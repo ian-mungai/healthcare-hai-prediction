@@ -5,6 +5,16 @@
 # shellcheck disable=SC2154,SC2329
 
 orchestration_checks() {
+  timed "orchestration_checks: SDK worker fixtures" "$python_bin" -B -m scripts.orchestration.sdk_worker_cases --check-fixtures --fixtures "$repo_root/data_contracts/orchestration/examples/sdk_worker_cases" --revision "$(git rev-parse HEAD)" --output "$e2e_output/sdk_worker_cases/report.json"
+  timed "orchestration_checks: SDK lifecycle cases" "$python_bin" -B -m scripts.orchestration.sdk_lifecycle_cases --fixtures "$repo_root/data_contracts/orchestration/examples/sdk_worker_cases" --output "$e2e_output/sdk_lifecycle_cases/report.json"
+  timed "orchestration_checks: SDK runtime cases" "$python_bin" -B -m scripts.orchestration.sdk_runtime_cases --mode native --cases all --output "$e2e_output/sdk_runtime_cases/report.json"
+  timed "orchestration_checks: SDK source mutations" "$python_bin" -B -m scripts.orchestration.sdk_static_mutations --output "$e2e_output/sdk_static_mutations/report.json"
+  timed "orchestration_checks: catalog transport cases" "$python_bin" -B -m scripts.orchestration.catalog_transport_cases --mutations --output "$e2e_output/catalog_transport_cases/report.json"
+  if [[ "$(uname -s)" == Linux ]]; then
+    timed "orchestration_checks: SDK supervisor Linux source smoke" "$python_bin" -B -m scripts.orchestration.sdk_supervisor_cases --mode native --source-smoke --output "$e2e_output/sdk_supervisor_cases/report.json"
+  else
+    timed "orchestration_checks: SDK supervisor source checks" "$python_bin" -B -m scripts.orchestration.sdk_supervisor_cases --mode static --source-smoke --output "$e2e_output/sdk_supervisor_cases/report.json"
+  fi
   timed "orchestration_checks: lineage E2E" "$python_bin" -m scripts.orchestration.run_lineage_e2e
   timed "orchestration_checks: lineage completion E2E" "$python_bin" -m scripts.orchestration.run_lineage_completion_e2e
   timed "orchestration_checks: lineage amendment E2E" "$python_bin" -m scripts.orchestration.run_lineage_amendment_e2e

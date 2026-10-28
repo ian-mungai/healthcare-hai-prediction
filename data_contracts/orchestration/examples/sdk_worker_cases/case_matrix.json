@@ -1,0 +1,1870 @@
+{
+  "classification": "Synthetic",
+  "scope": "section_4_1_preparation_only",
+  "top_level_cases": [
+    "61",
+    "83",
+    "85",
+    "86",
+    "93"
+  ],
+  "deferred_cases": [
+    "107",
+    "123"
+  ],
+  "primary_deadline_operations": [
+    "run_task",
+    "stop_task",
+    "describe_tasks",
+    "list_tasks",
+    "assume_role",
+    "logs_get_events",
+    "s3_download",
+    "s3_upload_part"
+  ],
+  "operations": [
+    {
+      "op": "run_task",
+      "cap_seconds": 25,
+      "lane": "control",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "stop_task",
+      "cap_seconds": 25,
+      "lane": "control",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "describe_tasks",
+      "cap_seconds": 12,
+      "lane": "control",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "list_tasks",
+      "cap_seconds": 12,
+      "lane": "control",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "assume_role",
+      "cap_seconds": 25,
+      "lane": "control",
+      "mutating": true,
+      "one_shot": true
+    },
+    {
+      "op": "caller_identity",
+      "cap_seconds": 25,
+      "lane": "control",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "s3_head",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "s3_list",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "s3_put_small",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": true,
+      "one_shot": true
+    },
+    {
+      "op": "s3_get_small",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": false,
+      "one_shot": true
+    },
+    {
+      "op": "s3_download",
+      "cap_seconds": 40,
+      "lane": "data",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "s3_upload_part",
+      "cap_seconds": 40,
+      "lane": "data",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "s3_mpu_create",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "s3_mpu_complete",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "s3_mpu_abort",
+      "cap_seconds": 10,
+      "lane": "data",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "s3_mpu_list",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "s3_delete",
+      "cap_seconds": 20,
+      "lane": "data",
+      "mutating": true,
+      "one_shot": false
+    },
+    {
+      "op": "logs_get_events",
+      "cap_seconds": 20,
+      "lane": "control",
+      "mutating": false,
+      "one_shot": false
+    },
+    {
+      "op": "get_parameter",
+      "cap_seconds": 20,
+      "lane": "control",
+      "mutating": false,
+      "one_shot": true
+    }
+  ],
+  "slow_modes": [
+    "delay_headers",
+    "drip_headers",
+    "hang_body",
+    "drip_body"
+  ],
+  "deadline_matrix": [
+    {
+      "case": "61a",
+      "op": "run_task",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "run_task",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "run_task",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "run_task",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "stop_task",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "stop_task",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "stop_task",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "stop_task",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "describe_tasks",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "describe_tasks",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "describe_tasks",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "describe_tasks",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "list_tasks",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "list_tasks",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "list_tasks",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "list_tasks",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "assume_role",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "assume_role",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "assume_role",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "assume_role",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "caller_identity",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "caller_identity",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "caller_identity",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "caller_identity",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_head",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_head",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_head",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_head",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_list",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_list",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_list",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_list",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_put_small",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_put_small",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_put_small",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_put_small",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_get_small",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_get_small",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_get_small",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_get_small",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_download",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_download",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_download",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_download",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_upload_part",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_upload_part",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_upload_part",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_upload_part",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_create",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_create",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_create",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_create",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_complete",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_complete",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_complete",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_complete",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_abort",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_abort",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_abort",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_abort",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_list",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_list",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_list",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_mpu_list",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_delete",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_delete",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_delete",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "s3_delete",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "logs_get_events",
+      "mode": "delay_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "logs_get_events",
+      "mode": "drip_headers",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "logs_get_events",
+      "mode": "hang_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "logs_get_events",
+      "mode": "drip_body",
+      "primary": true,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "get_parameter",
+      "mode": "delay_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "get_parameter",
+      "mode": "drip_headers",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "get_parameter",
+      "mode": "hang_body",
+      "primary": false,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61a",
+      "op": "get_parameter",
+      "mode": "drip_body",
+      "primary": false,
+      "status": "pending_runtime"
+    }
+  ],
+  "retry_matrix": [
+    {
+      "case": "83",
+      "op": "run_task",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "run_task",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "run_task",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "run_task",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "stop_task",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "stop_task",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "stop_task",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "stop_task",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "describe_tasks",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "describe_tasks",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "describe_tasks",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "describe_tasks",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "list_tasks",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "list_tasks",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "list_tasks",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "list_tasks",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "assume_role",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "assume_role",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "assume_role",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "assume_role",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "caller_identity",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "caller_identity",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "caller_identity",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "caller_identity",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_head",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_head",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_head",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_head",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_list",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_list",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_list",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_list",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_put_small",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_put_small",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_put_small",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_put_small",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_get_small",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_get_small",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_get_small",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_get_small",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_download",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_download",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_download",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_download",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_upload_part",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_upload_part",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_upload_part",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_upload_part",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_create",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_create",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_create",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_create",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_complete",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_complete",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_complete",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_complete",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_abort",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_abort",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_abort",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_abort",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_list",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_list",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_list",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_mpu_list",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_delete",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_delete",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_delete",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "s3_delete",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "logs_get_events",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "logs_get_events",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "logs_get_events",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "logs_get_events",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "get_parameter",
+      "fault": "throttle",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "get_parameter",
+      "fault": "throttle",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "get_parameter",
+      "fault": "server_error",
+      "pool": "pooled",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "op": "get_parameter",
+      "fault": "server_error",
+      "pool": "per_call",
+      "expected_requests": 1,
+      "status": "pending_runtime"
+    }
+  ],
+  "recovery_evidence_matrix": [
+    {
+      "group": "present",
+      "token": "seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "present",
+      "token": "not_seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "present",
+      "token": "denied",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "present",
+      "token": "timed_out",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "absent",
+      "token": "seen",
+      "first_read": "record_and_alert",
+      "later_read": "close_absent",
+      "signals": 0
+    },
+    {
+      "group": "absent",
+      "token": "not_seen",
+      "first_read": "record_and_alert",
+      "later_read": "close_absent",
+      "signals": 0
+    },
+    {
+      "group": "absent",
+      "token": "denied",
+      "first_read": "record_and_alert",
+      "later_read": "close_absent",
+      "signals": 0
+    },
+    {
+      "group": "absent",
+      "token": "timed_out",
+      "first_read": "record_and_alert",
+      "later_read": "close_absent",
+      "signals": 0
+    },
+    {
+      "group": "denied",
+      "token": "seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "denied",
+      "token": "not_seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "denied",
+      "token": "denied",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "denied",
+      "token": "timed_out",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "timed_out",
+      "token": "seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "timed_out",
+      "token": "not_seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "timed_out",
+      "token": "denied",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "timed_out",
+      "token": "timed_out",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "not_probed",
+      "token": "seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "not_probed",
+      "token": "not_seen",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "not_probed",
+      "token": "denied",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    },
+    {
+      "group": "not_probed",
+      "token": "timed_out",
+      "first_read": "record_and_alert",
+      "later_read": "keep_open",
+      "signals": 0
+    }
+  ],
+  "owned_stop_variants": [
+    "members_gone_leader_held",
+    "rescan_no_witness_continue",
+    "denied_signal_leader_held",
+    "after_reap_reused_number_refused",
+    "early_reap_with_member_read_only",
+    "controller_dies_after_stop",
+    "failed_witness_reap_only_eventual_reap"
+  ],
+  "cases": [
+    {
+      "case": "61a",
+      "name": "Absolute deadlines and independent cleanup",
+      "variants": [
+        "all_operation_slow_modes",
+        "queue_deadline",
+        "malformed_frames",
+        "effect_unknown",
+        "socket_closed_within_one_second",
+        "descendant_esrch",
+        "no_zombies",
+        "descriptor_and_thread_baseline"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61b",
+      "name": "Repeated deadlines and control fairness",
+      "variants": [
+        "twenty_five_mixed_timeouts",
+        "control_progress_with_three_data_workers",
+        "four_active_two_stopping_six_live_cap",
+        "breaker_after_three"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61c",
+      "name": "Shutdown and leader exit",
+      "variants": [
+        "four_calls_in_flight",
+        "leader_exit_before_descendant",
+        "cleanup_within_ten_seconds",
+        "leader_held_until_last_signal",
+        "new_calls_shutdown"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61d",
+      "name": "Controller death and read-only recovery",
+      "variants": [
+        "eof_within_three_seconds",
+        "live_recovered_descendant_two_rescans",
+        "reused_group",
+        "all_group_token_evidence_pairs",
+        "native_environment_omission",
+        "controller_death_after_ps_alert_socket",
+        "owned_stop_after_scan_after_stop_before_reap_after_reap_reap_early",
+        "failed_witness_reap_only_exit"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61e",
+      "name": "Denied signals and survivor recovery",
+      "variants": [
+        "eperm_survivor_files_retained",
+        "same_session_guarded_retry",
+        "no_signal_after_reap",
+        "restart_read_only",
+        "unknown_run_task_reconciled"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61f",
+      "name": "SDK cleanup before seal drain",
+      "variants": [
+        "thirty_second_seal_hold",
+        "sdk_gone_within_ten_seconds",
+        "seal_still_inflight",
+        "registry_lock_retained",
+        "seal_completion_once",
+        "exit_after_seal_return"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61g",
+      "name": "Interactive owner command",
+      "variants": [
+        "list_no_effect",
+        "wrong_eof_interrupt_timeout_stdin_not_tty_stdout_not_tty",
+        "typed_pgid_close_once",
+        "concurrent_close_integrity",
+        "present_group_close_without_signal",
+        "second_stop_confirmation",
+        "single_sigkill_no_sigstop",
+        "eperm_keeps_open",
+        "no_launcher_caller"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "61x",
+      "name": "Intended planted defects",
+      "variants": [
+        "all_twenty_four_defects",
+        "passing_native_baseline_first",
+        "exact_assertion_failure",
+        "restore_each_mutation"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "83",
+      "name": "One SDK request per call",
+      "variants": [
+        "all_operations_throttle_and_server_error",
+        "pooled_and_per_call_modes",
+        "one_request_not_two"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "85",
+      "name": "Memory-only credentials and redacted errors",
+      "variants": [
+        "normal_and_killed_assume_role",
+        "grant_write_frame_only",
+        "all_other_secret_replies",
+        "allowlisted_environment",
+        "rlimit_core_zero",
+        "botocore_warning_only",
+        "stderr_redacted",
+        "no_marker_in_persisted_surfaces",
+        "download_partial_removed",
+        "credential_process_source_profile_refused"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "86",
+      "name": "Pool reuse and retirement",
+      "variants": [
+        "reuse_success_service_throttle_bad_request",
+        "discard_network_deadline_protocol_worker_death",
+        "secret_request_reply_one_shot",
+        "recycle_at_five_hundred_calls",
+        "recycle_at_ten_minutes",
+        "sixty_second_idle",
+        "pooled_and_per_call_deadline_and_retry_tables",
+        "spawn_time_and_rss_observed_only"
+      ],
+      "status": "pending_runtime"
+    },
+    {
+      "case": "93",
+      "name": "Versioned parameter scanning",
+      "variants": [
+        "exact_name_version_reply_match",
+        "dispatch_to_collection_inclusive_versions",
+        "rotation_before_start",
+        "rotation_before_collect",
+        "missing_denied_unavailable_version",
+        "hang_deadline",
+        "name_alias_or_latest_refused",
+        "unreadable_withhold_logs_and_outputs",
+        "one_shot_redacted_reply"
+      ],
+      "status": "pending_runtime"
+    }
+  ],
+  "runtime_boundaries": [
+    "frame_bytes_not_characters",
+    "reject_duplicate_json_keys",
+    "reject_nonfinite_numbers",
+    "one_request_in_flight",
+    "correlate_reply_id_and_operation_result",
+    "bound_queue_and_read_and_shutdown_by_original_deadline",
+    "session_field_forces_one_shot",
+    "versioned_reply_name_and_version_match",
+    "file_no_follow_identity_and_owned_temp_path",
+    "both_parent_and_worker_validate"
+  ],
+  "unnumbered_checks": [
+    "three_portable_helpers_only",
+    "ecs_api_forbidden_imports",
+    "signals_and_reap_same_guarded_handle_lock",
+    "waitpid_only_stop_owned",
+    "no_catch_all_reaper",
+    "recovery_sweeps_never_signal",
+    "owner_stop_only_named_confirmed_exception",
+    "no_launcher_owner_command_call",
+    "portable_helper_sent_gone_denied_parity",
+    "linux_supervisor_serialized_reap",
+    "baked_helper_and_worker_bytes_match",
+    "sigchld_default_both_parents"
+  ],
+  "repeated_timeout_schedule": [
+    {
+      "sequence": 1,
+      "op": "run_task",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 2,
+      "op": "stop_task",
+      "mode": "drip_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 3,
+      "op": "describe_tasks",
+      "mode": "hang_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 4,
+      "op": "list_tasks",
+      "mode": "drip_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 5,
+      "op": "assume_role",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 6,
+      "op": "logs_get_events",
+      "mode": "drip_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 7,
+      "op": "s3_download",
+      "mode": "hang_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 8,
+      "op": "s3_upload_part",
+      "mode": "drip_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 9,
+      "op": "run_task",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 10,
+      "op": "stop_task",
+      "mode": "drip_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 11,
+      "op": "describe_tasks",
+      "mode": "hang_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 12,
+      "op": "list_tasks",
+      "mode": "drip_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 13,
+      "op": "assume_role",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 14,
+      "op": "logs_get_events",
+      "mode": "drip_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 15,
+      "op": "s3_download",
+      "mode": "hang_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 16,
+      "op": "s3_upload_part",
+      "mode": "drip_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 17,
+      "op": "run_task",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 18,
+      "op": "stop_task",
+      "mode": "drip_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 19,
+      "op": "describe_tasks",
+      "mode": "hang_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 20,
+      "op": "list_tasks",
+      "mode": "drip_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 21,
+      "op": "assume_role",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 22,
+      "op": "logs_get_events",
+      "mode": "drip_headers",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 23,
+      "op": "s3_download",
+      "mode": "hang_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 24,
+      "op": "s3_upload_part",
+      "mode": "drip_body",
+      "original_deadline_must_not_reset": true
+    },
+    {
+      "sequence": 25,
+      "op": "run_task",
+      "mode": "delay_headers",
+      "original_deadline_must_not_reset": true
+    }
+  ],
+  "parameter_version_matrix": [
+    {
+      "name": "no_rotation",
+      "dispatch_version": 3,
+      "collection_version": 3,
+      "must_read": [
+        3
+      ],
+      "unreadable": [],
+      "scan_complete": true
+    },
+    {
+      "name": "rotated_before_start",
+      "dispatch_version": 3,
+      "collection_version": 4,
+      "must_read": [
+        3,
+        4
+      ],
+      "unreadable": [],
+      "scan_complete": true
+    },
+    {
+      "name": "rotated_before_collect",
+      "dispatch_version": 3,
+      "collection_version": 5,
+      "must_read": [
+        3,
+        4,
+        5
+      ],
+      "unreadable": [],
+      "scan_complete": true
+    },
+    {
+      "name": "interior_version_unreadable",
+      "dispatch_version": 3,
+      "collection_version": 5,
+      "must_read": [
+        3,
+        4,
+        5
+      ],
+      "unreadable": [
+        4
+      ],
+      "scan_complete": false,
+      "logs_withheld": true,
+      "outputs_refused": true
+    },
+    {
+      "name": "version_read_deadline",
+      "dispatch_version": 3,
+      "collection_version": 4,
+      "must_read": [
+        3,
+        4
+      ],
+      "unreadable": [
+        4
+      ],
+      "scan_complete": false,
+      "logs_withheld": true,
+      "outputs_refused": true
+    }
+  ]
+}

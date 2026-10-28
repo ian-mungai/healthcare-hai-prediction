@@ -166,6 +166,11 @@ ORCHESTRATION_SHARED = {
     "scripts/quality/docker_calls.py": QUALITY_SCRIPT,
     "scripts/quality/repo_checks.py": QUALITY_SCRIPT,
     "config/quality/docker_calls_reviewed.json": QUALITY_CONFIG,
+    "scripts/process_group.py": ["python_lint", "orchestration_checks", "repository_code_checks"],
+    "services/hai/bootstrap/supervisor.py": LAKEHOUSE_SCRIPT,
+    "orchestration/worker_stderr.py": LAKEHOUSE_SCRIPT,
+    "data_contracts/orchestration/examples/sdk_worker_cases/case_matrix.json": [*LAYERS, "orchestration_checks"],
+    "data_contracts/orchestration/examples/sdk_worker_cases/mutation_cases.json": [*LAYERS, "orchestration_checks"],
 }
 MARKDOWNLINT = ROOT / ".tools" / "markdownlint-cli2" / "node_modules" / ".bin" / "markdownlint-cli2"
 
@@ -350,7 +355,7 @@ def scratch_cleanup_interrupt_case(scratch: Path) -> dict[str, Any]:
 
 
 def break_gate(work: Path) -> Path:
-    moved = next(iter(json.loads((ROOT / "config" / "data_paths.json").read_text(encoding="utf-8"))["moved"]))
+    moved: str = next(iter(json.loads((ROOT / "config" / "data_paths.json").read_text(encoding="utf-8"))["moved"]))
     folder = work / moved
     folder.mkdir(parents=True)
     return folder
@@ -976,7 +981,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "service_python_selects_types",
             ["--scope", "paths", "--path", "services/hai/deadline_run.py", "--part", "core+layers"],
-            ["python_lint", *LAYERS, "repository_code_checks"],
+            ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"],
         ),
         selection_case(
             work,
