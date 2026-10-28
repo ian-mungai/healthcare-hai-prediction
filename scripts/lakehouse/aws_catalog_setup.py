@@ -73,6 +73,9 @@ CLOSE_SECONDS = 30.0
 SECRET_SECONDS = 30.0
 # The longest the credential step holds the launcher registry lock; the launcher waits for that lock at most run_lock.LOCK_WAIT_SECONDS.
 REGISTRY_HOLD_SECONDS = 20.0
+# The longest a pair write past its deadline is awaited, locks held: botocore's own bound for one call (secret_store.CLIENT_OPTIONS: 2 attempts
+# of 5 s connect and 10 s read) plus its retry backoff.
+WRITE_SETTLE_SECONDS = 45.0
 MAX_REPLY_BYTES = 1 << 20
 MANAGEMENT = "/api/management/v1"
 APPROVAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -136,16 +139,47 @@ def writable_names() -> frozenset[str]:
     return frozenset(name for pair in configured_pairs().values() for name in pair)
 
 
+def pending_write_mark(locks: Path, role: str) -> Path:
+    """The mark an unconfirmed pair write of the principal leaves next to its lock."""
+    return locks / f"aws_{role}.pending_write"
+
+
+def mark_pending_write(mark: Path) -> None:
+    """Record that a pair write of this process may still commit."""
+    mark.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    mark.write_text(json.dumps({"pid": os.getpid(), "since_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}) + "\n")
+
+
+def refuse_pending_write(mark: Path, role: str) -> None:
+    """Stop while an earlier pair write of the principal may still commit: its mark stays until the write ends, or its process has ended."""
+    try:
+        owner = json.loads(mark.read_text())["pid"]
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError, KeyError, TypeError):
+        raise SetupError("credentials", f"the pending-write mark of principal {role} cannot be read; no pair change is safe until it is resolved") from None
+    if not isinstance(owner, int) or owner <= 0:
+        raise SetupError("credentials", f"the pending-write mark of principal {role} names no process; no pair change is safe until it is resolved")
+    try:
+        os.kill(owner, 0)
+    except ProcessLookupError:
+        mark.unlink(missing_ok=True)
+        return
+    except PermissionError:
+        pass
+    raise SetupError("credentials", f"an earlier pair write of principal {role} may still commit; rerun after it ends")
+
+
 class PairVault(secret_store.SecretStore):
     """Parameter Store through the project profile: writes only the ten AWS Polaris pair names and reads those and the Polaris root secret."""
 
-    def __init__(self, parameters: Any, deadline: float | None = None, clock: Clock = time.monotonic) -> None:
+    def __init__(self, parameters: Any, deadline: float | None = None, clock: Clock = time.monotonic, pending: Path | None = None) -> None:
         super().__init__(parameters)
-        self.deadline, self.clock = deadline, clock
+        self.deadline, self.clock, self.pending = deadline, clock, pending
 
-    def bounded(self, deadline: float, clock: Clock = time.monotonic) -> PairVault:
-        """The same store with every pair read and write held to the absolute deadline."""
-        return PairVault(self.parameters, deadline, clock)
+    def bounded(self, deadline: float, clock: Clock = time.monotonic, pending: Path | None = None) -> PairVault:
+        """The same store with every pair read and write held to the absolute deadline; ``pending`` is the principal's pending-write mark."""
+        return PairVault(self.parameters, deadline, clock, pending or self.pending)
 
     def within_deadline[T](self, call: Callable[[], T], what: str) -> T:
         if self.deadline is None:
@@ -156,7 +190,47 @@ class PairVault(secret_store.SecretStore):
         return self.within_deadline(lambda: secret_store.SecretStore.find(self, name), f"reading {name}")
 
     def put(self, name: str, value: str) -> None:
-        self.within_deadline(lambda: secret_store.SecretStore.put(self, name, value), f"writing {name}")
+        if self.deadline is None:
+            secret_store.SecretStore.put(self, name, value)
+            return
+        self.confirmed(functools.partial(secret_store.SecretStore.put, self, name, value), f"writing {name}")
+
+    def confirmed(self, call: Callable[[], None], what: str) -> None:
+        """Run one pair write and return only once it is confirmed finished, so no write outlives the locks of its run (P4, P5).
+
+        A write still running at the deadline is awaited for at most ``WRITE_SETTLE_SECONDS`` more, with every lock still held. One that has
+        not ended then leaves the pending-write mark before the locks are released; the write removes the mark when it ends, and until then
+        every rerun of the principal refuses (``refuse_pending_write``). Without a mark to leave the write is refused before it starts.
+        """
+        if self.pending is None or self.deadline is None:
+            raise secret_store.SecretStoreError(f"{what} has no pending-write mark, so it is not started")
+        left = min(SECRET_SECONDS, check_deadline(self.deadline, self.clock))
+        failure: list[BaseException] = []
+        done, guard = threading.Event(), threading.Lock()
+        abandoned: list[Path] = []
+
+        def work() -> None:
+            try:
+                call()
+            except BaseException as error:
+                failure.append(error)
+            finally:
+                with guard:
+                    done.set()
+                    for mark in abandoned:
+                        with contextlib.suppress(OSError):
+                            mark.unlink()
+
+        threading.Thread(target=work, name="pair-write", daemon=True).start()
+        if not done.wait(left):
+            done.wait(WRITE_SETTLE_SECONDS)
+        with guard:
+            if not done.is_set():
+                mark_pending_write(self.pending)
+                abandoned.append(self.pending)
+                raise secret_store.SecretStoreError(f"{what} did not finish within its deadline and may still commit; reruns refuse until it ends")
+        if failure:
+            raise failure[0]
 
     @staticmethod
     def check(name: str, write: bool = False) -> None:
@@ -700,7 +774,7 @@ def ensure_principal(
             outcome = principal_credentials.ensure_credentials(
                 principal=role,
                 names=configured_pairs()[identity],
-                vault=vault.bounded(hold, request.clock),
+                vault=vault.bounded(hold, request.clock, pending=pending_write_mark(lock_path.parent, role)),
                 request=request.bounded(hold),
                 access=access,
                 check=check,
@@ -738,6 +812,7 @@ def step_principal(services: Services, identity: str, instance: str, approval_id
     except principal_credentials.CredentialError as error:
         raise SetupError("credentials", str(error)) from None
     with held:
+        refuse_pending_write(pending_write_mark(services.locks, role), role)
         vault = services.vault().bounded(deadline, clock)
         secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
         with services.remote(instance, deadline=deadline) as remote:
