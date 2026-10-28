@@ -19,14 +19,17 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from orchestration.training_contract import DAGS as TRAINING_DAGS
+from orchestration.training_contract import HAI_TYPES, parameters_for
 from scripts.infrastructure import secret_store
 from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, AirflowApiError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
-DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag")
-MODES = ("publish_fixture", "real")
+DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag", *TRAINING_DAGS)
+MODES = ("fixture", "publish_fixture", "real")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 MAX_WAIT_SECONDS = 4 * 3600
 POLL_SECONDS = 2.0
@@ -45,11 +48,26 @@ def new_run_id() -> str:
     return f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
 
-def run_conf(dag: str, mode: str, run_id: str, silver_snapshot_run: str | None) -> dict[str, str]:
+def run_conf(dag: str, mode: str, run_id: str, silver_snapshot_run: str | None, training: dict[str, Any] | None = None) -> dict[str, Any]:
     """The validated configuration of one run; a gold run names the committed silver set it reads, the others name none."""
     if dag not in DAGS or mode not in MODES or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: unknown workflow, mode or run ID ({dag!r}, {mode!r}, {run_id!r})")
-    conf = {"run_id": run_id, "mode": mode}
+    conf: dict[str, Any] = {"run_id": run_id, "mode": mode}
+    if dag in TRAINING_DAGS:
+        if silver_snapshot_run is not None or mode not in (("fixture", "real") if dag == "training_dag" else ("real",)):
+            raise TriggerError("refused: training mode or silver snapshot selection is unsupported")
+        try:
+            selected = parameters_for(dag, training or {})
+        except ValueError as error:
+            raise TriggerError(str(error)) from None
+        if dag == "model_promotion_dag":
+            conf.update({name: value for name, value in selected.items() if name != "promotion_mode"})
+            conf["mode"] = selected["promotion_mode"]
+        else:
+            conf.update(selected)
+        return conf
+    if training is not None or mode == "fixture":
+        raise TriggerError("refused: training parameters or fixture mode belong only to training workflows")
     if dag == "gold_transform_dag":
         snapshot = "latest" if silver_snapshot_run is None else silver_snapshot_run
         if snapshot != "latest" and not RUN_ID.fullmatch(snapshot):
@@ -95,7 +113,7 @@ def wait_for_end(api: AirflowApi, dag: str, run_id: str, deadline: float, wait_s
         time.sleep(max(min(POLL_SECONDS, deadline - time.monotonic()), 0.0))
 
 
-def trigger(dag: str, conf: dict[str, str], deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
+def trigger(dag: str, conf: dict[str, Any], deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
     """Unpause the workflow, start the run, wait until it ends or the deadline passes, and return its end state and task states."""
     started = time.monotonic()
     run_id = conf["run_id"]
@@ -128,13 +146,26 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--mode", choices=MODES, required=True)
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
     cli.add_argument("--silver-snapshot-run", help="gold only: the committed silver run to read, or latest")
+    cli.add_argument("--features-run", default="latest")
+    cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
+    cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
+    cli.add_argument("--trigger", default="manual")
+    cli.add_argument("--mlflow", choices=("local", "aws"), default="local")
+    cli.add_argument("--hai-type", choices=HAI_TYPES)
+    cli.add_argument("--model-version")
+    cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
     cli.add_argument("--wait-seconds", type=float, required=True, help=f"the deadline of the whole wait, at most {MAX_WAIT_SECONDS} s")
     args = cli.parse_args(argv)
     try:
         if not 0 < args.wait_seconds <= MAX_WAIT_SECONDS:
             raise TriggerError(f"refused: --wait-seconds must be above 0 and at most {MAX_WAIT_SECONDS}")
         deadline = time.monotonic() + args.wait_seconds
-        conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run)
+        training = None
+        if args.dag == "training_dag":
+            training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}
+        elif args.dag == "model_promotion_dag":
+            training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
+        conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training)
         token_secret = read_token_secret(deadline)
         result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), token_secret, deadline=deadline))
     except (TriggerError, secret_store.SecretStoreError) as error:

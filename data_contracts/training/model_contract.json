@@ -1,0 +1,139 @@
+{
+  "aliases": [
+    "production",
+    "challenger"
+  ],
+  "child_runs": [
+    "m1_ols",
+    "m2_elastic_net",
+    "m3_mixed",
+    "m4_boosting",
+    "m5_spatial",
+    "m6_fixed_effects",
+    "rq1_joint",
+    "rq3_mediation",
+    "rq4_nested",
+    "rq5_moran",
+    "rq6_hausman",
+    "hac_validation",
+    "promotion"
+  ],
+  "completion_tag": "bundle_sha256",
+  "experiments": {
+    "HAI_1": "hai_training_HAI_1",
+    "HAI_2": "hai_training_HAI_2",
+    "HAI_3": "hai_training_HAI_3",
+    "HAI_4": "hai_training_HAI_4",
+    "HAI_5": "hai_training_HAI_5",
+    "HAI_6": "hai_training_HAI_6"
+  },
+  "feature_list_file": "feature_list.json",
+  "flavor": "sklearn",
+  "parent_run_template": "{run_id}_{population}",
+  "pipeline": "sklearn.pipeline.Pipeline",
+  "prediction_intervals": "null",
+  "prediction_method": "predict",
+  "registered_models": {
+    "HAI_1": "hai_model_HAI_1",
+    "HAI_2": "hai_model_HAI_2",
+    "HAI_3": "hai_model_HAI_3",
+    "HAI_4": "hai_model_HAI_4",
+    "HAI_5": "hai_model_HAI_5",
+    "HAI_6": "hai_model_HAI_6"
+  },
+  "registrable_slots": [
+    "m1_ols",
+    "m2_elastic_net",
+    "m4_boosting"
+  ],
+  "required_run_tags": [
+    "run_id",
+    "step_key",
+    "hai_type",
+    "target_control",
+    "population",
+    "analysis_plan_sha256",
+    "targets_sha256",
+    "training_config_sha256",
+    "code_digest",
+    "git_commit",
+    "git_dirty",
+    "image_digest",
+    "master_seed",
+    "features_run_id",
+    "features_snapshot_set_sha256",
+    "feature_schema_sha256",
+    "gold_run_id",
+    "dvc_md5",
+    "extract_sha256",
+    "manifest_sha256",
+    "newest_window",
+    "feature_list_sha256",
+    "training_key",
+    "reproducibility_sha256",
+    "bundle_sha256"
+  ],
+  "resolved_versions_required": [
+    "mlflow",
+    "mlflow-skinny",
+    "scikit-learn",
+    "xgboost",
+    "numpy",
+    "scipy",
+    "sqlalchemy",
+    "psycopg2-binary",
+    "libpq"
+  ],
+  "row_artifacts": {
+    "comparison_{hai_type}.parquet": {
+      "columns": [
+        "spine_key",
+        "observed_sir",
+        "champion_prediction",
+        "challenger_prediction",
+        "control_type_code",
+        "provider_subtype_code",
+        "census_region",
+        "bed_size_band"
+      ]
+    },
+    "holdout_predictions.parquet": {
+      "columns": [
+        "spine_key",
+        "observed_sir",
+        "predicted_m1_ols",
+        "predicted_m2_elastic_net",
+        "predicted_m3_mixed",
+        "predicted_m4_boosting",
+        "predicted_m5_spatial",
+        "predicted_m6_fixed_effects"
+      ]
+    }
+  },
+  "schema": 1,
+  "serialization": {
+    "code_paths": [
+      "scripts"
+    ],
+    "format": "skops",
+    "trusted_types": [
+      "scripts.training.preprocessing.FoldMissingnessSelector",
+      "xgboost.core.Booster",
+      "xgboost.sklearn.XGBRegressor"
+    ],
+    "verification": "requires_image_spike"
+  },
+  "signature": "bare_feature_column_names",
+  "version_tags": [
+    "hai_type",
+    "target_control",
+    "feature_schema_sha256",
+    "feature_list_sha256",
+    "source_run_id",
+    "bundle_sha256",
+    "promotion_verdict",
+    "comparison_sha256",
+    "create_identity",
+    "was_production"
+  ]
+}

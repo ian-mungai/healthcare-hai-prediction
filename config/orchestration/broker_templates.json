@@ -4205,6 +4205,706 @@
           }
         }
       }
+    },
+    "guard": {
+      "purpose": "Run the fixed training guard action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "guard"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "guard"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "version_extract": {
+      "purpose": "Run the fixed training version_extract action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "version_extract"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "version_extract"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "fit": {
+      "purpose": "Run the fixed training fit action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "fit"
+            },
+            "timeout_seconds": 14400,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "fit"
+            },
+            "timeout_seconds": 14400,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "mediation": {
+      "purpose": "Run the fixed training mediation action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "mediation"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "mediation"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "hac_validate": {
+      "purpose": "Run the fixed training hac_validate action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "hac_validate"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_job",
+            "args": [],
+            "params": {
+              "action": "hac_validate"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "log_run": {
+      "purpose": "Run the fixed training log_run action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "mlflow",
+          "no_op": false,
+          "launcher": {
+            "template": "training_mlflow",
+            "args": [],
+            "params": {
+              "action": "log_run"
+            },
+            "timeout_seconds": 1200,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "mlflow",
+          "no_op": false,
+          "launcher": {
+            "template": "training_mlflow",
+            "args": [],
+            "params": {
+              "action": "log_run"
+            },
+            "timeout_seconds": 1200,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "promotion_check": {
+      "purpose": "Run the fixed training promotion_check action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "mlflow",
+          "no_op": false,
+          "launcher": {
+            "template": "training_mlflow",
+            "args": [],
+            "params": {
+              "action": "promotion_check"
+            },
+            "timeout_seconds": 1200,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "mlflow",
+          "no_op": false,
+          "launcher": {
+            "template": "training_mlflow",
+            "args": [],
+            "params": {
+              "action": "promotion_check"
+            },
+            "timeout_seconds": 1200,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "promote": {
+      "purpose": "Run the fixed training promote action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "mlflow",
+          "no_op": false,
+          "launcher": {
+            "template": "training_mlflow",
+            "args": [],
+            "params": {
+              "action": "promote"
+            },
+            "timeout_seconds": 1200,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "mlflow",
+          "no_op": false,
+          "launcher": {
+            "template": "training_mlflow",
+            "args": [],
+            "params": {
+              "action": "promote"
+            },
+            "timeout_seconds": 1200,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "extract": {
+      "purpose": "Run the fixed training extract action on the recorded code snapshot",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "training_extract",
+            "args": [],
+            "params": {
+              "action": "extract"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "training_extract",
+            "args": [],
+            "params": {
+              "action": "extract"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "training_acquire_run": {
+      "purpose": "Perform the training run acquire_run control action",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "acquire",
+            "params": {
+              "folders": [
+                "outputs",
+                "extract",
+                "bundles",
+                "mlflow"
+              ]
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "acquire",
+            "params": {
+              "folders": [
+                "outputs",
+                "extract",
+                "bundles",
+                "mlflow"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "training_run_record": {
+      "purpose": "Perform the training run run_record control action",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "record",
+            "params": {
+              "record_file": "{run_dir}/training_run.json"
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "record",
+            "params": {
+              "record_file": "{run_dir}/training_run.json"
+            }
+          }
+        }
+      }
+    },
+    "training_catalog_release": {
+      "purpose": "Perform the training run catalog_release control action",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "catalog_release"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "catalog_release"
+          }
+        }
+      }
+    },
+    "training_release_accepted": {
+      "purpose": "Perform the training run release_accepted control action",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_accepted",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "build_files": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_accepted",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "build_files": []
+            }
+          }
+        }
+      }
+    },
+    "training_release_rejected": {
+      "purpose": "Perform the training run release_rejected control action",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_rejected"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_rejected"
+          }
+        }
+      }
+    },
+    "snapshot_training": {
+      "purpose": "Freeze and record every declared training code and configuration input",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "snapshot_training"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "snapshot_training"
+          }
+        }
+      }
+    },
+    "training_catalog_up": {
+      "purpose": "Start the catalog for a real feature extraction",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the synthetic publication uses the fixture SQL catalog"
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "catalog_up"
+          }
+        }
+      }
+    },
+    "training_final_gate_accepted": {
+      "purpose": "Retain a failed training run or verify every successful task before release",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "guard": "success",
+                "catalog_up": "success",
+                "extract": "success",
+                "version_extract": "success",
+                "fit": "success",
+                "mediation": "success",
+                "hac_validate": "success",
+                "log_run": "success",
+                "promotion_check": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "guard": "success",
+                "catalog_up": "success",
+                "extract": "success",
+                "version_extract": "success",
+                "fit": "success",
+                "mediation": "success",
+                "hac_validate": "success",
+                "log_run": "success",
+                "promotion_check": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "training_final_gate_rejected": {
+      "purpose": "Retain a failed training run or verify every successful task before release",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "guard": "success",
+                "catalog_up": "success",
+                "extract": "success",
+                "version_extract": "success",
+                "fit": "success",
+                "mediation": "success",
+                "hac_validate": "success",
+                "log_run": "success",
+                "promotion_check": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "guard": "success",
+                "catalog_up": "success",
+                "extract": "success",
+                "version_extract": "success",
+                "fit": "success",
+                "mediation": "success",
+                "hac_validate": "success",
+                "log_run": "success",
+                "promotion_check": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "promotion_final_gate_accepted": {
+      "purpose": "Retain a failed training run or verify every successful task before release",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "promote": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "promote": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "promotion_final_gate_rejected": {
+      "purpose": "Retain a failed training run or verify every successful task before release",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "promote": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{run_dir}/training_run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "snapshot_training": "success",
+                "promote": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

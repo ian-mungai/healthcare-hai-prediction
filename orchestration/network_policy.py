@@ -11,6 +11,7 @@ from typing import Any
 from scripts.lakehouse.gold_publish_record import RUN_ID
 
 CLASSES = ("lakehouse_read", "lakehouse_write")
+ENFORCED_CLASSES = (*CLASSES, "mlflow")
 PROXY_IMAGE = "ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c"
 PROXY_ALIAS = "hai-egress"
 LABEL_CLASS = "hai.network_class"

@@ -1,0 +1,568 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bootstrap": {
+      "additionalProperties": false,
+      "properties": {
+        "mediation": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence_level": {
+              "const": 0.95
+            },
+            "draws": {
+              "const": 5000
+            },
+            "generator": {
+              "const": "numpy.random.default_rng"
+            },
+            "interval_method": {
+              "const": "percentile"
+            },
+            "paired": {
+              "const": true
+            },
+            "unit": {
+              "const": "hospital"
+            }
+          },
+          "required": [
+            "draws",
+            "confidence_level",
+            "interval_method",
+            "unit",
+            "paired",
+            "generator"
+          ],
+          "type": "object"
+        },
+        "nested_comparison": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence_level": {
+              "const": 0.95
+            },
+            "draws": {
+              "const": 5000
+            },
+            "generator": {
+              "const": "numpy.random.default_rng"
+            },
+            "interval_method": {
+              "const": "percentile"
+            },
+            "paired": {
+              "const": true
+            },
+            "unit": {
+              "const": "hospital"
+            }
+          },
+          "required": [
+            "draws",
+            "confidence_level",
+            "interval_method",
+            "unit",
+            "paired",
+            "generator"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "mediation",
+        "nested_comparison"
+      ],
+      "type": "object"
+    },
+    "budgets": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap_seconds": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "fit_seconds": {
+          "const": 10800
+        },
+        "shap_seconds": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fit_seconds",
+        "shap_seconds",
+        "bootstrap_seconds"
+      ],
+      "type": "object"
+    },
+    "cross_validation": {
+      "additionalProperties": false,
+      "properties": {
+        "folds": {
+          "minimum": 2,
+          "type": "integer"
+        },
+        "groups": {
+          "const": "ccn"
+        },
+        "method": {
+          "const": "GroupKFold"
+        },
+        "panel_method": {
+          "const": "time_ordered"
+        },
+        "shuffle": {
+          "const": true
+        }
+      },
+      "required": [
+        "method",
+        "groups",
+        "shuffle",
+        "panel_method",
+        "folds"
+      ],
+      "type": "object"
+    },
+    "defaults_note": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "master_seed": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "minimum_rows": {
+      "additionalProperties": false,
+      "properties": {
+        "holdout": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "training": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "training",
+        "holdout"
+      ],
+      "type": "object"
+    },
+    "moran": {
+      "additionalProperties": false,
+      "properties": {
+        "global_seed_immediately_before_call": {
+          "const": true
+        },
+        "p_value": {
+          "const": "p_sim"
+        },
+        "permutations": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "row_standardized": {
+          "const": true
+        }
+      },
+      "required": [
+        "p_value",
+        "global_seed_immediately_before_call",
+        "row_standardized",
+        "permutations"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "const": 1
+    },
+    "seed_derivation": {
+      "const": "sha256:<master>|<hai_type>|<purpose>:first_32_bits"
+    },
+    "slots": {
+      "additionalProperties": false,
+      "properties": {
+        "m1_ols": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_seconds": {
+              "maximum": 10800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "estimator": {
+              "const": "ols"
+            },
+            "feature_list": {
+              "const": "m1_ols.json"
+            },
+            "forced_references": {
+              "const": []
+            },
+            "grid": {
+              "additionalProperties": false,
+              "properties": {},
+              "required": [],
+              "type": "object"
+            },
+            "registrable": {
+              "const": true
+            }
+          },
+          "required": [
+            "estimator",
+            "feature_list",
+            "registrable",
+            "forced_references",
+            "budget_seconds",
+            "grid"
+          ],
+          "type": "object"
+        },
+        "m2_elastic_net": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_seconds": {
+              "maximum": 10800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "estimator": {
+              "const": "elastic_net"
+            },
+            "feature_list": {
+              "const": "m2_elastic_net.json"
+            },
+            "forced_references": {
+              "const": [
+                "feature_matrix_hospital_window:cmi"
+              ]
+            },
+            "grid": {
+              "additionalProperties": false,
+              "properties": {
+                "alpha": {
+                  "items": {
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "l1_ratio": {
+                  "items": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1,
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "alpha",
+                "l1_ratio"
+              ],
+              "type": "object"
+            },
+            "registrable": {
+              "const": true
+            }
+          },
+          "required": [
+            "estimator",
+            "feature_list",
+            "registrable",
+            "forced_references",
+            "budget_seconds",
+            "grid"
+          ],
+          "type": "object"
+        },
+        "m3_mixed": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_seconds": {
+              "maximum": 10800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "estimator": {
+              "const": "mixed_effects"
+            },
+            "feature_list": {
+              "const": "m3_mixed.json"
+            },
+            "forced_references": {
+              "const": [
+                "feature_matrix_hospital_window:cmi"
+              ]
+            },
+            "grid": {
+              "additionalProperties": false,
+              "properties": {},
+              "required": [],
+              "type": "object"
+            },
+            "registrable": {
+              "const": false
+            }
+          },
+          "required": [
+            "estimator",
+            "feature_list",
+            "registrable",
+            "forced_references",
+            "budget_seconds",
+            "grid"
+          ],
+          "type": "object"
+        },
+        "m4_boosting": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_seconds": {
+              "maximum": 10800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "check": {
+              "additionalProperties": false,
+              "properties": {
+                "estimator": {
+                  "const": "random_forest"
+                },
+                "grid": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "max_depth": {
+                      "items": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "n_estimators": {
+                      "items": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  },
+                  "required": [
+                    "n_estimators",
+                    "max_depth"
+                  ],
+                  "type": "object"
+                },
+                "registrable": {
+                  "const": false
+                }
+              },
+              "required": [
+                "estimator",
+                "registrable",
+                "grid"
+              ],
+              "type": "object"
+            },
+            "estimator": {
+              "const": "xgboost"
+            },
+            "feature_list": {
+              "const": "m4_boosting.json"
+            },
+            "forced_references": {
+              "const": [
+                "feature_matrix_hospital_window:cmi"
+              ]
+            },
+            "grid": {
+              "additionalProperties": false,
+              "properties": {
+                "learning_rate": {
+                  "items": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1,
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "max_depth": {
+                  "items": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "n_estimators": {
+                  "items": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "n_estimators",
+                "max_depth",
+                "learning_rate"
+              ],
+              "type": "object"
+            },
+            "registrable": {
+              "const": true
+            }
+          },
+          "required": [
+            "estimator",
+            "feature_list",
+            "registrable",
+            "forced_references",
+            "budget_seconds",
+            "grid",
+            "check"
+          ],
+          "type": "object"
+        },
+        "m5_spatial": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_seconds": {
+              "maximum": 10800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "estimator": {
+              "const": "spatial"
+            },
+            "feature_list": {
+              "const": "m5_spatial.json"
+            },
+            "forced_references": {
+              "const": [
+                "feature_matrix_hospital_window:cmi"
+              ]
+            },
+            "grid": {
+              "additionalProperties": false,
+              "properties": {},
+              "required": [],
+              "type": "object"
+            },
+            "registrable": {
+              "const": false
+            }
+          },
+          "required": [
+            "estimator",
+            "feature_list",
+            "registrable",
+            "forced_references",
+            "budget_seconds",
+            "grid"
+          ],
+          "type": "object"
+        },
+        "m6_fixed_effects": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_seconds": {
+              "maximum": 10800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "estimator": {
+              "const": "fixed_effects"
+            },
+            "feature_list": {
+              "const": "m6_fixed_effects.json"
+            },
+            "forced_references": {
+              "const": [
+                "feature_matrix_hospital_window:cmi"
+              ]
+            },
+            "grid": {
+              "additionalProperties": false,
+              "properties": {},
+              "required": [],
+              "type": "object"
+            },
+            "registrable": {
+              "const": false
+            }
+          },
+          "required": [
+            "estimator",
+            "feature_list",
+            "registrable",
+            "forced_references",
+            "budget_seconds",
+            "grid"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "m1_ols",
+        "m2_elastic_net",
+        "m3_mixed",
+        "m4_boosting",
+        "m5_spatial",
+        "m6_fixed_effects"
+      ],
+      "type": "object"
+    },
+    "thresholds": {
+      "additionalProperties": false,
+      "properties": {
+        "max_missing_fraction": {
+          "const": 0.5
+        },
+        "significance_level": {
+          "const": 0.05
+        }
+      },
+      "required": [
+        "max_missing_fraction",
+        "significance_level"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "master_seed",
+    "seed_derivation",
+    "minimum_rows",
+    "thresholds",
+    "cross_validation",
+    "bootstrap",
+    "moran",
+    "budgets",
+    "slots",
+    "defaults_note"
+  ],
+  "title": "Models",
+  "type": "object"
+}

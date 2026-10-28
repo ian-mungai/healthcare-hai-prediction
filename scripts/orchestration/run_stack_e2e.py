@@ -277,7 +277,7 @@ def stack_up_down(env: StackEnv) -> dict[str, bool]:
         == ["airflow-apiserver", "airflow-scheduler"],
         "only the scheduler receives the broker session folder": [s for s, b in bodies.items() if any(t == "/opt/hai/broker" for _, t, _ in mount_pairs(b))]
         == ["airflow-scheduler"],
-        "the launcher mounts the four DAG-side modules read-only, never launcher.py": sorted(
+        "the launcher mounts the five DAG-side modules read-only, never launcher.py": sorted(
             t for _, t, _ in mount_pairs(scheduler) if t.startswith("/opt/hai/orchestration/")
         )
         == [
@@ -285,6 +285,7 @@ def stack_up_down(env: StackEnv) -> dict[str, bool]:
             "/opt/hai/orchestration/client.py",
             "/opt/hai/orchestration/dag_runtime.py",
             "/opt/hai/orchestration/interface.py",
+            "/opt/hai/orchestration/training_contract.py",
         ]
         and all(read_only for _, target, read_only in mount_pairs(scheduler) if target.startswith("/opt/hai/orchestration/")),
         "every service has a memory limit from the plan and a registered growth reserve": all(b["HostConfig"]["Memory"] > 0 for b in bodies.values())

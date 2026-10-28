@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from orchestration.training_contract import PROMOTION_STEPS, TRAINING_STEPS
+
 WORK_CHAIN = (
     "acquire_run",
     "catalog_up",
@@ -42,6 +44,8 @@ EXPECTED_UPSTREAM: dict[str, frozenset[str]] = {
 }
 EXPECTED_RULES = {"run_record": "none_failed_min_one_success", "catalog_release": "all_done", "final_gate": "all_done", "release_run": "all_done"}
 PIPELINE_CHAINS = {
+    "training_dag": TRAINING_STEPS,
+    "model_promotion_dag": PROMOTION_STEPS,
     "silver_transform_dag": (
         "acquire_run",
         "catalog_up",

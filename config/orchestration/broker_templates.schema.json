@@ -86,7 +86,8 @@
         "lakehouse_write",
         "collector",
         "training",
-        "serving"
+        "serving",
+        "mlflow"
       ]
     },
     "placeholder_text": {
@@ -217,7 +218,8 @@
             "seal_silver",
             "seal_gold",
             "fixture_pin",
-            "fixture_verify"
+            "fixture_verify",
+            "snapshot_training"
           ]
         },
         "params": {
@@ -243,7 +245,7 @@
               "items": {
                 "$ref": "#/$defs/placeholder_text"
               },
-              "minItems": 1
+              "minItems": 0
             },
             "expected_states": {
               "type": "object",

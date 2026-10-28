@@ -1,0 +1,43 @@
+{
+  "bootstrap": {
+    "confidence_level": 0.95,
+    "draws": 5000,
+    "generator": "numpy.random.default_rng",
+    "interval_method": "percentile",
+    "paired": true,
+    "unit": "hospital"
+  },
+  "group_boundary_inclusive": true,
+  "groups": {
+    "bed_size_band": {
+      "bands": [
+        "under_100",
+        "100_to_299",
+        "300_and_over"
+      ],
+      "column": "bed_count",
+      "cut_points": [
+        100,
+        300
+      ]
+    },
+    "census_region": {
+      "column": "state_code",
+      "lookup": "census_regions.json"
+    },
+    "hospital_subtype": {
+      "column": "provider_subtype_code"
+    },
+    "ownership_type": {
+      "column": "control_type_code"
+    }
+  },
+  "improvement_boundary_inclusive": true,
+  "interval_must_exclude_zero": true,
+  "maximum_group_rmse_increase": 0.05,
+  "minimum_group_size": 100,
+  "minimum_rmse_improvement": 0.02,
+  "null_group_values": "excluded_and_counted",
+  "population": "primary",
+  "schema": 1
+}
