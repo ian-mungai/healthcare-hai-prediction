@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_outputs.schema.json",
+  "title": "Task output commit marker",
+  "description": "Proposed marker shape. Acceptance also requires the live try, exact declarations, object version reads, byte checks and complete secret scans.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "generation", "attempt_id", "try_id", "task_arn", "template", "job_spec_sha256", "input_map_sha256", "exit_code", "timings", "bytes", "minimum_free_disk_bytes", "objects", "discarded_scratch"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"$ref": "ecs_input_map.schema.json#/$defs/run_id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "attempt_id": {"$ref": "ecs_input_map.schema.json#/$defs/identifier"},
+    "try_id": {"$ref": "ecs_input_map.schema.json#/$defs/try_id"},
+    "task_arn": {"type": "string", "pattern": "^arn:aws(?:-cn|-us-gov)?:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9_-]+/[a-f0-9]{32}$(?![\\s\\S])"},
+    "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$(?![\\s\\S])"},
+    "job_spec_sha256": {"$ref": "ecs_input_map.schema.json#/$defs/sha256"},
+    "input_map_sha256": {"$ref": "ecs_input_map.schema.json#/$defs/sha256"},
+    "exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
+    "timings": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}},
+    "bytes": {"type": "integer", "minimum": 0},
+    "minimum_free_disk_bytes": {"type": "integer", "minimum": 0},
+    "objects": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/object"}},
+    "discarded_scratch": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "size"],
+        "properties": {"name": {"$ref": "ecs_input_map.schema.json#/$defs/path"}, "size": {"type": "integer", "minimum": 0}}
+      }
+    }
+  },
+  "allOf": [{"if": {"properties": {"exit_code": {"minimum": 1}}}, "then": {"properties": {"objects": {"items": {"properties": {"name": {"enum": ["stdout.txt", "stderr.txt"]}, "kind": {"const": "controller_record"}}}}}}}],
+  "$defs": {
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key", "version_id", "sha256", "size", "kind"],
+      "properties": {
+        "name": {"$ref": "ecs_input_map.schema.json#/$defs/path"},
+        "key": {"$ref": "ecs_input_map.schema.json#/$defs/key"},
+        "version_id": {"$ref": "ecs_input_map.schema.json#/$defs/version_id"},
+        "sha256": {"$ref": "ecs_input_map.schema.json#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 0},
+        "kind": {"enum": ["controller_record", "data"]}
+      },
+      "allOf": [{"if": {"properties": {"kind": {"const": "controller_record"}}}, "then": {"properties": {"size": {"maximum": 33554432}}}}]
+    }
+  }
+}

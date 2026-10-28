@@ -2,6 +2,7 @@
   "host": {
     "requirements": ["requirements.txt"],
     "provided": {
+      "hai_bootstrap": "the first-party services/hai/bootstrap sources exposed as hai_bootstrap by the runner image; the host uses services.hai.bootstrap",
       "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json",
       "referencing": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json"
     }
