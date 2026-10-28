@@ -98,6 +98,9 @@ EXECUTION_PARAMETERS = (
 )
 SHARED_KEYS = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 AWS_READER_PARAMETERS = ("aws_polaris_reader_client_id", "aws_polaris_reader_client_secret")
+# The AWS catalog setup's writer pairs: the project user writes all ten AWS Polaris names and reads these eight besides the reader pair.
+AWS_WRITER_PARAMETERS = tuple(f"aws_polaris_{identity}_client_{part}" for identity in ("e2e", "bronze", "silver", "gold") for part in ("id", "secret"))
+AWS_POLARIS_PARAMETERS = (*AWS_READER_PARAMETERS, *AWS_WRITER_PARAMETERS)
 JOB_TASK_ROLES = ("job_execution", "job_offline_task", "job_seal_task", "job_read_task")
 
 
@@ -232,8 +235,9 @@ def approved_requests() -> dict[str, list[Request]]:
         add("ssm", "GetParameter", parameter(name), region=None)
     for name in PARAMETERS:
         add("ssm", "PutParameter", parameter(name), region=None)
-    for name in AWS_READER_PARAMETERS:
+    for name in AWS_POLARIS_PARAMETERS:
         add("ssm", "GetParameter", parameter(name), region=None)
+        add("ssm", "PutParameter", parameter(name), region=None)
     add("ssm", "PutParameter", parameter("airflow_admin"), region=None)
     add("ssm", "PutParameter", parameter("airflow_admin"), region=None, extra={"ssm:Overwrite": "false"})
     add("ssm", "GetParameters", PUBLIC_PARAMETER, region=None)
@@ -856,12 +860,40 @@ def job_project_cases() -> Iterator[Case]:
         False,
     )
     for name in AWS_READER_PARAMETERS:
-        yield Case(f"job reader: read {name}", request("ssm:GetParameter", parameter(name), region=None), True, "ReadAwsReaderPair")
-        for action in ("GetParameters", "GetParametersByPath", "PutParameter", "GetParameterHistory"):
+        yield Case(f"job reader: read {name}", request("ssm:GetParameter", parameter(name), region=None), True, "SetUpAwsPolarisPairs")
+        for action in ("GetParameters", "GetParametersByPath", "GetParameterHistory"):
             yield Case(f"job reader: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
         for suffix in ("_extra", "/child"):
             yield Case(f"job reader: refuse {name}{suffix}", request("ssm:GetParameter", parameter(name + suffix), region=None), False)
     yield Case("job reader: refuse writer parameter", request("ssm:GetParameter", parameter("aws_polaris_writer_client_secret"), region=None), False)
+
+
+def aws_polaris_pair_cases() -> Iterator[Case]:
+    """The AWS catalog setup under the project user: write the ten AWS Polaris names, read the eight writer names, nothing wider and no listing."""
+    for name in AWS_POLARIS_PARAMETERS:
+        for action in ("PutParameter", "GetParameter"):
+            yield Case(f"aws pair: {action} {name}", request(f"ssm:{action}", parameter(name), region=None), True, "SetUpAwsPolarisPairs")
+        for action in ("GetParameters", "GetParametersByPath", "GetParameterHistory", "DeleteParameter", "DeleteParameters", "LabelParameterVersion"):
+            yield Case(f"aws pair: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+        for action in ("AddTagsToResource", "RemoveTagsFromResource"):
+            yield Case(f"aws pair: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+        for suffix in ("_extra", "/child"):
+            for action in ("PutParameter", "GetParameter"):
+                yield Case(f"aws pair: refuse {action} {name}{suffix}", request(f"ssm:{action}", parameter(name + suffix), region=None), False)
+        for label, resource in (
+            ("another region", parameter(name).replace(f":{R}:", ":eu-west-2:")),
+            ("another account", parameter(name).replace(f":{A}:", ":222222222222:")),
+            ("another folder", parameter(name).replace(f"/{PARAMETER_FOLDER}/", "/another_project/")),
+        ):
+            for action in ("PutParameter", "GetParameter"):
+                yield Case(f"aws pair: refuse {action} {name} in {label}", request(f"ssm:{action}", resource, region=None), False)
+    for name in ("aws_polaris_features_client_id", "aws_polaris_features_client_secret", "aws_polaris_root_secret", "aws_polaris_writer_client_secret"):
+        for action in ("PutParameter", "GetParameter"):
+            yield Case(f"aws pair: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    yield Case("aws pair: refuse the account-wide parameter listing", request("ssm:DescribeParameters", "*"), False)
+    yield Case(
+        "aws pair: refuse a listing scoped to a pair name", request("ssm:DescribeParameters", parameter("aws_polaris_gold_client_id"), region=None), False
+    )
 
 
 FORBIDDEN = {
@@ -1321,6 +1353,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from parameter_cases()
     yield from pass_role_cases()
     yield from job_project_cases()
+    yield from aws_polaris_pair_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
     yield from execution_cases()
@@ -1596,8 +1629,52 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         del by_sid(documents, "sts", "AssumeTryOutputRole")["Condition"]
 
     def job_reader_batch_allowed(documents: dict[str, dict[str, Any]]) -> None:
-        add_action(documents, "ssm", "ReadAwsReaderPair", "ssm:GetParameters")
+        add_action(documents, "ssm", "SetUpAwsPolarisPairs", "ssm:GetParameters")
 
+    def aws_pair_action(sid: str, action: str) -> Mutation:
+        def mutate(documents: dict[str, dict[str, Any]]) -> None:
+            add_action(documents, "ssm", sid, action)
+
+        return mutate
+
+    def aws_pair_statement_dropped(documents: dict[str, dict[str, Any]]) -> None:
+        drop(documents, "ssm", "SetUpAwsPolarisPairs")
+
+    def aws_pair_listing_granted(documents: dict[str, dict[str, Any]]) -> None:
+        documents["healthcare_hai_prediction_ssm_policy"]["Statement"].append(
+            {"Sid": "ListParameters", "Effect": "Allow", "Action": "ssm:DescribeParameters", "Resource": "*"}
+        )
+
+    aws_pair_defects: dict[str, tuple[str, Mutation]] = {
+        f"aws pair resource {name} widened": (
+            f"aws pair: refuse PutParameter {name}_extra",
+            job_resource("ssm", "SetUpAwsPolarisPairs", index, parameter(name) + "*"),
+        )
+        for index, name in enumerate(AWS_POLARIS_PARAMETERS)
+        if name in AWS_WRITER_PARAMETERS
+    }
+    aws_pair_defects.update(
+        {
+            "aws pair write statement dropped": ("aws pair: PutParameter aws_polaris_gold_client_secret", aws_pair_statement_dropped),
+            "aws pair delete action added": (
+                "aws pair: refuse DeleteParameter aws_polaris_reader_client_id",
+                aws_pair_action("SetUpAwsPolarisPairs", "ssm:DeleteParameter"),
+            ),
+            "aws pair batch read added": (
+                "aws pair: refuse GetParameters aws_polaris_e2e_client_id",
+                aws_pair_action("SetUpAwsPolarisPairs", "ssm:GetParameters"),
+            ),
+            "aws pair history read added": (
+                "aws pair: refuse GetParameterHistory aws_polaris_bronze_client_secret",
+                aws_pair_action("SetUpAwsPolarisPairs", "ssm:GetParameterHistory"),
+            ),
+            "aws pair tagging added": (
+                "aws pair: refuse AddTagsToResource aws_polaris_silver_client_id",
+                aws_pair_action("SetUpAwsPolarisPairs", "ssm:AddTagsToResource"),
+            ),
+            "account-wide parameter listing granted": ("aws pair: refuse the account-wide parameter listing", aws_pair_listing_granted),
+        }
+    )
     job_defects: dict[str, tuple[str, Mutation]] = {
         f"job PassRole resource {name} widened": (
             "job pass: refuse job_try_writer",
@@ -1607,7 +1684,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     }
     job_defects.update(
         {
-            f"job reader resource {name} widened": (f"job reader: refuse {name}_extra", job_resource("ssm", "ReadAwsReaderPair", index, parameter(name) + "*"))
+            f"job reader resource {name} widened": (
+                f"job reader: refuse {name}_extra",
+                job_resource("ssm", "SetUpAwsPolarisPairs", index, parameter(name) + "*"),
+            )
             for index, name in enumerate(AWS_READER_PARAMETERS)
         }
     )
@@ -1626,6 +1706,7 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     )
     return {
         **job_defects,
+        **aws_pair_defects,
         "DescribeContainerInstances is granted on the cluster ARN instead of the container-instance ARN (review round 5 finding 6)": (
             "ecs:DescribeContainerInstances on container-instance",
             container_instance_on_cluster,
