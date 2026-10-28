@@ -18,9 +18,24 @@ PLANTS: dict[str, tuple[str, str]] = {
     "drops tag propagation": ('"TASK_DEFINITION"', '"NONE"'),
     "starts a second one-shot task": ("        if running:\n", "        if False:\n"),
     "leaves the host on after a failure": (
-        "            else:\n                self.host_off()\n            raise",
-        "            else:\n                pass\n            raise",
+        "        try:\n            self.host_off()\n        except HostSessionError",
+        "        try:\n            pass\n        except HostSessionError",
     ),
+    "leaves the host on after a failed bootstrap": ('self.stop_after_failure("bootstrap", keep_on)', "pass"),
+    "ignores an interruption": (
+        '        finally:\n            if not succeeded:\n                self.stop_after_failure("start", keep_on)',
+        '        except HostSessionError:\n            self.stop_after_failure("start", keep_on)\n            raise',
+    ),
+    "ignores the termination signal": ("raise TerminationRequested(signal.Signals(number).name)", "return"),
+    "launches without a client token": ('            "--client-token",\n            token,\n', ""),
+    "keeps the token after a confirmed launch": ("            del self.launch_tokens[key]\n            return launched", "            return launched"),
+    "treats a lost reply as absent": ("if UNCONFIRMED not in str(error):", "if True:"),
+    "accepts a success after the deadline": ("if value and self.clock.now() <= end:", "if value:"),
+    "gives every call the full limit": ("timeout=remaining)", "timeout=CALL_SECONDS)"),
+    "sleeps past the deadline": ("self.clock.sleep(min(every, end - self.clock.now()))", "self.clock.sleep(every)"),
+    "prints the stopped reason": ("category(stopped_task.get('stoppedReason'), STOPPED_REASONS)", "stopped_task.get('stoppedReason')"),
+    "prints the rollout reason": ('category(deployment.get("rolloutStateReason", ""), ROLLOUT_REASONS)', 'deployment.get("rolloutStateReason", "")'),
+    "prints the RunTask reason": ('run_task_code(item.get("reason"))', 'str(item.get("reason"))'),
     "ignores a FAILED rollout": ('deployment.get("rolloutState") == FAILED_ROLLOUT', 'deployment.get("rolloutState") == "NEVER"'),
     "skips the registration wait": ("len(self.active_instances()) == 1", "True"),
     "puts postgres last": ("key != FIRST_SERVICE", "key == FIRST_SERVICE"),
@@ -29,7 +44,6 @@ PLANTS: dict[str, tuple[str, str]] = {
     "bootstraps before services are stable": ("not self.services_stable(gate)", "False"),
     "never gives up on failed polls": ("failed >= FAILED_POLLS_ALLOWED", "failed >= 10**6"),
     "does not verify the termination": ('not group.get("Instances")', "True"),
-    "ignores an interruption": ("except BaseException", "except Exception"),
     "ignores pending tasks": (' and not service.get("pendingCount")', ""),
     "does not force the deployment": ('"--force-new-deployment"]', '"--no-force-new-deployment"]'),
     "prints the task ARN": ('self.step(key, f"exit codes {exits}")', 'self.step(key, f"exit codes {exits} {task}")'),
@@ -53,7 +67,7 @@ def caught(source: str) -> bool:
         try:
             if not all(function().values()):
                 return True
-        except Exception:
+        except cases.CASE_ERRORS:
             return True
     return False
 

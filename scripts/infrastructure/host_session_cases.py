@@ -18,7 +18,13 @@ from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_
 from scripts.infrastructure.host_session_stand_in import CLUSTER, FAMILIES, GROUP, PROFILE, PROJECT, PROVIDER, REGION, SERVICES, StandInHost
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b")
+ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
+CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, HostSessionError)
+
+
+def session_module() -> Any:
+    """The ``host_session`` module as it is loaded now (a plant replaces it in ``sys.modules``)."""
+    return importlib.import_module("scripts.infrastructure.host_session")
 
 
 def names() -> Names:
@@ -199,6 +205,128 @@ def bootstrap_guards() -> dict[str, bool]:
     }
 
 
+def lost_run_task_reply() -> dict[str, bool]:
+    host, session, _ = build({"lose_run_task_reply", "stale_list_tasks"})
+    message = failure(session.start)
+    first = [entry["options"].get("--client-token") for entry in host.log if entry["operation"] == "run-task"]
+    session.start()
+    tokens = [entry["options"].get("--client-token", [None])[0] for entry in host.log if entry["operation"] == "run-task"]
+    lost_host, lost_session, _ = build({"lose_run_task_reply:99", "stale_list_tasks"})
+    unconfirmed = failure(lost_session.start)
+    return {
+        "a lost reply does not fail the start": message is None and host.prepared,
+        "the retry reuses the client token": len(first) == 2 and first[0] == first[1] and first[0] is not None,
+        "the accepted launch is not doubled": len([task for task in host.tasks.values() if task["key"] == "host_prepare"]) == 2 and len(set(tokens)) == 2,
+        "a confirmed launch gives the next launch a new token": len(tokens) == 3 and tokens[0] == tokens[1] and tokens[0] != tokens[2],
+        "repeated lost replies fail as unconfirmed with the host off": unconfirmed is not None
+        and "unconfirmed" in unconfirmed
+        and lost_host.desired == 0
+        and len(lost_host.tasks) == 1,
+    }
+
+
+def late_success() -> dict[str, bool]:
+    host, session, _ = build({"slow_calls:24"})
+    session.host_on()
+    start, before = host.now, len(host.log)
+    message = failure(lambda: session.wait("registration", lambda: len(session.active_instances()) == 1, 10, 15))
+    waited = [entry["timeout"] for entry in host.log[before:] if entry["operation"] in {"list-container-instances", "describe-container-instances"}]
+    elapsed = host.now - start
+
+    def slow_check() -> bool:
+        host.advance(24)
+        return True
+
+    slow = failure(lambda: session.wait("slow check", slow_check, 10, 15))
+    quiet = host.now
+    failure(lambda: session.wait("nothing", lambda: False, 20, 15))
+    slept = host.now - quiet
+    return {
+        "a success after the deadline is rejected": message is not None and "not reached within 10 s" in message,
+        "a check that succeeds after the deadline is rejected": slow is not None and "not reached within 10 s" in slow,
+        "every call gets the remaining budget": bool(waited) and all(limit is not None and limit <= 10 for limit in waited),
+        "the wait ends near its deadline": elapsed <= 10,
+        "a sleep never runs past the deadline": slept <= 20,
+    }
+
+
+def bootstrap_failure_stops_host() -> dict[str, bool]:
+    host, session, _ = build()
+    session.start()
+    host.faults.add("exit_code:polaris_bootstrap=1")
+    message = failure(session.bootstrap)
+    kept_host, kept, kept_lines = build()
+    kept.start()
+    kept_host.faults.add("exit_code:polaris_bootstrap=1")
+    failure(lambda: kept.bootstrap(keep_on=True))
+    interrupted_host, interrupted, _ = build()
+    interrupted.start()
+    interrupted_host.faults.add("interrupt_run_task")
+    stopped = False
+    try:
+        interrupted.bootstrap()
+    except KeyboardInterrupt:
+        stopped = True
+    refused_host, refused, _ = build()
+    before = failure(refused.bootstrap)
+    return {
+        "a failed bootstrap fails with the exit code": message is not None and "polaris_bootstrap" in message,
+        "a failed bootstrap stops and verifies the host": host.desired == 0 and host.instance_up_at is None,
+        "keep-on leaves the host on after a failed bootstrap": kept_host.desired == 1 and any("host_kept_on" in line for line in kept_lines),
+        "an interrupted bootstrap stops the host": stopped and interrupted_host.desired == 0 and interrupted_host.instance_up_at is None,
+        "a refused bootstrap changes nothing": before is not None and refused_host.desired == 0 and not writes(refused_host),
+    }
+
+
+def terminated_session() -> dict[str, bool]:
+    module = session_module()
+    restore = module.install_termination_handler()
+    try:
+        host, session, _ = build({"signal_run_task"})
+        stopped = False
+        try:
+            session.start()
+        except module.TerminationRequested:
+            stopped = True
+        boot_host, boot, _ = build()
+        boot.start()
+        boot_host.faults.add("signal_run_task")
+        boot_stopped = False
+        try:
+            boot.bootstrap()
+        except module.TerminationRequested:
+            boot_stopped = True
+    finally:
+        restore()
+    return {
+        "SIGTERM ends a start with the termination error": stopped,
+        "SIGTERM during a start stops and verifies the host": host.desired == 0 and host.instance_up_at is None,
+        "SIGTERM during a bootstrap stops and verifies the host": boot_stopped and boot_host.desired == 0 and boot_host.instance_up_at is None,
+    }
+
+
+def failure_output_privacy() -> dict[str, bool]:
+    exit_host, exit_session, exit_lines = build({"leaky_reasons", "exit_code:host_prepare=3"})
+    exit_message = failure(exit_session.start)
+    rollout_host, rollout_session, rollout_lines = build({"leaky_reasons"})
+    rollout_host.prepared = False
+    rollout_host.advance(0)
+    rollout_session.host_on()
+    for name in SERVICES.values():
+        rollout_session.call("ecs", "update-service", ["--cluster", CLUSTER, "--service", name, "--force-new-deployment"])
+    rollout_message = failure(lambda: rollout_session.wait("services stable", rollout_session.services_stable, 1200, 15))
+    run_host, run_session, run_lines = build({"leaky_reasons", "run_task_failure"})
+    run_message = failure(run_session.start)
+    shown = [*exit_lines, *rollout_lines, *run_lines, exit_message or "", rollout_message or "", run_message or ""]
+    return {
+        "a stopped reason reaches the output as a category": exit_message is not None and "essential container exited" in exit_message,
+        "a rollout reason reaches the output as a category": rollout_message is not None and "circuit breaker" in rollout_message,
+        "a RunTask reason keeps its fixed code": run_message is not None and "RESOURCE:MEMORY" in run_message,
+        "failure output names no ARN, account ID or instance ID": not any(ARN_OR_ACCOUNT.search(line) for line in shown) and bool(shown),
+        "the hosts are off after the start failures": all(item.desired == 0 for item in (exit_host, run_host)),
+    }
+
+
 def load_names_order() -> dict[str, bool]:
     module: Any = importlib.import_module("scripts.infrastructure.host_session")
     platform = {
@@ -256,6 +384,11 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "throttled_poll": throttled_poll,
     "interrupted_start": interrupted_start,
     "bootstrap_guards": bootstrap_guards,
+    "lost_run_task_reply": lost_run_task_reply,
+    "late_success": late_success,
+    "bootstrap_failure_stops_host": bootstrap_failure_stops_host,
+    "terminated_session": terminated_session,
+    "failure_output_privacy": failure_output_privacy,
     "load_names_order": load_names_order,
     "status_read_only": status_read_only,
 }

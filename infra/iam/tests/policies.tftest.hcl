@@ -377,7 +377,7 @@ run "host_launch_template" {
           "ECS_CLUSTER=example_project_cluster_dev", "ECS_ENABLE_TASK_IAM_ROLE=true", "ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST=true",
           "ECS_AWSVPC_BLOCK_IMDS=true", "ECS_ENABLE_AWSLOGS_EXECUTIONROLE_OVERRIDE=true", "systemctl enable --now amazon-ssm-agent",
           "data_volume_name=\"example_project_host_data_dev\"", "address_name=\"example_project_host_dev\"", "project_tag=\"example_project\"",
-          "volume=$(run_within 60 \"Finding the data volume\" aws ec2 describe-volumes", "allocation=$(run_within 60 \"Finding the Elastic IP\" aws ec2 describe-addresses",
+          "current_step=\"Finding the data volume\"\nvolume=$(run_within 60 \"$current_step\" aws ec2 describe-volumes", "current_step=\"Finding the Elastic IP\"\nallocation=$(run_within 60 \"$current_step\" aws ec2 describe-addresses",
           "\"Name=tag:Project,Values=$project_tag\"", "^vol-[0-9a-f]{8,17}$", "^eipalloc-[0-9a-f]{8,17}$"
         ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
       ]) &&

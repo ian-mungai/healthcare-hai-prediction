@@ -10,7 +10,7 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from scripts.infrastructure.host_session_cases import CASES, REPO_ROOT
+from scripts.infrastructure.host_session_cases import CASE_ERRORS, CASES, REPO_ROOT
 
 OUTPUT = REPO_ROOT / "data" / "e2e" / "host_session"
 
@@ -21,7 +21,7 @@ def run_cases() -> dict[str, dict[str, bool]]:
     for name, function in CASES.items():
         try:
             results[name] = function()
-        except Exception as error:
+        except CASE_ERRORS as error:
             results[name] = {f"the case ended with {type(error).__name__}": False}
     return results
 
