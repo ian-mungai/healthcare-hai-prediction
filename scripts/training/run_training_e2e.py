@@ -168,6 +168,17 @@ def _source_digest() -> str:
     return digest.hexdigest()
 
 
+class CheckOutputError(ValueError):
+    """A passing check printed JSON that is not an object."""
+
+
+def _check_record(stdout: str) -> dict[str, Any]:
+    record = json.loads(stdout)
+    if not isinstance(record, dict):
+        raise CheckOutputError(f"check output must be a JSON object, not {type(record).__name__}")
+    return record
+
+
 class Report:
     def __init__(self) -> None:
         self.steps: list[dict[str, Any]] = []
@@ -192,8 +203,8 @@ class Report:
             }
             self.steps.append(record)
             if ok and expected is None:
-                return json.loads(result.stdout)
-        except (OSError, TimeoutExpired, json.JSONDecodeError) as error:
+                return _check_record(result.stdout)
+        except (OSError, TimeoutExpired, json.JSONDecodeError, CheckOutputError) as error:
             self.steps.append({"name": name, "design_case": design_case, "verdict": "fail", "error": type(error).__name__})
         return None
 
@@ -645,6 +656,17 @@ def _lock_cases(report: Report, scratch: Path) -> None:
         lambda f: _edit(f / "wheels.json", lambda d: d["release_history"].pop("psycopg2-binary")),
         "release history",
     )
+    run("array_wheel_inventory", lambda f: _write(f / "wheels.json", []), "wheel inventory: root")
+
+
+def _check_output_cases(report: Report) -> None:
+    for name, stdout in (("array_check_output", "[]"), ("string_check_output", '"ok"')):
+        try:
+            _check_record(stdout)
+        except CheckOutputError as error:
+            report.assertion(name, "JSON object" in str(error), error=str(error))
+        else:
+            report.assertion(name, False, error="no CheckOutputError")
 
 
 def _committed_feature_lists(report: Report, commit: str) -> None:
@@ -670,6 +692,7 @@ def main() -> int:
             _guard_cases(report, Path(scratch))
             _committed_feature_lists(report, revision.stdout.strip())
             _lock_cases(report, Path(scratch))
+            _check_output_cases(report)
     except (OSError, ValueError, KeyError) as error:
         report.steps.append({"name": "fixture_setup", "verdict": "fail", "error": type(error).__name__, "detail": str(error)})
     report.assertion("source_unchanged_during_run", _source_digest() == before)
