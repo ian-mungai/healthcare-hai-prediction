@@ -1967,7 +1967,7 @@ def bootstrap_repair_scenarios(spark: Any, root: Path) -> dict[str, bool]:
         patch.object(bronze, "DEPLOYMENT", deployment),
         patch.object(bronze, "REPORT_ROOT", report_root),
         patch.object(bronze, "SCRATCH", root / "repair_scratch"),
-        patch.object(bronze, "S3Storage", lambda: storage),
+        patch.object(bronze, "S3Storage", lambda *, task_role=False: storage),
         patch.object(bronze, "load_table_map", lambda: config),
         patch.object(bronze, "load_retired", bronze.RetiredObjects),
         patch.object(sys, "argv", ["bronze", "--bootstrap-all", "--repair-tables", "repair_first,repair_second"]),
