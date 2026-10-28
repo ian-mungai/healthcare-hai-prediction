@@ -71,13 +71,15 @@ def close_pipes(process: subprocess.Popen[str]) -> None:
             pipe.close()
 
 
-def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None = None) -> bool:
+def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None = None, grace_seconds: float | None = None) -> bool:
     """Stop every member of a process group: TERM, then KILL after the grace period, and confirm none is left.
 
     ``leader`` is the child that started the group. It is reaped here, because an unreaped zombie keeps the group alive.
+    ``grace_seconds`` is the time between TERM and KILL; None means ``STOP_GRACE_SECONDS``.
     Returns True when a member survived KILL for ``CONFIRM_SECONDS``.
     """
-    for signal_number, wait_seconds in ((signal.SIGTERM, STOP_GRACE_SECONDS), (signal.SIGKILL, CONFIRM_SECONDS)):
+    grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
+    for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process_group, signal_number)
         end = time.monotonic() + wait_seconds
@@ -118,6 +120,7 @@ def run_command(
     env: Mapping[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     check: bool = False,
+    grace_seconds: float | None = None,
 ) -> CompletedProcess[str]:
     """Run ``program`` with ``args`` and return its exit code and captured text output.
 
@@ -135,6 +138,9 @@ def run_command(
         Seconds before the program is stopped.
     check : bool
         Raise when the program exits non-zero.
+    grace_seconds : float, optional
+        Seconds between TERM and KILL when the group is stopped; ``STOP_GRACE_SECONDS`` when omitted. A caller whose own deadline must hold
+        within a bound shorter than that passes a smaller value.
 
     Returns
     -------
@@ -166,13 +172,13 @@ def run_command(
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except TimeoutExpired as expired:
-        survived = stop_process_group(process.pid, process)
+        survived = stop_process_group(process.pid, process, grace_seconds)
         close_pipes(process)
         if survived:
             raise ProcessGroupSurvived(process.args, timeout, process.pid, expired.stdout, expired.stderr) from None
         raise
     except BaseException:
-        stop_process_group(process.pid, process)
+        stop_process_group(process.pid, process, grace_seconds)
         close_pipes(process)
         raise
     if check and process.returncode:

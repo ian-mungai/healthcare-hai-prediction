@@ -37,7 +37,6 @@ WATCHED = ("scripts/process.py", "scripts/quality/run_process_e2e.py")
 # The grace periods of the cases (the real defaults are checked by a separate case); short, so the cases stay quick.
 CASE_GRACE_SECONDS = 1.0
 CASE_TIMEOUT_SECONDS = 1.0
-PID_WAIT_SECONDS = 10.0
 # The child is one literal bash program; the folder and the modes reach it and its grandchild through the environment. A program that ignores TERM
 # does so for its children too (an ignored signal survives exec).
 GRANDCHILD = """
@@ -71,16 +70,6 @@ def alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
-
-
-def pid_of(path: Path) -> int | None:
-    """Read a pid file, waiting up to PID_WAIT_SECONDS for the child to write it."""
-    end = time.monotonic() + PID_WAIT_SECONDS
-    while time.monotonic() < end:
-        if path.exists() and path.read_text().strip():
-            return int(path.read_text().strip())
-        time.sleep(0.05)
-    return None
 
 
 class Scratch:
