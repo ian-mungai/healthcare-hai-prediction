@@ -4,6 +4,7 @@ Run from the repository root:
 
     .venv/bin/python -m scripts.quality.docker_calls                 # every Python and shell file Git tracks or would track
     .venv/bin/python -m scripts.quality.docker_calls path/a.py b.sh  # named files (the pre-commit form)
+    .venv/bin/python -m scripts.quality.docker_calls rebind          # refresh the reviewed entries' hashes and line pointers
 
 Only ``orchestration/launcher.py`` changes container, network or volume state, so it is the only file that may start ``docker``, open
 the Docker socket or run ``docker compose``. This is a guard, not a proof: a static check of Python cannot see every route a program can
@@ -999,6 +1000,103 @@ def site_entry(models: dict[str, FileModel], relative: str, root: Path, line: in
     }
 
 
+def code_lines(text: str, code_sha: str) -> list[int]:
+    """The 1-based lines of a text whose stripped content has the given SHA-256."""
+    return [number for number, line in enumerate(text.splitlines(), 1) if hashlib.sha256(line.strip().encode()).hexdigest() == code_sha]
+
+
+def reviewed_text(root: Path, relative: str, file_sha: str) -> str | None:
+    """The reviewed version of a file: the working copy, the staged copy or the HEAD copy whose SHA-256 is the entry's file hash."""
+    if sha256_file(root / relative) == file_sha:
+        return (root / relative).read_text(errors="replace")
+    for revision in (":", "HEAD:"):
+        try:
+            shown = run_command("git", ["show", f"{revision}{relative}"], cwd=root, timeout=60)
+        except UnicodeDecodeError:
+            continue
+        if shown.returncode == 0 and hashlib.sha256(shown.stdout.encode()).hexdigest() == file_sha:
+            return shown.stdout
+    return None
+
+
+def rebound_line(root: Path, entry: dict[str, object], text: str) -> tuple[int | None, str]:
+    """The current line of an entry's reviewed code and, when there is none, why: the line keeps its ordinal among identical lines.
+
+    Without the reviewed copy only a single identical line is certain; the guard still compares the finding count."""
+    old = int(str(entry["line"]))
+    code_sha = str(entry["code_sha256"])
+    hits = code_lines(text, code_sha)
+    if not hits:
+        return None, "the reviewed line no longer exists"
+    reviewed = reviewed_text(root, str(entry["path"]), str(entry["file_sha256"]))
+    if reviewed is None:
+        return (
+            (hits[0], "")
+            if len(hits) == 1
+            else (None, f"the reviewed line is ambiguous: lines {hits} match and the reviewed copy is not in the work tree, index or HEAD")
+        )
+    old_hits = code_lines(reviewed, code_sha)
+    if old not in old_hits:
+        return None, f"the reviewed line is ambiguous: line {old} of the reviewed copy is not the reviewed code"
+    if len(old_hits) != len(hits):
+        return None, f"the reviewed line is ambiguous: {len(old_hits)} identical lines were reviewed and {len(hits)} match now"
+    return hits[old_hits.index(old)], ""
+
+
+def digests(value: object) -> dict[str, str]:
+    """An entry's dependency hashes as a typed mapping."""
+    return {str(name): str(digest) for name, digest in value.items()} if isinstance(value, dict) else {}
+
+
+def rebind(root: Path, reviewed_file: Path) -> tuple[list[str], list[str]]:
+    """Refresh every entry's file hash, dependencies and line pointer; the changes made, or the failures and no write.
+
+    A pointer moves only to a line whose stripped text has the entry's code hash, keeping its ordinal among identical lines. The other
+    fields are never changed, and no entry is added or removed. The file is replaced in one rename, and only when something changed."""
+    raw = reviewed_file.read_text()
+    document = json.loads(raw)
+    sites: list[dict[str, object]] = document["sites"]
+    models = parse(root, sorted({str(entry["path"]) for entry in sites}))
+    changes: list[str] = []
+    failures: list[str] = []
+    updated = []
+    for entry in sites:
+        relative, old = str(entry["path"]), entry["line"]
+        if relative not in models:
+            failures.append(f"{relative}:{old}: the file is missing or does not parse")
+            updated.append(entry)
+            continue
+        text = (root / relative).read_text(errors="replace")
+        line, problem = rebound_line(root, entry, text)
+        if line is None:
+            failures.append(f"{relative}:{old}: {problem}")
+            updated.append(entry)
+            continue
+        new = {**entry, "line": line, "file_sha256": sha256_file(root / relative), "dependencies": dependencies(models, relative, root)}
+        if line != old:
+            changes.append(f"moved {relative}: line {old} -> {line}")
+        if new["file_sha256"] != entry["file_sha256"]:
+            changes.append(f"file hash {relative}: {str(entry['file_sha256'])[:12]} -> {str(new['file_sha256'])[:12]}")
+        before, after = digests(entry["dependencies"]), digests(new["dependencies"])
+        for name in sorted({*before, *after}):
+            if before.get(name) != after.get(name):
+                was, now = (str(value).removeprefix("sha256:")[:12] if value else "absent" for value in (before.get(name), after.get(name)))
+                changes.append(f"dependency {relative}: {name} {was} -> {now}")
+        updated.append(new)
+    for entry in updated:
+        lines = (root / str(entry["path"])).read_text(errors="replace").splitlines() if (root / str(entry["path"])).is_file() else []
+        number = int(str(entry["line"]))
+        if not failures and not (0 < number <= len(lines) and hashlib.sha256(lines[number - 1].strip().encode()).hexdigest() == entry["code_sha256"]):
+            failures.append(f"{entry['path']}:{number}: the pointer does not name the reviewed code after the rebind")
+    if failures or not changes:
+        return changes if not failures else [], failures
+    indent = 2 if raw.startswith('{\n  "') else 1
+    temporary = reviewed_file.with_name(reviewed_file.name + ".rebind")
+    temporary.write_text(json.dumps({**document, "sites": updated}, indent=indent, ensure_ascii=False) + ("\n" if raw.endswith("\n") else ""))
+    temporary.replace(reviewed_file)
+    return changes, []
+
+
 def reviewed_findings(entries: list[dict[str, object]], found: list[Finding], models: dict[str, FileModel], relative: str, root: Path) -> list[Finding]:
     """The findings left after the reviewed entries of one file: an entry clears its findings only while the file, its imported modules,
     its finding class and its occurrence count are exactly as reviewed; an entry that does not match is a finding itself."""
@@ -1058,9 +1156,21 @@ def tracked_files(root: Path) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Check the named files, or every tracked Python and shell file; print each finding and exit 1 when there is one."""
+    """Check the named files, or every tracked Python and shell file; print each finding and exit 1 when there is one. ``rebind`` refreshes
+    the reviewed entries instead, prints every change and exits 1, writing nothing, when an entry's reviewed line is gone or ambiguous."""
     arguments = sys.argv[1:] if argv is None else argv
     root = Path(__file__).resolve().parents[2]
+    if arguments == ["rebind"]:
+        changes, failures = rebind(root, root / REVIEWED)
+        for failure in failures:
+            sys.stderr.write(f"{failure}\n")
+        if failures:
+            sys.stderr.write(f"docker-calls rebind: {len(failures)} entries need a new review; nothing written to {REVIEWED}\n")
+            return 1
+        for change in changes:
+            sys.stdout.write(f"{change}\n")
+        sys.stdout.write(f"docker-calls rebind: {len(changes)} changes written to {REVIEWED}\n" if changes else "docker-calls rebind: no change\n")
+        return 0
     findings = check(arguments or tracked_files(root), root)
     for finding in findings:
         sys.stderr.write(f"{finding.location}: {finding.problem}; {FIX}\n")

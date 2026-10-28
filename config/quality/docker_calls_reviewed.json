@@ -396,7 +396,7 @@
         "scripts/lakehouse/run_staging_e2e.py": "sha256:117d731d371bca5566b0dd3968abf1c1867859258ad7b861a3d0774395427dc7",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/docker_calls.py": "sha256:ee3b124eaecceb3568ed78b821c057fb92763c963926996557c23459c6bce911"
+        "scripts/quality/docker_calls.py": "sha256:e0d6a550d82fd738475cfe0828da4eed96c2c8a72ce64a97bbb1d70de39fdb15"
       },
       "reason": "detached_python runs a Python snippet given by a launcher E2E case (sys.executable -c); both callers' snippets call orchestration.launcher client methods only",
       "lines": [
