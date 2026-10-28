@@ -61,6 +61,7 @@ SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", 
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
 JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
 ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
+LEGACY_VARIABLES = ("airflow_admin_legacy_secret_name",)
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
 VARIABLES = "infra/iam/variables.tf"
 LOOPBACK = {"127.0.0.1", "localhost"}
@@ -159,10 +160,10 @@ def variable_names(variables: Path) -> dict[str, str]:
     stack passes the same variables to its own policy templates, so the Python checks and Terraform read one default per name.
     """
     defaults = terraform_variables(variables)
-    missing = [name for name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES) if name not in defaults]
+    missing = [name for name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES, *LEGACY_VARIABLES) if name not in defaults]
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
-    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES) or value.startswith(PREFIX)]
+    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES, *LEGACY_VARIABLES) or value.startswith(PREFIX)]
     return {name.upper(): defaults[name] for name in wanted}
 
 

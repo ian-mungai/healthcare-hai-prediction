@@ -83,6 +83,8 @@ PARAMETERS = (
     "redis_password",
 )
 READ_ONLY_PARAMETERS = ("airflow_admin",)
+# The hand-made Secrets Manager copy of the Airflow administrator password; the project user may read it once to clone it.
+LEGACY_AIRFLOW_ADMIN = "healthcare-hai-prediction/airflow-admin"
 # The eight control-plane parameters the task execution role injects; each is one of PARAMETERS.
 EXECUTION_PARAMETERS = (
     "postgres_password",
@@ -222,6 +224,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("logs", "DescribeLogGroups", "*")
     add("secretsmanager", "GetSecretValue", arn("secretsmanager", "secret:bls_api_key-AbCdEf"), region=None)
     add("secretsmanager", "DescribeSecret", arn("secretsmanager", "secret:jev_api_key-AbCdEf"), region=None)
+    add("secretsmanager", "GetSecretValue", arn("secretsmanager", f"secret:{LEGACY_AIRFLOW_ADMIN}-AbCdEf"), region=None)
     add("sns", "CreateTopic", TOPIC, region=None, **tagged)
     for action in ("DeleteTopic", "GetTopicAttributes", "SetTopicAttributes", "ListTagsForResource", "TagResource", "UntagResource"):
         add("sns", action, TOPIC, region=None, tags={"DataClassification": "x"} if action.endswith("agResource") else None)
@@ -231,6 +234,8 @@ def approved_requests() -> dict[str, list[Request]]:
         add("ssm", "PutParameter", parameter(name), region=None)
     for name in AWS_READER_PARAMETERS:
         add("ssm", "GetParameter", parameter(name), region=None)
+    add("ssm", "PutParameter", parameter("airflow_admin"), region=None)
+    add("ssm", "PutParameter", parameter("airflow_admin"), region=None, extra={"ssm:Overwrite": "false"})
     add("ssm", "GetParameters", PUBLIC_PARAMETER, region=None)
     add(
         "ssm",
@@ -697,7 +702,11 @@ def console_cases() -> Iterator[Case]:
 
 def parameter_cases() -> Iterator[Case]:
     """Parameter Store: exact names, no batch or path read, no write to the read-only name."""
-    yield Case("parameter: write the Airflow administrator password", request("ssm:PutParameter", parameter("airflow_admin"), region=None), False)
+    yield Case(
+        "parameter: overwrite the Airflow administrator password",
+        request("ssm:PutParameter", parameter("airflow_admin"), extra={"ssm:Overwrite": "true"}, region=None),
+        False,
+    )
     yield Case("parameter: read another name in the project folder", request("ssm:GetParameter", parameter("other_secret"), region=None), False)
     yield Case("parameter: write another name in the project folder", request("ssm:PutParameter", parameter("other_secret"), region=None), False)
     yield Case("parameter: read a name without the project folder", request("ssm:GetParameter", arn("ssm", "parameter/postgres_password"), region=None), False)
@@ -737,6 +746,17 @@ def parameter_cases() -> Iterator[Case]:
         "kms:CreateGrant",
     ):
         yield Case(f"parameter: no {name}", request(name, parameter("postgres_password"), region=None), False)
+    for action in ("secretsmanager:DescribeSecret", "secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret"):
+        yield Case(
+            f"secret: no {action} on the legacy Airflow password",
+            request(action, arn("secretsmanager", f"secret:{LEGACY_AIRFLOW_ADMIN}-AbCdEf"), region=None),
+            False,
+        )
+    yield Case(
+        "secret: a name that only starts like the legacy Airflow password",
+        request("secretsmanager:GetSecretValue", arn("secretsmanager", f"secret:{LEGACY_AIRFLOW_ADMIN}_extra-AbCdEf"), region=None),
+        False,
+    )
     for secret in ("other_key", "airflow-admin", "bls_api_key_extra"):
         yield Case(
             f"secret: {secret} is not a shared key",
@@ -1467,6 +1487,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def admin_password_write(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "ssm", "WriteManagedProjectParameters")["Resource"] = by_sid(documents, "ssm", "ReadProjectParameters")["Resource"]
 
+    def airflow_clone_overwrite(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ssm", "CreateAirflowAdminPasswordOnce")["Condition"]
+
     def roles_wildcard(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sts", "AssumeLakehouseRolesOnly")["Resource"] = f"arn:aws:iam::{A}:role/*"
 
@@ -1656,7 +1679,8 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "image push and pull on every repository": ("ecr:PutImage in another project", ecr_cross_project),
         "parameter read by wildcard": ("parameter: read another name in the project folder", parameter_wildcard),
         "parameter path read": ("forbidden ssm:GetParametersByPath", parameter_path_read),
-        "write access to the read-only administrator password": ("parameter: write the Airflow administrator password", admin_password_write),
+        "write access to the read-only administrator password": ("parameter: overwrite the Airflow administrator password", admin_password_write),
+        "the Airflow password clone may overwrite": ("parameter: overwrite the Airflow administrator password", airflow_clone_overwrite),
         "sts AssumeRole on every role": ("AssumeRole administrator", roles_wildcard),
         "the percent-sign deny is missing": ("single copy: PutObject leaf", percent_deny_missing),
         "the older-grants deny is missing": ("single copy: PutObject bronze_objects", older_grants_deny_missing),

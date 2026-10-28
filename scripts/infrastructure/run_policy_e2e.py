@@ -126,6 +126,8 @@ AWS_READER = ("ssm", "ReadAwsReaderPair")
 TASK_EXECUTION = "owner_task_execution"
 STS = ("sts", "AssumeLakehouseRolesOnly")
 INJECT = (TASK_EXECUTION, "InjectNamedParameters")
+AIRFLOW_CLONE_READ = ("secretsmanager", "CloneLegacyAirflowAdminPassword")
+AIRFLOW_CLONE_WRITE = ("ssm", "CreateAirflowAdminPasswordOnce")
 
 
 def role_arn(name: str) -> str:
@@ -141,6 +143,8 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         STS: {role_arn(names[key]) for key in ROLE_PLACEHOLDERS},
         INJECT: {parameter_arn(names[key]) for key in EXECUTION_PLACEHOLDERS},
         AWS_READER: {parameter_arn(names[key]) for key in AWS_READER_PLACEHOLDERS},
+        AIRFLOW_CLONE_READ: {secret_arn(names["AIRFLOW_ADMIN_LEGACY_SECRET_NAME"])},
+        AIRFLOW_CLONE_WRITE: {parameter_arn(names["AIRFLOW_ADMIN_SECRET_NAME"])},
     }
 
 
@@ -224,7 +228,13 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         for resource in as_list(statement["Resource"])
         if ":parameter" in resource
     } - {public}
-    allowed = expected[("ssm", "ReadProjectParameters")] | expected[("ssm", "WriteManagedProjectParameters")] | expected[INJECT] | expected[AWS_READER]
+    allowed = (
+        expected[("ssm", "ReadProjectParameters")]
+        | expected[("ssm", "WriteManagedProjectParameters")]
+        | expected[INJECT]
+        | expected[AWS_READER]
+        | expected[AIRFLOW_CLONE_WRITE]
+    )
     problems += difference("parameter resources of all policies against the injected names", granted, allowed)
     named_secrets = {
         resource
@@ -233,7 +243,8 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         for resource in as_list(statement["Resource"])
         if ":secret:" in resource
     }
-    problems += difference("secret resources of all policies against the injected names", named_secrets, expected[("secretsmanager", "ReadSharedApiKeys")])
+    shared_or_clone = expected[("secretsmanager", "ReadSharedApiKeys")] | expected[AIRFLOW_CLONE_READ]
+    problems += difference("secret resources of all policies against the injected names", named_secrets, shared_or_clone)
     return problems
 
 
