@@ -38,8 +38,8 @@ GROUPS_DEPENDENCIES = (
 RECORDED = 'recorded = run_command("bash", ["-c", job["steps"][0].get("run", "")], cwd=root, env={**os.environ, "GITHUB_ENV": str(marker)}, timeout=10)'
 DEADLINE_RUN = "run = run_command("
 DEADLINE_ARGUMENT = '["-c", HOOK_DEADLINE_PROGRAM, "--root", str(root), "--group", "code", "--output-directory", str(output)],'
-CALL = 'run_command(os.environ["TOOL"], [], timeout=5)'
-TWIN = 'run_command(os.environ["TWIN"], [], timeout=5)'
+CALL = "run_command(os.environ[TOOL_NAME], [], timeout=5)"
+TWIN = "run_command(os.environ[TWIN_NAME], [], timeout=5)"
 PROBLEM = "whose program the check cannot prove"
 RUN_SECONDS = 300
 HELPER_SOURCE = 'VALUE = "one"\n'
@@ -49,6 +49,8 @@ import os
 
 from pkg import helper
 from scripts.process import run_command
+
+TOOL_NAME, TWIN_NAME = "TOOL", "TWIN"
 
 
 def first() -> None:
