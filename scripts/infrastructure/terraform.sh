@@ -6,6 +6,9 @@ cd "$repo_root"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 stack=storage
 admin_profile=""
+preparation_inputs=""
+preparation_sha256=""
+identity_probe=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,10 +17,32 @@ while [[ $# -gt 0 ]]; do
       stack="${1#--}"
       shift
       ;;
+    --identity-probe)
+      [[ "$identity_probe" == false ]] || { printf 'Select the identity probe once.\n' >&2; exit 2; }
+      identity_probe=true
+      shift
+      ;;
+    --preparation-inputs)
+      [[ -z "$preparation_inputs" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one preparation input path.\n' >&2; exit 2; }
+      preparation_inputs="$2"
+      shift 2
+      ;;
+    --preparation-sha256)
+      [[ -z "$preparation_sha256" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one preparation SHA-256.\n' >&2; exit 2; }
+      preparation_sha256="$2"
+      shift 2
+      ;;
     --admin-profile) admin_profile="${2:?Supply the approved administrator profile}"; shift 2 ;;
     *) break ;;
   esac
 done
+if [[ -n "$preparation_inputs" || -n "$preparation_sha256" || "$identity_probe" == true ]]; then
+  [[ "$stack" == jobs ]] || { printf 'Preparation inputs and the identity probe are allowed only with --jobs.\n' >&2; exit 2; }
+fi
+if [[ ( -n "$preparation_inputs" && -z "$preparation_sha256" ) || ( -z "$preparation_inputs" && -n "$preparation_sha256" ) ]]; then
+  printf 'Supply both --preparation-inputs and --preparation-sha256.\n' >&2
+  exit 2
+fi
 action="${1:?Use plan, apply or validate}"
 shift
 case "$action" in
@@ -42,6 +67,11 @@ for name in "${!TF_CLI_ARGS@}"; do
   esac
 done
 
+for name in "${!TF_VAR_@}"; do
+  printf 'Unset %s; use the reviewed preparation inputs.\n' "$name" >&2
+  exit 2
+done
+
 directory="$repo_root/infra"
 renderer=scripts.infrastructure.render_project_config
 render_args=(--stack "$stack")
@@ -51,11 +81,17 @@ if [[ "$stack" == platform || "$stack" == services ]]; then
   renderer=scripts.infrastructure.render_platform_config
   render_args=(--stack "$stack")
 fi
-# The jobs stack has its own renderer, which writes only the inputs that stack declares.
 if [[ "$stack" == jobs ]]; then
   directory="$directory/jobs"
   renderer=scripts.infrastructure.render_jobs_config
   render_args=()
+  if [[ "$identity_probe" == true ]]; then
+    directory="$directory/identity_probe"
+    render_args+=(--identity-probe)
+  fi
+  if [[ -n "$preparation_inputs" ]]; then
+    render_args+=(--preparation-inputs "$preparation_inputs" --preparation-sha256 "$preparation_sha256")
+  fi
 fi
 if [[ "$stack" == iam ]]; then
   [[ -n "$admin_profile" ]] || { printf 'IAM updates require --admin-profile.\n' >&2; exit 2; }
