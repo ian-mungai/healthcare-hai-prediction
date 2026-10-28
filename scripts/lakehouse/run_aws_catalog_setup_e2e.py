@@ -910,6 +910,40 @@ def case_request_expiry(_: Path) -> dict[str, bool]:
     return checks
 
 
+def case_lock_before_changes(_: Path) -> dict[str, bool]:
+    """P11, every wait has a deadline: while another update holds the principal's lock past the step deadline, the step stops at its deadline
+    before any approval, namespace, role, assignment or pair read."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        lock = services.locks / f"aws_{setup.PRINCIPALS['reader']}.lock"
+        held, release = threading.Event(), threading.Event()
+
+        def hold() -> None:
+            with principal_credentials.serialized(lock, "reader", 5.0):
+                held.set()
+                release.wait(0.7)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        held.wait(5.0)
+        began = time.monotonic()
+        code, out, err = run_main(["--seconds", "0.2", "principal", "--identity", "reader", "--instance", INSTANCE], services)
+        took = time.monotonic() - began
+        OUTPUTS.append(out + err)
+        SECRETS_SEEN.append(root)
+        release.set()
+        holder.join(timeout=5.0)
+        pairs = set(setup.writable_names())
+        changes = [item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH]
+        return {
+            "the step stops": code == 1,
+            "it stops near its own deadline": took < 0.5,
+            "no role, namespace or assignment was sent": not changes and not polaris.principal_roles,
+            "no pair name was read": not [name for _action, name in ssm.requests() if name in pairs],
+            "nothing was written": ssm.writes() == 0,
+        }
+
+
 CASES: dict[str, Case] = {
     "catalog_created": case_catalog_created,
     "catalog_rerun": case_catalog_rerun,
@@ -942,6 +976,7 @@ CASES: dict[str, Case] = {
     "live_writer_try": case_live_writer_try,
     "extra_role_membership": case_extra_role_membership,
     "request_expiry": case_request_expiry,
+    "lock_before_changes": case_lock_before_changes,
 }
 
 
@@ -988,6 +1023,10 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     "the request read has no absolute expiry": (
         "request_expiry",
         lambda: mock.patch.object(setup, "threading", mock.Mock(Event=threading.Event, Timer=lambda *a, **k: mock.Mock())),
+    ),
+    "the principal lock is not taken first": (
+        "lock_before_changes",
+        lambda: mock.patch.object(principal_credentials, "serialized", lambda *a: contextlib.nullcontext()),
     ),
     "role memberships are not checked": ("extra_role_membership", lambda: mock.patch.object(setup, "verify_memberships", lambda *a: None)),
     "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
