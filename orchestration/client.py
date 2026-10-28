@@ -108,4 +108,4 @@ def _handle(body: dict[str, Any]) -> Handle:
 def _status(body: dict[str, Any]) -> Status:
     """A status from the broker's answer."""
     exit_code = body["exit_code"]
-    return Status(_handle(body["handle"]), State(body["state"]), None if exit_code is None else int(exit_code), body["record_path"])
+    return Status(_handle(body["handle"]), State(body["state"]), None if exit_code is None else int(exit_code), body["record_path"], body.get("execution"))

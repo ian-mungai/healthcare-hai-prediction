@@ -209,5 +209,35 @@
         "777777777777"
       ]
     }
+  ],
+  "cloud admission before a task is accepted": [
+    {
+      "schema_version": 1,
+      "run_id": "20261011T090000Z-0a1b2c3d",
+      "template": "silver_build",
+      "mode": "fixture",
+      "attempt": 1,
+      "submission_id": "20261011T090000Z-0a1b2c3d:silver_build:fixture:1",
+      "event": "intent",
+      "at": "2026-10-11T09:00:01Z",
+      "spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "code_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "inputs": {
+        "bronze_snapshot_set": "pins-33333333"
+      },
+      "reservation_id": "r-0123456789ab",
+      "reserved_memory_bytes": 22548578304,
+      "container_name": "hai-20261011T090000Z-0a1b2c3d-silver_build-1",
+      "target": "ecs",
+      "execution": {
+        "version": 1,
+        "requested_target": "ecs",
+        "queued_at": 1791718801,
+        "deadline_utc": 1791722401,
+        "catalog_epoch": null,
+        "live_try": null,
+        "placements": []
+      }
+    }
   ]
 }
