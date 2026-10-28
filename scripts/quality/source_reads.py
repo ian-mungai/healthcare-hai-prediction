@@ -23,7 +23,13 @@ def fills_template(template: list[str | None], path: str, names: set[str]) -> bo
 
 
 def source_inputs(source: str, tracked: set[str], rooted: bool = False) -> dict[str, str]:
-    """Every tracked file that a string anywhere in ``source`` names, in module-level constants and inside functions alike, with the text that names it.
+    """Every tracked file that a string anywhere in ``source`` names, with the first text that names it (see ``source_reads``)."""
+    return {path: next(iter(texts)) for path, texts in source_reads(source, tracked, rooted).items()}
+
+
+def source_reads(source: str, tracked: set[str], rooted: bool = False) -> dict[str, dict[str, list[int]]]:
+    """Every tracked file that a string anywhere in ``source`` names, in module-level constants and inside functions alike, with every text that names it
+    (sorted, f-strings last) and the lines where that text occurs.
     A string constant, or a ``/`` join of strings (``Path(..)``, names assigned a join anywhere in the module), names a file or the files in a folder when it
     holds a slash; a join that is only created (the receiver of ``mkdir``, ``write_text``, ``write_bytes``, ``touch`` or ``unlink``) is not read. An f-string
     names every tracked file it matches when each placeholder is replaced by a string constant of the module (``f"dbt/models/{folder}/{name}.sql"``).
@@ -33,11 +39,12 @@ def source_inputs(source: str, tracked: set[str], rooted: bool = False) -> dict[
     tree = ast.parse(source)
     in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
     docstrings = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
-    strings = {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in in_fstring and id(node) not in docstrings
-    }
+    constant_lines: dict[str, set[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in in_fstring and id(node) not in docstrings:
+            constant_lines.setdefault(node.value, set()).add(node.lineno)
+    strings = set(constant_lines)
+    join_lines: dict[str, set[int]] = {}
     created = {
         id(node.func.value)
         for node in ast.walk(tree)
@@ -98,21 +105,26 @@ def source_inputs(source: str, tracked: set[str], rooted: bool = False) -> dict[
     names = set(strings)
     for node in ast.walk(tree):
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner and id(node) not in created:
-            names.update(joined(node))
-    templates: list[list[str | None]] = [
-        [part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else None for part in node.values]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.JoinedStr)
-    ]
+            for text in joined(node):
+                names.add(text)
+                join_lines.setdefault(text, set()).add(node.lineno)
+    templates: dict[str, tuple[list[str | None], set[int]]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            template = [part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else None for part in node.values]
+            text = 'f"' + "{}".join(part or "" for part in template) + '"'
+            templates.setdefault(text, (template, set()))[1].add(node.lineno)
     if rooted:
         names.update(name for name in strings if "/" not in name and name in tracked)
-    found: dict[str, str] = {}
+    found: dict[str, dict[str, list[int]]] = {}
     for path in sorted(tracked):
         for text in sorted(names):
             base = text.strip("/")
             if ("/" in base or (rooted and (base in rooted_names or base in tracked))) and (path == base or path.startswith(f"{base}/")):
-                found.setdefault(path, text)
-        for template in templates:
+                # A one-component constant names nothing by itself: only its rooted joins (and a root file's own name) read.
+                where = join_lines.get(text, set()) | (constant_lines.get(text, set()) if "/" in base or base in tracked else set())
+                found.setdefault(path, {})[text] = sorted(where)
+        for text, (template, where) in templates.items():
             if None in template and any(template) and fills_template(template, path, strings):
-                found.setdefault(path, 'f"' + "{}".join(part or "" for part in template) + '"')
+                found.setdefault(path, {}).setdefault(text, sorted(where))
     return found
