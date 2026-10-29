@@ -159,13 +159,15 @@ def other_platform_hashes(top: Path) -> Problems:
 
 
 def tracked_files() -> Problems:
-    """The tracked configuration holds the owner's two settings and no remote, URL or account value."""
+    """The tracked configuration holds the owner's three settings and no remote, URL or account value."""
     problems: Problems = []
     parser = tracked_config()
     if parser.get("core", "autostage", fallback="") != "false":
         problems.append(".dvc/config must set core.autostage to false")
     if parser.get("core", "analytics", fallback="") != "false":
         problems.append(".dvc/config must set core.analytics to false")
+    if parser.get("core", "no_scm", fallback="") != "true":
+        problems.append(".dvc/config must set core.no_scm to true: the matrix and its metafile live under git-ignored data/")
     text = (ROOT / ".dvc/config").read_text()
     for forbidden in ("url", "s3://", "remote", "profile", "region", "bucket"):
         if forbidden in text.lower():

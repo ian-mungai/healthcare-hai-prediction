@@ -4,12 +4,13 @@ Run from the repository root:
 
     .venv/bin/python -m scripts.quality.install_dvc
 
-The versions are pinned with hashes by ``scripts/quality/dvc/requirements.txt``. They go into their own virtual environment, ``.tools/dvc``, so the
-training image, CI and every developer machine run the same DVC. pip verifies every hash. All packages are wheels except one, antlr4-python3-runtime
-(a dependency of dvc through hydra-core), which is published only as a source archive: ``scripts/quality/dvc/build_requirements.txt`` installs its
-hashed build tool first, and the second step builds that one archive with ``--no-build-isolation`` so that nothing unpinned is downloaded. A rerun with the
-same requirements changes nothing; a failed install removes the copied requirements so the next run retries instead of looking current. A Homebrew patch
-upgrade that removes the interpreter this environment links to makes ``dvc --version`` fail, so the next run rebuilds it.
+The versions are pinned with hashes by ``scripts/quality/dvc/requirements.txt``. They go into their own virtual environment, ``.tools/dvc``, so the training
+image, CI and every developer machine run the same DVC. pip verifies every hash. All packages are wheels except one, antlr4-python3-runtime (a dependency of
+dvc through hydra-core), which is published only as a source archive (the project owner accepted this one source build as the only exception to wheels only):
+``scripts/quality/dvc/build_requirements.txt`` installs its hashed build tool first, and the second step builds that one archive with ``--no-build-isolation``
+so that nothing unpinned is downloaded. A rerun with the same requirements changes nothing; a failed install removes the copied requirements so the next run
+retries instead of looking current. A Homebrew patch upgrade that removes the interpreter this environment links to makes ``dvc --version`` fail, so the next
+run rebuilds it.
 """
 
 from __future__ import annotations

@@ -1,4 +1,5 @@
-# The build tool for the one source-only package in requirements.txt (antlr4-python3-runtime). Installed first, with hashes, so the
-# build does not download an unpinned setuptools; the same version is pinned in requirements.txt.
+# The build tool for the one source-only package in requirements.txt (antlr4-python3-runtime; the project owner accepted this source build as the only
+# exception to wheels only). Installed first, with hashes, so the build does not download an unpinned setuptools; the same version is pinned in
+# requirements.txt.
 setuptools==84.2.1 \
     --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2

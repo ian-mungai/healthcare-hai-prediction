@@ -28,11 +28,13 @@ cp .env.example .env
 `install_dvc` puts the pinned Data Version Control (DVC 3.67.1 with its S3 remote, dvc-s3 3.3.0) into its own environment, `.tools/dvc`,
 from `scripts/quality/dvc/requirements.txt`. It records a hash for every package on Apple silicon and Linux AMD64 and verifies each one at install. Only
 `antlr4-python3-runtime`, a dependency of DVC, is published as a source archive. Its build tool is pinned in `build_requirements.txt` and installed first,
-so the build downloads nothing unpinned. A rerun changes nothing and a failed install leaves nothing that looks current.
+so the build downloads nothing unpinned. The project owner accepted this one source build as the only exception to wheels only. A rerun changes nothing and a
+failed install leaves nothing that looks current.
 
-The repository tracks DVC's `.dvc/config` (analytics and autostage off, no remote) and `.dvcignore`. The remote is the `dvc/` prefix of the private data
-bucket and exists only in the ignored `.dvc/config.local`, which the renderer writes from `.env` without printing it. Run it again after a `.env` change;
-`--check` reports a stale file:
+The repository tracks DVC's `.dvc/config` (analytics and autostage off, `core.no_scm` on, no remote) and `.dvcignore`. DVC runs without Git because the
+training matrix and its metafile live under the ignored `data/`; the metafile is stored in the MLflow run, not in Git. The remote is the `dvc/` prefix of the
+private data bucket and exists only in the ignored `.dvc/config.local`, which the renderer writes from `.env` without printing it. Run it again after a `.env`
+change; `--check` reports a stale file:
 
 ```sh
 bash scripts/infrastructure/render_project_config.sh --stack dvc

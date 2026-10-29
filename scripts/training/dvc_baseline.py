@@ -5,8 +5,10 @@ SHA-256 as a run tag beside the Iceberg snapshot IDs of the source feature table
 carries the metafile. ``load`` reads the metafile from the run, checks its hash against the tag, fetches the file with ``dvc pull`` and refuses a file whose
 MD5 differs from the one in the metafile. The drift loop loads its baseline this way from the Production run.
 
-The run store is any object with the MLflow client calls used here (``MlflowClient`` has them). Every DVC process starts through ``run_command`` with a
-deadline; a failure, a deadline or a mismatch raises ``BaselineError`` that names the step, never a silent partial result. The matrix must lie inside the DVC
+DVC runs in explicit no-SCM mode (``core.no_scm`` in the tracked ``.dvc/config``): the matrix and its metafile live under the git-ignored ``data/`` and the
+metafile is kept in the MLflow run, not in Git, so DVC must not ask Git about either file. The run store is any object with the MLflow client calls used here
+(``MlflowClient`` has them). Every DVC process starts through ``run_command`` with a deadline; a failure, a deadline or a mismatch raises ``BaselineError`` that
+names the step, never a silent partial result. The matrix must lie inside the DVC
 project. Run scripts that import this module from the repository root as modules.
 """
 
@@ -102,7 +104,7 @@ def metafile_md5(metafile: Path) -> str:
     found = MD5_LINE.findall(metafile.read_text())
     if len(found) != 1:
         raise BaselineError(f"the metafile {metafile.name} must track exactly one file with an MD5; it holds {len(found)}")
-    return found[0]
+    return str(found[0])
 
 
 def record(matrix_path: Path, run: Run, snapshots: Mapping[str, str], *, project: Path = ROOT, deadlines: Deadlines | None = None) -> str:
