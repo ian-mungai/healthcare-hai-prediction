@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import itertools
 import re
 import shlex
@@ -21,6 +22,9 @@ from scripts.quality.repo_checks import load_yaml
 
 LAUNCHER = "orchestration/launcher.py"
 PIPELINE = "orchestration/pipeline_render.py"
+TRAINING = "orchestration/training_render.py"
+CODE_DIGEST = "orchestration/code_digest.py"
+WORKSPACE = "/workspace"
 RULE = "docs/quality_checks.md#container-imports"
 PRIVATE = {".git", ".venv", ".tools", ".aws", ".codex", ".agents", "data", "plans", "node_modules"}
 VARIABLE = re.compile(r"\$\{([^}:]+)(?::[^}]*)?\}")
@@ -101,7 +105,7 @@ class Declarations:
             context = build if isinstance(build, str) else build.get("context") if isinstance(build, dict) else None
             if context:
                 self.images[str(spec["image"])] = tuple(self.image_binds(str(context)))
-        self.trees = {name: ast.parse((root / name).read_text(encoding="utf-8"), filename=name) for name in (LAUNCHER, PIPELINE)}
+        self.trees = {name: ast.parse((root / name).read_text(encoding="utf-8"), filename=name) for name in (LAUNCHER, PIPELINE, TRAINING, CODE_DIGEST)}
         self.functions = {name: {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)} for name, tree in self.trees.items()}
         self.constants: dict[str, dict[str, Any]] = {}
         for name, tree in self.trees.items():
@@ -267,7 +271,7 @@ class Declarations:
                     flag = self.strings(node.elts[1], path, function, values)
                     target = node.elts[2] if flag == {"-m"} and len(node.elts) > 2 else node.elts[1]
                     modules = self.strings(target, path, function, values)
-                    if function.name in {"render_pipeline", "render_training"} and dotted(target) == "spec.module":
+                    if function.name == "render_pipeline" and dotted(target) == "spec.module":
                         continue
                     if not modules:
                         raise ValueError(f"{path}:{node.lineno}: Python entry point cannot be resolved statically")
@@ -288,6 +292,61 @@ class Declarations:
                 arguments.update({word.arg: self.strings(word.value, path, function, values) for word in node.keywords if word.arg})
                 result.extend(self.entries(path, callee, values | {name: value for name, value in arguments.items() if value}, seen | {function.name}))
         return list(dict.fromkeys(result))
+
+    def module_choices(self, expr: ast.AST) -> set[str]:
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            return {expr.value}
+        if isinstance(expr, ast.IfExp):
+            return self.module_choices(expr.body) | self.module_choices(expr.orelse)
+        return set()
+
+    def training(self) -> tuple[tuple[Bind, ...], set[str]]:
+        """Derive the training snapshot binds, action mounts and entry modules from the digest roots and the renderer's specification builder."""
+        roots = self.constants[CODE_DIGEST].get("TRAINING_ROOTS")
+        if not isinstance(roots, tuple) or not roots or not all(isinstance(root, str) for root in roots):
+            raise ValueError(f"{CODE_DIGEST}:1: TRAINING_ROOTS must be a literal tuple of repository paths")
+        build = self.functions[TRAINING].get("build")
+        if build is None:
+            raise ValueError(f"{TRAINING}:1: the training specification builder build cannot be resolved")
+        binds: list[Bind] = []
+        for root in roots:
+            if "*" in root:
+                if any(fnmatch.fnmatch(name, root) for name in self.python):
+                    raise ValueError(f"{CODE_DIGEST}:1: a snapshot root pattern {root!r} selects Python sources")
+                continue
+            binds.append(Bind(root, f"{WORKSPACE}/{root}"))
+        snapshot_rule = False
+        modules: set[str] = set()
+        for node in ast.walk(build):
+            if isinstance(node, ast.Tuple) and len(node.elts) == 3 and isinstance(node.elts[2], ast.Constant) and isinstance(node.elts[2].value, bool):
+                target = node.elts[1]
+                prefix, dynamic = "", False
+                if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                    prefix = target.value
+                elif isinstance(target, ast.JoinedStr):
+                    for part in target.values:
+                        if not isinstance(part, ast.Constant):
+                            dynamic = True
+                            break
+                        prefix += str(part.value)
+                    if dynamic and prefix == f"{WORKSPACE}/" and len(target.values) == 2:
+                        snapshot_rule = True
+                        continue
+                else:
+                    continue
+                if not prefix.startswith("/"):
+                    raise ValueError(f"{TRAINING}:{node.lineno}: training mount target cannot be resolved statically")
+                binds.append(Bind(None, prefix.rstrip("/") if dynamic else prefix))
+            if isinstance(node, ast.Call) and dotted(node.func) == "JobSpec":
+                choices = self.module_choices(node.args[1]) if len(node.args) > 1 else set()
+                if not choices:
+                    raise ValueError(f"{TRAINING}:{node.lineno}: JobSpec module cannot be resolved statically")
+                modules |= choices
+        if not snapshot_rule:
+            raise ValueError(f"{TRAINING}:{build.lineno}: the {WORKSPACE} snapshot mount rule cannot be resolved")
+        if not modules:
+            raise ValueError(f"{TRAINING}:{build.lineno}: no training JobSpec module was found")
+        return tuple(dict.fromkeys(binds)), modules
 
     def working_folder(self, path: str, function: ast.FunctionDef, seen: frozenset[str] = frozenset()) -> str:
         folders: set[str] = set()
@@ -373,8 +432,13 @@ class Declarations:
                 "render_gold_publish",
             }:
                 continue
-            entries = self.entries(LAUNCHER, function, {"spec['module']": all_job_modules})
+            overrides = {"spec['module']": all_job_modules}
             binds = self.mounts(LAUNCHER, function)
+            if method == "render_training":
+                training_binds, training_modules = self.training()
+                overrides["spec.module"] = training_modules
+                binds = tuple(dict.fromkeys([*training_binds, *binds]))
+            entries = self.entries(LAUNCHER, function, overrides)
             label = f"launcher:{method.removeprefix('render_')}"
             self.classify_mounts(binds, LAUNCHER, function.lineno, label)
             if entries:

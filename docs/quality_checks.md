@@ -317,7 +317,7 @@ Its path list covers Python sources, Dockerfiles and Compose files at the reposi
 Each service keeps its own mounts. A quality job does not gain the mounts of a pipeline job that shares its image.
 The mount declarations remain the authority. The check keeps no second mount allowlist.
 `PYTHON_SOURCES` is the remaining hand-kept source-role classification. It classifies `scripts/` and `orchestration/` as import dependencies.
-It classifies `dags/`, `services/lineage/` and `services/analytics/` as framework or image entry directories.
+It classifies `dags/`, `services/lineage/`, `services/analytics/` and `feature_store/` as framework or image entry directories.
 A bind that contains repository Python outside these prefixes fails as an unclassified Python mount, with its declaration location.
 Mount helpers are followed through their declared `Mount` return types, including lists and tuples, without a helper-name list.
 
@@ -328,7 +328,8 @@ The supported declarations are:
 - Launcher `Mount` calls and pipeline mount tuples with literal paths under the checkout.
   The Spark and gold job tables supply their module names. Renderer defaults and fixed pipeline layer choices supply the other entry points.
   The `workdir=` argument of each renderer's `assemble` call supplies its working folder. Pipeline specifications use their launcher's declared working folder.
-  The training job renderer takes its module from the training specification at run time. The check does not follow those modules or their mounts yet.
+  The training renderer's modules come from the `JobSpec` entries of `training_render.build`. Its snapshot binds come from `TRAINING_ROOTS` in `code_digest.py`
+  and the `/workspace` mount rule. Its action mounts shadow the snapshot beneath them. An unresolved root, mount target or module fails the check.
 - Literal Python files copied by a final Dockerfile stage to an absolute destination, including the analytics UI relay.
   The check reads the Dockerfile in the declared build context. It does not build or inspect an image.
 
