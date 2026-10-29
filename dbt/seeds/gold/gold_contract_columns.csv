@@ -1282,6 +1282,8 @@ dim_owner_role,code_label,,false
 dim_registry_control,measure_control,,false
 dim_registry_control,parent,,false
 dim_registry_control,review_decision,,false
+dim_registry_control,family,,false
+dim_registry_control,closeout_decision,,false
 dim_release,member_sha256,,false
 dim_release,object_key,,false
 dim_release,copy_count,,false

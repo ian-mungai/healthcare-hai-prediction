@@ -503,7 +503,9 @@
       "attributes": [
         "measure_control",
         "parent",
-        "review_decision"
+        "review_decision",
+        "family",
+        "closeout_decision"
       ],
       "grain": "registry control (revision 3)",
       "inputs": [
