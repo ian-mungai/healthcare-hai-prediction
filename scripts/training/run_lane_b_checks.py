@@ -28,6 +28,8 @@ SOURCE_FILES = (
     "scripts/training/lane_b_cases.py",
     "scripts/training/lane_b_dag_cases.py",
     "scripts/training/lane_b_fix_cases.py",
+    "scripts/training/job.py",
+    "scripts/training/job_cases.py",
     "services/orchestration/docker-compose.orchestration.yaml",
     "scripts/orchestration/transform_fixtures.py",
     "scripts/orchestration/run_stack_e2e.py",
@@ -114,7 +116,7 @@ def run_checks(output: Path) -> int:
             case("source_edit_changes_digest", code_digest.tree_digest(source) != digest)
         from orchestration import launcher
         from scripts.infrastructure import secret_store
-        from scripts.training import lane_b_cases, lane_b_dag_cases, lane_b_fix_cases
+        from scripts.training import job_cases, lane_b_cases, lane_b_dag_cases, lane_b_fix_cases
 
         with (
             mock.patch.object(launcher.LauncherClient, "call", side_effect=RuntimeError("light checks forbid launcher requests")),
@@ -125,6 +127,7 @@ def run_checks(output: Path) -> int:
             cases.extend(lane_b_cases.run())
             cases.extend(lane_b_dag_cases.run())
             cases.extend(lane_b_fix_cases.run())
+            cases.extend(job_cases.run())
     output.mkdir(parents=True, exist_ok=True)
     case("candidate_did_not_change", before == source_hashes())
     source_identity = hashlib.sha256(json.dumps(before, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
