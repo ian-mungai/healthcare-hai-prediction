@@ -57,6 +57,22 @@
           "iam:PassedToService": "ecs-tasks.amazonaws.com"
         }
       }
+    },
+    {
+      "Sid": "PassLayerWriterRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_silver_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_gold_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_features_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_bronze_task_${ENVIRONMENT}"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
     }
   ]
 }

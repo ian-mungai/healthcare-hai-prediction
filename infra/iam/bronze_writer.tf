@@ -14,18 +14,7 @@ locals {
     SOURCE_OBJECT_ARNS   = jsonencode([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${collection}/*"])
     SOURCE_LIST_PREFIXES = jsonencode([for collection in local.bronze_collections : "${collection}/*"])
   }
-  bronze_test_storage_inputs = merge(local.bronze_storage_inputs, {
-    TABLE_OBJECT_ARNS    = jsonencode([for name in local.bronze_test_namespaces : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
-    TABLE_LIST_PREFIXES  = jsonencode([for name in local.bronze_test_namespaces : "lakehouse/${name}/*"])
-    SOURCE_OBJECT_ARNS   = jsonencode(["${local.bronze_bucket_arn}/${var.bronze_qualification_collection}/*"])
-    SOURCE_LIST_PREFIXES = jsonencode(["${var.bronze_qualification_collection}/*"])
-  })
-  bronze_storage_policy      = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_storage_inputs)
-  bronze_test_storage_policy = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_test_storage_inputs)
-  bronze_reader_policy = templatefile("${path.module}/owner_policies/bronze_reader_storage.json", merge(local.bronze_storage_inputs, {
-    TABLE_OBJECT_ARNS   = jsonencode([for name in local.bronze_test_namespaces : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
-    TABLE_LIST_PREFIXES = jsonencode([for name in local.bronze_test_namespaces : "lakehouse/${name}/*"])
-  }))
+  bronze_storage_policy = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_storage_inputs)
 }
 
 resource "aws_iam_role" "bronze_writer" {
@@ -35,6 +24,7 @@ resource "aws_iam_role" "bronze_writer" {
   description          = "Bronze, dictionary and scratch task access with versioned source reads. Catalog writes remain separately gated."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
+  tags                 = local.project_tags
 
   lifecycle {
     precondition {
@@ -51,12 +41,8 @@ resource "aws_iam_role" "bronze_writer" {
     }
 
     precondition {
-      condition = (
-        var.aws_polaris_bronze_client_id_name != var.aws_polaris_bronze_client_secret_name &&
-        !contains([var.polaris_root_secret_name, var.polaris_reader_client_id_name, var.polaris_reader_client_secret_name], var.aws_polaris_bronze_client_id_name) &&
-        !contains([var.polaris_root_secret_name, var.polaris_reader_client_id_name, var.polaris_reader_client_secret_name], var.aws_polaris_bronze_client_secret_name)
-      )
-      error_message = "The bronze pair must use two distinct names and must never bind the administrator or local reader pair."
+      condition     = length(distinct(local.job_writer_credential_names)) == length(local.job_writer_credential_names)
+      error_message = "Every AWS reader and writer pair must be distinct from every other pair and the configured Mac reader, writers and administrator."
     }
   }
 }
@@ -88,25 +74,15 @@ output "bronze_writer_contract" {
 }
 
 output "bronze_execution_delta" {
-  description = "Unattached addition for the job execution role. Only ECS injects the bronze pair."
+  description = "Bronze slice of the job execution grants attached when bronze is prepared. Only ECS injects this pair."
   value = jsondecode(templatefile("${path.module}/owner_policies/bronze_execution.json", {
     BRONZE_PARAMETER_ARNS = jsonencode(local.bronze_parameter_arns)
   }))
 }
 
 output "bronze_project_delta" {
-  description = "Unattached PassRole addition for the lead to review. The project profile receives no writer-parameter read."
+  description = "Bronze slice of the project user's ECS-only writer PassRole policy. The project profile receives no writer-parameter read."
   value = jsondecode(templatefile("${path.module}/owner_policies/bronze_project_delta.json", {
     BRONZE_TASK_ROLE_ARN = jsonencode("arn:aws:iam::${var.expected_account_id}:role/${local.bronze_writer_role_name}")
   }))
-}
-
-output "bronze_qualification_storage_delta" {
-  description = "Unattached test-role extension for the four twins and one selected source collection."
-  value       = contains(local.bronze_collections, var.bronze_qualification_collection) ? jsondecode(local.bronze_test_storage_policy) : null
-}
-
-output "bronze_reader_storage_delta" {
-  description = "Unattached read-role extension for complete observations of the four bronze qualification twins."
-  value       = jsondecode(local.bronze_reader_policy)
 }

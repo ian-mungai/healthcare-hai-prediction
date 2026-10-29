@@ -2,11 +2,11 @@
 
 This optional module defines the bronze writer task and its dispatch contract. Task registration requires `register_definition = true`.
 
-## Reader policy delta
+## Reader policy
 
-The reader delta in `infra/iam/bronze_writer.tf` renders `infra/iam/owner_policies/bronze_reader_storage.json` for `job_read_task`. The owner approved `s3:GetObjectVersion` and `s3:ListBucketVersions` on Oct 24 2026 so completion checks can identify and read metadata object versions.
+The `aws_iam_role_policy.job_reader_e2e` resource in `infra/iam/job_writer.tf` attaches `infra/iam/owner_policies/job_reader_e2e.json` to `job_read_task` when `job_writer_e2e_prepared` is true.
 
-The delta permits `s3:GetObject` and `s3:GetObjectVersion` on objects below these four prefixes. It permits `s3:ListBucket` and `s3:ListBucketVersions` with those prefixes as conditions.
+The policy permits `s3:GetObject` on the three `silver_e2e`, `gold_e2e` and `features_e2e` prefixes and the four bronze test prefixes below. It permits `s3:ListBucket` with those seven prefixes as conditions. Completion checks also use `s3:GetObjectVersion` and `s3:ListBucketVersions` on only the four bronze test prefixes, so they can identify and read metadata object versions.
 
 ```text
 lakehouse/bronze_e2e/
@@ -15,7 +15,7 @@ lakehouse/smoke_check_e2e/
 lakehouse/duckdb_view_check_e2e/
 ```
 
-Canonical reads depend on the reader role's existing policy. Applying or attaching the delta requires the separate infrastructure approval.
+Canonical reads depend on the reader role's existing policy. Applying or attaching this qualification policy requires separate infrastructure approval.
 
 ## Module checks
 

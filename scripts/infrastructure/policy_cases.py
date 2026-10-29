@@ -826,12 +826,23 @@ def job_project_cases() -> Iterator[Case]:
         for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
             yield Case(f"job pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
         yield Case(f"job pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
-    for name in ("job_try_writer", "job_write_silver_task", "job_other_task"):
+    for name in ("job_try_writer", "job_other_task", "job_write_other_task"):
         yield Case(
             f"job pass: refuse {name}",
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
             False,
         )
+    for layer in ("silver", "gold", "features", "bronze"):
+        name = f"job_write_{layer}_task"
+        yield Case(
+            f"layer pass: {name} to ECS tasks",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            True,
+            "PassLayerWriterRoles",
+        )
+        for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+            yield Case(f"layer pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
+        yield Case(f"layer pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
     for session in ("hai_try_example", "hai_try_", "unrelated", "hai_try", "other_hai_try_example", None):
         allowed = session in ("hai_try_example", "hai_try_")
         yield Case(
@@ -1698,6 +1709,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 job_resource("sts", "AssumeTryOutputRole", 0, f"arn:aws:iam::{A}:role/{P}_job_*_{E}"),
             ),
             "job stage version resource widened": ("job stage: refuse lakehouse/silver", job_resource("s3", "ReadStageVersions", 0, f"{BUCKET}/lakehouse/*")),
+            "layer PassRole writer-family wildcard": (
+                "job pass: refuse job_write_other_task",
+                job_resource("iam", "PassLayerWriterRoles", 0, role("job_write_*_task")),
+            ),
             "job PassRole service condition removed": ("job pass: job_execution without a service", job_pass_without_service_condition),
             "job PassRole service changed to ECS": ("job pass: job_execution to ecs.amazonaws.com", job_pass_to_ecs_service),
             "job try-writer session condition removed": ("job assume: session 'unrelated'", job_assume_without_session_condition),

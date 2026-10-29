@@ -127,6 +127,7 @@ run "bronze_rendered_storage_scope" {
   command = plan
 
   variables {
+    job_writer_e2e_prepared         = true
     bronze_writer_prepared          = true
     bronze_qualification_collection = "cms/hospitals"
     bronze_live_locations = {
@@ -175,35 +176,39 @@ run "bronze_rendered_storage_scope" {
 
   assert {
     condition = (
-      toset(output.bronze_qualification_storage_delta.Statement[0].Resource) == toset([
+      toset(jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[0].Resource) == toset([
+        "arn:aws:s3:::example-data-bucket/lakehouse/silver_e2e/*",
+        "arn:aws:s3:::example-data-bucket/lakehouse/gold_e2e/*",
+        "arn:aws:s3:::example-data-bucket/lakehouse/features_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_dictionary_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/smoke_check_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/duckdb_view_check_e2e/*"
       ]) &&
-      toset(output.bronze_qualification_storage_delta.Statement[1].Condition.StringLike["s3:prefix"]) == toset([
+      toset(jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[1].Condition.StringLike["s3:prefix"]) == toset([
+        "lakehouse/silver_e2e/*", "lakehouse/gold_e2e/*", "lakehouse/features_e2e/*",
         "lakehouse/bronze_e2e/*", "lakehouse/bronze_dictionary_e2e/*", "lakehouse/smoke_check_e2e/*", "lakehouse/duckdb_view_check_e2e/*"
       ]) &&
-      output.bronze_qualification_storage_delta.Statement[2].Resource == ["arn:aws:s3:::example-data-bucket/cms/hospitals/*"] &&
-      output.bronze_qualification_storage_delta.Statement[3].Condition.StringLike["s3:prefix"] == ["cms/hospitals/*"]
+      jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[2].Resource == ["arn:aws:s3:::example-data-bucket/cms/hospitals/*"] &&
+      jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[3].Condition.StringLike["s3:prefix"] == ["cms/hospitals/*"]
     )
-    error_message = "The rendered qualification policy must contain only four twins and one source collection."
+    error_message = "The attached qualification policy must contain seven twins and one source collection."
   }
 
   assert {
     condition = (
-      toset(output.bronze_reader_storage_delta.Statement[0].Resource) == toset([
+      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[2].Resource) == toset([
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_dictionary_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/smoke_check_e2e/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/duckdb_view_check_e2e/*"
       ]) &&
-      toset(output.bronze_reader_storage_delta.Statement[1].Condition.StringLike["s3:prefix"]) == toset([
+      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset([
         "lakehouse/bronze_e2e/*", "lakehouse/bronze_dictionary_e2e/*", "lakehouse/smoke_check_e2e/*", "lakehouse/duckdb_view_check_e2e/*"
       ]) &&
-      output.bronze_reader_storage_delta.Statement[0].Action == ["s3:GetObject", "s3:GetObjectVersion"] &&
-      output.bronze_reader_storage_delta.Statement[1].Action == ["s3:ListBucket", "s3:ListBucketVersions"]
+      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[2].Action == ["s3:GetObjectVersion"] &&
+      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Action == ["s3:ListBucketVersions"]
     )
-    error_message = "The rendered reader delta must grant Get and List on exactly four twins."
+    error_message = "The attached reader policy must grant version reads and version listings on exactly four bronze twins."
   }
 }
