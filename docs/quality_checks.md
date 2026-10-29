@@ -811,7 +811,8 @@ when all of this holds: the push is to `main`; exactly one merged pull request h
 checkout) is byte-identical to the tree of the head commit of that pull request; and the latest completed pull request run of `ci.yml` for that head commit and head branch succeeded,
 with every job listed in `config/quality/ci_jobs.json` present once and successful and no other job failed, cancelled or skipped (except the reuse job). Any other result and any
 error of the API, runs every job. GitHub empties the `pull_requests` list of a run once its pull request is merged, so the run is matched by workflow path, event, head commit and
-`head_branch` (equal to `head.ref` of the pull request), not by pull request number. A push to `main` without a pull request runs in full. Pull request runs check out the head commit, so the tree that their jobs checked is the tree
+`head_branch` (equal to `head.ref` of the pull request), not by pull request number. A run whose list names another pull request does not count. The
+run is not reused when another pull request has the same head commit, because that pull request's runs select their checks from its own base. A push to `main` without a pull request runs in full. Pull request runs check out the head commit, so the tree that their jobs checked is the tree
 compared. When the run is reused, the jobs of the workflow are skipped; "Quick Gates of a Reused Result" runs the commit-message and removed-names checks of the pushed range and
 `CI_PART=gates` (the privacy, secret, credential, data-file, writing, Markdown, documentation and source gates). The plan job's summary names the pull request, the head commit, the
 tree, the reused run and the conclusion of each required job. `.venv/bin/python -m scripts.quality.run_ci_reuse_e2e` checks the reuse and every case that must run in full.

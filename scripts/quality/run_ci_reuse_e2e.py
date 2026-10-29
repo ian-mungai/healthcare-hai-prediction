@@ -5,9 +5,10 @@ config/quality/ci_jobs.json into a scratch Git repository and run ``python -m sc
 variables of GitHub Actions and a stand-in ``gh`` first on PATH that answers the API paths from a table. Only the stand-in answers differ between
 cases: a world in which every condition holds gives ``reuse=true`` (also when GitHub has emptied the ``pull_requests`` list of the run of a merged
 pull request), and each negative case breaks exactly one condition (a different tree, no pull request, two pull requests, no run, a failed, running,
-other-workflow, other-branch, other-event or older-than-latest run, a skipped, missing or failing job, an API error, a malformed answer, another event
-or branch, a tree that the checkout and the API disagree on) and passes only when the answer is ``reuse=false`` and
-the summary names that cause. The stand-in records every call, and a case checks that each one is a read (``gh api --method GET``).
+other-workflow, other-branch, other-event, other-pull-request or older-than-latest run, another pull request with the same head commit, a skipped,
+missing or failing job, an API error, a malformed answer, another event or branch, a tree that the checkout and the API disagree on) and passes only
+when the answer is ``reuse=false`` and the summary names that cause. The stand-in records every call, and a case checks that each one is a read
+(``gh api --method GET``).
 The static cases read .github/workflows/ci.yml: the job list equals config/quality/ci_jobs.json, every checkout uses the pull request head, every
 heavy job waits for the plan job and runs unless it answers ``true`` (also for an empty answer), the reuse job runs the commit checks and the quick
 gates, and the plan job's token is read-only. Failure modes R1 to R18 and F1 to F9 (plans, local). The report goes to
@@ -107,6 +108,7 @@ def good_world(sha: str, tree: str, required: list[str], skipped: list[str]) -> 
         "pulls": [
             {"number": PULL, "merged_at": "2026-10-22T10:30:00Z", "merge_commit_sha": sha, "base": {"ref": "main"}, "head": {"sha": HEAD, "ref": BRANCH}}
         ],
+        "head_pulls": [{"number": PULL, "merged_at": "2026-10-22T10:30:00Z", "base": {"ref": "main"}, "head": {"sha": HEAD, "ref": BRANCH}}],
         "main_tree": tree,
         "head_tree": tree,
         "runs": [run],
@@ -117,6 +119,7 @@ def good_world(sha: str, tree: str, required: list[str], skipped: list[str]) -> 
 def routes_of(world: dict[str, Any], sha: str) -> dict[str, Any]:
     paths = {
         f"repos/{REPOSITORY}/commits/{sha}/pulls?per_page=100": world["pulls"],
+        f"repos/{REPOSITORY}/commits/{HEAD}/pulls?per_page=100": world["head_pulls"],
         f"repos/{REPOSITORY}/git/commits/{sha}": {"tree": {"sha": world["main_tree"]}},
         f"repos/{REPOSITORY}/git/commits/{HEAD}": {"tree": {"sha": world["head_tree"]}},
         f"repos/{REPOSITORY}/actions/runs?head_sha={HEAD}&event=pull_request&per_page=100": {"workflow_runs": world["runs"]},
@@ -255,6 +258,12 @@ def two_pulls(world: dict[str, Any], scratch: Scratch) -> None:
     world["pulls"].append({**world["pulls"][0], "number": 8})
 
 
+def other_pull_with_the_same_head(world: dict[str, Any], scratch: Scratch) -> None:
+    """Another open pull request into another base has the same head commit and branch; its newer run selected its own, narrower checks."""
+    world["head_pulls"].append({"number": 8, "merged_at": None, "base": {"ref": "release"}, "head": {"sha": HEAD, "ref": BRANCH}})
+    world["runs"].append({**world["runs"][0], "id": 556, "created_at": "2026-10-22T11:00:00Z", "run_number": 13, "pull_requests": [{"number": 8}]})
+
+
 def older_green_newer_red(world: dict[str, Any], scratch: Scratch) -> None:
     world["runs"].append({**world["runs"][0], "id": 556, "created_at": "2026-10-22T11:00:00Z", "run_number": 13, "conclusion": "failure"})
 
@@ -307,6 +316,15 @@ def dynamic_cases(scratch: Scratch) -> list[dict[str, Any]]:
             "no pull request was merged into main with this commit",
         ),
         negative_case(scratch, "ambiguous_pull_requests_run_everything", two_pulls, "2 pull requests name this commit"),
+        negative_case(
+            scratch, "other_pull_request_with_the_same_head_runs_everything", other_pull_with_the_same_head, "pull request 8 has the same head commit"
+        ),
+        negative_case(
+            scratch,
+            "run_of_another_pull_request_does_not_count",
+            lambda w, s: set_run(w, pull_requests=[{"number": 8}]),
+            "no pull request run of .github/workflows/ci.yml exists",
+        ),
         negative_case(scratch, "missing_run_runs_everything", lambda w, s: w.update(runs=[]), "no pull request run of .github/workflows/ci.yml exists"),
         negative_case(scratch, "failed_run_runs_everything", lambda w, s: set_run(w, conclusion="failure"), "conclusion failure"),
         negative_case(scratch, "running_run_runs_everything", lambda w, s: set_run(w, status="in_progress", conclusion=None), "in_progress"),

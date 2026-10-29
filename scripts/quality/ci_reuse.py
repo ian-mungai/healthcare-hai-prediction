@@ -74,12 +74,24 @@ def merged_pull_request(repository: str, sha: str) -> dict[str, Any]:
     return merged[0]
 
 
-def latest_run(repository: str, head: str, branch: str) -> dict[str, Any]:
+def only_pull_request_of_head(repository: str, head: str, number: int) -> None:
+    """Refuse when another pull request has the same head commit: its runs select checks from its own base, so a run matched by branch and SHA could be its."""
+    found = listed(api(f"repos/{repository}/commits/{head}/pulls?per_page=100"), "the pull requests of the head commit")
+    for pull in found:
+        if pull.get("head", {}).get("sha") == head and int(pull["number"]) != number:
+            raise NoReuse(f"pull request {pull['number']} has the same head commit {head} as pull request {number}")
+
+
+def latest_run(repository: str, head: str, branch: str, number: int) -> dict[str, Any]:
     runs = api(f"repos/{repository}/actions/runs?head_sha={head}&event=pull_request&per_page=100")["workflow_runs"]
     own = [
         run
         for run in listed(runs, "the runs of the head commit")
-        if run.get("path") == WORKFLOW and run.get("event") == "pull_request" and run.get("head_sha") == head and run.get("head_branch") == branch
+        if run.get("path") == WORKFLOW
+        and run.get("event") == "pull_request"
+        and run.get("head_sha") == head
+        and run.get("head_branch") == branch
+        and all(int(pull["number"]) == number for pull in listed(run.get("pull_requests", []), "the pull requests of a run"))
     ]
     if not own:
         raise NoReuse(f"no pull request run of {WORKFLOW} exists for the head commit {head}")
@@ -131,7 +143,8 @@ def decide(environment: dict[str, str], config: dict[str, Any]) -> dict[str, Any
     head_tree = tree_of(repository, head)
     if head_tree != main_tree:
         raise NoReuse(f"the merged tree {main_tree} differs from the tree {head_tree} of the head of pull request {number}")
-    run = latest_run(repository, head, branch)
+    only_pull_request_of_head(repository, head, number)
+    run = latest_run(repository, head, branch, number)
     return {
         "pull_request": number,
         "head": head,
