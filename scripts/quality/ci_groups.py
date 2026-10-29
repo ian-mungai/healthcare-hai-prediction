@@ -47,6 +47,7 @@ LAYER_PARTS = {
     "features": "lakehouse_features",
     "feature_sources": "lakehouse_features",
     "feature_columns": "lakehouse_features",
+    "feature_store": "lakehouse_features",
 }
 PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
 
