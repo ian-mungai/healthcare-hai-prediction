@@ -193,9 +193,30 @@ SYNTHETIC = {
     "pkg/runs_case_folder.py": "COMMAND = ['python', './PKG/tool_case.py']\n",
     "pkg/runs_case_suffix.py": "COMMAND = ['python', './pkg/tool_case.PY']\n",
     "pkg/runs_case_path.py": "from pathlib import Path\nCOMMAND = ['python', str(Path('Pkg') / 'tool_case.py')]\n",
+    "pkg/hard_target.py": "import pkg.case_hidden\n",
+    "pkg/runs_link.py": "COMMAND = ['python', 'pkg/tool_link']\n",
+    "pkg/runs_link_out.py": "COMMAND = ['pkg/link_out']\n",
+    "pkg/runs_hard.py": "COMMAND = ['python', 'pkg/tool_hard']\n",
+    "pkg/app_dir/__main__.py": "import pkg.case_hidden\n",
+    "pkg/runs_dir.py": "COMMAND = ['python', 'pkg/app_dir']\n",
 }
 # On a disk that ignores letter case, each spelling runs pkg/tool_case.py, so its import must be bound too.
-CASE_VARIANTS = ["pkg.runs_case_folder", "pkg.runs_case_suffix", "pkg.runs_case_path", "pkg.runs_case_absolute"]
+CASE_VARIANTS = ["pkg.runs_case_folder", "pkg.runs_case_suffix", "pkg.runs_case_path", "pkg.runs_case_absolute", "pkg.runs_case_upper_root"]
+# The same disk runs these executables through an absolute path whose repository prefix is in capitals, so they are refused.
+CASE_REFUSED = {
+    "pkg.runs_upper_shell": "PKG/HELPER.SH",
+    "pkg.runs_upper_bit": "PKG/TOOL_BIT",
+    "pkg.runs_upper_shebang": "PKG/TOOL_SHEBANG",
+    "pkg.runs_upper_outside": "TOOLS/OUTSIDE.SH",
+}
+# A path binds the file it reaches on disk: through a symlink, a hard link or a folder Python runs by its __main__.py.
+IDENTITY = {
+    "pkg.runs_link": ["pkg/__init__.py", "pkg/case_hidden.py", "pkg/runs_link.py", "pkg/tool_case.py"],
+    "pkg.runs_link_in": ["pkg/__init__.py", "pkg/case_hidden.py", "pkg/runs_link_in.py", "pkg/tool_case.py"],
+    "pkg.runs_hard": ["pkg/__init__.py", "pkg/case_hidden.py", "pkg/hard_target.py", "pkg/runs_hard.py", "pkg/tool_hard"],
+    "pkg.runs_hard_in": ["pkg/__init__.py", "pkg/case_hidden.py", "pkg/hard_target.py", "pkg/runs_hard_in.py", "pkg/tool_hard"],
+    "pkg.runs_dir": ["pkg/__init__.py", "pkg/app_dir/__main__.py", "pkg/case_hidden.py", "pkg/runs_dir.py"],
+}
 EXECUTABLE_BIT = ["pkg/tool_bit"]
 EXPECTED = {
     "pkg.entry": [
@@ -302,6 +323,7 @@ REFUSED = [
     "pkg.runs_tool",
     "pkg.runs_shebang",
     "pkg.runs_outside",
+    "pkg.runs_link_out",
 ]
 
 
@@ -323,12 +345,25 @@ def synthetic_cases(root: Path) -> list[dict]:
         (root / name).chmod(0o755)
     (root / "pkg/runs_absolute.py").write_text(f"COMMAND = [{str(root / 'pkg/tool_shebang')!r}]\n")
     (root.parent / "outside_tool").write_text("not part of the repository\n")
+    (root / "pkg/tool_link").symlink_to("tool_case.py")
+    (root / "pkg/link_out").symlink_to(root.parent / "outside_tool")
+    (root.parent / "link_in").symlink_to(root / "pkg/tool_case.py")
+    (root / "pkg/runs_link_in.py").write_text(f"COMMAND = ['python', {str(root.parent / 'link_in')!r}]\n")
+    (root / "pkg/tool_hard").hardlink_to(root / "pkg/hard_target.py")
+    (root.parent / "hard_in").hardlink_to(root / "pkg/hard_target.py")
+    (root / "pkg/runs_hard_in.py").write_text(f"COMMAND = ['python', {str(root.parent / 'hard_in')!r}]\n")
     cases = [{"name": f"closure_{entry}", "passed": code_closure.closure(entry, root, ("pkg",)) == sorted(files)} for entry, files in EXPECTED.items()]
     cases += [{"name": f"refuses_{module}", "passed": refused(partial(code_closure.closure, module, root, ("pkg",)))} for module in REFUSED]
+    cases += [{"name": f"identity_{entry}", "passed": code_closure.closure(entry, root, ("pkg",)) == files} for entry, files in IDENTITY.items()]
     (root / "pkg/runs_case_absolute.py").write_text(f"COMMAND = ['python', {str(root / 'PKG/tool_case.py')!r}]\n")
-    if not (root / "PKG").is_dir():
+    (root / "pkg/runs_case_upper_root.py").write_text(f"COMMAND = ['python', {str(root).upper() + '/PKG/TOOL_CASE.PY'!r}]\n")
+    for entry, spelling in CASE_REFUSED.items():
+        (root / (entry.replace(".", "/") + ".py")).write_text(f"COMMAND = ['bash', {str(root).upper() + '/' + spelling!r}]\n")
+    if not (root / "PKG").is_dir() or not Path(str(root).upper()).is_dir():
         # A disk that respects letter case cannot run these spellings, so there is nothing to bind.
-        return cases + [{"name": f"closure_{entry}", "passed": True, "skipped": "the disk respects letter case"} for entry in CASE_VARIANTS]
+        skipped = [f"closure_{entry}" for entry in CASE_VARIANTS] + [f"refuses_{entry}" for entry in CASE_REFUSED]
+        return cases + [{"name": name, "passed": True, "skipped": "the disk respects letter case"} for name in skipped]
+    cases += [{"name": f"refuses_{entry}", "passed": refused(partial(code_closure.closure, entry, root, ("pkg",)))} for entry in CASE_REFUSED]
     for entry in CASE_VARIANTS:
         bound = {path.casefold() for path in code_closure.closure(entry, root, ("pkg",))}
         expected = {"pkg/__init__.py", entry.replace(".", "/") + ".py", "pkg/tool_case.py", "pkg/case_hidden.py"}
@@ -345,7 +380,7 @@ def contract_cases(tree: Path) -> list[dict]:
         with patch.object(code_closure, "REPO_ROOT", tree):
             files = code_closure.closure(entry, tree)
             entry_file = entry.replace(".", "/") + ".py"
-            imported = code_closure.references(entry_file, tree, code_closure.CODE_DIRECTORIES)
+            imported = code_closure.references(entry_file, tree, code_closure.code_index(tree, code_closure.CODE_DIRECTORIES))
             direct = sorted(f for f in imported if f.endswith(".py") and f != entry_file)
             transitive = sorted(f for f in files if f.endswith(".py") and f not in imported and f != entry_file)
             outside = [
