@@ -58,9 +58,20 @@ PLANTS: dict[str, tuple[str, str]] = {
     "C6 prints the task ARN": ('f"{task.family} {task.suffix}" + (" (writer)"', 'f"{task.family} {task.suffix} {task.arn}" + (" (writer)"'),
     "C6 prints the full task ID": ('return self.arn.rsplit("/", 1)[-1][-SUFFIX_LENGTH:]', 'return self.arn.rsplit("/", 1)[-1]'),
     "C6 prints the ARN of a task not stopped": ('+ "not STOPPED" for task in left', '+ f"{task.arn} not STOPPED" for task in left'),
-    "deadline gives the whole command no bound": ("self.session.deadline = self.session.clock.now() + CLEANUP_SECONDS", "pass"),
+    "deadline gives the whole command no bound": ("self.session.deadline = begin + CLEANUP_SECONDS", "pass"),
     "deadline lets the stop grace run 15 minutes": ("STOP_GRACE_SECONDS = 90", "STOP_GRACE_SECONDS = 900"),
     "deadline does not cut the wait to the time left": ("self.grace(), STOP_POLL_SECONDS", "STOP_GRACE_SECONDS, STOP_POLL_SECONDS"),
+    "T18 starts the deadline after the setup": (
+        "begin = self.session.clock.now() if self.started is None else self.started",
+        "begin = self.session.clock.now()",
+    ),
+    "T18 reads the start time after the setup": ("    started = clock.now()\n    try:\n", "    started = None\n    try:\n"),
+    "T18 gives the session another clock than the deadline": ("load_names(settings), clock)", "load_names(settings))"),
+    "T19 returns at once on an empty cluster": (
+        '                self.session.step("tasks", "no job task is running")\n            sent: list[JobTask] = []',
+        '                self.session.step("tasks", "no job task is running")\n                return\n            sent: list[JobTask] = []',
+    ),
+    "T19 does not check the confirmations": ("for value in sorted(confirmed - {task.suffix", "for value in sorted(set() - {task.suffix"),
     "deadline is not applied to the listing": (
         "with self.bounded():\n            tasks = self.discover()\n        for task",
         "with contextlib.nullcontext():\n            tasks = self.discover()\n        for task",

@@ -8,10 +8,13 @@ raises, so a planted defect that removes a deadline ends as a failed case and no
 from __future__ import annotations
 
 import importlib
+import io
 import tempfile
 from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure.host_session import Clock, HostSessionError, Session
@@ -52,6 +55,35 @@ def build(faults: set[str] | None = None) -> tuple[StandInHost, Any, list[str]]:
     marker = Path(tempfile.mkdtemp(prefix="aws_tasks_case_")) / "unused.launched"
     session = Session(cli, names(), Clock(lambda: host.now, runaway_sleep(host)), marker, lines.append)
     return host, tasks_module().TaskCleanup(session, PREFIX), lines
+
+
+def run_main(host: StandInHost, arguments: list[str], setup_seconds: float) -> int:
+    """The exit code of the real ``main`` with a configuration, an ``AwsCli`` and a Terraform lookup that the stand-in and a virtual clock replace.
+
+    The lookup of the names takes ``setup_seconds`` of virtual time, like slow Terraform outputs. Output of the command is discarded.
+    """
+    module = tasks_module()
+    clock = Clock(lambda: host.now, runaway_sleep(host))
+
+    def slow_names(_settings: dict[str, str]) -> Any:
+        host.advance(setup_seconds)
+        return names()
+
+    class TimedSession(Session):
+        def __init__(self, cli: AwsCli, session_names: Any, session_clock: Clock | None = None) -> None:
+            super().__init__(cli, session_names, session_clock, Path(tempfile.mkdtemp(prefix="aws_tasks_case_")) / "unused.launched")
+
+    settings = {"project_name": "standin", "environment": "dev", "aws_profile": PROFILE, "aws_region": REGION}
+    with (
+        patch.object(module, "load_configuration", lambda _path: (settings, {})),
+        patch.object(module, "AwsCli", lambda configuration: AwsCli(configuration, host.runner)),
+        patch.object(module, "load_names", slow_names),
+        patch.object(module, "Session", TimedSession),
+        patch.object(module, "install_termination_handler", lambda: lambda: None),
+        redirect_stdout(io.StringIO()),
+        redirect_stderr(io.StringIO()),
+    ):
+        return int(module.main(arguments, clock))
 
 
 def suffix(arn: str) -> str:
@@ -405,6 +437,75 @@ def stop_lost_reply_is_confirmed() -> dict[str, bool]:
     }
 
 
+def setup_counts_toward_the_deadline() -> dict[str, bool]:
+    host = StandInHost({"slow_calls:30"})
+    populate(host)
+    code = run_main(host, ["list"], setup_seconds=100)
+    stop_host = StandInHost({"slow_calls:30", "never_stop_task"})
+    populate(stop_host)
+    stop_code = run_main(stop_host, ["stop"], setup_seconds=100)
+    return {
+        "a listing after 100 s of setup fails visibly": code == 1,
+        "the listing run ends within the 120 s bound, setup included": host.now <= 120 + 1,
+        "no listing call is given more than the time left": all(entry["timeout"] is not None and entry["timeout"] <= 20 + 1 for entry in host.log),
+        "a stop after 100 s of setup fails visibly": stop_code == 1,
+        "the stop run ends within the 120 s bound, setup included": stop_host.now <= 120 + 1,
+        "no stop-run call is given more than the time left": all(entry["timeout"] is not None and entry["timeout"] <= 20 + 1 for entry in stop_host.log),
+    }
+
+
+def setup_that_used_the_time_sends_no_call() -> dict[str, bool]:
+    host = StandInHost()
+    found = populate(host)
+    list_code = run_main(host, ["list"], setup_seconds=120)
+    stop_code = run_main(host, ["stop"], setup_seconds=120)
+    return {
+        "a listing after 120 s of setup fails": list_code == 1,
+        "a stop after 120 s of setup fails": stop_code == 1,
+        "no task call was sent": not host.log,
+        "no task was stopped": all(status(host, arn) == "RUNNING" for arn in found.values()),
+    }
+
+
+def setup_within_the_bound_runs() -> dict[str, bool]:
+    host = StandInHost()
+    found = populate(host)
+    list_code = run_main(host, ["list"], setup_seconds=10)
+    stop_code = run_main(host, ["stop"], setup_seconds=10)
+    return {
+        "a listing after 10 s of setup succeeds": list_code == 0,
+        "a stop after 10 s of setup succeeds": stop_code == 0,
+        "the job tasks are stopped": all(status(host, found[key]) == "STOPPED" for key in ("read0", "read1", "read2")),
+        "the other tasks are untouched": all(status(host, found[key]) == "RUNNING" for key in ("service", "one_shot", "other_project")),
+    }
+
+
+def stale_confirmation_on_empty_cluster() -> dict[str, bool]:
+    host, cleanup, lines = build()
+    message = failure(lambda: cleanup.stop(frozenset({"deadbeef"}))) or ""
+    plain = failure(lambda: cleanup.stop(frozenset()))
+    main_host = StandInHost()
+    code = run_main(main_host, ["stop", "--confirm-writer-stop", "deadbeef"], setup_seconds=1)
+    return {
+        "a stale confirmation on an empty cluster fails": bool(message),
+        "the message names the confirmation": "deadbeef" in message and "matches no running writer" in message,
+        "no stop call was sent": not operations(host, STOP_CALLS),
+        "the report still says no job task is running": any("no job task" in line for line in lines),
+        "no confirmation on an empty cluster still succeeds": plain is None,
+        "the command line exits 1": code == 1,
+    }
+
+
+def stale_confirmation_beside_job_tasks() -> dict[str, bool]:
+    host, cleanup, _ = build()
+    found = populate(host)
+    message = failure(lambda: cleanup.stop(frozenset({"deadbeef"}))) or ""
+    return {
+        "the job tasks are stopped": all(status(host, found[key]) == "STOPPED" for key in ("read0", "read1", "read2")),
+        "the stale confirmation fails the command": "deadbeef" in message,
+    }
+
+
 def output_privacy() -> dict[str, bool]:
     host, cleanup, lines = build({"leaky_reasons", "never_stop_task"})
     found = populate(host, writer=True)
@@ -447,5 +548,10 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "mismatch_output_privacy": mismatch_output_privacy,
     "stop_failed_call_is_described": stop_failed_call_is_described,
     "stop_lost_reply_is_confirmed": stop_lost_reply_is_confirmed,
+    "setup_counts_toward_the_deadline": setup_counts_toward_the_deadline,
+    "setup_that_used_the_time_sends_no_call": setup_that_used_the_time_sends_no_call,
+    "setup_within_the_bound_runs": setup_within_the_bound_runs,
+    "stale_confirmation_on_empty_cluster": stale_confirmation_on_empty_cluster,
+    "stale_confirmation_beside_job_tasks": stale_confirmation_beside_job_tasks,
     "output_privacy": output_privacy,
 }

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
-from scripts.infrastructure.host_session import HostSessionError, Session, TerminationRequested, install_termination_handler, load_names
+from scripts.infrastructure.host_session import Clock, HostSessionError, Session, TerminationRequested, install_termination_handler, load_names
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 
 CLEANUP_SECONDS = 120
@@ -57,14 +57,18 @@ class JobTask:
 class TaskCleanup:
     """The job tasks of one project and environment in the project cluster."""
 
-    def __init__(self, session: Session, prefix: str) -> None:
-        self.session, self.prefix = session, prefix
+    def __init__(self, session: Session, prefix: str, started: float | None = None) -> None:
+        """``started`` is the clock time at which the command began, before its setup lookups, and the cleanup deadline counts from it.
+        When absent, the deadline counts from the start of each cleanup command."""
+        self.session, self.prefix, self.started = session, prefix, started
 
     @contextlib.contextmanager
     def bounded(self) -> Iterator[None]:
-        """Run one command under the cleanup deadline; each call gets the time that remains and no call starts after it."""
+        """Run one command under the cleanup deadline, which counts from the start of the command and includes its setup lookups.
+        Each call gets the time that remains and no call starts after it."""
         outer = self.session.deadline
-        self.session.deadline = self.session.clock.now() + CLEANUP_SECONDS
+        begin = self.session.clock.now() if self.started is None else self.started
+        self.session.deadline = begin + CLEANUP_SECONDS
         try:
             yield
         finally:
@@ -150,7 +154,6 @@ class TaskCleanup:
             tasks = self.discover()
             if not tasks:
                 self.session.step("tasks", "no job task is running")
-                return
             sent: list[JobTask] = []
             failed: dict[JobTask, str] = {}
             for task in tasks:
@@ -220,13 +223,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run one subcommand and return 0 on success, 1 on a failed, refused, interrupted or terminated step, 2 on a configuration error."""
+def main(argv: list[str] | None = None, clock: Clock | None = None) -> int:
+    """Run one subcommand and return 0 on success, 1 on a failed, refused, interrupted or terminated step, 2 on a configuration error.
+
+    The 120-second deadline starts here, before the setup lookups. A setup that used all of it leaves no time for a task call, so none is sent.
+    """
     arguments = build_parser().parse_args(argv)
+    clock = clock or Clock()
+    started = clock.now()
     try:
         settings, _ = load_configuration(REPO_ROOT / ".env")
-        session = Session(AwsCli(settings), load_names(settings))
-        cleanup = TaskCleanup(session, f"{settings['project_name']}_{settings['environment']}_job_")
+        session = Session(AwsCli(settings), load_names(settings), clock)
+        cleanup = TaskCleanup(session, f"{settings['project_name']}_{settings['environment']}_job_", started)
     except ConfigurationError as error:
         sys.stderr.write(f"configuration: {error}\n")
         return 2
