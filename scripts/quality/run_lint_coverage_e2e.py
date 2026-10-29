@@ -37,6 +37,11 @@ SNAPSHOT = (*COPIED, "scripts/quality/run_lint_coverage_e2e.py")
 PROJECT = "name: hai\nversion: '1.0.0'\nconfig-version: 2\nprofile: hai\nmodel-paths: [models]\nmacro-paths: [macros]\n"
 PROFILE = "hai:\n  target: lint\n  outputs:\n    lint:\n      type: duckdb\n      path: ':memory:'\n      threads: 1\n"
 YAML_PROFILE = (ROOT / ".yamllint").read_text()
+# The project config sets large_file_skip_byte_limit = 0, so SQLFluff never skips a file.
+# The size-skip samples run with SQLFluff's default limit to prove the hook fails when it does.
+SQLFLUFF_SIZE_LIMIT = (ROOT / ".sqlfluff").read_text().replace("large_file_skip_byte_limit = 0", "large_file_skip_byte_limit = 20000")
+if "large_file_skip_byte_limit = 20000" not in SQLFLUFF_SIZE_LIMIT:
+    raise SystemExit(".sqlfluff no longer sets large_file_skip_byte_limit = 0; adapt the size-skip samples")
 AIRFLOW_HEADER = "# docker build --tag hai-airflow:3.3.2-python3.12 --build-context hai=services/hai services/orchestration\n"
 
 
@@ -220,7 +225,15 @@ SAMPLES = (
         expected_line=2,
     ),
     *(
-        Sample(name, "sqlfluff", path, small + "-- " + "x" * 30000 + "\n", small, "SQLFluff skipped this file for size")
+        Sample(
+            name,
+            "sqlfluff",
+            path,
+            small + "-- " + "x" * 30000 + "\n",
+            small,
+            "SQLFluff skipped this file for size",
+            support=((".sqlfluff", SQLFLUFF_SIZE_LIMIT),),
+        )
         for name, path, small in (
             ("sql_size_skip_model", "dbt/models/probe.sql", "select 1 as id\n"),
             ("sql_size_skip_postgres", "services/lakehouse/polaris/create-polaris-schema.sql", "create schema if not exists polaris_schema;\n"),
