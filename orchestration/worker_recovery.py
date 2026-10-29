@@ -25,6 +25,8 @@ EVIDENCE_KEYS = frozenset({"group", "token", "members", "scan_utc"})
 LEADER_STATES = frozenset({"match", "replaced", "absent", "unknown"})
 INTENT_KEYS = frozenset({"nonce", "spawn_utc", "session", "lane", "owner", "witness"})
 INTENT_GRACE_SECONDS = 10.0
+GUARD_WAIT_SECONDS = 2.0
+SPAWN_LOCK = "spawn.lock"
 SPAWN_KEYS = frozenset({"nonce", "pid", "pgid", "leader_start", "spawn_utc", "lane", "session", "witness", "kind", "owner"})
 
 
@@ -69,6 +71,38 @@ class WorkerLedger:
         """Identify live in-process transports that use this same registry."""
         return any(value == session and ledger.registry.resolve() == self.registry.resolve() for ledger, value in tuple(_ACTIVE_SESSIONS.items()))
 
+    def _check_registry(self) -> None:
+        status = self.registry.lstat()
+        if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o077:
+            raise PermissionError("worker_registry_must_be_private")
+
+    @staticmethod
+    def _flock(fd: int, deadline: float, reason: str) -> None:
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(reason)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+
+    @contextlib.contextmanager
+    def spawn_guard(self, deadline: float, *, create: bool = True) -> Iterator[None]:
+        """Hold the spawn lock: a spawner from before its intent row until its spawn row is written, a sweep while it decides expiry."""
+        if create:
+            self.registry.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._check_registry()
+        fd = os.open(self.registry / SPAWN_LOCK, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_CREAT, 0o600)
+        try:
+            status = os.fstat(fd)
+            if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o077:
+                raise PermissionError("worker_spawn_lock_must_be_private")
+            self._flock(fd, deadline, "worker_spawn_lock_deadline")
+            yield
+        finally:
+            os.close(fd)
+
     @contextlib.contextmanager
     def _locked(self, deadline: float, *, create: bool = False) -> Iterator[int | None]:
         if create:
@@ -76,9 +110,7 @@ class WorkerLedger:
         if not self.registry.exists():
             yield None
             return
-        status = self.registry.lstat()
-        if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o077:
-            raise PermissionError("worker_registry_must_be_private")
+        self._check_registry()
         try:
             fd = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_CREAT if create else 0), 0o600)
         except FileNotFoundError:
@@ -90,14 +122,7 @@ class WorkerLedger:
             status = os.fstat(fd)
             if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o077:
                 raise PermissionError("worker_ledger_must_be_private")
-            while True:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("worker_ledger_lock_deadline")
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+            self._flock(fd, deadline, "worker_ledger_lock_deadline")
             yield fd
         finally:
             os.close(fd)
@@ -333,10 +358,11 @@ class WorkerLedger:
 class Recovery:
     """Read prior-session entries and expose one sanitized alert while dispatch is paused. Only this registry's own records pause it."""
 
-    def __init__(self, ledger: WorkerLedger, session: str, *, intent_grace: float = INTENT_GRACE_SECONDS) -> None:
+    def __init__(self, ledger: WorkerLedger, session: str, *, intent_grace: float = INTENT_GRACE_SECONDS, guard_wait: float = GUARD_WAIT_SECONDS) -> None:
         self.ledger = ledger
         self.session = session
         self.intent_grace = intent_grace
+        self.guard_wait = guard_wait
         self.alert: dict[str, Any] | None = None
         self.next_sweep = 0.0
         self.failed = False
@@ -353,34 +379,63 @@ class Recovery:
         evidence = entry["evidence"]
         return evidence is None or not (evidence.get("leader") == "replaced" and (evidence["group"], evidence["token"]) == ("present", "not_seen"))
 
+    @staticmethod
+    def _carriers(snapshot: Any, intent: Mapping[str, Any]) -> list[Any]:
+        """Group leaders that carry the intent's nonce and started no earlier than the intent's second."""
+        began = int(datetime.fromisoformat(intent["spawn_utc"]).timestamp())
+        return [
+            member
+            for member in snapshot.members
+            if member.pid == member.pgid and member.marker_nonce == intent["nonce"] and member.started and start_epoch(member.started) >= began
+        ]
+
+    def _adopt(self, intent: Mapping[str, Any], member: Any, deadline: float) -> None:
+        self.ledger.adopt_intent(intent["nonce"], member.pid, member.pgid, normalize_start(member.started), deadline=deadline)
+
+    def _pending(self, intent: Mapping[str, Any]) -> None:
+        self.pending_intents.append({key: value for key, value in intent.items() if key != "witness"})
+
     def _resolve_intents(self, snapshot: Any, deadline: float) -> None:
-        """Adopt the group leader that carries a recovered intent's nonce and started no earlier than the intent. Close intents with no worker."""
+        """Adopt the group leader that carries a recovered intent's nonce. Expiry is decided only under the spawn lock on a fresh snapshot."""
         self.pending_intents = []
+        expired = []
         for intent in (row for row in self.ledger.open_intents(deadline=deadline) if self._recovered(row)):
-            began = datetime.fromisoformat(intent["spawn_utc"]).timestamp()
-            matches = [
-                member
-                for member in snapshot.members
-                if member.pid == member.pgid and member.marker_nonce == intent["nonce"] and member.started and start_epoch(member.started) >= int(began)
-            ]
+            matches = self._carriers(snapshot, intent)
             if len(matches) == 1:
-                self.ledger.adopt_intent(intent["nonce"], matches[0].pid, matches[0].pgid, normalize_start(matches[0].started), deadline=deadline)
-            elif not matches and time.time() - began >= self.intent_grace:
-                self.ledger.close_intent(intent["nonce"], "no_worker", deadline=deadline)
+                self._adopt(intent, matches[0], deadline)
+            elif not matches and time.time() - datetime.fromisoformat(intent["spawn_utc"]).timestamp() >= self.intent_grace:
+                expired.append(intent)
             else:
-                self.pending_intents.append({key: value for key, value in intent.items() if key != "witness"})
+                self._pending(intent)
+        if expired:
+            self._expire(expired, deadline)
+
+    def _expire(self, intents: list[dict[str, Any]], deadline: float) -> None:
+        """Close an intent only when a snapshot taken inside the spawn lock still shows no carrier. A held lock or an unreadable snapshot keeps it pending."""
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(self.ledger.spawn_guard(min(deadline, time.monotonic() + self.guard_wait), create=False))
+            except TimeoutError:
+                for intent in intents:
+                    self._pending(intent)
+                return
+            fresh = process_snapshot(min(deadline, time.monotonic() + 2))
+            for intent in intents:
+                matches = self._carriers(fresh, intent) if fresh.status == "seen" else None
+                if matches is not None and len(matches) == 1:
+                    self._adopt(intent, matches[0], deadline)
+                elif matches is not None and not matches:
+                    self.ledger.close_intent(intent["nonce"], "no_worker", deadline=deadline)
+                else:
+                    self._pending(intent)
 
     def _list_unresolved(self, snapshot: Any, deadline: float) -> list[dict[str, Any]]:
-        """List marked group leaders that no record of this registry names by pid and start time. Nothing pauses on them."""
+        """List marked group leaders that no spawn record of this registry names by pid and start time. Nothing pauses on them."""
         known = self.ledger.known_identities(deadline=deadline)
-        in_flight = {row["nonce"] for row in self.ledger.open_intents(deadline=deadline) if not self._recovered(row)}
         return [
             {"pid": member.pid, "pgid": member.pgid, "name": member.name, "state": member.state, "started": member.started, "reason": "no_registry_record"}
             for member in snapshot.members
-            if member.marker_nonce is not None
-            and member.pid == member.pgid
-            and (member.pid, normalize_start(member.started)) not in known
-            and member.marker_nonce not in in_flight
+            if member.marker_nonce is not None and member.pid == member.pgid and (member.pid, normalize_start(member.started)) not in known
         ]
 
     def inspect(self, *, deadline: float, discover: bool = False) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
