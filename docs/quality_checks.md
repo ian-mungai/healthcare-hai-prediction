@@ -330,6 +330,8 @@ The supported declarations are:
   The `workdir=` argument of each renderer's `assemble` call supplies its working folder. Pipeline specifications use their launcher's declared working folder.
   The training renderer's modules come from the `JobSpec` entries of `training_render.build`. Its snapshot binds come from `TRAINING_ROOTS` in `code_digest.py`
   and the `/workspace` mount rule. Its action mounts shadow the snapshot beneath them. An unresolved root, mount target or module fails the check.
+  A conditional module resolves only when both branches are literal strings. The mount rule must be the comprehension
+  `(str(path), f"/workspace/{path.name}", True) for path in sorted((folder / "code").iterdir())`. Any other form fails and names the part that differs.
 - Literal Python files copied by a final Dockerfile stage to an absolute destination, including the analytics UI relay.
   The check reads the Dockerfile in the declared build context. It does not build or inspect an image.
 

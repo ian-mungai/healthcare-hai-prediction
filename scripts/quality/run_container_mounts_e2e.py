@@ -26,7 +26,12 @@ LAUNCHER = "orchestration/launcher.py"
 COMPOSE = "docker-compose.yaml"
 QUALITY = "scripts/lakehouse/silver_quality.py"
 RUNTIME = "orchestration/dag_runtime.py"
+ORCHESTRATION = "services/orchestration/docker-compose.orchestration.yaml"
+CONTRACT_BIND = "orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro"
 PIPELINE = "orchestration/pipeline_render.py"
+TRAINING = "orchestration/training_render.py"
+JOB = "scripts/training/job.py"
+EXTRACT = "scripts/features/training_extract.py"
 RUN_SECONDS = 720
 PYTHON = ROOT / ".venv/bin/python"
 
@@ -62,19 +67,48 @@ def scenarios(source: dict[str, str]) -> list[Case]:
     engine_code = "from orchestration.pipeline_protocol import PipelineError\n"
     helper = "scripts/lakehouse/mount_helper.py"
     runtime_import = injected(source[RUNTIME], "import orchestration.training_contract")
+    if source[ORCHESTRATION].count(CONTRACT_BIND) != 4:
+        raise ValueError("The orchestration stack no longer mounts the training contract in four places")
+    unbound_contract = "".join(line for line in source[ORCHESTRATION].splitlines(keepends=True) if CONTRACT_BIND not in line)
     quality_import = injected(source[QUALITY], "from scripts.lakehouse import ecs_engine")
     session = "scripts/lakehouse/session.py"
     cases = [
         Case("current_main", {}, 0),
         Case(
             "past_training_contract",
-            {RUNTIME: runtime_import, "orchestration/training_contract.py": "VALUE = 'synthetic'\n"},
+            {RUNTIME: runtime_import, ORCHESTRATION: unbound_contract, "orchestration/training_contract.py": "VALUE = 'synthetic'\n"},
             messages=(RUNTIME, "orchestration.training_contract", "container services/orchestration/docker-compose.orchestration.yaml:airflow-scheduler"),
         ),
         Case(
             "training_job_import_outside_mounts",
             {"scripts/training/job.py": "import dags.training_dag\n"},
             messages=("scripts/training/job.py:1:", "dags.training_dag", "container launcher:training", "Entry points: scripts.training.job"),
+        ),
+        Case(
+            "training_job_branch_unresolved",
+            {
+                TRAINING: replaced(source[TRAINING], '"scripts.training.job"', 'str("scripts.training.job")'),
+                JOB: source[JOB] + "\nimport dags.training_dag\n",
+            },
+            messages=(TRAINING, "JobSpec module cannot be resolved statically"),
+        ),
+        Case(
+            "training_extract_branch_unresolved",
+            {
+                TRAINING: replaced(source[TRAINING], '"scripts.features.training_extract"', 'str("scripts.features.training_extract")'),
+                EXTRACT: source[EXTRACT] + "\nimport dags.training_dag\n",
+            },
+            messages=(TRAINING, "JobSpec module cannot be resolved statically"),
+        ),
+        Case(
+            "training_snapshot_parent_name",
+            {TRAINING: replaced(source[TRAINING], "{path.name}", "{path.parent.name}")},
+            messages=(TRAINING, "unsupported snapshot mount form", "path.parent.name"),
+        ),
+        Case(
+            "training_snapshot_outputs_iterator",
+            {TRAINING: replaced(source[TRAINING], '(folder / "code").iterdir()', '(folder / "outputs").iterdir()')},
+            messages=(TRAINING, "unsupported snapshot mount form", "'outputs'"),
         ),
         Case(
             "past_quality_engine",
@@ -423,8 +457,8 @@ def scenarios(source: dict[str, str]) -> list[Case]:
             ),
             Case(
                 "grouped_import_diagnostic",
-                {RUNTIME: runtime_import, "orchestration/training_contract.py": "VALUE = 'synthetic'\n"},
-                messages=(RUNTIME, "orchestration.training_contract", "airflow-scheduler", "airflow-apiserver"),
+                {RUNTIME: injected(source[RUNTIME], "import orchestration.pipeline_protocol")},
+                messages=(RUNTIME, "orchestration.pipeline_protocol", "airflow-scheduler", "airflow-apiserver"),
                 counts=((RUNTIME + ":", 1),),
             ),
             Case(
@@ -562,7 +596,7 @@ def ci_case(source: dict[str, str], workspace: Path, deadline: float, name: str 
     )
     environment = fixture(files, folder, workspace, deadline)
     selected = {}
-    paths = [COMPOSE, "services/orchestration/docker-compose.orchestration.yaml", "services/lakehouse/spark/Dockerfile", "config/example.compose.yaml"]
+    paths = [COMPOSE, ORCHESTRATION, "services/lakehouse/spark/Dockerfile", "config/example.compose.yaml"]
     for path in paths:
         result = run_command(
             str(PYTHON),
@@ -615,6 +649,20 @@ def checker_mutations() -> list[tuple[str, str, str, str, str]]:
         ),
         ("no_class_scan", imports, "ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)", "ast.FunctionDef | ast.AsyncFunctionDef)", "class_method_import"),
         ("no_container_identity", CHECKER, "{container.name}", "unrelated", "past_quality_engine"),
+        (
+            "conditional_one_branch",
+            CHECKER,
+            "return body | other if body and other else set()",
+            "return body | other",
+            "training_job_branch_unresolved",
+        ),
+        (
+            "snapshot_comprehension_unchecked",
+            CHECKER,
+            "if problem := self.snapshot_comprehension_problem(comprehensions.get(id(node)), node):",
+            "if problem := None:",
+            "training_snapshot_parent_name",
+        ),
         (
             "training_invocations_skipped",
             CHECKER,
