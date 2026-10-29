@@ -96,6 +96,12 @@ class Transfer:
         check_deadline(call_deadline)
         return result
 
+    def verify_reference(self, reference: FileRef, deadline: float) -> None:
+        """Check an exact version's size and digest metadata without downloading it."""
+        reply = self._call(self.reader, "head", {"key": reference.key, "version_id": reference.version_id}, deadline)
+        if object_identity(reply, reference.size, reference.sha256) != reference.version_id:
+            raise StageError("stage_conflict", 71)
+
     def _written(self, reply: Mapping[str, Any], key: str, size: int, digest: str, deadline: float) -> str:
         version = reply.get("version_id")
         if not isinstance(version, str) or not version or version.casefold() == "null":
