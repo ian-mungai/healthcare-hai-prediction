@@ -43,6 +43,7 @@ PLANTS: dict[str, tuple[str, str]] = {
     "ignores a FAILED rollout": ('deployment.get("rolloutState") == FAILED_ROLLOUT', 'deployment.get("rolloutState") == "NEVER"'),
     "skips the registration wait": ('"host registration", ready,', '"host registration", lambda: True,'),
     "skips the capacity provider wait": ('active[0].get("capacityProviderName") != self.names.provider', "False"),
+    "accepts any capacity provider": ('active[0].get("capacityProviderName") != self.names.provider', 'not active[0].get("capacityProviderName")'),
     "puts postgres last": ("key != FIRST_SERVICE", "key == FIRST_SERVICE"),
     "accepts a nonzero exit": ("code != 0 for code", "code == 99 for code"),
     "allows a second bootstrap": ("self.marker.exists() and not again", "False"),

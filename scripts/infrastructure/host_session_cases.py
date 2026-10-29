@@ -116,6 +116,19 @@ def provider_membership_never() -> dict[str, bool]:
     }
 
 
+def provider_membership_other() -> dict[str, bool]:
+    host, session, lines = build({"other_provider"})
+    message = failure(session.start)
+    return {
+        "start fails at the registration deadline": message is not None and f"{REGISTRATION_SECONDS} s" in message,
+        "the failure names the missing capacity provider membership": message is not None and "capacity provider" in message,
+        "no host_registered line, no task and no deployment": not any(line.startswith("host_registered") for line in lines)
+        and "run-task" not in writes(host)
+        and "update-service" not in writes(host),
+        "host is off and verified": host.desired == 0 and host.instance_up_at is None,
+    }
+
+
 def run_task_failures() -> dict[str, bool]:
     host, session, _ = build({"run_task_failure"})
     message = failure(session.start)
@@ -427,6 +440,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "registration_timeout": registration_timeout,
     "provider_membership_lag": provider_membership_lag,
     "provider_membership_never": provider_membership_never,
+    "provider_membership_other": provider_membership_other,
     "run_task_failures": run_task_failures,
     "host_prepare_nonzero": host_prepare_nonzero,
     "service_never_stable": service_never_stable,
