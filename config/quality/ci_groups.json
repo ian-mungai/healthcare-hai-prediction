@@ -133,7 +133,8 @@
       "^scripts/ci/groups/repository_code_checks\\.sh$"
     ],
     "configuration_checks": [
-      "^scripts/(infrastructure|quality)/",
+      "^scripts/(infrastructure|quality|training)/",
+      "^\\.dvc(ignore)?(/|$)",
       "^tests/",
       "^config/",
       "^infra/",
