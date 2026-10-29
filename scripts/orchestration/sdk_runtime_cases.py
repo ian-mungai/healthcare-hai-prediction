@@ -614,7 +614,7 @@ def _spawn_rows(registry: Path) -> list[dict[str, Any]]:
 
 def records_cases(folder: Path) -> list[dict[str, Any]]:
     """Plant each rule of records-only recovery with real marked processes and real ledger rows."""
-    from orchestration.worker_recovery import WorkerLedger
+    from orchestration.worker_recovery import Recovery, WorkerLedger
     from scripts.process_group import Member, Snapshot
 
     scratch = Path(tempfile.mkdtemp(prefix="sdk_records_", dir=folder))
@@ -752,6 +752,81 @@ def records_cases(folder: Path) -> list[dict[str, Any]]:
                 "checks": {
                     "not_adopted": early.pid not in _pids(before_entries) and not before_recovery.dispatch_paused,
                     "listed_unresolved": early.pid in _pids(before_recovery.unresolved),
+                },
+            }
+        )
+
+        # Delayed spawn: the worker starts after the sweep's first process read and before expiry is decided; its intent must not close.
+        delayed = scratch / "delayed"
+        delayed_nonce = secrets.token_hex(16)
+        WorkerLedger(delayed).append_intent({**_intent(delayed_nonce), "spawn_utc": _ago(60)}, deadline=time.monotonic() + 3)
+        delayed_recovery = _sweeper(delayed, grace=10.0)
+        reads: list[int] = []
+        late_worker: list[Any] = []
+        real_snapshot = process_snapshot
+
+        def read_then_spawn(*args: Any, **kwargs: Any) -> Any:
+            result = real_snapshot(*args, **kwargs)
+            if not reads:
+                late_worker.append(_plant(scratch, stack, delayed_nonce, os.getpid()))
+            reads.append(1)
+            return result
+
+        with patch("orchestration.worker_recovery.process_snapshot", side_effect=read_then_spawn):
+            delayed_entries = _sweep(delayed_recovery)
+        rows.append(
+            {
+                "case": "delayed_spawn_not_expired",
+                "checks": {
+                    "worker_started_after_first_read": len(late_worker) == 1 and len(reads) >= 1,
+                    "intent_not_closed": bool(late_worker) and late_worker[0].pid in _pids(delayed_entries),
+                    "adopted_with_one_spawn_row": len(_spawn_rows(delayed)) == 1,
+                    "dispatch_paused": delayed_recovery.dispatch_paused,
+                    "not_listed_unresolved": bool(late_worker) and late_worker[0].pid not in _pids(delayed_recovery.unresolved),
+                },
+            }
+        )
+
+        # An unrelated leader that carries an active session's open intent nonce is listed, never hidden.
+        active = scratch / "active"
+        active_nonce = secrets.token_hex(16)
+        active_ledger = WorkerLedger(active)
+        active_ledger.register_session("live_owner")
+        active_ledger.append_intent({**_intent(active_nonce), "session": "live_owner", "owner": "live_owner"}, deadline=time.monotonic() + 3)
+        look_alike = _plant(scratch, stack, active_nonce, os.getpid())
+        active_recovery = _sweeper(active)
+        active_entries = _sweep(active_recovery)
+        active_ledger.unregister_session()
+        rows.append(
+            {
+                "case": "active_intent_nonce_listed",
+                "checks": {
+                    "leader_listed_unresolved": look_alike.pid in _pids(active_recovery.unresolved),
+                    "report_lists_it": look_alike.pid in _pids(active_recovery.report()["unresolved"]),
+                    "nothing_pauses": not active_entries and not active_recovery.dispatch_paused,
+                    "no_spawn_row_written": not _spawn_rows(active),
+                },
+            }
+        )
+
+        # Spawn lock: while a spawner holds it, an old intent with no visible process is not closed; a spawner that dies holding it is recovered.
+        locked = scratch / "locked"
+        locked_nonce = secrets.token_hex(16)
+        locked_ledger = WorkerLedger(locked)
+        locked_ledger.append_intent({**_intent(locked_nonce), "spawn_utc": _ago(60)}, deadline=time.monotonic() + 3)
+        waiting_recovery = Recovery(WorkerLedger(locked), "sweeper", intent_grace=10.0, guard_wait=0.3)
+        with locked_ledger.spawn_guard(time.monotonic() + 3):
+            held_entries = _sweep(waiting_recovery)
+            held_open = len(waiting_recovery.ledger.open_intents(deadline=time.monotonic() + 3))
+            held_pending = len(waiting_recovery.pending_intents)
+            started_under_lock = _plant(scratch, stack, locked_nonce, os.getpid())
+        freed_entries = _sweep(waiting_recovery)
+        rows.append(
+            {
+                "case": "spawn_lock_defers_expiry",
+                "checks": {
+                    "held_lock_closes_nothing": not held_entries and held_open == 1 and held_pending == 1 and not waiting_recovery.failed,
+                    "released_lock_adopts_worker": started_under_lock.pid in _pids(freed_entries) and len(_spawn_rows(locked)) == 1,
                 },
             }
         )
