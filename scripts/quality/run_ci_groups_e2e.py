@@ -2670,6 +2670,7 @@ def guard_cases() -> list[dict[str, Any]]:
         path = tree / ".github/workflows/ci.yml"
         source = path.read_text(encoding="utf-8")
         source = re.sub(r"^  feature_(?:sources|columns):\n.*?(?=^  [a-z_]+:\n|\Z)", "", source, flags=re.MULTILINE | re.DOTALL)
+        source = re.sub(r"^          - layer: Features\n(?:            .*\n)+", "", source, flags=re.MULTILINE)
         path.write_text(source, encoding="utf-8")
 
     def rename_launcher(tree: Path) -> None:
