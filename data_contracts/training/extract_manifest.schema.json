@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/training/extract_manifest.schema.json",
+  "title": "Training extract manifest",
+  "description": "One deterministic per-type predictor extract and its separately declared mediation, validation and adjacency inputs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "run_id",
+    "hai_type",
+    "population",
+    "parameters_sha256",
+    "code_digest",
+    "features_snapshot_set_sha256",
+    "gold_snapshot_set_sha256",
+    "feature_schema_sha256",
+    "hai_outcome_controls_sha256",
+    "feature_list_sha256",
+    "writer_lock_sha256",
+    "publication_run_id",
+    "gold_run_id",
+    "features_namespace",
+    "snapshot_set",
+    "file",
+    "sha256",
+    "row_count",
+    "columns",
+    "value_content_sha256",
+    "label_column",
+    "oldest_window_year",
+    "newest_window_year",
+    "counts",
+    "auxiliary_files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "training_extract"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+    },
+    "hai_type": {
+      "enum": [
+        "HAI_1",
+        "HAI_2",
+        "HAI_3",
+        "HAI_4",
+        "HAI_5",
+        "HAI_6"
+      ]
+    },
+    "population": {
+      "enum": [
+        "primary",
+        "sensitivity"
+      ]
+    },
+    "parameters_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "code_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "features_snapshot_set_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gold_snapshot_set_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "feature_schema_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "hai_outcome_controls_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "feature_list_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "writer_lock_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "publication_run_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+    },
+    "gold_run_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+    },
+    "features_namespace": {
+      "enum": [
+        "features",
+        "features_e2e"
+      ]
+    },
+    "snapshot_set": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "file": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_]+[.]parquet$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "row_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "columns": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "enum": [
+          "varchar",
+          "double",
+          "bigint",
+          "boolean",
+          "date",
+          "timestamp with time zone"
+        ]
+      }
+    },
+    "value_content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "label_column": {
+      "type": "string",
+      "pattern": "^hai_[1-6]__sir__number$"
+    },
+    "oldest_window_year": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1000,
+      "maximum": 2999
+    },
+    "newest_window_year": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1000,
+      "maximum": 2999
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "spine",
+        "population_excluded",
+        "label_excluded",
+        "included"
+      ],
+      "properties": {
+        "spine": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "population_excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "label_excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "included": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "auxiliary_files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mediator.parquet",
+        "hac.parquet",
+        "adjacency.parquet"
+      ],
+      "properties": {
+        "mediator.parquet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "sha256",
+            "row_count",
+            "columns",
+            "value_content_sha256",
+            "kind"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+[.]parquet$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "row_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "columns": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "enum": [
+                  "varchar",
+                  "double",
+                  "bigint",
+                  "boolean",
+                  "date",
+                  "timestamp with time zone"
+                ]
+              }
+            },
+            "value_content_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "kind": {
+              "enum": [
+                "mediator",
+                "hac",
+                "adjacency"
+              ]
+            }
+          }
+        },
+        "hac.parquet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "sha256",
+            "row_count",
+            "columns",
+            "value_content_sha256",
+            "kind"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+[.]parquet$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "row_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "columns": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "enum": [
+                  "varchar",
+                  "double",
+                  "bigint",
+                  "boolean",
+                  "date",
+                  "timestamp with time zone"
+                ]
+              }
+            },
+            "value_content_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "kind": {
+              "enum": [
+                "mediator",
+                "hac",
+                "adjacency"
+              ]
+            }
+          }
+        },
+        "adjacency.parquet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "sha256",
+            "row_count",
+            "columns",
+            "value_content_sha256",
+            "kind"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+[.]parquet$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "row_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "columns": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "enum": [
+                  "varchar",
+                  "double",
+                  "bigint",
+                  "boolean",
+                  "date",
+                  "timestamp with time zone"
+                ]
+              }
+            },
+            "value_content_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "kind": {
+              "enum": [
+                "mediator",
+                "hac",
+                "adjacency"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

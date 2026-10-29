@@ -9,6 +9,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from orchestration import training_contract
 from orchestration.graph import PIPELINE_CHAINS, requirements
 from orchestration.network_policy import CLASSES, PROXY_IMAGE, load
 from scripts.quality.ci_groups import plan
@@ -22,6 +23,23 @@ DEPENDENCIES = (
     "scripts/lakehouse/silver_publish.py",
     "scripts/lakehouse/gold_maintenance.py",
 )
+
+
+def declared_steps(tree: ast.Module) -> tuple[str, ...]:
+    """The task steps a DAG file builds: its WORK_STEPS literal, or the training contract constant it passes to build_tasks."""
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "WORK_STEPS" for target in node.targets):
+            return tuple(ast.literal_eval(node.value))
+    imported = {
+        alias.name for node in tree.body if isinstance(node, ast.ImportFrom) and node.module == "orchestration.training_contract" for alias in node.names
+    }
+    built = {
+        node.args[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "build_tasks" and node.args and isinstance(node.args[0], ast.Name)
+    }
+    (name,) = built & imported & {"TRAINING_STEPS", "PROMOTION_STEPS"}
+    return tuple(getattr(training_contract, name))
 
 
 def main() -> int:
@@ -39,11 +57,7 @@ def main() -> int:
         name = f"dags/{dag_id}.py"
         inputs.add(name)
         tree = ast.parse((ROOT / name).read_text())
-        literal = next(
-            ast.literal_eval(node.value)
-            for node in tree.body
-            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "WORK_STEPS" for target in node.targets)
-        )
+        literal = declared_steps(tree)
         expected, rules = requirements(dag_id)
         checks[f"graph_{dag_id}"] = {
             "ok": literal == chain

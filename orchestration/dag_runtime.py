@@ -12,6 +12,7 @@ from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
 from orchestration.client import BrokerClient, BrokerUnavailable
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
+from orchestration.training_contract import DAGS, parameters_for
 
 LOG = logging.getLogger(__name__)
 STEP_TIMEOUT = timedelta(hours=26)
@@ -59,18 +60,30 @@ def run_step(template: str) -> str:
     params = context["params"]
     selected = params.get(SELECTIONS[template], "latest") if template in SELECTIONS else "latest"
     instance = context["ti"]
+    training = None
+    mode = str(params["mode"])
+    if instance.dag_id in DAGS:
+        names = (
+            ("features_run", "population", "hai_types", "trigger", "mlflow") if instance.dag_id == "training_dag" else ("hai_type", "model_version", "mlflow")
+        )
+        raw = {name: params[name] for name in names}
+        if instance.dag_id == "model_promotion_dag":
+            raw["promotion_mode"] = mode
+            mode = "real"
+        training = parameters_for(instance.dag_id, raw)
     request = SubmissionRequest(
         template,
         str(params["run_id"]),
-        str(params["mode"]),
+        mode,
         int(instance.try_number),
         instance.dag_id,
         instance.task_id,
         instance.run_id,
         None if selected == "latest" else str(selected),
+        training=training,
     )
     _, status = submit_and_wait(BrokerClient.from_session(), request)
-    if status.state not in PASSING:
+    if status.state != State.SUCCEEDED and not (instance.dag_id in DAGS and status.state == State.NO_OP):
         raise RuntimeError(f"{template} ended {status.state.value} with exit code {status.exit_code}")
     return status.state.value
 

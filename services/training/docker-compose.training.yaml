@@ -1,0 +1,11 @@
+name: hai-training
+
+services:
+  training:
+    image: hai-training:3.17.0
+    user: "10006:10006"
+    entrypoint: [/opt/hai/deadline_run]
+  feature-store:
+    image: hai-feature-store:feast0.66.0
+    user: "10004:10004"
+    entrypoint: [/opt/hai/deadline_run]

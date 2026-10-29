@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.metadata import version
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TypedDict
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -34,7 +34,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = ROOT
 EVIDENCE: Path | None = None
 RUN = "20261017T010000Z-1234abcd"
-IDENTITY = {"dag_id": "silver_transform_dag", "task_id": "silver_build", "dag_run_id": "manual__2026-10-17T01:00:00+00:00"}
+
+
+class Identity(TypedDict):
+    dag_id: str
+    task_id: str
+    dag_run_id: str
+
+
+IDENTITY: Identity = {"dag_id": "silver_transform_dag", "task_id": "silver_build", "dag_run_id": "manual__2026-10-17T01:00:00+00:00"}
 ENVELOPE = {
     "version": 1,
     "inputs": [{"namespace": "file", "name": "fixture/bronze.duckdb"}],
@@ -122,7 +130,7 @@ def broker_records() -> None:
         check(all(record[key] == value for key, value in IDENTITY.items()), "caller identity missing from finished record")
         check(record.get("lineage") == {"version": 1, "inputs": [], "outputs": []}, "no-op lineage was not frozen")
         check(record["ledger"][0]["lineage"] == record["lineage"], "intent and terminal lineage disagree")
-        conflict = SubmissionRequest("pin_bronze", RUN, "fixture", 1, **{**IDENTITY, "dag_id": "other_dag"})
+        conflict = SubmissionRequest("pin_bronze", RUN, "fixture", 1, **(IDENTITY | {"dag_id": "other_dag"}))
         try:
             broker.submit(conflict)
         except SubmissionRefused as error:

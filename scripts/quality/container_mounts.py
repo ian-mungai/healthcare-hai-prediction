@@ -267,7 +267,7 @@ class Declarations:
                     flag = self.strings(node.elts[1], path, function, values)
                     target = node.elts[2] if flag == {"-m"} and len(node.elts) > 2 else node.elts[1]
                     modules = self.strings(target, path, function, values)
-                    if function.name == "render_pipeline" and dotted(target) == "spec.module":
+                    if function.name in {"render_pipeline", "render_training"} and dotted(target) == "spec.module":
                         continue
                     if not modules:
                         raise ValueError(f"{path}:{node.lineno}: Python entry point cannot be resolved statically")

@@ -43,6 +43,7 @@ x-airflow: &airflow
     - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
     - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
     - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
+    - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
     - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
   security_opt:
     - no-new-privileges:true
@@ -88,6 +89,7 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
+      - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
       - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
     ports:
@@ -112,6 +114,7 @@ services:
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
+      - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
       # The broker URL and this session's token; only the scheduler runs tasks, so only it receives them.
       - ${HAI_ORCH_STATE}/session:/opt/hai/broker:ro
@@ -160,6 +163,7 @@ services:
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_REPO}/orchestration/graph.py:/opt/hai/orchestration/graph.py:ro
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
+      - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
       - ${HAI_ORCH_REPO}/scripts/orchestration/in_image_checks.py:/opt/hai/checks/in_image_checks.py:ro
       - ${HAI_ORCH_REPO}/services/orchestration/constraints-3.12.txt:/opt/hai/constraints.txt:ro
       - ${HAI_ORCH_REPO}/config/orchestration/platform.json:/opt/hai/platform.json:ro
