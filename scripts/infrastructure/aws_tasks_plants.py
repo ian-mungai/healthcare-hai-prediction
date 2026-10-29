@@ -15,8 +15,29 @@ from pathlib import Path
 MODULE = "scripts.infrastructure.aws_tasks"
 SOURCE = Path(__file__).with_name("aws_tasks.py")
 PLANTS: dict[str, tuple[str, str]] = {
-    "C2 stops tasks of every group": ('group.startswith(f"{GROUP_PREFIX}{self.prefix}")', "True"),
-    "C2 accepts every family": ('group.startswith(f"{GROUP_PREFIX}{self.prefix}")', 'group.startswith("family:")'),
+    "C2 stops tasks of every family": ("if family is not None and family.startswith(self.prefix)", "if family is not None"),
+    "C2 accepts the prefix of another project": ("family.startswith(self.prefix)]", 'family.startswith("other")]'),
+    "T14 lists only the desired status RUNNING": ('DESIRED_STATUSES = ("RUNNING", "STOPPED")', 'DESIRED_STATUSES = ("RUNNING",)'),
+    "T14 lists only the desired status STOPPED": ('DESIRED_STATUSES = ("RUNNING", "STOPPED")', 'DESIRED_STATUSES = ("STOPPED",)'),
+    "T14 reads only the first page of the second status": (
+        "            arns |= dict.fromkeys(self.page_status(desired))",
+        "            arns |= dict.fromkeys(self.page_status(desired)[:2])",
+    ),
+    "T15 takes the family from the group": ("else None\n            ours", "else grouped\n            ours"),
+    "T15 does not compare group and definition": ("grouped != defined)", "False)"),
+    "T15 stops a mismatched task": (
+        "                if task.mismatch:\n                    problems.append",
+        "                if False:\n                    problems.append",
+    ),
+    "T15 stops a mismatched task that the owner confirmed": (
+        "                if task.mismatch:\n",
+        "                if task.mismatch and task.suffix not in confirmed:\n",
+    ),
+    "T15 prints the group text": ("shown = family if FAMILY_FORM.fullmatch(family) else UNNAMED", "shown = family"),
+    "T16 does not describe a task whose stop call failed": (
+        "                    failed[task] = str(error)\n                sent.append(task)",
+        "                    failed[task] = str(error)\n                    continue\n                sent.append(task)",
+    ),
     "C3 reads only the first page": ('            token = page.get("nextToken")\n', "            token = None\n"),
     "C3 lets the CLI join the pages and skips the token": ('"--no-paginate"', '"--cli-binary-format"'),
     "C3 follows a repeated token": ("if token in seen", "if False"),
@@ -30,13 +51,13 @@ PLANTS: dict[str, tuple[str, str]] = {
     "C5 leaves no reason on the stop": (', "--reason", reason]', "]"),
     "C5 leaves no trace of the owner's confirmation": ("WRITER_STOP_REASON if task.writer else STOP_REASON", "STOP_REASON"),
     "T10 stops at the first failed stop call": (
-        "                    continue\n                sent.append(task)",
-        "                    break\n                sent.append(task)",
+        "                    failed[task] = str(error)\n                sent.append(task)",
+        "                    failed[task] = str(error)\n                    break\n                sent.append(task)",
     ),
     "T7 ends the loop at a refused writer": ("                    continue\n                reason =", "                    break\n                reason ="),
     "C6 prints the task ARN": ('f"{task.family} {task.suffix}" + (" (writer)"', 'f"{task.family} {task.suffix} {task.arn}" + (" (writer)"'),
     "C6 prints the full task ID": ('return self.arn.rsplit("/", 1)[-1][-SUFFIX_LENGTH:]', 'return self.arn.rsplit("/", 1)[-1]'),
-    "C6 prints the ARN of a task not stopped": ('f"{task.family} {task.suffix} not STOPPED"', 'f"{task.family} {task.suffix} not STOPPED {task.arn}"'),
+    "C6 prints the ARN of a task not stopped": ('+ "not STOPPED" for task in left', '+ f"{task.arn} not STOPPED" for task in left'),
     "deadline gives the whole command no bound": ("self.session.deadline = self.session.clock.now() + CLEANUP_SECONDS", "pass"),
     "deadline lets the stop grace run 15 minutes": ("STOP_GRACE_SECONDS = 90", "STOP_GRACE_SECONDS = 900"),
     "deadline does not cut the wait to the time left": ("self.grace(), STOP_POLL_SECONDS", "STOP_GRACE_SECONDS, STOP_POLL_SECONDS"),

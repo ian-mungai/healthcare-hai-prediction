@@ -1,10 +1,11 @@
 """List and stop the project's job tasks before the host is stopped: ``list`` and ``stop``.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.aws_tasks list``. The profile and region come from ``.env`` through
-``load_configuration``, the cluster from the platform Terraform output. Only tasks whose ECS group is ``family:<project>_<environment>_job_*`` are listed or
-stopped; service tasks, one-shot tasks and tasks of other projects are never touched. A writer task (family ``..._job_write_*``) is stopped only when the
-owner names its ID suffix with ``--confirm-writer-stop``. Every call and wait ends at one deadline and fails visibly. Output shows only the family and the
-last 8 characters of the task ID, never an ARN, an account ID or a provider reason.
+``load_configuration``, the cluster from the platform Terraform output. Only tasks of the families ``<project>_<environment>_job_*`` are listed or stopped;
+service tasks, one-shot tasks and tasks of other projects are never touched. The family comes from the task definition, and a task whose ECS group and task
+definition disagree is refused. A writer task (family ``..._job_write_*``) is stopped only when the owner names its ID suffix with
+``--confirm-writer-stop``. A task that is already stopping (desired status STOPPED, not yet STOPPED) counts as running. Every call and wait ends at one
+deadline and fails visibly. Output shows only the family and the last 8 characters of the task ID, never an ARN, an account ID or a provider reason.
 """
 
 from __future__ import annotations
@@ -33,7 +34,10 @@ STOP_REASON = "aws_tasks stop"
 WRITER_STOP_REASON = "aws_tasks stop: owner confirmed writer stop"
 MISSING = "MISSING"
 STOPPED = "STOPPED"
+DESIRED_STATUSES = ("RUNNING", "STOPPED")
 SUFFIX_FORM = re.compile(r"[0-9a-f]{8}")
+FAMILY_FORM = re.compile(r"[A-Za-z0-9_-]{1,255}")
+UNNAMED = "unnamed"
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class JobTask:
     arn: str
     family: str
     writer: bool
+    mismatch: bool = False
 
     @property
     def suffix(self) -> str:
@@ -72,12 +77,20 @@ class TaskCleanup:
         return max(left, 1)
 
     def page_arns(self) -> list[str]:
-        """Every running task ARN of the cluster: the pages are followed by their tokens, a repeated token or too many pages fails."""
+        """Every task ARN of the cluster with either desired status, each without duplicates: the pages are followed by their tokens, a repeated token or
+        too many pages fails. A task that was told to stop but still runs only shows under desired status STOPPED."""
+        arns: dict[str, None] = {}
+        for desired in DESIRED_STATUSES:
+            arns |= dict.fromkeys(self.page_status(desired))
+        return list(arns)
+
+    def page_status(self, desired: str) -> list[str]:
+        """The task ARNs with one desired status."""
         arns: list[str] = []
         seen: set[str] = set()
         token: str | None = None
         for _ in range(MAX_PAGES):
-            arguments = ["--cluster", self.session.names.cluster, "--desired-status", "RUNNING", "--no-paginate"]
+            arguments = ["--cluster", self.session.names.cluster, "--desired-status", desired, "--no-paginate"]
             page = self.session.call("ecs", "list-tasks", [*arguments, "--next-token", token] if token else arguments)
             arns += page.get("taskArns", [])
             token = page.get("nextToken")
@@ -99,13 +112,19 @@ class TaskCleanup:
         return found
 
     def discover(self) -> list[JobTask]:
-        """The running tasks of the project's job families."""
+        """The tasks of the project's job families that are not STOPPED. The family comes from the task definition; a task whose group names another
+        family, or whose definition is absent, is marked as a mismatch and is never stopped."""
         tasks: list[JobTask] = []
         for item in self.describe(self.page_arns()):
-            group = item.get("group")
-            if isinstance(group, str) and group.startswith(f"{GROUP_PREFIX}{self.prefix}") and item.get("lastStatus") != STOPPED:
-                family = group.removeprefix(GROUP_PREFIX)
-                tasks.append(JobTask(str(item["taskArn"]), family, family.removeprefix(self.prefix).startswith(WRITER_MARK)))
+            group, definition = item.get("group"), item.get("taskDefinitionArn")
+            grouped = group.removeprefix(GROUP_PREFIX) if isinstance(group, str) and group.startswith(GROUP_PREFIX) else None
+            defined = definition.rsplit("/", 1)[-1].rsplit(":", 1)[0] if isinstance(definition, str) and "/" in definition else None
+            ours = [family for family in (grouped, defined) if family is not None and family.startswith(self.prefix)]
+            if not ours or item.get("lastStatus") == STOPPED:
+                continue
+            family = ours[-1]
+            shown = family if FAMILY_FORM.fullmatch(family) else UNNAMED
+            tasks.append(JobTask(str(item["taskArn"]), shown, family.removeprefix(self.prefix).startswith(WRITER_MARK), grouped != defined))
         return tasks
 
     def not_stopped(self, tasks: list[JobTask]) -> list[JobTask]:
@@ -118,7 +137,9 @@ class TaskCleanup:
         with self.bounded():
             tasks = self.discover()
         for task in tasks:
-            self.session.step("task", f"{task.family} {task.suffix}" + (" (writer)" if task.writer else ""))
+            self.session.step(
+                "task", f"{task.family} {task.suffix}" + (" (writer)" if task.writer else "") + (" (group and task definition differ)" if task.mismatch else "")
+            )
         self.session.step("tasks", f"{len(tasks)} job task(s) running" if tasks else "no job task is running")
         return tasks
 
@@ -131,7 +152,11 @@ class TaskCleanup:
                 self.session.step("tasks", "no job task is running")
                 return
             sent: list[JobTask] = []
+            failed: dict[JobTask, str] = {}
             for task in tasks:
+                if task.mismatch:
+                    problems.append(f"{task.family} {task.suffix} not stopped: its group and its task definition differ")
+                    continue
                 if task.writer and task.suffix not in confirmed:
                     problems.append(
                         f"writer {task.family} {task.suffix} not stopped: its intent may be open; to stop it add --confirm-writer-stop {task.suffix}"
@@ -141,10 +166,12 @@ class TaskCleanup:
                 try:
                     self.session.call("ecs", "stop-task", ["--cluster", self.session.names.cluster, "--task", task.arn, "--reason", reason])
                 except HostSessionError as error:
-                    problems.append(f"{task.family} {task.suffix} stop call failed ({error})")
-                    continue
+                    failed[task] = str(error)
                 sent.append(task)
-            problems += [f"confirmation {value} matches no running writer" for value in sorted(confirmed - {task.suffix for task in tasks if task.writer})]
+            problems += [
+                f"confirmation {value} matches no running writer"
+                for value in sorted(confirmed - {task.suffix for task in tasks if task.writer and not task.mismatch})
+            ]
             if sent:
                 try:
                     self.session.wait("the job tasks to stop", lambda: not self.not_stopped(sent), self.grace(), STOP_POLL_SECONDS)
@@ -154,7 +181,9 @@ class TaskCleanup:
                     left = sent
                     with contextlib.suppress(HostSessionError):
                         left = self.not_stopped(sent)
-                problems += [f"{task.family} {task.suffix} not STOPPED" for task in left]
+                problems += [
+                    f"{task.family} {task.suffix} " + (f"stop call failed ({failed[task]}) and " if task in failed else "") + "not STOPPED" for task in left
+                ]
                 for task in sent:
                     if task not in left:
                         self.session.step("stopped", f"{task.family} {task.suffix}")

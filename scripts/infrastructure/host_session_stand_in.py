@@ -76,8 +76,10 @@ class StandInHost:
     ``page_size:<n>`` makes list-tasks answer n ARNs and a ``nextToken`` per page when the call has ``--no-paginate`` (without it the CLI joins the
     pages), ``repeat_token`` makes every page answer the same ``nextToken``, ``ghost_task`` makes list-tasks name one task that describe-tasks reports
     ``MISSING``, ``vanish_after_stop`` makes a stopped task unknown to describe-tasks, ``never_stop_task`` makes stop-task accept the call but leave the
-    task running and ``stop_task_error`` makes stop-task fail. ``add_task`` adds a running task of any family and group, so a case can hold job tasks,
-    service tasks and writer tasks together.
+    task running, ``stop_task_error`` makes stop-task fail without effect, ``stop_task_lost_reply`` makes stop-task take effect and then fail and
+    ``no_definition`` makes describe-tasks omit ``taskDefinitionArn``. List-tasks answers the tasks whose ``desiredStatus`` is the ``--desired-status``
+    value (RUNNING when absent), and a stopped task has desired status STOPPED. ``add_task`` adds a running task of any family and group, so a case
+    can hold job tasks, service tasks and writer tasks together.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
@@ -135,7 +137,7 @@ class StandInHost:
             self.instance_up_at, self.terminate_at = None, None
         for task in self.tasks.values():
             if task["status"] != "STOPPED" and self.now >= task["stops_at"]:
-                task["status"] = "STOPPED"
+                task["status"], task["desired"] = "STOPPED", "STOPPED"
                 if task["key"] == "host_prepare" and task["exit"] == 0:
                     self.prepared = True
         for name, service in self.services.items():
@@ -229,10 +231,13 @@ class StandInHost:
         family = options.get("--family", [None])[0]
         if "stale_list_tasks" in self.faults:
             return {"taskArns": []}
+        desired = options.get("--desired-status", ["RUNNING"])[0]
         arns = [
             arn
             for arn, task in self.tasks.items()
-            if (family is None or task["family"] == family) and task["status"] != "STOPPED" and task.get("desired", "RUNNING") == "RUNNING"
+            if (family is None or task["family"] == family)
+            and task.get("desired", "RUNNING") == desired
+            and (desired == "STOPPED" or task["status"] != "STOPPED")
         ]
         if "ghost_task" in self.faults:
             arns = [*arns, f"{ACCOUNT_MARK}task/{CLUSTER}/ghost"]
@@ -256,6 +261,8 @@ class StandInHost:
             return {"task": {"desiredStatus": "STOPPED"}}
         if "never_stop_task" not in self.faults:
             task["stops_at"] = min(task["stops_at"], self.now + STOP_TASK_SECONDS)
+        if "stop_task_lost_reply" in self.faults:
+            raise StandInError("ServerException")
         return {"task": {"taskArn": options["--task"][0], "desiredStatus": "STOPPED"}}
 
     def ecs_run_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
@@ -290,9 +297,11 @@ class StandInHost:
                 failures.append({"arn": arn, "reason": "MISSING"})
                 continue
             container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
+            definition = {} if "no_definition" in self.faults else {"taskDefinitionArn": f"{ACCOUNT_MARK}task-definition/{task['family']}:7"}
             found.append(
                 {
                     "taskArn": arn,
+                    **definition,
                     "group": task.get("group", f"family:{task['family']}"),
                     "lastStatus": task["status"],
                     "desiredStatus": task.get("desired", "RUNNING"),

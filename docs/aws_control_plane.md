@@ -263,16 +263,26 @@ Save the task ARN for the waiter and continue only with an empty `failures` list
 `host_session stop` ends only the host group. Fargate job tasks keep running and cost money, so run the task cleanup first and stop the host after it:
 
 ```sh
-.venv/bin/python -m scripts.infrastructure.aws_tasks list
-.venv/bin/python -m scripts.infrastructure.aws_tasks stop
-.venv/bin/python -m scripts.infrastructure.host_session stop
+.venv/bin/python -m scripts.infrastructure.aws_tasks list \
+  && .venv/bin/python -m scripts.infrastructure.aws_tasks stop \
+  && .venv/bin/python -m scripts.infrastructure.host_session stop
 ```
 
-- `list` shows the running job tasks and changes nothing. It follows the `ListTasks` pages to the end.
-- `stop` sends `StopTask` for each running job task and waits up to 90 seconds until ECS describes each as `STOPPED`. The whole command ends within 120 seconds. The command exits 1 for a task that is still running or that ECS no longer describes. It names that task by family and ID suffix. A second run finds nothing to stop and exits 0.
-- Only tasks whose ECS group is `family:<PROJECT_NAME>_<ENVIRONMENT>_job_*` are touched. Service tasks (Postgres, Polaris, Airflow), the one-shot host tasks and tasks of other projects are skipped.
+The commands are joined with `&&`: when the cleanup exits 1 (a writer refused, a task left running), the host stop does not run.
+
+- `list` shows the job tasks that are not `STOPPED` and changes nothing. It follows the `ListTasks` pages to the end for both desired statuses, `RUNNING` and `STOPPED`, because a task that was told to stop but still runs only shows under `STOPPED`.
+- `stop` sends `StopTask` for each such job task (again on a retry) and waits up to 90 seconds until ECS describes each as `STOPPED`. The whole command ends within 120 seconds. The command exits 1 for a task that is still running or that ECS no longer describes. It names that task by family and ID suffix. A second run finds nothing to stop and exits 0.
+- Only tasks of the families `<PROJECT_NAME>_<ENVIRONMENT>_job_*` are touched. The family comes from the task definition, not from the group, because the caller of `RunTask` chooses the group. A task is never stopped, even with a confirmation, when its group family and task definition family differ or when `DescribeTasks` returns no definition for it. It is listed with "group and task definition differ" and named in the failure. The exit code is 1. Service tasks (Postgres, Polaris, Airflow), the one-shot host tasks and tasks of other projects are skipped.
+- A task whose `StopTask` call failed is described again with the others. One that ECS now shows as `STOPPED` is confirmed; any other fails the command.
 - A writer task (family `..._job_write_*`) may hold an open writer intent. The tool cannot read the launcher's journal. `stop` does not stop it unless the owner names its ID suffix: `aws_tasks stop --confirm-writer-stop <suffix>` (repeatable; the suffix is the 8 characters `list` shows). The other tasks are still stopped, the refused writers are listed and the exit code is 1, so a running writer blocks the host stop. The `StopTask` reason records the owner's confirmation. The writer's layer stays in recovery hold until `complete` runs from the terminal observation.
 - Output shows the family and the last 8 characters of the task ID only, never an ARN, an account ID or a provider reason. The project user's policy already allows `ListTasks`, `DescribeTasks` and `StopTask` on the project cluster.
+
+### Accepted limits of the task cleanup (waiting for the owner's agreement)
+
+Scores are severity, likelihood and cost-to-fix on a 1 to 10 scale, as model / Jev, from the B1 and B23 review triage (project standard decision 18). None is built.
+
+- **B1-M1: setup lookups run before the 120-second deadline starts.** `main` reads the profile, region and cluster name (output lookups, up to about 121 seconds) before `bounded` starts, so a `list` can send its first task call after the deadline would have passed. Severity 4 / 5, likelihood 4 / 2, cost 3 / 2.
+- **B1-L1: a stale confirmation passes on an empty cluster.** With no job task running, `stop --confirm-writer-stop deadbeef` returns 0 without reporting that the confirmation matches no writer (failure mode T8 covers only a cluster with tasks). Severity 2 / 2, likelihood 4 / 3, cost 1 / 1.
 
 ## Teardown
 

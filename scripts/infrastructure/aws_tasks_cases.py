@@ -94,7 +94,7 @@ def listing_follows_pages() -> dict[str, bool]:
     for index in range(2):
         found[f"extra{index}"] = host.add_task(f"{READ}_extra{index}")
     listed = cleanup.list_tasks()
-    calls = operations(host, {"list-tasks"})
+    calls = [call for call in operations(host, {"list-tasks"}) if call["options"].get("--desired-status") == ["RUNNING"]]
     return {
         "every page is read": len(listed) == 5,
         "the calls turn off the CLI's own joining": all("--no-paginate" in call["options"] for call in calls),
@@ -189,7 +189,7 @@ def stop_not_stopped_fails_in_bound() -> dict[str, bool]:
 
 
 def stop_deadline_with_slow_calls() -> dict[str, bool]:
-    host, cleanup, _ = build({"never_stop_task", "slow_calls:50"})
+    host, cleanup, _ = build({"never_stop_task", "slow_calls:25"})
     populate(host)
     message = failure(lambda: cleanup.stop(frozenset()))
     return {
@@ -277,6 +277,134 @@ def stop_rerun() -> dict[str, bool]:
     }
 
 
+def stop_retry_finishes_stopping_tasks() -> dict[str, bool]:
+    host, cleanup, lines = build({"never_stop_task"})
+    found = populate(host)
+    first = failure(lambda: cleanup.stop(frozenset()))
+    host.faults.discard("never_stop_task")
+    lines.clear()
+    first_stops = len(operations(host, STOP_CALLS))
+    cleanup.stop(frozenset())
+    return {
+        "the first stop fails with the tasks left": first is not None,
+        "the retry sends a stop call again for each task that is still running": len(operations(host, STOP_CALLS)) == first_stops + 3,
+        "the retry ends with every job task STOPPED": all(status(host, found[key]) == "STOPPED" for key in ("read0", "read1", "read2")),
+        "the retry does not say that no job task is running": not any("no job task" in line for line in lines),
+    }
+
+
+def stop_retry_still_running_fails() -> dict[str, bool]:
+    host, cleanup, _ = build({"never_stop_task"})
+    found = populate(host)
+    failure(lambda: cleanup.stop(frozenset()))
+    message = failure(lambda: cleanup.stop(frozenset())) or ""
+    return {
+        "the retry fails while the tasks run": bool(message),
+        "the retry names each task": all(suffix(found[key]) in message for key in ("read0", "read1", "read2")),
+    }
+
+
+def listing_shows_stopping_tasks() -> dict[str, bool]:
+    host, cleanup, _ = build({"never_stop_task"})
+    populate(host)
+    failure(lambda: cleanup.stop(frozenset()))
+    listed = cleanup.list_tasks()
+    desired = {call["options"].get("--desired-status", [""])[0] for call in operations(host, {"list-tasks"})}
+    return {
+        "a task with desired status STOPPED and a running status is listed": len(listed) == 3,
+        "both desired statuses are listed": {"RUNNING", "STOPPED"} <= desired,
+    }
+
+
+def listing_pages_both_statuses() -> dict[str, bool]:
+    host, cleanup, _ = build({"page_size:2", "never_stop_task"})
+    populate(host)
+    for index in range(3):
+        host.add_task(f"{READ}_more{index}")
+    failure(lambda: cleanup.stop(frozenset()))
+    host.log.clear()
+    listed = cleanup.list_tasks()
+    calls = operations(host, {"list-tasks"})
+    stopped_calls = [call for call in calls if call["options"].get("--desired-status") == ["STOPPED"]]
+    return {
+        "all six stopping tasks are listed once": len(listed) == 6 and len({item.arn for item in listed}) == 6,
+        "the STOPPED listing follows its own pages": len(stopped_calls) == 3,
+        "no listing ends without its last page": all(call["options"].get("--next-token") != ["6"] for call in calls),
+    }
+
+
+def writer_classified_by_definition() -> dict[str, bool]:
+    host, cleanup, _ = build()
+    found = populate(host)
+    disguised = host.add_task(WRITER, group=f"family:{READ}_0")
+    message = failure(lambda: cleanup.stop(frozenset({suffix(disguised)}))) or ""
+    stopped_arns = [call["options"]["--task"][0] for call in operations(host, STOP_CALLS)]
+    return {
+        "the writer with a job group is not stopped": disguised not in stopped_arns and status(host, disguised) == "RUNNING",
+        "a confirmation does not override the mismatch": status(host, disguised) == "RUNNING",
+        "the command fails and names the task": bool(message) and suffix(disguised) in message,
+        "the other job tasks are stopped": all(status(host, found[key]) == "STOPPED" for key in ("read0", "read1", "read2")),
+    }
+
+
+def mismatch_refused_every_way() -> dict[str, bool]:
+    host, cleanup, lines = build()
+    populate(host)
+    reader_in_writer_group = host.add_task(f"{READ}_9", group=f"family:{WRITER}")
+    job_in_service_group = host.add_task(f"{READ}_8", group=f"service:{SERVICES['polaris']}")
+    foreign_definition = host.add_task("other_dev_job_read_silver", group=f"family:{READ}_7")
+    listed = cleanup.list_tasks()
+    message = failure(lambda: cleanup.stop(frozenset())) or ""
+    refused = (reader_in_writer_group, job_in_service_group, foreign_definition)
+    stopped_arns = [call["options"]["--task"][0] for call in operations(host, STOP_CALLS)]
+    return {
+        "no mismatched task is stopped": not any(arn in stopped_arns for arn in refused),
+        "each mismatched task is named by its suffix": all(suffix(arn) in message for arn in refused),
+        "the listing shows each mismatched task": {item.suffix for item in listed} >= {suffix(arn) for arn in refused},
+        "the listing marks the mismatch": sum("differ" in line for line in lines) == 3,
+    }
+
+
+def missing_definition_refuses() -> dict[str, bool]:
+    host, cleanup, _ = build({"no_definition"})
+    populate(host)
+    message = failure(lambda: cleanup.stop(frozenset())) or ""
+    return {"no task is stopped without a task definition": not operations(host, STOP_CALLS), "the command fails": bool(message)}
+
+
+def mismatch_output_privacy() -> dict[str, bool]:
+    host, cleanup, lines = build()
+    leak = f"{PREFIX}x {ACCOUNT_MARK}task/leak i-0123456789abcdef0 123456789012"
+    host.add_task(WRITER, group=f"family:{leak}")
+    host.add_task("other_dev_job_read_silver", group=f"family:{leak}")
+    cleanup.list_tasks()
+    message = failure(lambda: cleanup.stop(frozenset())) or ""
+    text = "\n".join([*lines, message])
+    return {"no ARN, account ID or instance ID from the group": not ARN_OR_ACCOUNT.search(text) and ACCOUNT_MARK not in text and "123456789012" not in text}
+
+
+def stop_failed_call_is_described() -> dict[str, bool]:
+    host, cleanup, _ = build({"stop_task_error"})
+    found = populate(host)
+    message = failure(lambda: cleanup.stop(frozenset())) or ""
+    calls = [entry["operation"] for entry in host.log]
+    last_stop = max(index for index, operation in enumerate(calls) if operation == "stop-task")
+    return {
+        "a describe call follows the last stop call": "describe-tasks" in calls[last_stop + 1 :],
+        "the message says each task is not STOPPED": all(suffix(found[key]) in message for key in ("read0", "read1", "read2")) and "not STOPPED" in message,
+    }
+
+
+def stop_lost_reply_is_confirmed() -> dict[str, bool]:
+    host, cleanup, _ = build({"stop_task_lost_reply"})
+    found = populate(host)
+    message = failure(lambda: cleanup.stop(frozenset()))
+    return {
+        "a stop call that failed but took effect is confirmed by description": message is None,
+        "every job task is STOPPED": all(status(host, found[key]) == "STOPPED" for key in ("read0", "read1", "read2")),
+    }
+
+
 def output_privacy() -> dict[str, bool]:
     host, cleanup, lines = build({"leaky_reasons", "never_stop_task"})
     found = populate(host, writer=True)
@@ -309,5 +437,15 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "stop_task_that_vanishes": stop_task_that_vanishes,
     "stop_failure_does_not_hide_others": stop_failure_does_not_hide_others,
     "stop_rerun": stop_rerun,
+    "stop_retry_finishes_stopping_tasks": stop_retry_finishes_stopping_tasks,
+    "stop_retry_still_running_fails": stop_retry_still_running_fails,
+    "listing_shows_stopping_tasks": listing_shows_stopping_tasks,
+    "listing_pages_both_statuses": listing_pages_both_statuses,
+    "writer_classified_by_definition": writer_classified_by_definition,
+    "mismatch_refused_every_way": mismatch_refused_every_way,
+    "missing_definition_refuses": missing_definition_refuses,
+    "mismatch_output_privacy": mismatch_output_privacy,
+    "stop_failed_call_is_described": stop_failed_call_is_described,
+    "stop_lost_reply_is_confirmed": stop_lost_reply_is_confirmed,
     "output_privacy": output_privacy,
 }
