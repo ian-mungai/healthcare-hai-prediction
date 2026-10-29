@@ -60,7 +60,7 @@ class TransportCleanupUnconfirmed(RuntimeError):
 def _request(endpoint: str) -> bytes:
     connection = http.client.HTTPConnection("127.0.0.1", urlsplit(endpoint).port, timeout=1)
     try:
-        connection.request("GET", "/")
+        connection.request("GET", "/", headers={"X-Synthetic-Client": "catalog"})
         return connection.getresponse().read()
     finally:
         connection.close()
@@ -130,7 +130,7 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
     checks: dict[str, bool] = {}
     failure_code = None
     transport = CatalogTransport(scratch / "registry")
-    with WorkerStandin(Scenario("catalog", "reset" if name == "dead_target" else "normal", BODY, lifetime_s=12)) as peer:
+    with WorkerStandin(Scenario("catalog", "reset" if name == "dead_target" else "normal", BODY, lifetime_s=12, counted_header="x-synthetic-client")) as peer:
         try:
             if name == "stderr_flood":
                 checks["stderr_tunnel_flood_does_not_block_route"] = _stderr_route(transport, scratch) == BODY
