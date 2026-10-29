@@ -568,7 +568,7 @@ class LaunchPool(ThreadPoolExecutor):
             self.holding = True
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
+    def __exit__(self, _exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
         interrupt = exc_value if isinstance(exc_value, KeyboardInterrupt) else None
         problems: list[str] = []
         try:
