@@ -1184,7 +1184,7 @@ def case_e30_harness(c: Checker) -> None:
     """The report keeps the full traceback of an unexpected exception and names the innermost project frame, not an import-system frame."""
 
     def broken(checker: Checker) -> None:
-        importlib.import_module("a_module_that_does_not_exist")
+        importlib.import_module("scripts.features.a_module_that_does_not_exist")
 
     quiet = sys.stderr
     with tempfile.TemporaryFile("w+") as sink:
