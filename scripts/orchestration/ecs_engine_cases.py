@@ -27,6 +27,9 @@ from scripts.lakehouse import pipeline_build, session
 from scripts.orchestration.ecs_stage_runtime_cases import changed_function, lint_mutant, require
 from scripts.process import run_command
 
+# The secret variable the planted defect reads; named here so the planted text is not itself an environment read.
+PLANTED_DBT_VARIABLE = "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET"
+
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = "spark.sql.catalog.hai_lakehouse"
 PROVIDER = "software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider"
@@ -583,7 +586,7 @@ def mutations(folder: Path) -> dict[str, Any]:
             (
                 (
                     "result = dbtRunner().invoke(arguments)",
-                    'arguments.append(os.environ["DBT_ENV_SECRET_POLARIS_CLIENT_SECRET"])\n            result = dbtRunner().invoke(arguments)',
+                    f"arguments.append(os.environ[{PLANTED_DBT_VARIABLE!r}])\n            result = dbtRunner().invoke(arguments)",
                 ),
             ),
             task_dbt,
