@@ -14,7 +14,7 @@
       "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
       "Condition": {
         "StringLike": {
-          "s3:prefix": ["dvc", "dvc/*"]
+          "s3:prefix": ["dvc/*"]
         }
       }
     }
