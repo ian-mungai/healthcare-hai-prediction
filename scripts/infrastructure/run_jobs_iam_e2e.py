@@ -26,6 +26,7 @@ VALUES = {
 }
 ROLE = "AROEXAMPLEREADER:task_one"
 S3 = "arn:aws:s3:::example-project-ci-bucket"
+EPOCH_KEY = "lakehouse/authority/catalog_epoch.json"
 IAM = "arn:aws:iam::111111111111:role/example_project_"
 PARAMETER = "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/"
 POLICIES = ("job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_try_trust")
@@ -71,6 +72,20 @@ def cases() -> list[Case]:
         result.append((f"{actor} input tree", actor, "s3:GetObjectVersion", f"{S3}/lakehouse/run_stage/run/inputs/trees/code.tar", allowed, {}))
     for action in ("s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"):
         result.append((f"try writer {action}", "try_writer", action, f"{S3}/lakehouse/run_stage/run/tries/try_one/output", True, {}))
+    result.append(("try writer reads the catalog epoch key", "try_writer", "s3:GetObject", f"{S3}/{EPOCH_KEY}", True, {}))
+    for action in ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
+        result.append((f"try writer cannot change or version-read the epoch key {action}", "try_writer", action, f"{S3}/{EPOCH_KEY}", False, {}))
+    for resource in (
+        f"{S3}/lakehouse/authority/other.json",
+        f"{S3}/lakehouse/authority/catalog_epoch.json.bak",
+        f"{S3}/lakehouse/authority/catalog_epoch.jsonx",
+        f"{S3}/lakehouse/authority/",
+        f"{S3}/lakehouse/authority/*",
+        f"{S3}/lakehouse/authority/nested/catalog_epoch.json",
+        f"{S3}/lakehouse/silver/table/metadata.json",
+    ):
+        result.append((f"try writer cannot read {resource.removeprefix(S3 + '/')}", "try_writer", "s3:GetObject", resource, False, {}))
+    result.append(("try writer cannot list the authority prefix", "try_writer", "s3:ListBucket", S3, False, {"s3:prefix": ("lakehouse/authority/",)}))
     for action, resource in (
         ("s3:GetObject", f"{S3}/lakehouse/run_stage/run/tries/try_one/output"),
         ("s3:DeleteObject", f"{S3}/lakehouse/run_stage/run/tries/try_one/output"),
@@ -234,6 +249,8 @@ def main() -> int:
             ),
             "pass_any_role": ("project_iam", "PassReadJobRoles", "Resource", "arn:aws:iam::111111111111:role/*"),
             "seal_reads_tree": ("job_seal_deny", "NoTreeInput", "Resource", f"{S3}/unused/*"),
+            "epoch_prefix_wildcard": ("job_try_writer", "ReadCatalogEpochOnly", "Resource", f"{S3}/lakehouse/authority/*"),
+            "epoch_write": ("job_try_writer", "ReadCatalogEpochOnly", "Action", ["s3:GetObject", "s3:PutObject"]),
         }
         for label, (policy, sid, field, value) in mutations.items():
             changed = copy.deepcopy(documents)
