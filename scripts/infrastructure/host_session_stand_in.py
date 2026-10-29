@@ -3,7 +3,9 @@
 It is the ``runner`` of ``AwsCli``: it receives the command line and answers with the exit code and JSON the command would. Time is virtual: the
 session's clock reads ``now`` and its sleep calls ``advance``, which moves the host, the tasks and the services forward. The stand-in models the
 incident of 2026-10-27: a service starts no task after the host registers until a new deployment is forced, and a forced deployment before
-``host_prepare`` finished ends ``FAILED``. ``faults`` names what goes wrong; ``log`` keeps each call's service, operation and options.
+``host_prepare`` finished ends ``FAILED``. It also models the incident of 2026-10-29: the instance is ACTIVE and connected before it joins the capacity
+provider, and RunTask on the provider fails until it has joined. ``faults`` names what goes wrong; ``log`` keeps each call's service, operation,
+options, time limit and virtual time.
 """
 
 from __future__ import annotations
@@ -27,6 +29,9 @@ ACCOUNT_MARK = "arn:aws:ecs:stand-in:000000000000:"
 BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
 TASK_SECONDS = 20
+NO_INSTANCES = (
+    "\nAn error occurred (InvalidParameterException) when calling the RunTask operation: The specified capacity provider contains no container instances.\n"
+)
 SERVICE_START_SECONDS = 45
 LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 123456789012"
 CLIENT_TOKEN_LIMIT = 64
@@ -51,6 +56,7 @@ class StandInHost:
     """The state of one host group, its container instance, its services and its one-shot tasks.
 
     ``faults`` may hold: ``never_register``, ``never_terminate``, ``run_task_failure``, ``exit_code:<family key>=<n>``, ``never_stable``, ``pending_stuck``,
+    ``late_provider:<n>`` (the instance joins the capacity provider n virtual seconds after it registers), ``never_provider`` (it never joins),
     ``throttle:<n>`` (the next n describe calls fail), ``api_error`` (every describe call fails) and
     ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt), ``signal_run_task`` (a run-task call receives a real SIGTERM),
     ``second_signal:<name>`` (the cleanup's set-desired-capacity call to 0 receives a real SIGINT, SIGTERM or SIGHUP once),
@@ -86,6 +92,7 @@ class StandInHost:
             ("ecs", "describe-services"): self.ecs_describe_services,
         }
         self.throttled = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("throttle:")), 0)
+        self.provider_delay = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("late_provider:")), 0)
 
     def advance(self, seconds: float) -> None:
         """Move virtual time forward and settle what completes."""
@@ -110,11 +117,16 @@ class StandInHost:
         """True when the container instance is registered."""
         return self.instance_up_at is not None and self.now >= self.instance_up_at
 
+    def provider_member(self) -> bool:
+        """True when the registered container instance has joined the capacity provider."""
+        joined = self.instance_up_at is not None and self.now >= self.instance_up_at + self.provider_delay
+        return joined and "never_provider" not in self.faults
+
     def runner(self, argv: list[str], **kwargs: Any) -> CompletedProcess[str]:
         """The ``AwsCli`` runner: answer one command line."""
         service, operation, options = argv[1], argv[2], parse(argv)
         limit = kwargs.get("timeout")
-        self.log.append({"service": service, "operation": operation, "options": options, "timeout": limit})
+        self.log.append({"service": service, "operation": operation, "options": options, "timeout": limit, "at": self.now})
         if options.get("--profile") != [PROFILE] or options.get("--region") != [REGION]:
             return CompletedProcess(argv, 255, "", "wrong profile or region")
         if operation.startswith(("describe", "list")) and (self.throttled > 0 or "api_error" in self.faults):
@@ -125,6 +137,8 @@ class StandInHost:
                 self.advance(limit)
                 raise TimeoutExpired(argv, limit)
             self.advance(self.latency)
+        if operation == "run-task" and self.instance_active() and not self.provider_member() and "run_task_failure" not in self.faults:
+            return CompletedProcess(argv, 254, "", NO_INSTANCES)
         if operation == "run-task" and "interrupt_run_task" in self.faults:
             raise KeyboardInterrupt
         if operation == "run-task" and "signal_run_task" in self.faults:
@@ -167,7 +181,10 @@ class StandInHost:
 
     def ecs_describe_container_instances(self, options: dict[str, list[str]]) -> dict[str, Any]:
         active = self.instance_active()
-        return {"containerInstances": [{"status": "ACTIVE" if active else "REGISTERING", "agentConnected": active}]}
+        instance: dict[str, Any] = {"status": "ACTIVE" if active else "REGISTERING", "agentConnected": active}
+        if self.provider_member():
+            instance["capacityProviderName"] = PROVIDER
+        return {"containerInstances": [instance]}
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         family = options["--family"][0]
