@@ -38,13 +38,12 @@ import os
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
 
-from scripts.process import CompletedProcess, TimeoutExpired, run_command
+from scripts.process import CompletedProcess, LaunchPool, TimeoutExpired, run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
@@ -236,7 +235,7 @@ def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dic
     """
     serial = [step for step in steps if step["kind"] in SERIAL_KINDS]
     jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+    with LaunchPool(max_workers=len(jobs)) as pool:
         finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
     rows: dict[str, dict[str, Any]] = {row["name"]: row for job in finished for row in job}
     return [rows[step["name"]] for step in steps]

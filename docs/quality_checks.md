@@ -679,7 +679,11 @@ worker. A member that survives KILL fails the run with the worker's name. An exi
 its stop step is a new process in the dispatcher's session that an outer stop would also signal. An alarm ends that step after its grace period plus 25 seconds. Worker sessions
 are not members of the dispatcher's session: the deadline of `scripts/quality/pre_push.py` reaches the workers through that exit trap. When the dispatcher is killed before its trap
 runs, each worker's watchdog stops its session. A process that starts its own session without the
-launcher is outside the worker's session. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
+launcher is outside the worker's session. Accepted limits that wait for the owner's agreement (rule 8.7), not built: (1) A worker that has just ended and is not yet seen by the
+dispatcher's half-second poll has no watchdog, because the session leader ends with its program. If the dispatcher is killed (KILL) inside that window while a descendant of the
+worker is left, that descendant survives. Likelihood low; the fix keeps the leader alive until it has stopped and confirmed the worker's remaining session, then returns the status. (2) When the
+alarm of the exit trap's stop step ends, it kills the step but not a stalled `ps` lister and its pipe holder. `run_worker_deadline_e2e` also has no alarm-expiry case. Likelihood very low
+(`ps` must stall for 27 seconds); the fix unwinds the alarm through the bounded lister cleanup and adds that case. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
 worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher (once after removing the old registry, the review reproduction)
 and workers that start late in a wall-clock second (one ends 0.25 seconds before its limit and must pass; one never ends and must get TERM only after its limit). It plants a dispatcher
 without a deadline, one that stops the direct process only, one with the old whole-second comparison and one that stops the worker's process group only. A plant counts as caught only when
@@ -800,6 +804,15 @@ program that ends in time gives the same result as before. A deadline raises `Ti
 raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the session, so no timeout ends silently with a live process. SIGINT is held while the program starts
 and while it is stopped. It is raised once the stop is confirmed, so a second Ctrl-C cannot cut the stop short.
 
+Python delivers SIGINT to the main thread only. A program in its own session never receives the terminal's Ctrl-C. A caller that runs jobs in threads (the push gate's steps in
+`scripts/quality/pre_push.py`, the historical acquisition scripts `continue_history.py` and `history_routes.py`, the parallel cases of `run_model_metadata_e2e.py`) uses
+`LaunchPool` from `scripts/process.py` instead of `ThreadPoolExecutor`. Inside its `with` block the first SIGINT sets the pool's cancellation and raises `KeyboardInterrupt`; more are held
+until the pool is left. A job's `run_command` waits in 0.1 s slices, so it sees the cancellation, stops its own session as above and raises `LaunchCancelled`. A queued job starts nothing.
+Leaving the block drops the queued jobs and waits for every running job (up to `CANCEL_WAIT_SECONDS`, 37 s with the defaults), then forwards the interrupt. If a stop is not confirmed or a
+job does not end in that time, the block raises `LaunchesNotStopped` chained from the interrupt. The pool keeps its cancellation and its futures in memory only (no registry). Limits: a
+thread outside a `LaunchPool` is unchanged; a pool created outside the main thread installs no handler; SIGTERM is not handled (the default action ends the caller; a caller inside a launch
+session is covered by the outer stop); a job that does no `run_command` call and runs long delays the interrupt up to that bound.
+
 The stop lists every live process with `ps -A -o pid=,ppid=,stat=` (macOS `pgrep` has no session option and its `ps` shows the session as 0) and signals those whose `os.getsid` is the
 session. It lists again on every 50 ms poll, so a member that starts during the stop is signalled too. Zombies are not counted. The leader is reaped only after the stop, so its pid, which is
 the session id, cannot be reused while the stop runs. A pid that ends and is reused in the moment between its listing and its signal is the remaining race. Each member's session is read again just before its signal, so a member that left the session after the listing is
@@ -816,8 +829,9 @@ terminal, so an open of `/dev/tty` fails at once. The API key reader starts its 
 `.venv/bin/python -m scripts.quality.run_process_e2e` (in `repository_code_checks`) starts a child that starts a grandchild (once with TERM ignored and once without) and nested
 launchers one and two levels deep. It checks by process ID that none is left, that a nested launch stays in the outer session and keeps its own deadline, that a descendant in a new group
 stops, that a descendant cannot hide by changing the old registry (the review reproductions), that an unrelated command is never signalled and that a failed listing fails visibly. It also
-plants four defects (stop the direct child only, send TERM without KILL, skip the confirmation, stop the leader's group only). Each plant takes the real arguments of `stop_launch` and
-counts as caught only when the intended check of its case fails.
+runs the review's threaded reproduction through the real `pre_push.run_steps` in a child interpreter: two steps and a serial pair run programs (one ignores TERM), SIGINT is sent twice.
+Every program must be gone before the interrupt reaches the caller and the queued step must never start; an unconfirmed stop must raise `LaunchesNotStopped`. It plants four defects (stop the direct child only, send TERM without KILL, skip the confirmation, stop the leader's group only). Each plant takes the real arguments of `stop_launch` and
+counts as caught only when the intended check of its case fails. Three more plants break the pool (no cancellation flag, no session stop, no wait for the jobs).
 
 ## Practice
 

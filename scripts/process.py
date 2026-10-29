@@ -10,7 +10,11 @@ own deadline; the outer stop reaches it as a session member. A member that start
 session and is not stopped. The leader is reaped only after the stop, so its pid, which is the session id, cannot be reused while the stop runs. If
 the session cannot be listed (the lister cannot start, fails or stalls: its own group is killed and reaped within a bound), the stop still signals
 the leader's group and the call fails as if a member survived. Each member's session is read again just before its signal. SIGINT is held while the
-program starts and while it is stopped, and is raised once the stop is confirmed. Other scripts import
+program starts and while it is stopped, and is raised once the stop is confirmed. Python delivers SIGINT to the main thread only, so a caller that
+runs jobs in threads uses ``LaunchPool`` instead of ``ThreadPoolExecutor``: the first SIGINT sets the pool's cancellation, each job's ``run_command``
+(it waits in short slices) stops its own session and raises ``LaunchCancelled``, the pool waits for every job within ``CANCEL_WAIT_SECONDS``, and only
+then forwards the interrupt (``LaunchesNotStopped`` when a stop is not confirmed or a job does not end). A thread outside a ``LaunchPool`` is unchanged.
+Other scripts import
 ``run_command`` from here instead of ``subprocess``, so the lint exception for starting a process exists on one line. Run scripts that import it as
 modules from the repository root, for example ``.venv/bin/python -m scripts.quality.scan_secrets``.
 """
@@ -24,13 +28,18 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess, SubprocessError, TimeoutExpired
-from typing import Any
+from types import FrameType, TracebackType
+from typing import Any, ParamSpec, Self, TypeVar
 
 __all__ = [
     "CompletedProcess",
+    "LaunchCancelled",
+    "LaunchPool",
+    "LaunchesNotStopped",
     "ProcessGroupSurvived",
     "SessionListingFailed",
     "SubprocessError",
@@ -55,6 +64,14 @@ SESSION_LISTING = ("ps", "-A", "-o", "pid=,ppid=,stat=")
 LISTING_SECONDS = 5.0
 # Seconds the lister gets to be reaped after its group got KILL at the listing deadline.
 REAP_SECONDS = 1.0
+# A job of a ``LaunchPool`` waits for its program in slices of this many seconds and looks at the pool's cancellation between them.
+SLICE_SECONDS = 0.1
+# Seconds a ``LaunchPool`` waits for its jobs to stop their sessions after an interrupt: two stops (TERM and KILL phases) that each end late by one
+# listing and one reap, plus a confirmation.
+CANCEL_WAIT_SECONDS = 2 * (STOP_GRACE_SECONDS + CONFIRM_SECONDS + LISTING_SECONDS + REAP_SECONDS) + CONFIRM_SECONDS
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 
 class ProcessGroupSurvived(TimeoutExpired):
@@ -72,6 +89,14 @@ class ProcessGroupSurvived(TimeoutExpired):
             f"{super().__str__()}; the session or process group {self.process_group} still had members after KILL or could not be listed, "
             "so the stop is not confirmed"
         )
+
+
+class LaunchCancelled(RuntimeError):
+    """The pool a job belongs to was interrupted: the job's program (if it started) has been stopped and no new program starts."""
+
+
+class LaunchesNotStopped(RuntimeError):
+    """A pool was interrupted and a job's stop was not confirmed, or a job did not end within ``CANCEL_WAIT_SECONDS``."""
 
 
 class SessionListingFailed(OSError):
@@ -293,6 +318,129 @@ def interrupts_deferred() -> Iterator[None]:
             signal.raise_signal(signal.SIGINT)
 
 
+class Cancellation:
+    """The cancellation of one ``LaunchPool``: set once by the pool's first interrupt; ``unconfirmed`` lists the launches whose stop was not confirmed."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.unconfirmed: list[int] = []
+
+    def cancelled(self) -> bool:
+        return self.event.is_set()
+
+
+# The cancellation of the pool whose job runs in this thread; absent in every other thread.
+JOB = threading.local()
+
+
+def communicate(process: subprocess.Popen[str], timeout: float, cancellation: Cancellation | None) -> tuple[str, str]:
+    """Wait for the program's output. A pool job waits in slices and raises ``LaunchCancelled`` as soon as its pool is cancelled."""
+    if cancellation is None:
+        return process.communicate(timeout=timeout)
+    end = time.monotonic() + timeout
+    while True:
+        if cancellation.cancelled():
+            raise LaunchCancelled(f"{process.args!r} was cancelled by an interrupt")
+        remaining = end - time.monotonic()
+        try:
+            return process.communicate(timeout=min(SLICE_SECONDS, max(remaining, 0.0)))
+        except TimeoutExpired as expired:
+            if remaining <= SLICE_SECONDS:
+                raise TimeoutExpired(process.args, timeout, expired.stdout, expired.stderr) from None
+
+
+class LaunchPool(ThreadPoolExecutor):
+    """A thread pool for jobs that start programs through ``run_command``, which stops their sessions when the caller is interrupted.
+
+    Use it as ``with LaunchPool(max_workers=n) as pool:`` in the main thread instead of ``ThreadPoolExecutor``. Inside the block the first SIGINT sets
+    the pool's cancellation and raises ``KeyboardInterrupt``; later ones are held until the pool is left. Leaving the block after an interrupt drops the
+    queued jobs, waits for every running job (each stops its own session within its ``run_command``) and only then forwards the interrupt. A job that
+    ends in a stop that is not confirmed, or a job that does not end within ``CANCEL_WAIT_SECONDS``, raises ``LaunchesNotStopped`` instead, chained
+    from the interrupt. In another thread no handler is installed and the pool behaves as a plain one. SIGTERM is not handled.
+    """
+
+    def __init__(self, max_workers: int | None = None) -> None:
+        super().__init__(max_workers=max_workers)
+        self.cancellation = Cancellation()
+        self.jobs: list[Future[Any]] = []
+        self.closed = False
+        self.interrupts = 0
+        self.holding = False
+        self.previous: Any = None
+
+    def __enter__(self) -> Self:
+        super().__enter__()
+        if threading.current_thread() is threading.main_thread():
+            self.previous = signal.signal(signal.SIGINT, self.interrupted)
+            self.holding = True
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
+        interrupt = exc_value if isinstance(exc_value, KeyboardInterrupt) else None
+        problems: list[str] = []
+        try:
+            if interrupt is None:
+                try:
+                    if not self.closed:
+                        self.shutdown(wait=True)
+                except KeyboardInterrupt as error:
+                    interrupt = error
+            if interrupt is not None or self.cancellation.cancelled():
+                problems = self.stop_jobs()
+        finally:
+            self.release_interrupts()
+        if problems:
+            raise LaunchesNotStopped("; ".join(problems)) from interrupt
+        if interrupt is not None and interrupt is not exc_value:
+            raise interrupt
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        self.closed = True
+        super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def submit(self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+        future = super().submit(self.run_job, fn, args, kwargs)
+        self.jobs.append(future)
+        return future
+
+    def run_job(self, function: Callable[..., T], arguments: tuple[Any, ...], keywords: dict[str, Any]) -> T:
+        """Run a job in a pool thread with the pool's cancellation visible to its ``run_command`` calls; a cancelled pool starts no job."""
+        if self.cancellation.cancelled():
+            raise LaunchCancelled("the pool was cancelled by an interrupt before this job started")
+        JOB.cancellation = self.cancellation
+        try:
+            return function(*arguments, **keywords)
+        finally:
+            del JOB.cancellation
+
+    def interrupted(self, _number: int, _frame: FrameType | None) -> None:
+        """The pool's SIGINT handler: the first interrupt cancels the pool and reaches the caller; the others are held."""
+        self.interrupts += 1
+        if self.interrupts == 1:
+            self.cancellation.event.set()
+            raise KeyboardInterrupt
+        if self.interrupts == 2:
+            os.write(2, b"interrupt: the running programs are being stopped; further interrupts are held until they are gone\n")
+
+    def release_interrupts(self) -> None:
+        if self.holding:
+            self.holding = False
+            signal.signal(signal.SIGINT, signal.SIG_DFL if self.previous is None else self.previous)
+
+    def stop_jobs(self) -> list[str]:
+        """Cancel the pool and wait for its jobs. Returns what is wrong: stops that were not confirmed and jobs that did not end."""
+        self.cancellation.event.set()
+        self.shutdown(wait=False, cancel_futures=True)
+        problems = self.wait_for_jobs()
+        problems.extend(f"the stop of the launch with pid {pid} was not confirmed" for pid in self.cancellation.unconfirmed)
+        return problems
+
+    def wait_for_jobs(self) -> list[str]:
+        """Wait up to ``CANCEL_WAIT_SECONDS`` for every job; return a description of the jobs still running."""
+        _done, running = wait(list(self.jobs), timeout=CANCEL_WAIT_SECONDS)
+        return [f"{len(running)} job(s) were still running {CANCEL_WAIT_SECONDS:g} s after the interrupt"] if running else []
+
+
 def clear_git_environment() -> None:
     """Detach a synthetic test runner from an invoking Git hook before it operates on scratch repositories.
 
@@ -362,11 +510,24 @@ def run_command(
     child_environment = dict(os.environ if env is None else env)
     child_environment[SESSION_VARIABLE] = "1"
     # SIGINT is held while the program starts and while it is stopped; one that arrived then is raised once the stop is confirmed.
+    cancellation: Cancellation | None = getattr(JOB, "cancellation", None)
+    if cancellation is not None and cancellation.cancelled():
+        raise LaunchCancelled(f"{program} was not started: the pool was cancelled by an interrupt")
     process: subprocess.Popen[str] | None = None
     try:
         with interrupts_deferred():
             process = start([executable, *args], cwd, child_environment, new_session=not nested)
-        stdout, stderr = process.communicate(timeout=timeout)
+        stdout, stderr = communicate(process, timeout, cancellation)
+    except LaunchCancelled:
+        if process is None or cancellation is None:
+            raise
+        with interrupts_deferred():
+            survived = stop_launch(process.pid, process, grace_seconds, session=not nested)
+            close_pipes(process)
+        if survived:
+            cancellation.unconfirmed.append(process.pid)
+            raise ProcessGroupSurvived(process.args, timeout, process.pid) from None
+        raise
     except TimeoutExpired as expired:
         if process is None:
             raise

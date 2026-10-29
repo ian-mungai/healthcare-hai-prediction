@@ -792,6 +792,156 @@ def member_leaves_before_signal(base: Path) -> dict[str, Any]:
     return case("member_that_leaves_before_the_signal_is_skipped", base, body)
 
 
+# A program that prints its first argument.
+PRINTER = "import sys; print(sys.argv[1])"
+# The reviewer's threaded reproduction through the real call site (fix round 5): ``pre_push.run_steps`` runs two steps at once and a serial pair, each
+# step starting a program through ``run_command`` (``launch`` is replaced by a launch of this subject). Arguments: repository root, case folder,
+# mode ("interrupt" or "survivor": a session stop that is never confirmed) and plant ("" or the name of a planted defect). The runner is interrupted
+# twice (the parent sends SIGINT, then again 0.3 s later) and records, at the moment the interrupt returns to it, which subjects are still alive.
+THREADED_RUNNER = """
+import json, os, signal, sys
+from pathlib import Path
+from unittest import mock
+root, folder, mode, plant = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+sys.path.insert(0, str(root))
+signal.signal(signal.SIGINT, signal.default_int_handler)
+from scripts import process
+from scripts.quality import pre_push
+SUBJECT = (
+    "import os, signal, sys, time\\n"
+    "if sys.argv[2] == 'two':\\n"
+    "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\\n"
+    "open(sys.argv[1], 'w').write(str(os.getpid()))\\n"
+    "while True:\\n"
+    "    time.sleep(1)\\n"
+)
+def launch(_root, step, _environment):
+    return process.run_command(sys.executable, ["-B", "-c", SUBJECT, str(folder / (step["name"] + ".pid")), step["name"]], timeout=60, grace_seconds=0.5)
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+steps = [
+    {"name": name, "kind": kind, "env": {}, "arguments": [], "timeout_seconds": 60}
+    for name, kind in (("one", "repo_checks"), ("two", "repo_checks"), ("three", "pre_commit"), ("four", "pre_commit"))
+]
+patches = [mock.patch.object(pre_push, "launch", launch), mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 3.0, create=True)]
+if mode == "survivor":
+    patches += [mock.patch("scripts.process.session_left", lambda _members: True), mock.patch("scripts.process.CONFIRM_SECONDS", 0.5)]
+if plant == "no_cancellation_flag":
+    patches.append(mock.patch.object(process.Cancellation, "cancelled", lambda self: False))
+if plant == "no_session_stop":
+    patches.append(mock.patch("scripts.process.stop_launch", lambda *_arguments, **_keywords: False))
+if plant == "pool_does_not_wait":
+    patches.append(mock.patch.object(process.LaunchPool, "wait_for_jobs", lambda self: []))
+output = folder / "output"
+output.mkdir()
+result = {}
+for patch in patches:
+    patch.start()
+try:
+    pre_push.run_steps(root, output, steps)
+    result["raised"] = "nothing"
+except BaseException as error:
+    result["raised"] = type(error).__name__
+    result["message"] = str(error)[:300]
+    for name in ("one", "two", "three"):
+        file = folder / (name + ".pid")
+        result[name + "_alive_at_return"] = file.exists() and alive(int(file.read_text()))
+    result["four_started"] = (folder / "four.pid").exists()
+(folder / "result.json").write_text(json.dumps(result))
+"""
+
+
+def threaded_interrupt_result(scratch: Scratch, mode: str, plant: str = "") -> dict[str, Any]:
+    """Run THREADED_RUNNER, interrupt it twice and return what it recorded when the interrupt came back to it (empty when it never did)."""
+    script = scratch.folder / "runner.py"
+    script.write_text(THREADED_RUNNER, encoding="utf-8")
+    environment = {key: value for key, value in os.environ.items() if key != process.SESSION_VARIABLE}
+    runner = process.start([sys.executable, "-B", str(script), str(ROOT), str(scratch.folder), mode, plant], ROOT, environment, new_session=True)
+    try:
+        names = ("one", "two", "three")
+        if not all(wait_for_file(scratch.folder / f"{name}.pid") for name in names):
+            return {"started": False}
+        os.kill(runner.pid, signal.SIGINT)
+        time.sleep(0.3)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(runner.pid, signal.SIGINT)
+        finished = wait_for_file(scratch.folder / "result.json", 45)
+        result: dict[str, Any] = json.loads((scratch.folder / "result.json").read_text()) if finished else {}
+        pids = scratch.pids()
+        result.update(started=True, finished=finished, alive_after={name: alive(pids[name]) for name in names if name in pids})
+        return result
+    finally:
+        # A runner that never saw the interrupt through (the defect) waits for its pool at exit: its session and every subject are killed.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(runner.pid, signal.SIGKILL)
+        scratch.cleanup()
+        process.close_pipes(runner)
+        runner.wait(timeout=CASE_GRACE_SECONDS + 5)
+
+
+def threaded_interrupt(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result = threaded_interrupt_result(scratch, "interrupt", plant)
+        if not result.get("started"):
+            return {"programs_started": False}
+        return {
+            "interrupt_came_back_to_the_caller": result.get("raised") == "KeyboardInterrupt",
+            "every_running_program_gone_before_the_interrupt_returned": result.get("finished", False)
+            and not any(result.get(f"{name}_alive_at_return", True) for name in ("one", "two", "three")),
+            "every_running_program_gone_afterwards": bool(result.get("alive_after")) and not any(result["alive_after"].values()),
+            "queued_step_never_started": result.get("four_started", True) is False,
+            "exception_seen": result.get("raised"),
+        }
+
+    return case("threaded_interrupt_stops_the_launch", base, body)
+
+
+def threaded_survivor(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result = threaded_interrupt_result(scratch, "survivor")
+        if not result.get("started"):
+            return {"programs_started": False}
+        return {
+            "unconfirmed_stop_fails_visibly": result.get("raised") == "LaunchesNotStopped",
+            "message_names_the_cause": "not confirmed" in result.get("message", "") or "still running" in result.get("message", ""),
+            "exception_seen": result.get("raised"),
+        }
+
+    return case("threaded_interrupt_survivor_fails_visibly", base, body)
+
+
+def threaded_normal_run(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        earlier = signal.getsignal(signal.SIGINT)
+
+        def printing(number: int) -> str:
+            if number == 9:
+                raise ValueError("job failure")
+            return run_command(sys.executable, ["-B", "-c", PRINTER, str(number)], cwd=ROOT, timeout=30).stdout.strip()
+
+        with process.LaunchPool(max_workers=3) as pool:
+            ordered = list(pool.map(printing, [3, 1, 2]))
+            failing = pool.submit(printing, 9)
+            expiring = pool.submit(scratch.run, "term", "wait", CASE_TIMEOUT_SECONDS)
+            failing_error, expiring_error = failing.exception(), expiring.exception()
+        pids = scratch.pids()
+        return {
+            "results_in_submission_order": ordered == ["3", "1", "2"],
+            "job_exception_reaches_the_caller": isinstance(failing_error, ValueError),
+            "job_deadline_raises_the_timeout": isinstance(expiring_error, TimeoutExpired),
+            "job_deadline_stops_the_session": "grandchild" in pids and not alive(pids["grandchild"]) and not alive(pids.get("child", 0)),
+            "interrupt_handler_restored": signal.getsignal(signal.SIGINT) is earlier,
+        }
+
+    return case("threaded_normal_run_unchanged", base, body)
+
+
 def default_periods(base: Path) -> dict[str, Any]:
     return {
         "case": "default_grace_periods_are_set",
@@ -822,6 +972,9 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "stalled_listing_is_bounded": stalled_listing,
     "second_interrupt_during_cleanup_is_deferred": second_interrupt,
     "member_that_leaves_before_the_signal_is_skipped": member_leaves_before_signal,
+    "threaded_interrupt_stops_the_launch": threaded_interrupt,
+    "threaded_interrupt_survivor_fails_visibly": threaded_survivor,
+    "threaded_normal_run_unchanged": threaded_normal_run,
     "default_grace_periods_are_set": default_periods,
 }
 REAL_STOP = process.stop_launch
@@ -904,6 +1057,29 @@ def planted_cases(base: Path) -> list[dict[str, Any]]:
     return results
 
 
+# threaded plant name -> the check of threaded_interrupt_stops_the_launch that must be false
+THREADED_PLANTS = {
+    "no_cancellation_flag": "every_running_program_gone_before_the_interrupt_returned",
+    "no_session_stop": "every_running_program_gone_before_the_interrupt_returned",
+    "pool_does_not_wait": "every_running_program_gone_before_the_interrupt_returned",
+}
+
+
+def planted_threaded_cases(base: Path) -> list[dict[str, Any]]:
+    """Each plant breaks one part of the pool's interrupt cleanup inside the runner; the threaded case must fail on the named check."""
+    results: list[dict[str, Any]] = []
+    for name, check in THREADED_PLANTS.items():
+        result = threaded_interrupt(base / f"plant_{name}", name)
+        results.append(
+            {
+                "case": f"planted_{name}_is_caught",
+                "passed": caught_on(result, check),
+                "checks": {check: result["checks"].get(check), "exception_seen": result["checks"].get("exception_seen")},
+            }
+        )
+    return results
+
+
 def main() -> int:
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
@@ -914,6 +1090,7 @@ def main() -> int:
         results = [CASES[name](base) for name in selected] if selected else [case_function(base) for case_function in CASES.values()]
         if not selected:
             results.extend(planted_cases(base))
+            results.extend(planted_threaded_cases(base))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     after = {name: sha256_of(ROOT / name) for name in WATCHED}
