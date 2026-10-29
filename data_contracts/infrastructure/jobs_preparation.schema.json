@@ -1,0 +1,387 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reviewed jobs preparation inputs",
+  "description": "Nonsecret prepared inputs bound to a reviewed byte digest and a single disabled-by-default Terraform root.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "root",
+    "variables"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "root": {
+      "enum": [
+        "jobs",
+        "identity_probe"
+      ]
+    },
+    "variables": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "root": {
+          "const": "jobs"
+        },
+        "variables": {
+          "$ref": "#/$defs/read"
+        }
+      }
+    },
+    {
+      "properties": {
+        "root": {
+          "const": "identity_probe"
+        },
+        "variables": {
+          "$ref": "#/$defs/probe"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "read": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jobs_enabled": {
+          "type": "boolean"
+        },
+        "enabled_definitions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "analytics_offline",
+              "quality_offline",
+              "seal",
+              "analytics_read",
+              "spark_read"
+            ]
+          }
+        },
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "analytics": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9_]+@sha256:[a-f0-9]{64}$"
+            },
+            "quality": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9_]+@sha256:[a-f0-9]{64}$"
+            },
+            "spark": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9_]+@sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "job_role_arns": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
+            },
+            "offline_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
+            },
+            "seal_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
+            },
+            "read_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
+            }
+          }
+        },
+        "task_resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "analytics_offline": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory",
+                "ephemeral_storage_gib"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "integer",
+                  "enum": [
+                    1024,
+                    2048,
+                    4096,
+                    8192,
+                    16384
+                  ]
+                },
+                "memory": {
+                  "type": "integer",
+                  "minimum": 2048,
+                  "maximum": 122880
+                },
+                "ephemeral_storage_gib": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 200
+                }
+              }
+            },
+            "quality_offline": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory",
+                "ephemeral_storage_gib"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "integer",
+                  "enum": [
+                    1024,
+                    2048,
+                    4096,
+                    8192,
+                    16384
+                  ]
+                },
+                "memory": {
+                  "type": "integer",
+                  "minimum": 2048,
+                  "maximum": 122880
+                },
+                "ephemeral_storage_gib": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 200
+                }
+              }
+            },
+            "seal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory",
+                "ephemeral_storage_gib"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "integer",
+                  "enum": [
+                    1024,
+                    2048,
+                    4096,
+                    8192,
+                    16384
+                  ]
+                },
+                "memory": {
+                  "type": "integer",
+                  "minimum": 2048,
+                  "maximum": 122880
+                },
+                "ephemeral_storage_gib": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 200
+                }
+              }
+            },
+            "analytics_read": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory",
+                "ephemeral_storage_gib"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "integer",
+                  "enum": [
+                    1024,
+                    2048,
+                    4096,
+                    8192,
+                    16384
+                  ]
+                },
+                "memory": {
+                  "type": "integer",
+                  "minimum": 2048,
+                  "maximum": 122880
+                },
+                "ephemeral_storage_gib": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 200
+                }
+              }
+            },
+            "spark_read": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory",
+                "ephemeral_storage_gib"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "integer",
+                  "enum": [
+                    1024,
+                    2048,
+                    4096,
+                    8192,
+                    16384
+                  ]
+                },
+                "memory": {
+                  "type": "integer",
+                  "minimum": 2048,
+                  "maximum": 122880
+                },
+                "ephemeral_storage_gib": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 200
+                }
+              }
+            }
+          }
+        },
+        "cloud_limits": {
+          "enum": [
+            null,
+            {
+              "max_tasks": 3,
+              "max_vcpu": 16,
+              "max_memory_gib": 120
+            }
+          ]
+        },
+        "log_group_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]+_jobs_(dev|prod)$"
+        },
+        "aws_polaris_reader_client_id_name": {
+          "type": "string",
+          "pattern": "^/[a-z][a-z0-9_]+/aws_polaris_reader_client_id$"
+        },
+        "aws_polaris_reader_client_secret_name": {
+          "type": "string",
+          "pattern": "^/[a-z][a-z0-9_]+/aws_polaris_reader_client_secret$"
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "probe_enabled": {
+          "type": "boolean"
+        },
+        "seed_image": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9_]+@sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_role_arn": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_role_arn": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_role_unique_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^AROA[A-Z0-9]{17}$"
+        },
+        "log_group_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]+_jobs_(dev|prod)$"
+        },
+        "foundation_network": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "subnet_ids",
+            "security_group_ids"
+          ],
+          "properties": {
+            "subnet_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^subnet-([a-f0-9]{8}|[a-f0-9]{17})$"
+              }
+            },
+            "security_group_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 5,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^sg-([a-f0-9]{8}|[a-f0-9]{17})$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

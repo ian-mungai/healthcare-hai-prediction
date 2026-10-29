@@ -466,17 +466,17 @@
     },
     {
       "path": "scripts/quality/static_checks.py",
-      "line": 121,
+      "line": 145,
       "code_sha256": "6f1a30c3aa77ac7a428f4a29379d7000945c01f753cb614c445e9e82eb039436",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "47c39456bf2d8ea090f30fd7da285eba82eb4d3058ff4b781f1a2d21eb076a20",
+      "file_sha256": "fa9ab7d9af6186663f6c0fb0fdc0e7bc598440a38dcf21cc48eb3f85307615a0",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "runs the Terraform check table built in the same function: terraform, tflint, checkov through sys.executable -m and trivy",
       "lines": [
-        121
+        145
       ]
     },
     {

@@ -632,6 +632,8 @@ def scratch_repo(root: Path, case: Case) -> Path:
     listed = run_command(
         "git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts", "orchestration/launcher.py"], cwd=ROOT, check=True
     ).stdout.splitlines()
+    if case.hook == "env-example":
+        listed.append("infra/jobs/identity_probe/probe.py")
     for relative in [*COPIED, *listed]:
         if (ROOT / relative).is_file():
             (repo / relative).parent.mkdir(parents=True, exist_ok=True)

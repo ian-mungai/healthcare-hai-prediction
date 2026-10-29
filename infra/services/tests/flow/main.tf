@@ -82,9 +82,9 @@ locals {
       inside      = length([for before, text in container.lines : text if before < index && can(regex(local.opener_re, text))]) > length([for before, text in container.lines : text if before < index && can(regex(local.closer_re, text))])
       safe_syntax = !can(regex(local.unsafe_syntax_re, line))
       assignment = (
-        can(regex(local.assign_re, line))
-        && !can(regex("[<>|;&`]|\\$\\(", regex(local.assign_re, line)[1]))
-        && (can(regex(local.single_word_re, regex(local.assign_re, line)[1])) || can(regex(local.substitution_re, regex(local.assign_re, line)[1])))
+        can(regex(local.assign_re, line)) &&
+        !can(regex("[<>|;&`]|\\$\\(", regex(local.assign_re, line)[1])) &&
+        (can(regex(local.single_word_re, regex(local.assign_re, line)[1])) || can(regex(local.substitution_re, regex(local.assign_re, line)[1])))
       )
       printf_to_variable = can(regex(local.printfv_re, line)) && !can(regex(local.unsafe_syntax_re, line))
       getenv             = can(regex(local.getenv_re, line))
@@ -100,8 +100,8 @@ locals {
       [
         for entry in local.checked[id] : "${id}: ${entry.line}"
         if entry.holds && !(
-          entry.assignment || entry.printf_to_variable || entry.getenv || entry.psql_set || entry.sql_password || entry.placeholder
-          || (entry.printf_text && entry.safe_syntax && entry.inside)
+          entry.assignment || entry.printf_to_variable || entry.getenv || entry.psql_set || entry.sql_password || entry.placeholder ||
+          (entry.printf_text && entry.safe_syntax && entry.inside)
         )
       ],
       [for line in container.lines : "${id}: ${line}" if can(regex(local.file_write_re, line)) && !can(regex(local.literal_file_re, line))],
