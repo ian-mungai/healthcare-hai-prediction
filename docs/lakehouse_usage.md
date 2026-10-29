@@ -214,8 +214,19 @@ rules with a fake Docker and a test registry.
 .venv/bin/python -m orchestration.launcher status                # the launcher; --what registry, catalog or protected_sets
 .venv/bin/python -m orchestration.launcher plan                  # the memory plan the launcher computes now
 .venv/bin/python -m orchestration.launcher shutdown --owner      # stop the launcher
+.venv/bin/python -m orchestration.launcher docker-start --owner [--deadline S]                 # start Docker Desktop if it does not answer; wait until the launcher serves
+.venv/bin/python -m orchestration.launcher docker-release --owner [--since EPOCH] [--deadline S]   # quit Docker Desktop after a heavy run when nothing runs
 .venv/bin/python -m scripts.lakehouse.run_launcher_e2e           # launcher scenarios with a fake Docker; report: data/e2e/launcher/
 ```
+
+`docker-start` and `docker-release` run `docker desktop start` and `docker desktop stop` (found on the `PATH`, then in `/usr/local/bin` and
+`/Applications/Docker.app/Contents/Resources/bin`; check both subcommands with `docker desktop --help` before the first real use). `docker-start`
+prints `{"started": false}` when Docker already answers; otherwise it runs the start command and waits until the launcher serves, within one
+deadline (default 240 s; exit 5 names the deadline and the macOS dialog to answer). `docker-release` never restarts Docker. It prints
+`{"outcome": "skipped", ...}` and exits 0 when no launcher runs, when Docker is not running or when (with `--since`) no container was created since that Unix time. It
+exits 3 and names every running container the launcher did not create (or the first registry blocker, such as a held allocation) and leaves Docker
+running. Otherwise it stops the idle catalog, quits Docker Desktop, waits until the daemon stops answering (120 s by default; exit 5 when it
+still answers, exit 4 when the command fails) and shuts the launcher down. `docker-restart --owner` stays for a manual restart.
 
 ## Bronze
 
