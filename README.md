@@ -30,6 +30,14 @@ from `scripts/quality/dvc/requirements.txt`. It records a hash for every package
 `antlr4-python3-runtime`, a dependency of DVC, is published as a source archive. Its build tool is pinned in `build_requirements.txt` and installed first,
 so the build downloads nothing unpinned. A rerun changes nothing and a failed install leaves nothing that looks current.
 
+The repository tracks DVC's `.dvc/config` (analytics and autostage off, no remote) and `.dvcignore`. The remote is the `dvc/` prefix of the private data
+bucket and exists only in the ignored `.dvc/config.local`, which the renderer writes from `.env` without printing it. Run it again after a `.env` change;
+`--check` reports a stale file:
+
+```sh
+bash scripts/infrastructure/render_project_config.sh --stack dvc
+```
+
 Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
@@ -158,6 +166,7 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_e2e --output-directory <new_directory>
 .venv/bin/python -m scripts.quality.run_checks_e2e
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
+.venv/bin/python -m scripts.quality.run_dvc_e2e
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 .venv/bin/python -m scripts.infrastructure.run_host_session_e2e
 .venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e
