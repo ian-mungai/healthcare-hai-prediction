@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure.host_session import Clock, HostSessionError, Session
 from scripts.infrastructure.host_session_cases import ARN_OR_ACCOUNT, REPO_ROOT, names
 from scripts.infrastructure.host_session_stand_in import ACCOUNT_MARK, FAMILIES, PROFILE, REGION, SERVICES, STOP_TASK_SECONDS, StandInHost
+from scripts.process import CompletedProcess, TimeoutExpired
 
 __all__ = ["CASES", "CASE_ERRORS", "REPO_ROOT"]
 
@@ -65,7 +67,7 @@ def run_main(host: StandInHost, arguments: list[str], setup_seconds: float) -> i
     module = tasks_module()
     clock = Clock(lambda: host.now, runaway_sleep(host))
 
-    def slow_names(_settings: dict[str, str]) -> Any:
+    def slow_names(_settings: dict[str, str], *_limit: Any) -> Any:
         host.advance(setup_seconds)
         return names()
 
@@ -84,6 +86,55 @@ def run_main(host: StandInHost, arguments: list[str], setup_seconds: float) -> i
         redirect_stderr(io.StringIO()),
     ):
         return int(module.main(arguments, clock))
+
+
+def run_main_with_lookups(host: StandInHost, arguments: list[str], durations: Sequence[float]) -> tuple[int, list[float]]:
+    """The exit code of the real ``main`` and the timeout of each Terraform lookup when the real ``load_names`` runs against a replaced process runner.
+
+    Lookup ``n`` would take ``durations[n]`` seconds of virtual time. A real runner stops the process at its timeout, so a lookup that would take longer ends
+    at its timeout with ``TimeoutExpired``. Output of the command is discarded.
+    """
+    module = tasks_module()
+    renderer = importlib.import_module("scripts.infrastructure.render_platform_config")
+    clock = Clock(lambda: host.now, runaway_sleep(host))
+    session_names = names()
+    outputs = [
+        {
+            "cluster_name": {"value": session_names.cluster},
+            "host_autoscaling_group_name": {"value": session_names.group},
+            "ec2_capacity_provider_name": {"value": session_names.provider},
+            "project_tag": {"value": session_names.project_tag},
+        },
+        {
+            "service_names": {"value": session_names.services},
+            "one_shot_run_task": {"value": {key: {"task_definition": value} for key, value in session_names.one_shot.items()}},
+        },
+    ]
+    timeouts: list[float] = []
+
+    def fake_run(program: str, argv: Any, *, env: Any, timeout: float) -> CompletedProcess[str]:
+        timeouts.append(timeout)
+        duration = durations[len(timeouts) - 1]
+        host.advance(min(duration, timeout))
+        if duration > timeout:
+            raise TimeoutExpired([program], timeout)
+        return CompletedProcess([program, *argv], 0, json.dumps(outputs[len(timeouts) - 1]), "")
+
+    class TimedSession(Session):
+        def __init__(self, cli: AwsCli, session_names: Any, session_clock: Clock | None = None) -> None:
+            super().__init__(cli, session_names, session_clock, Path(tempfile.mkdtemp(prefix="aws_tasks_case_")) / "unused.launched")
+
+    settings = {"project_name": "standin", "environment": "dev", "aws_profile": PROFILE, "aws_region": REGION}
+    with (
+        patch.object(renderer, "run_command", fake_run),
+        patch.object(module, "load_configuration", lambda _path: (settings, {})),
+        patch.object(module, "AwsCli", lambda configuration: AwsCli(configuration, host.runner)),
+        patch.object(module, "Session", TimedSession),
+        patch.object(module, "install_termination_handler", lambda: lambda: None),
+        redirect_stdout(io.StringIO()),
+        redirect_stderr(io.StringIO()),
+    ):
+        return int(module.main(arguments, clock)), timeouts
 
 
 def suffix(arn: str) -> str:
@@ -454,6 +505,25 @@ def setup_counts_toward_the_deadline() -> dict[str, bool]:
     }
 
 
+def lookups_share_the_deadline() -> dict[str, bool]:
+    results: dict[str, bool] = {}
+    for name, durations in (("119 s and 119 s", [119, 119]), ("119 s and a hung lookup", [119, 500]), ("a first lookup of 120 s", [120, 5])):
+        host = StandInHost()
+        populate(host)
+        code, timeouts = run_main_with_lookups(host, ["list"], durations)
+        results[f"{name}: the command ends within the 120 s bound"] = host.now <= 120 + 1
+        results[f"{name}: the command fails and sends no task call"] = code in (1, 2) and not host.log
+        results[f"{name}: no lookup is given more than the time left"] = all(
+            timeout <= 120 - spent + 1e-6 for timeout, spent in zip(timeouts, [0, durations[0]], strict=False)
+        )
+    host = StandInHost()
+    found = populate(host)
+    code, timeouts = run_main_with_lookups(host, ["stop"], [10, 10])
+    results["two quick lookups: the second gets the time left after the first"] = len(timeouts) == 2 and timeouts[0] == 120 and timeouts[1] == 110
+    results["two quick lookups: the stop runs"] = code == 0 and all(status(host, found[key]) == "STOPPED" for key in ("read0", "read1", "read2"))
+    return results
+
+
 def setup_that_used_the_time_sends_no_call() -> dict[str, bool]:
     host = StandInHost()
     found = populate(host)
@@ -549,6 +619,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "stop_failed_call_is_described": stop_failed_call_is_described,
     "stop_lost_reply_is_confirmed": stop_lost_reply_is_confirmed,
     "setup_counts_toward_the_deadline": setup_counts_toward_the_deadline,
+    "lookups_share_the_deadline": lookups_share_the_deadline,
     "setup_that_used_the_time_sends_no_call": setup_that_used_the_time_sends_no_call,
     "setup_within_the_bound_runs": setup_within_the_bound_runs,
     "stale_confirmation_on_empty_cluster": stale_confirmation_on_empty_cluster,

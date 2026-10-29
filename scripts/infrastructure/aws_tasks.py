@@ -226,14 +226,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, clock: Clock | None = None) -> int:
     """Run one subcommand and return 0 on success, 1 on a failed, refused, interrupted or terminated step, 2 on a configuration error.
 
-    The 120-second deadline starts here, before the setup lookups. A setup that used all of it leaves no time for a task call, so none is sent.
+    The 120-second deadline starts here and covers the setup lookups and the task calls. Each Terraform lookup gets only the time that remains, and none
+    starts when no time remains (exit 2). A setup that used all of it leaves no time for a task call, so none is sent.
     """
     arguments = build_parser().parse_args(argv)
     clock = clock or Clock()
     started = clock.now()
     try:
         settings, _ = load_configuration(REPO_ROOT / ".env")
-        session = Session(AwsCli(settings), load_names(settings), clock)
+        session = Session(AwsCli(settings), load_names(settings, lambda: started + CLEANUP_SECONDS - clock.now()), clock)
         cleanup = TaskCleanup(session, f"{settings['project_name']}_{settings['environment']}_job_", started)
     except ConfigurationError as error:
         sys.stderr.write(f"configuration: {error}\n")

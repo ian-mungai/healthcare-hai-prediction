@@ -146,10 +146,18 @@ def output_value(document: dict[str, Any], name: str, kind: type) -> Any:
     return value
 
 
-def load_names(settings: dict[str, str]) -> Names:
-    """Read the platform and services outputs with the project profile."""
-    platform = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], settings, "The platform outputs could not be read.")
-    services = terraform_document(SERVICES_DIRECTORY, ["output", "-json"], settings, "The services outputs could not be read.")
+def limit(remaining: Callable[[], float] | None) -> dict[str, float]:
+    """The ``timeout`` argument of one lookup under the deadline, or none when the caller has no deadline."""
+    return {} if remaining is None else {"timeout": remaining()}
+
+
+def load_names(settings: dict[str, str], remaining: Callable[[], float] | None = None) -> Names:
+    """Read the platform and services outputs with the project profile.
+
+    ``remaining`` gives the seconds left under the caller's deadline. It is read before each lookup, which gets only that much time.
+    """
+    platform = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], settings, "The platform outputs could not be read.", **limit(remaining))
+    services = terraform_document(SERVICES_DIRECTORY, ["output", "-json"], settings, "The services outputs could not be read.", **limit(remaining))
     service_names = output_value(services, "service_names", dict)
     one_shot = output_value(services, "one_shot_run_task", dict)
     ordered = {key: service_names[key] for key in sorted(service_names, key=lambda key: key != FIRST_SERVICE)}

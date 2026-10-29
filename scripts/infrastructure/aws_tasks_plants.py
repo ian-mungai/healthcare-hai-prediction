@@ -66,7 +66,9 @@ PLANTS: dict[str, tuple[str, str]] = {
         "begin = self.session.clock.now()",
     ),
     "T18 reads the start time after the setup": ("    started = clock.now()\n    try:\n", "    started = None\n    try:\n"),
-    "T18 gives the session another clock than the deadline": ("load_names(settings), clock)", "load_names(settings))"),
+    "T18 gives the session another clock than the deadline": ("clock.now()), clock)", "clock.now()))"),
+    "T20 gives the lookups no deadline": ("load_names(settings, lambda: started + CLEANUP_SECONDS - clock.now())", "load_names(settings)"),
+    "T20 gives each lookup the whole deadline": ("lambda: started + CLEANUP_SECONDS - clock.now()", "lambda: CLEANUP_SECONDS"),
     "T19 returns at once on an empty cluster": (
         '                self.session.step("tasks", "no job task is running")\n            sent: list[JobTask] = []',
         '                self.session.step("tasks", "no job task is running")\n                return\n            sent: list[JobTask] = []',
