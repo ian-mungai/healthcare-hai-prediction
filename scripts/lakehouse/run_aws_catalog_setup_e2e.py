@@ -392,20 +392,38 @@ def case_mac_port(_: Path) -> dict[str, bool]:
 
 
 def case_host_ingress(_: Path) -> dict[str, bool]:
-    """The route goes only to one running host whose security groups admit only same-account security groups; its public address is allowed."""
+    """The route goes only to one running host whose inbound sources are project security groups of its VPC; its public address is allowed."""
     from scripts.lakehouse.run_bronze_cutover_e2e import describe_runner, ingress_variants
 
     checks: dict[str, bool] = {}
     settings = {"aws_profile": "synthetic", "aws_region": REGION, "data_bucket_name": "synthetic-bucket", "expected_account_id": "synthetic_account"}
     spec = TransportSpec("i-0123456789abcdef0", "project", REGION, 18181, 18182)
-    for label, instance, groups, accepted in ingress_variants([]):
-        aws = AwsCli(settings, runner=describe_runner(instance, groups))
+
+    def code(aws: AwsCli, **options: Any) -> str:
         try:
-            setup.network_acceptance(spec, aws, deadline=time.monotonic() + 10)
-            code = ""
+            setup.network_acceptance(spec, aws, "hai", **{"deadline": time.monotonic() + 10, **options})
         except setup.SetupError as error:
-            code = error.code
-        checks[f"host ingress: {label}"] = code == ("" if accepted else "network")
+            return error.code
+        return ""
+
+    variants = ingress_variants("hai")
+    for label, instance, groups, accepted in variants:
+        checks[f"host ingress: {label}"] = code(AwsCli(settings, runner=describe_runner(instance, groups))) == ("" if accepted else "network")
+    host, closed = variants[0][1], variants[0][2]
+    now = [0.0]
+    reads = [0]
+    passing = describe_runner(host, closed)
+
+    def clock() -> float:
+        reads[0] += 1
+        return now[0] if reads[0] == 1 or now[0] > 2.0 else 2.0
+
+    def late(command: list[str], **options: Any) -> Any:
+        if "describe-instances" in command:
+            now[0] = 11.0
+        return passing(command, **options)
+
+    checks["a host reply that arrives after the step deadline is refused"] = code(AwsCli(settings, runner=late), deadline=10.0, clock=clock) == "network"
     return checks
 
 

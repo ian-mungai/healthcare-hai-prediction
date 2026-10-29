@@ -372,12 +372,12 @@ def check_ports(spec: TransportSpec) -> None:
         raise SetupError("network", f"the tunnel and relay ports must differ from the Mac Polaris port {MAC_POLARIS_PORT}")
 
 
-def network_acceptance(spec: TransportSpec, aws: AwsCli, *, deadline: float, clock: Clock = time.monotonic) -> None:
-    """Accept the route only to one running host whose security groups admit only same-account security groups; the catalog stays private."""
+def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, deadline: float, clock: Clock = time.monotonic) -> None:
+    """Accept the route only to one running host whose inbound sources are project security groups of its VPC; the catalog stays private."""
     check_ports(spec)
-    left = check_deadline(deadline, clock)
+    check_deadline(deadline, clock)
     try:
-        facts = cutover_route.describe_host(aws, spec.instance, "", deadline=clock() + left, clock=clock)
+        facts = cutover_route.describe_host(aws, spec.instance, project_tag, deadline=deadline, clock=clock)
     except StorageError as error:
         raise SetupError("network", f"describing the catalog host failed ({error.code})") from None
     if not cutover_route.host_accepted(facts, require_tag=False):
@@ -919,6 +919,18 @@ class LiveServices:
             raise SetupError("profile", str(error)) from None
         return settings
 
+    @functools.cached_property
+    def project_tag(self) -> str:
+        """The project tag from the platform outputs; the host's inbound source groups must carry it."""
+        from scripts.infrastructure.host_session import output_value
+        from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
+
+        try:
+            outputs = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], self.settings, "The platform outputs could not be read.")
+            return str(output_value(outputs, "project_tag", str))
+        except (OSError, ValueError) as error:
+            raise SetupError("network", f"the platform outputs could not be read ({type(error).__name__})") from None
+
     @property
     def bucket(self) -> str:
         return self.settings["data_bucket_name"]
@@ -949,7 +961,7 @@ class LiveServices:
     @contextlib.contextmanager
     def remote(self, instance: str, *, deadline: float) -> Iterator[Remote]:
         spec = TransportSpec(instance, self.settings["aws_profile"], self.region, *self.ports)
-        network_acceptance(spec, AwsCli(self.settings), deadline=deadline)
+        network_acceptance(spec, AwsCli(self.settings), self.project_tag, deadline=deadline)
         folder = self.state_root / "catalog_setup_transport"
         durable_directory(folder)
         transport = CatalogTransport(folder)
