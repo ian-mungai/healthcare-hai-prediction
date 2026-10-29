@@ -295,6 +295,27 @@ def mlflow_failure_case(folder: Path, *, late: bool) -> None:
         require(broker.lines_of(request)[-1] == line, "terminal startup refusal changed after releasing the run lock")
 
 
+def preparation_cases(cases: Cases, folder: Path) -> None:
+    """Queue each training template and require its preparation to inspect the training image, never the root Compose model."""
+    config = launcher.Config(run_lock.Registry(folder / "registry", "test"), ROOT, "", folder / "tokens", folder / "runs", allowed_roots=(ROOT,))
+    for template in ("training_job", "training_mlflow", "training_extract"):
+
+        def prepared(template: str = template) -> None:
+            subject = launcher.Launcher.__new__(launcher.Launcher)
+            subject.cfg, subject.main_checkout, subject.key, subject.compose_models = config, ROOT, b"", {}
+            subject.docker = mock.NonCallableMock(spec_set=["image"])
+            subject.docker.image.return_value = None
+            attempt = {"template": template, "checkout": str(ROOT), "params": {}}
+            result = subject.prepare_attempt("at", attempt, False, {})
+            service = launcher.TEMPLATES[template].service
+            require(service is not None, "a training template has no service")
+            expected = subject.renderer_of(template, ROOT).image(str(service))
+            require(subject.docker.image.call_args_list == [mock.call(expected)], "queued preparation did not inspect the training image")
+            require(result["image_error"] == f"image {expected} is not present", "queued preparation lost the missing-image refusal")
+
+        cases.check(f"{template}_preparation_inspects_training_image", prepared)
+
+
 def run() -> list[dict[str, Any]]:
     """Run fix regressions without a launcher process, engine request or real dataset."""
     cases = Cases([])
@@ -304,6 +325,7 @@ def run() -> list[dict[str, Any]]:
         cases.check("snapshot_case_setup", lambda: snapshot_cases(cases, folder / "snapshot"))
         cases.check("rendered_case_setup", lambda: rendered_cases(cases, folder / "render"))
         cases.check("approval_case_setup", lambda: approval_cases(cases, folder / "approval"))
+        cases.check("preparation_case_setup", lambda: preparation_cases(cases, folder / "preparation"))
         cases.check("mlflow_failed_start_records_refusal", lambda: mlflow_failure_case(folder / "mlflow_failed", late=False))
         cases.check("mlflow_late_start_records_refusal", lambda: mlflow_failure_case(folder / "mlflow_late", late=True))
     return cases.results

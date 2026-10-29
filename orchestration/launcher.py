@@ -5221,8 +5221,7 @@ class Launcher:
             result["plan"] = {"environment": plan.environment(), "record": plan.record()}
         template = TEMPLATES[a["template"]]
         if template.finite and template.service is not None:
-            renderer = self.renderer_for(Path(a["checkout"]))
-            image = renderer.image(template.service)
+            image = self.image_reference(a)
             info = self.docker.image(image)
             if info is None:
                 result["image_error"] = f"image {image} is not present"
