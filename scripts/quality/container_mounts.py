@@ -302,8 +302,10 @@ class Declarations:
         return set()
 
     @staticmethod
-    def snapshot_comprehension_problem(comprehension: ast.AST | None, entry: ast.Tuple) -> str | None:
-        """Name the first part of the `/workspace/{path.name}` code mount comprehension that differs from the supported form."""
+    def snapshot_comprehension_problem(comprehension: ast.AST | None, entry: ast.Tuple, verified: set[str]) -> str | None:
+        """Name the first part of the `/workspace/{path.name}` code mount comprehension that differs from the supported form.
+
+        ``verified`` holds the names bound once in the builder and passed to ``verify_snapshot``: only such a folder may supply the code mounts."""
         if not isinstance(comprehension, ast.ListComp | ast.SetComp | ast.GeneratorExp) or comprehension.elt is not entry:
             return "the target must come from a comprehension over the snapshot code folder"
         if len(comprehension.generators) != 1 or comprehension.generators[0].ifs or comprehension.generators[0].is_async:
@@ -329,6 +331,8 @@ class Declarations:
             return 'the iterator must be sorted((folder / "code").iterdir())'
         if source.args[0].func.value.right.value != "code":
             return f'the iterator folder {source.args[0].func.value.right.value!r} is not the snapshot "code" folder'
+        if source.args[0].func.value.left.id not in verified:
+            return f"the iterator folder {source.args[0].func.value.left.id!r} is not the snapshot folder the builder verifies"
         source_word, target = entry.elts[0], entry.elts[1]
         if not (isinstance(source_word, ast.Call) and dotted(source_word.func) == "str" and len(source_word.args) == 1 and not source_word.keywords):
             return "the bind source must be str(<variable>)"
@@ -359,6 +363,16 @@ class Declarations:
         snapshot_rule = False
         modules: set[str] = set()
         comprehensions = {id(node.elt): node for node in ast.walk(build) if isinstance(node, ast.ListComp | ast.SetComp | ast.GeneratorExp)}
+        stores = [node.id for node in ast.walk(build) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)]
+        verified = {
+            node.args[0].id
+            for node in ast.walk(build)
+            if isinstance(node, ast.Call)
+            and dotted(node.func).endswith("verify_snapshot")
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and stores.count(node.args[0].id) <= 1
+        }
         for node in ast.walk(build):
             if isinstance(node, ast.Tuple) and len(node.elts) == 3 and isinstance(node.elts[2], ast.Constant) and isinstance(node.elts[2].value, bool):
                 target = node.elts[1]
@@ -372,7 +386,7 @@ class Declarations:
                             break
                         prefix += str(part.value)
                     if dynamic and prefix == f"{WORKSPACE}/" and len(target.values) == 2:
-                        if problem := self.snapshot_comprehension_problem(comprehensions.get(id(node)), node):
+                        if problem := self.snapshot_comprehension_problem(comprehensions.get(id(node)), node, verified):
                             raise ValueError(f"{TRAINING}:{node.lineno}: unsupported snapshot mount form: {problem}")
                         snapshot_rule = True
                         continue
