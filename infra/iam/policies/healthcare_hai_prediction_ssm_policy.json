@@ -82,21 +82,6 @@
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_ID_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_SECRET_NAME}"
       ]
-    },
-    {
-      "Sid": "CreateAirflowAdminPasswordOnce",
-      "Effect": "Allow",
-      "Action": [
-        "ssm:PutParameter"
-      ],
-      "Resource": [
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_ADMIN_SECRET_NAME}"
-      ],
-      "Condition": {
-        "StringEqualsIfExists": {
-          "ssm:Overwrite": "false"
-        }
-      }
     }
   ]
 }
