@@ -3,7 +3,7 @@ set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the
 # acquisition gate and the four lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
-# if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), or "gates" (the gates only).
+# if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), "feature_store" (the feature store's own light checks) or "gates" (the gates only).
 # FEATURE_SHARD=K/N selects one hosted feature shard. Without it the selected feature suites run all their shards and combine their evidence. GitHub CI runs
 # "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
@@ -28,8 +28,8 @@ source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher | bronze | silver | gold | features | feature_sources | feature_columns | gates) ;;
-  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold, features, feature_sources, feature_columns or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | launcher | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
+  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"
@@ -214,8 +214,14 @@ for group in ${run_groups[@]+"${run_groups[@]}"}; do
   fi
   require_group_file "$group"
   if [[ "$group" == "lakehouse_features" ]]; then
+    # The feature store's own light checks are one item, run by every part that selects the group except the two feature suites.
+    if [[ "$part" != "feature_sources" && "$part" != "feature_columns" ]]; then
+      item="lakehouse_features_store"
+      printf -v "item_group_$item" '%s' "$group"
+      shared+=("$item")
+    fi
     for suite in sources columns; do
-      if [[ "$part" == "feature_sources" || "$part" == "feature_columns" ]] && [[ "$part" != "feature_$suite" ]]; then
+      if [[ "$part" == "feature_store" ]] || { [[ "$part" == "feature_sources" || "$part" == "feature_columns" ]] && [[ "$part" != "feature_$suite" ]]; }; then
         continue
       fi
       count_variable="feature_${suite}_shards"
@@ -312,7 +318,7 @@ if ((${#failed[@]})); then
   exit 1
 fi
 
-if is_selected lakehouse_features && [[ -z "$feature_shard" ]]; then
+if is_selected lakehouse_features && [[ -z "$feature_shard" && "$part" != "feature_store" ]]; then
   combines=()
   if [[ "$part" != "feature_columns" ]]; then
     combines+=(combine_feature_sources)

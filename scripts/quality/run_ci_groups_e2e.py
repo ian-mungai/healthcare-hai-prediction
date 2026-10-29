@@ -165,6 +165,7 @@ PART_GROUPS = {
     "features": LAYERS[3:],
     "feature_sources": LAYERS[3:],
     "feature_columns": LAYERS[3:],
+    "feature_store": LAYERS[3:],
     "core+layers": WITH_LAYERS,
     "all": [*WITH_LAYERS, "launcher", "acquisition", "repository_hooks"],
 }
@@ -465,6 +466,7 @@ def list_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
         "features": "run lakehouse_features",
         "feature_sources": "run lakehouse_features",
         "feature_columns": "run lakehouse_features",
+        "feature_store": "run lakehouse_features",
     }.get(part, "run launcher")
     checks = {
         "exit_zero": code == 0,
@@ -759,6 +761,26 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/silver/staged_copy.yml"]],
             [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
+        path_case(
+            "layer_feast_job_only_change_selects_features_only",
+            "scripts/features/feast_job.py",
+            ["python_lint", "lakehouse_features", "repository_code_checks"],
+        ),
+        path_case(
+            "layer_feast_definitions_select_features_only", "feature_store/definitions.py", ["python_lint", "lakehouse_features", "repository_code_checks"]
+        ),
+        path_case("layer_feature_schema_selects_features_only", "data_contracts/features/feature_schema.json", ["lakehouse_features"]),
+        path_case(
+            "layer_features_publication_contract_selects_features_and_launcher_checks",
+            "data_contracts/lakehouse/features_publish.json",
+            ["lakehouse_features", "orchestration_checks"],
+        ),
+        path_case("layer_feast_image_folder_selects_features_only", "services/feature_store/requirements.in", ["lakehouse_features"]),
+        path_case(
+            "layer_generated_matrix_model_selects_gold_and_features",
+            "dbt/models/features/matrix/feature_matrix_hospital.sql",
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+        ),
     ]
     return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
 
@@ -920,6 +942,13 @@ def reader_scan_case(tracked: set[str]) -> dict[str, Any]:
 
 
 HOSTED_ENTRY_POINTS = {
+    "lakehouse_features_store": (
+        ("scripts.features.feature_schema check", ("scripts/features/feature_schema.py", "data_contracts/features/feature_schema_rules.json")),
+        ("scripts.features.run_feature_store_e2e --mode static", ("scripts/features/run_feature_store_e2e.py", "scripts/features/feature_schema.py")),
+        ("scripts.features.feast_cases --part local", ("scripts/features/feast_cases.py", "scripts/features/feast_job.py", "feature_store/feature_store.yaml")),
+        ("scripts.features.online_cases --part fake", ("scripts/features/online_cases.py", "scripts/features/online_protocol.py")),
+        ("scripts.orchestration.run_features_pipeline_light", ("scripts/orchestration/run_features_pipeline_light.py",)),
+    ),
     "repository_code_checks": (
         (
             "scripts.quality.run_scratch_worktree_e2e",
@@ -951,7 +980,7 @@ def entry_point_cases() -> list[dict[str, Any]]:
         for command, sources in entries:
             if not body or not re.search(rf"^\s*timed \"[^\"]+\" \"\$python_bin\" -m {re.escape(command)}$", body.group(1), re.MULTILINE):
                 missing.append(f"{function}: {command}")
-            group = "lakehouse_gold" if function.startswith("lakehouse_gold") else function
+            group = next((name for name in ("lakehouse_gold", "lakehouse_features") if function.startswith(name)), function)
             not_selecting += [path for path in sources if group not in ci_groups.plan("paths", "all", paths=[path])["run"]]
     return [
         {
@@ -1224,7 +1253,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
 
 def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
-    for part in ("all", "core", "launcher", "bronze", "silver", "gold", "features", "feature_sources", "feature_columns"):
+    for part in ("all", "core", "launcher", "bronze", "silver", "gold", "features", "feature_sources", "feature_columns", "feature_store"):
         cases.append(list_only_case(work, out, part))
     for part in ("core", "all", "launcher", "gold", "features", "feature_sources", "feature_columns"):
         cases.append(docs_only_case(work, out, part))
