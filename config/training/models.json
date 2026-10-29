@@ -43,6 +43,9 @@
   },
   "schema": 1,
   "seed_derivation": "sha256:<master>|<hai_type>|<purpose>:first_32_bits",
+  "shap": {
+    "sample_cap": 128
+  },
   "slots": {
     "m1_ols": {
       "budget_seconds": 1200,

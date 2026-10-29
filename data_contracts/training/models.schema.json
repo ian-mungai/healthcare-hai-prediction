@@ -185,6 +185,19 @@
     "seed_derivation": {
       "const": "sha256:<master>|<hai_type>|<purpose>:first_32_bits"
     },
+    "shap": {
+      "additionalProperties": false,
+      "properties": {
+        "sample_cap": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sample_cap"
+      ],
+      "type": "object"
+    },
     "slots": {
       "additionalProperties": false,
       "properties": {
@@ -561,7 +574,8 @@
     "moran",
     "budgets",
     "slots",
-    "defaults_note"
+    "defaults_note",
+    "shap"
   ],
   "title": "Models",
   "type": "object"
