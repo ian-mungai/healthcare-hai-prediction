@@ -1,6 +1,6 @@
 -- One row per registry control of revision 3 (the base registry and its append-only additions), plus the unknown member. The review decision is
--- read from the control bridge seeds and is null for a control with no bridge row. The family and the closeout decision are deferred (amendment
--- A36) [824] [827].
+-- read from the control bridge seeds and is null for a control with no bridge row. The family is the analytic domain of the control (Structure,
+-- Process, Outcome, Context or Linkage), generated into the registry_controls seed. The closeout decision is deferred (amendment A36) [824] [827].
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',
@@ -44,6 +44,7 @@ final as (
         md5(registry_controls.measure_control) as registry_control_sk,
         registry_controls.measure_control,
         registry_controls.parent_control as parent,
+        registry_controls.family,
         reviews.review_decision
     from {{ ref('registry_controls') }} as registry_controls
     left join reviews
@@ -53,6 +54,7 @@ final as (
         md5('<unknown>') as registry_control_sk,
         '<unknown>' as measure_control,
         cast(null as varchar) as parent,
+        cast(null as varchar) as family,
         cast(null as varchar) as review_decision
 )
 

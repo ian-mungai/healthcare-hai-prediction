@@ -5,6 +5,10 @@ Run from the repository root:
     .venv/bin/python -m scripts.lakehouse.bridge_references --write    # write the four reference seeds in dbt/seeds/gold/
     .venv/bin/python -m scripts.lakehouse.bridge_references --check    # fail when a seed drifts or a recipe breaks a rule
 
+``registry_controls.csv`` also carries each control's ``family``: the analytic domain (Structure, Process, Outcome, Context or Linkage) of the dimension of its
+sources' original source families. A control with no source family takes the domain of ``registry_family_supplement.csv``, a reviewed list. A control whose
+sources fall in two domains, a dimension that maps to no domain and a control that resolves to none or to two values stop the run.
+
 ``gold_contract_columns.csv`` is generated from the frozen gold contract (every column of every gold model with its explicit footnote column and
 whether it is the model's published measure-key column). ``registry_controls.csv`` is generated from the registry of revision 3 and its append-only
 additions. ``gold_measure_key_evidence.csv`` lists the published measure key of each ACS, impact, HAI hospital and BLS bridge row with the reviewed file that
@@ -51,7 +55,12 @@ SVI_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_context_columns.sql", "sv
 GV_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_health_columns.sql", "gv_identifier_columns")
 REGISTRY_REVISION = 3
 CONTRACT_COLUMNS = ("gold_model", "column_name", "footnote_column", "is_measure_key")
-CONTROL_COLUMNS = ("measure_control", "parent_control", "origin")
+CONTROL_COLUMNS = ("measure_control", "parent_control", "origin", "family")
+FAMILY_SUPPLEMENT = "registry_family_supplement.csv"
+SUPPLEMENT_COLUMNS = ("measure_control", "family")
+# The analytic domains a control's family takes; the dimension of a source family maps to one of them by its text before ":" or "/", or by the linkage list.
+DOMAINS = ("Structure", "Process", "Outcome", "Context", "Linkage")
+LINKAGE_DIMENSIONS = ("Geographic linkage", "Spatial context", "Community context")
 EVIDENCE_COLUMNS = ("fact", "measure_key", "measure_control", "basis")
 RULE_COLUMNS = ("fact", "rule", "value")
 INVENTORY_COLUMNS = ("recipe", "measure_control", "source_row", "rule", "inputs")
@@ -241,10 +250,71 @@ def registry_records(registry: Mapping[str, Any], additions: Mapping[str, Any]) 
     return records
 
 
-def registry_rows(records: Mapping[str, tuple[str, dict[str, Any]]]) -> list[dict[str, str]]:
-    """Return one row per registry control with its parent and origin."""
+def domain_of(dimension: str) -> str | None:
+    """Return the analytic domain of a source family's dimension text, or None when it maps to no domain."""
+    if dimension in LINKAGE_DIMENSIONS:
+        return "Linkage"
+    head = re.split(r"[:/]", dimension)[0].strip()
+    return head if head in DOMAINS and head != "Linkage" else None
+
+
+def supplement_problems(supplement: list[dict[str, str]], records: Mapping[str, tuple[str, dict[str, Any]]]) -> tuple[dict[str, str], list[str]]:
+    """Return the reviewed supplement by control and what is wrong with it: a control twice, not in the registry or a family outside the domains."""
+    problems: list[str] = []
+    by_control: dict[str, str] = {}
+    for row in supplement:
+        control, family = row["measure_control"], row["family"]
+        if control in by_control:
+            problems.append(f"{FAMILY_SUPPLEMENT}: control {control} appears twice")
+        if control not in records:
+            problems.append(f"{FAMILY_SUPPLEMENT}: control {control} is not in the registry")
+        if family not in DOMAINS:
+            problems.append(f"{FAMILY_SUPPLEMENT}: control {control} has family {family!r}, not one of {list(DOMAINS)}")
+        by_control[control] = family
+    return by_control, problems
+
+
+def control_families(
+    registry: Mapping[str, Any], records: Mapping[str, tuple[str, dict[str, Any]]], supplement: list[dict[str, str]]
+) -> tuple[dict[str, str], list[str]]:
+    """Return each control's family and why a control does not resolve to exactly one: an unmapped dimension, an unknown source, two domains or none."""
+    reviewed, problems = supplement_problems(supplement, records)
+    domains: dict[str, str | None] = {}
+    for family in registry["source_families"]:
+        domains[family["id"]] = domain_of(family["dimension"])
+        if domains[family["id"]] is None:
+            problems.append(f"source family {family['id']} has dimension {family['dimension']!r}, which maps to no domain")
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    families: dict[str, str] = {}
+    for control_id, (_, control) in records.items():
+        found: set[str] = set()
+        for source_id in control.get("source_ids") or []:
+            if source_id not in sources:
+                problems.append(f"control {control_id} names source {source_id}, which is not in the registry")
+                continue
+            for family_id in sources[source_id].get("original_source_family_ids") or []:
+                if family_id not in domains:
+                    problems.append(f"source {source_id} names source family {family_id}, which is not in the registry")
+                elif domains[family_id]:
+                    found.add(str(domains[family_id]))
+        if len(found) > 1:
+            problems.append(f"control {control_id} resolves to the domains {sorted(found)}, not one")
+        elif found and control_id in reviewed:
+            problems.append(f"{FAMILY_SUPPLEMENT}: control {control_id} has a source family; remove it from the supplement")
+        elif found:
+            families[control_id] = found.pop()
+        elif control_id in reviewed:
+            families[control_id] = reviewed[control_id]
+        else:
+            problems.append(f"control {control_id} has no source family and no row in {FAMILY_SUPPLEMENT}")
+    return families, problems
+
+
+def registry_rows(records: Mapping[str, tuple[str, dict[str, Any]]], families: Mapping[str, str]) -> list[dict[str, str]]:
+    """Return one row per registry control with its parent, origin and family; a control that resolves to no family holds an empty family."""
     rows = [
-        {"measure_control": control_id, "parent_control": control.get("parent_id") or "", "origin": origin} for control_id, (origin, control) in records.items()
+        {"measure_control": control_id, "parent_control": control.get("parent_id") or "", "origin": origin, "family": families.get(control_id, "")}
+        for control_id, (origin, control) in records.items()
     ]
     return sorted(rows, key=lambda row: (row["origin"], row["measure_control"]))
 
@@ -518,10 +588,16 @@ def _bridge_problems(path: str, rows: list[dict[str, str]], bridge: list[dict[st
 
 def generated(contract_path: Path, contract_optional: bool, seeds_dir: Path) -> tuple[dict[str, str], dict[str, set[str]] | None, list[str]]:
     """Return the text each reference seed must have, the contract's columns per model (None when the contract is absent and optional) and key problems."""
-    records = registry_records(json.loads(REGISTRY.read_text()), json.loads(ADDITIONS.read_text()))
-    texts = {"registry_controls.csv": as_csv(CONTROL_COLUMNS, registry_rows(records))}
+    registry = json.loads(REGISTRY.read_text())
+    records = registry_records(registry, json.loads(ADDITIONS.read_text()))
+    supplement_header, supplement = read_table(seeds_dir / FAMILY_SUPPLEMENT) if (seeds_dir / FAMILY_SUPPLEMENT).exists() else ([], [])
+    if supplement_header != list(SUPPLEMENT_COLUMNS):
+        raise ReferenceInputError(f"{FAMILY_SUPPLEMENT} has columns {supplement_header}, expected {list(SUPPLEMENT_COLUMNS)}")
+    families, family_problems = control_families(registry, records, supplement)
+    texts = {"registry_controls.csv": as_csv(CONTROL_COLUMNS, registry_rows(records, families))}
     bridge = [row for path in sorted(seeds_dir.glob("*_bridge.csv")) for row in read_rows(path)]
     evidence, key_problems = key_evidence(bridge)
+    key_problems = [*family_problems, *key_problems]
     texts["gold_measure_key_evidence.csv"] = as_csv(EVIDENCE_COLUMNS, evidence)
     texts["gold_measure_key_rules.csv"] = as_csv(RULE_COLUMNS, key_rules())
     if not contract_path.exists():
