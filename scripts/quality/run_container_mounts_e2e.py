@@ -111,6 +111,11 @@ def scenarios(source: dict[str, str]) -> list[Case]:
             messages=(TRAINING, "unsupported snapshot mount form", "'outputs'"),
         ),
         Case(
+            "training_snapshot_unverified_folder",
+            {TRAINING: replaced(source[TRAINING], '(folder / "code").iterdir()', '(output / "code").iterdir()')},
+            messages=(TRAINING, "unsupported snapshot mount form", "'output' is not the snapshot folder"),
+        ),
+        Case(
             "past_quality_engine",
             {QUALITY: quality_import, engine: engine_code},
             messages=(engine, "orchestration.pipeline_protocol", "container docker-compose.yaml:quality"),
@@ -659,7 +664,7 @@ def checker_mutations() -> list[tuple[str, str, str, str, str]]:
         (
             "snapshot_comprehension_unchecked",
             CHECKER,
-            "if problem := self.snapshot_comprehension_problem(comprehensions.get(id(node)), node):",
+            "if problem := self.snapshot_comprehension_problem(comprehensions.get(id(node)), node, verified):",
             "if problem := None:",
             "training_snapshot_parent_name",
         ),
