@@ -20,6 +20,7 @@ from scripts.process import TimeoutExpired, run_command
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
 TRIVY_IGNORE = re.compile(r"^\s*#trivy:ignore:(?P<check>[A-Z]+-[0-9]+)\s*$")
+LOCAL_MODULE_SOURCE = re.compile(r'(?m)^\s*source\s*=\s*"(\.\.?/[^"\n]+)"\s*$')
 RESOURCE = re.compile(r'^resource\s+"(?P<type>[\w-]+)"\s+"(?P<name>[\w-]+)"\s*\{')
 
 
@@ -44,6 +45,38 @@ def trivy_exceptions(source: Path) -> list[dict[str, str]]:
     return exceptions
 
 
+def copy_terraform_sources(directory: Path, destination: Path, hashes: dict[str, str]) -> Path:
+    """Copy a root and its literal local modules without deployment inputs or state."""
+    directory = directory.resolve()
+    boundary = ROOT if directory.is_relative_to(ROOT) else directory.parent
+    pending = [directory]
+    copied: set[Path] = set()
+    while pending:
+        module = pending.pop()
+        if module in copied:
+            continue
+        copied.add(module)
+        if not module.is_relative_to(boundary) or not module.is_dir():
+            raise ValueError("A local Terraform module is missing or outside the source boundary")
+        target = destination / module.relative_to(boundary)
+        target.mkdir(parents=True, exist_ok=True)
+        sources = sorted(module.glob("*.tf"))
+        if not sources:
+            raise ValueError("No Terraform sources found")
+        for path in sources:
+            if path.is_symlink():
+                raise ValueError("Symlink source is not allowed")
+            content = path.read_bytes()
+            (target / path.name).write_bytes(content)
+            hashes[os.path.relpath(path, directory)] = hashlib.sha256(content).hexdigest()
+            for reference in LOCAL_MODULE_SOURCE.findall(content.decode("utf-8")):
+                dependency = module / reference
+                if dependency.is_symlink():
+                    raise ValueError("Symlink module is not allowed")
+                pending.append(dependency.resolve())
+    return destination / directory.relative_to(boundary)
+
+
 def scan(directory: Path, output: Path) -> bool:
     """Copy Terraform source only, run both scanners and save summaries without values."""
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -51,16 +84,7 @@ def scan(directory: Path, output: Path) -> bool:
     try:
         with tempfile.TemporaryDirectory(prefix="terraform_static_") as temporary:
             scratch = Path(temporary)
-            source = scratch / "source"
-            source.mkdir()
-            for path in sorted(directory.glob("*.tf")):
-                if path.is_symlink():
-                    raise ValueError("Symlink source is not allowed")
-                content = path.read_bytes()
-                (source / path.name).write_bytes(content)
-                report["source_sha256"][path.name] = hashlib.sha256(content).hexdigest()
-            if not report["source_sha256"]:
-                raise ValueError("No Terraform sources found")
+            source = copy_terraform_sources(directory, scratch / "source", report["source_sha256"])
             policies = directory / "policies"
             if policies.is_dir():
                 (source / "policies").mkdir()

@@ -23,3 +23,6 @@ aws-account data_contracts/orchestration/examples/ecs_outputs.json -- synthetic 
 aws-account data_contracts/orchestration/examples/ecs_target.json -- synthetic all-zero account references in the read target example
 aws-account data_contracts/orchestration/examples/ecs_target_inputs.json -- synthetic all-zero account references in exported-output examples
 aws-account scripts/infrastructure/run_ecs_render_e2e.py -- synthetic all-zero and all-ones accounts in renderer command cases
+aws-account infra/jobs/tests/jobs.tftest.hcl -- synthetic all-ones and all-twos account IDs in read definition refusal cases; not the project account
+aws-account infra/jobs/identity_probe/tests/probe.tftest.hcl -- synthetic all-ones and all-twos account IDs in identity probe refusal cases; not the project account
+aws-account scripts/infrastructure/run_jobs_preparation_e2e.py -- synthetic all-ones account IDs in inert preparation renderer fixtures; not the project account
