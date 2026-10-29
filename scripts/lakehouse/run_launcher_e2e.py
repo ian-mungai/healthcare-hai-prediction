@@ -42,7 +42,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from orchestration import code_digest, launcher, mlflow_service, online_store, pipeline_session, training_contract
@@ -3048,7 +3048,7 @@ def docker_restart_command_and_client(env: Env) -> dict[str, bool]:
         "the default restart command starts the docker program with desktop restart": default_config.restart_command == ("docker", "desktop", "restart")
         and launcher.Config.__dataclass_fields__["restart_command"].default == ("docker", "desktop", "restart"),
         "a refused restart (a foreign container runs) is a nonzero exit of the client": code == 1,
-        "the failure text names the refusal and no success line is printed": "Docker not restarted" in stderr.getvalue(),
+        "the failure text names the refusal and no success line is printed": "Docker not quit" in stderr.getvalue(),
         "the restart did not run": not env.daemon.calls_matching("POST", "/restart"),
     }
 
@@ -3324,6 +3324,19 @@ def docker_release_quit_deadlines(env: Env) -> dict[str, bool]:
     }
 
 
+def launcher_cli(*arguments: str) -> tuple[int, str, str]:
+    """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
+    saved = sys.argv
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        sys.argv = ["launcher", *arguments]
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = launcher.main()
+    finally:
+        sys.argv = saved
+    return code, out.getvalue(), err.getvalue()
+
+
 @case("docker_desktop_defaults")
 def docker_desktop_defaults(env: Env) -> dict[str, bool]:
     """R10 and R12: the default commands are pinned (nothing runs); a program that is not found refuses with the PATH in the message; the CLI skips a
@@ -3335,15 +3348,7 @@ def docker_desktop_defaults(env: Env) -> dict[str, bool]:
     env.write_settings()
 
     def cli(*arguments: str) -> tuple[int, str, str]:
-        saved = sys.argv
-        out, err = io.StringIO(), io.StringIO()
-        try:
-            sys.argv = ["launcher", "--test-registry", str(env.registry), *arguments]
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = launcher.main()
-        finally:
-            sys.argv = saved
-        return code, out.getvalue(), err.getvalue()
+        return launcher_cli("--test-registry", str(env.registry), *arguments)
 
     no_launcher = cli("docker-release", "--owner")
     env.start()
@@ -3381,6 +3386,65 @@ def docker_desktop_defaults(env: Env) -> dict[str, bool]:
         "docker-start with Docker running prints started false and exits 0": already_up[0] == 0 and '"started": false' in already_up[1],
         "a refused release exits 3 and names every foreign container": refused_cli[0] == 3 and "rogue-one" in refused_cli[2] and "rogue-two" in refused_cli[2],
         "a release with no container since the start time exits 0": future[0] == 0 and "no container ran since" in future[1],
+    }
+
+
+@case("docker_release_client_deadline", timings={"quit_wait": 8})
+def docker_release_client_deadline(env: Env) -> dict[str, bool]:
+    """F1: a quit command that returns while the daemon keeps answering, with `--deadline 1`, ends the CLI as degraded (exit 5) naming the deadline, not as a
+    registry error (exit 4); a `docker-start` or `docker-release` request with no reply by its deadline gets the same translation."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    env.start()
+    set_mode(env, "quit", "noop")
+    code, _, error = launcher_cli("--test-registry", str(env.registry), "docker-release", "--owner", "--deadline", "1")
+
+    class Silent:
+        """A client whose request gets no reply."""
+
+        def call(self, *_: Any, **__: Any) -> Any:
+            raise TimeoutError("no complete reply")
+
+    expired = expect_error(lambda: launcher.call_by_deadline(cast(Any, Silent()), "docker-start", "desktop_start", {"owner": True}, 7, 37))
+    return {
+        "the CLI exits 5, the degraded exit": code == launcher.DEGRADED_EXIT,
+        "the message names the deadline of 1 s": "1 s" in error and "deadline" in error,
+        "it is no registry error": "registry error" not in error,
+        "a request without a reply is a degraded error naming its deadline": refused(expired, "degraded", "docker-start") and "deadline of 7 s" in str(expired),
+    }
+
+
+@case("docker_context_program_lookup")
+def docker_context_program_lookup(env: Env) -> dict[str, bool]:
+    """F2: the real configuration branch (a scratch Git checkout, no `DOCKER_HOST`) finds `docker` for the Docker context the way `desktop_program` does: on
+    the PATH, then in the Docker Desktop folders. With none of them holding it, the CLI refuses with exit 3 and names the PATH. No real `docker` runs."""
+    checkout = env.work / "checkout"
+    run_command("git", ["init", "-q", str(checkout)], timeout=30, check=True)
+    path_folder, fallback = env.work / "empty_path", env.work / "fallback_bin"
+    path_folder.mkdir()
+    fallback.mkdir()
+    (path_folder / "git").symlink_to(str(shutil.which("git")))
+    executable(fallback / "docker", response("unix://" + str(env.work / "context.sock")))
+    saved = (Path.cwd(), os.environ.get("DOCKER_HOST"), os.environ["PATH"], launcher.DOCKER_PROGRAM_FOLDERS)
+    try:
+        os.chdir(checkout)
+        os.environ.pop("DOCKER_HOST", None)
+        os.environ["PATH"] = str(path_folder)
+        launcher.DOCKER_PROGRAM_FOLDERS = ()
+        missing = launcher_cli("docker-release", "--owner")
+        launcher.DOCKER_PROGRAM_FOLDERS = (str(fallback),)
+        config = launcher.resolve_config(None, checkout)
+    finally:
+        os.chdir(saved[0])
+        if saved[1] is not None:
+            os.environ["DOCKER_HOST"] = saved[1]
+        os.environ["PATH"] = saved[2]
+        launcher.DOCKER_PROGRAM_FOLDERS = saved[3]
+    return {
+        "a missing docker CLI refuses with exit 3": missing[0] == launcher.REFUSED_EXIT,
+        "the refusal names the PATH": f"docker CLI not found on PATH ({path_folder})" in missing[2],
+        "it is no registry error": "registry error" not in missing[2],
+        "a docker in a Docker Desktop folder is found for the context": config.docker_socket == str(env.work / "context.sock"),
     }
 
 
@@ -10032,6 +10096,8 @@ ALL_CASES = (
     docker_release_quit,
     docker_release_quit_deadlines,
     docker_desktop_defaults,
+    docker_release_client_deadline,
+    docker_context_program_lookup,
     effective_spec_mutations,
     mount_fence_other_checkouts,
     template_owner_predicates,

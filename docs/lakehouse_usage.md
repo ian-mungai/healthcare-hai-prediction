@@ -228,6 +228,10 @@ exits 3 and names every running container the launcher did not create (or the fi
 running. Otherwise it stops the idle catalog, quits Docker Desktop, waits until the daemon stops answering (120 s by default; exit 5 when it
 still answers, exit 4 when the command fails) and shuts the launcher down. `docker-restart --owner` stays for a manual restart.
 
+Accepted limit (waiting for the owner): a `docker-start` that joins a start already running keeps the first caller's deadline, not its own shorter
+`--deadline`. The joiner waits for the running start and receives its result, so a 1 s request can wait for a 240 s start and
+receives the first caller's error if that start fails.
+
 ### Session end
 
 Before a session ends and in the break procedure, run `.venv/bin/python -m orchestration.launcher docker-release --owner`. Without `--since` it

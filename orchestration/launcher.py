@@ -139,7 +139,7 @@ DOCKER_RESTART_COMMAND = ("docker", "desktop", "restart")
 DOCKER_START_COMMAND = ("docker", "desktop", "start")
 DOCKER_QUIT_COMMAND = ("docker", "desktop", "stop")
 # Folders searched after the PATH for the docker program: a Git hook often runs with a short PATH.
-DOCKER_PROGRAM_FOLDERS = ("/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin")
+DOCKER_PROGRAM_FOLDERS: tuple[str, ...] = ("/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin")
 DEADLINE_LIMIT = 3600.0
 # D1 section 5 item 1: the admitted host-to-VM skew, the start margin, the TERM-to-KILL grace and the headroom after it.
 SKEW_SECONDS = 2
@@ -339,12 +339,21 @@ def account_home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
+def docker_program(name: str) -> str:
+    """The full path of a Docker program: the PATH first, then the folders Docker Desktop installs into (failure mode R10)."""
+    path = os.environ.get("PATH", "")
+    found = shutil.which(name, path=os.pathsep.join([path, *DOCKER_PROGRAM_FOLDERS]))
+    if found is None:
+        raise LauncherError(f"docker CLI not found on PATH ({path})", "refused")
+    return found
+
+
 def docker_socket_path() -> str:
     """The Docker Engine socket: ``DOCKER_HOST`` as the Docker command does, else the current context's endpoint."""
     host = os.environ.get("DOCKER_HOST", "")
     if host.startswith("unix://"):
         return host.removeprefix("unix://")
-    result = run_command("docker", ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], timeout=30)
+    result = run_command(docker_program("docker"), ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], timeout=30)
     endpoint = result.stdout.strip()
     if result.returncode or not endpoint.startswith("unix://"):
         raise Degraded(f"cannot read the Docker socket from the Docker context: {result.stderr.strip()[-200:] or endpoint}")
@@ -9123,12 +9132,8 @@ class Launcher:
         return self.run_desktop_command(self.cfg.restart_command, self.timings.restart_wait)
 
     def desktop_program(self, command: Sequence[str]) -> str:
-        """The full path of a Docker Desktop command's program: the PATH first, then the folders Docker Desktop installs into (failure mode R10)."""
-        path = os.environ.get("PATH", "")
-        found = shutil.which(command[0], path=os.pathsep.join([path, *DOCKER_PROGRAM_FOLDERS]))
-        if found is None:
-            raise LauncherError(f"docker CLI not found on PATH ({path})", "refused")
-        return found
+        """The full path of a Docker Desktop command's program (``docker_program``)."""
+        return docker_program(command[0])
 
     def run_desktop_command(self, command: Sequence[str], seconds: float) -> int:
         """Worker: one command of the Docker application; it is stopped after ``seconds``."""
@@ -11067,7 +11072,7 @@ def main() -> int:
         elif args.command == "docker-start":
             deadline = args.deadline if args.deadline is not None else client.config.timings.start_wait
             params = {"owner": True} if args.deadline is None else {"owner": True, "deadline": args.deadline}
-            result = client.call("desktop_start", params, {"kind": "any", "owner": True}, timeout=deadline + 30)
+            result = call_by_deadline(client, "docker-start", "desktop_start", params, deadline, deadline + 30)
         elif args.command == "shutdown":
             result = client.call("shutdown", {"owner": True}, {"kind": "any", "owner": True})
         elif args.command == "dbt":
@@ -11292,6 +11297,14 @@ def session_input_line(data: bytes, tty: bool) -> bytes:
     return json.dumps(message).encode() + b"\n"
 
 
+def call_by_deadline(client: LauncherClient, command: str, method: str, params: dict[str, Any], deadline: float, wait: float) -> Any:
+    """An owner request that waits ``wait`` seconds for its reply; none by then is a degraded error naming the deadline, not a registry error."""
+    try:
+        return client.call(method, params, {"kind": "any", "owner": True}, timeout=wait)
+    except TimeoutError as error:
+        raise ClientError(f"{command} had no reply within its deadline of {deadline:g} s", "degraded") from error
+
+
 def release_command(client: LauncherClient, args: argparse.Namespace) -> dict[str, Any]:
     """``docker-release``: the launcher's answer, or ``skipped`` when no launcher runs (the client never starts one for a release)."""
     try:
@@ -11303,7 +11316,8 @@ def release_command(client: LauncherClient, args: argparse.Namespace) -> dict[st
         params["since"] = args.since
     if args.deadline is not None:
         params["deadline"] = args.deadline
-    return dict(client.call("docker_release", params, {"kind": "any", "owner": True}, timeout=args.deadline if args.deadline is not None else 900))
+    deadline = args.deadline if args.deadline is not None else 900
+    return dict(call_by_deadline(client, "docker-release", "docker_release", params, deadline, deadline))
 
 
 def run_command_line(client: LauncherClient, args: argparse.Namespace) -> int:
