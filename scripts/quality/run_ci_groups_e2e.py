@@ -693,7 +693,11 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             ["python_lint", *LAYERS[2:], "orchestration_checks", "repository_code_checks"],
         ),
         *(
-            path_case(f"layer_training_targets_{Path(path).stem}_selects_gold_and_features", path, ["python_lint", *LAYERS[2:], "repository_code_checks"])
+            path_case(
+                f"layer_training_targets_{Path(path).stem}_selects_gold_and_features",
+                path,
+                ["python_lint", *LAYERS[2:], "repository_code_checks", "configuration_checks"],
+            )
             for path in ("scripts/training/__init__.py", "scripts/training/targets.py", "scripts/training/run_targets_e2e.py")
         ),
         path_case("layer_training_targets_config_selects_gold_and_features", "config/training/targets.json", [*LAYERS[2:], "configuration_checks"]),
