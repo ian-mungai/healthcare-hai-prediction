@@ -28,10 +28,10 @@ once), a ref that pre-commit does not dispatch for, several refs, deletions, a t
 changed shim; an inherited ``SKIP`` and the other pre-commit selection variables never reach the gate or a step. Planted defects (a heavy hook back in the
 commit stage, a dropped privacy hook, a missing install type, an edited manual entry, a hook in no partition, an escalation gap) are caught by named cases.
 
-``--speed-only`` runs only the cases of the timing, units and gates part as an iteration run and not commit evidence.
-``--selection-only`` runs the selector and acquisition-hook selection cases as an iteration run and not commit evidence.
-It skips every case that runs scripts/run_ci.sh or this runner. Acquisition selection uses a scratch replacement of the
-heavy gate body and the real hook configuration.
+The Docker release cases run the gate against a stand-in launcher (``orchestration/launcher.py`` in the scratch repository). A failing step, a raising step
+runner and a passing gate each release once with ``--since`` the start of the run. A refused, failed, unreadable or too slow release never changes the exit
+code and is recorded as ``docker_release`` in ``report.json``. ``scripts/run_ci.sh`` skips its own release under the gate, on hosted CI, off macOS, in a
+list-only run and in the gates part (``release_docker`` runs on its own with a stand-in interpreter).
 """
 
 from __future__ import annotations
@@ -3290,7 +3290,9 @@ ORDINARY_PATHS = (
     "scripts/acquisition/s3_store.py",
     "scripts/acquisition/run_checks.sh",
 )
-INHERITED_PATTERN = "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
+INHERITED_PATTERN = (
+    "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|HAI_DOCKER_RELEASE$|GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
+)
 NOT_CONTROLS = frozenset(
     {
         "BASH",
@@ -3352,11 +3354,33 @@ if [[ -n "${STUB_WAIT_FOR_LOCK:-}" ]]; then
     sleep 0.1
   done
 fi
-printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s"}, "seen": "%s", "overlap": "%s"}\\n' \\
-  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "$seen" "$overlap" >>"$STUB_LOG"
+printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s"}, "seen": "%s", "overlap": "%s"}\\n' \\
+  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}" "$seen" "$overlap" >>"$STUB_LOG"
 if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
 exit "${STUB_EXIT_RUN_CI:-0}"
 """.replace("@PATTERN@", INHERITED_PATTERN)
+# The stand-in launcher of the release: it logs its arguments and answers as STUB_RELEASE says (quit, skipped, refused, error, garbage or sleep).
+STUB_LAUNCHER = (
+    "import json, os, re, sys, time\n"
+    "seen = ','.join(sorted(name for name in os.environ if re.match(%r, name)))\n"
+    "with open(os.environ['STUB_LOG'], 'a') as log:\n"
+    "    log.write(json.dumps({'stub': 'launcher', 'argv': sys.argv[1:], 'seen': seen}) + '\\n')\n"
+    "mode = os.environ.get('STUB_RELEASE', 'quit')\n"
+    "if mode == 'quit':\n"
+    "    print(json.dumps({'outcome': 'quit', 'catalog': 'down', 'seconds': 1.5}))\n"
+    "elif mode == 'skipped':\n"
+    "    print(json.dumps({'outcome': 'skipped', 'reason': 'no container ran since T'}))\n"
+    "elif mode == 'refused':\n"
+    "    sys.stderr.write('launcher: refused: docker_release is refused: running containers not created by this launcher: other_db, other_cache\\n')\n"
+    "    sys.exit(3)\n"
+    "elif mode == 'error':\n"
+    "    sys.stderr.write('launcher: docker quit failed: boom [command_failed]\\n')\n"
+    "    sys.exit(4)\n"
+    "elif mode == 'garbage':\n"
+    "    print('not json')\n"
+    "elif mode == 'sleep':\n"
+    "    time.sleep(60)\n"
+)
 STUB_ACQUISITION = """#!/usr/bin/env bash
 collided=false
 if [[ -n "${STUB_INDEX_LOCK:-}" ]]; then
@@ -3403,7 +3427,7 @@ def pre_push_repo(
     while root.exists():
         suffix += 1
         root = scratch / f"{name}_{suffix}"
-    for folder in ("config/quality", "scripts/quality", "scripts/acquisition", ".github/workflows"):
+    for folder in ("config/quality", "scripts/quality", "scripts/acquisition", ".github/workflows", "orchestration"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / ".venv").symlink_to(ROOT / ".venv")
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
@@ -3413,8 +3437,9 @@ def pre_push_repo(
     (root / "scripts/run_ci.sh").write_text(STUB_RUN_CI)
     (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
-    for package in ("scripts", "scripts/quality"):
+    for package in ("scripts", "scripts/quality", "orchestration"):
         (root / package / "__init__.py").write_text("")
+    (root / "orchestration/launcher.py").write_text(STUB_LAUNCHER % INHERITED_PATTERN)
     shutil.copy2(ROOT / "scripts/process.py", root / "scripts/process.py")
     source = (ROOT / "scripts/quality/pre_push.py").read_text()
     (root / "scripts/quality/pre_push.py").write_text(mutate(source) if mutate else source)
@@ -3531,6 +3556,257 @@ def hook_deadline_case(scratch: Path) -> dict[str, Any]:
     }
 
 
+def latest_report(root: Path) -> dict[str, Any]:
+    reports = sorted((root / "data/e2e/pre_push").glob("*/report.json"))
+    return json.loads(reports[-1].read_text()) if reports else {}
+
+
+def gate_release_case(
+    scratch: Path,
+    case: str,
+    mode: str,
+    want_exit: int,
+    want_outcome: str,
+    want_text: str,
+    step_exit: str = "0",
+    mutate: Callable[[str], str] | None = None,
+    seconds_limit: float = 60.0,
+) -> dict[str, Any]:
+    """The gate asks a stand-in launcher (it answers as ``mode`` says) to quit Docker after its steps; the gate's exit stays the steps' result."""
+    root = pre_push_repo(scratch, case, "README.md", mutate=mutate)
+    before = time.time()
+    began = time.monotonic()
+    code, out, error = pre_push(root, "run", extra={"STUB_RELEASE": mode, "STUB_EXIT_RUN_CI": step_exit}, timeout=180)
+    seconds = time.monotonic() - began
+    after = time.time()
+    calls = pre_push_calls(root)
+    launcher_calls = [call for call in calls if call["stub"] == "launcher"]
+    ci_calls = [call for call in calls if call["stub"] == "run_ci"]
+    argv = launcher_calls[0]["argv"] if launcher_calls else []
+    since = float(argv[argv.index("--since") + 1]) if "--since" in argv else -1.0
+    released = latest_report(root).get("docker_release") or {}
+    checks = {
+        "exit": code == want_exit,
+        "launcher_called_once": len(launcher_calls) == 1,
+        "release_arguments": argv[:3] == ["docker-release", "--owner", "--since"],
+        "since_is_the_run_start": before - 1 <= since <= after,
+        "release_environment_clean": launcher_calls[0]["seen"] == "" if launcher_calls else False,
+        "run_ci_defers_to_the_gate": bool(ci_calls) and all(call["env"]["HAI_DOCKER_RELEASE"] == "outer" for call in ci_calls),
+        "line_printed": f"pre-push: Docker release: {want_text}" in out,
+        "report_entry": released.get("outcome") == want_outcome,
+        "within_limit": seconds < seconds_limit,
+    }
+    return {"case": case, "passed": all(checks.values()), "checks": checks, "exit": code, "output": (out + error)[-500:]}
+
+
+def failing_step_release_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return gate_release_case(scratch, "pre_push_failing_step_still_releases", "quit", 1, "quit", "Docker Desktop quit in", step_exit="3", mutate=mutate)
+
+
+def refused_release_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return gate_release_case(
+        scratch, "pre_push_refused_release_keeps_the_exit_zero", "refused", 0, "refused", "refused (launcher: refused: docker_release is refused", mutate=mutate
+    )
+
+
+def exception_release_case(scratch: Path) -> dict[str, Any]:
+    """A step runner that raises (the Ctrl-C path) still releases, and the error reaches the caller."""
+    raising = source_edit('    serial = [step for step in steps if step["kind"] in SERIAL_KINDS]', '    raise RuntimeError("planted step failure")')
+    root = pre_push_repo(scratch, "pre_push_exception_still_releases", "README.md", mutate=raising)
+    code, out, error = pre_push(root, "run", extra={"STUB_RELEASE": "quit"}, timeout=120)
+    launcher_calls = [call for call in pre_push_calls(root) if call["stub"] == "launcher"]
+    checks = {
+        "error_reaches_the_caller": code != 0 and "planted step failure" in error,
+        "launcher_called_once": len(launcher_calls) == 1,
+        "line_printed": "pre-push: Docker release: Docker Desktop quit in" in out,
+    }
+    return {
+        "case": "pre_push_exception_in_the_steps_still_releases",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "exit": code,
+        "output": (out + error)[-400:],
+    }
+
+
+def direct_release_cases(scratch: Path) -> list[dict[str, Any]]:
+    """``pre_push.release`` on its own: a program that cannot start and a launcher that never answers are reported, never raised."""
+    missing = pre_push_module.release(scratch / "no_such_root", time.time())
+    root = pre_push_repo(scratch, "pre_push_release_direct", "README.md")
+    os.environ["STUB_LOG"] = str(root / "stub.log")
+    try:
+        registry = pre_push_module.release(root, time.time(), str(scratch / "registry"))
+    finally:
+        del os.environ["STUB_LOG"]
+    registry_argv: list[str] = next((call["argv"] for call in pre_push_calls(root) if call["stub"] == "launcher"), [])
+    return [
+        {
+            "case": "pre_push_release_reports_a_program_that_cannot_start",
+            "passed": missing["outcome"] == "failed" and "could not start" in missing["detail"],
+            "result": missing,
+        },
+        {
+            "case": "pre_push_release_passes_the_test_registry_before_the_command",
+            "passed": registry["outcome"] == "quit"
+            and registry_argv[:2] == ["--test-registry", str(scratch / "registry")]
+            and registry_argv[2] == "docker-release",
+            "argv": registry_argv,
+        },
+    ]
+
+
+def gate_release_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Gate cases 6 to 8 of the Docker release design, and the cases for every other answer of the launcher."""
+    deadline = source_edit("RELEASE_SECONDS = 600", "RELEASE_SECONDS = 2")
+    results = [
+        failing_step_release_case(scratch),
+        refused_release_case(scratch),
+        gate_release_case(
+            scratch,
+            "pre_push_release_deadline_is_killed_and_reported",
+            "sleep",
+            0,
+            "failed",
+            "failed (exceeded 2 s and was stopped)",
+            mutate=deadline,
+            seconds_limit=45,
+        ),
+        gate_release_case(scratch, "pre_push_passing_gate_quits_docker", "quit", 0, "quit", "Docker Desktop quit in"),
+        gate_release_case(scratch, "pre_push_skipped_release_is_reported", "skipped", 0, "skipped", "skipped (no container ran since T)"),
+        gate_release_case(
+            scratch,
+            "pre_push_failed_release_keeps_the_exit_zero",
+            "error",
+            0,
+            "failed",
+            "failed (exit 4: launcher: docker quit failed: boom [command_failed]); the gate result stands",
+        ),
+        gate_release_case(scratch, "pre_push_unreadable_release_answer_keeps_the_exit_zero", "garbage", 0, "failed", "failed (unreadable answer: not json)"),
+        exception_release_case(scratch),
+        *direct_release_cases(scratch),
+    ]
+    dropped = source_edit(
+        "        released = release(root, started, release_registry)", '        released = {"outcome": "skipped", "detail": "planted", "seconds": 0.0}'
+    )
+    blocking = source_edit(
+        '    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\\n")\n    return 0',
+        '    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\\n")\n    return 0 if released["outcome"] != "refused" else 1',
+    )
+    results += [
+        planted_case("dropped_release", failing_step_release_case, scratch, mutate=dropped),
+        planted_case("refused_release_blocks_the_push", refused_release_case, scratch, mutate=blocking),
+    ]
+    return results
+
+
+def release_docker_run(
+    scratch: Path,
+    name: str,
+    extra: dict[str, str],
+    system: str = "Darwin",
+    part: str = "all",
+    launcher_exit: str = "0",
+    transform: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Run the ``release_docker`` function of ``scripts/run_ci.sh`` alone, with a stand-in interpreter that logs its arguments and a ``uname`` shim."""
+    body = function_text((ROOT / "scripts/run_ci.sh").read_text(), "release_docker")
+    if body is None:
+        return {"code": -1, "calls": [], "output": "release_docker is not defined in scripts/run_ci.sh"}
+    text = f"release_docker() {{\n{body}}}\n"
+    folder = scratch / name
+    (folder / "bin").mkdir(parents=True)
+    log = folder / "calls.log"
+    (folder / "bin/uname").write_text(f"#!/bin/sh\necho {system}\n")
+    (folder / "bin/uname").chmod(0o755)
+    (folder / "python_bin").write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_LOG"\nexit "${STUB_EXIT:-0}"\n')
+    (folder / "python_bin").chmod(0o755)
+    (folder / "release_function.sh").write_text(transform(text) if transform else text)
+    environment = {key: value for key, value in os.environ.items() if key not in ("HAI_DOCKER_RELEASE", "GITHUB_ACTIONS", "CI_LIST_ONLY")}
+    result = run_command(
+        "/bin/bash",
+        [
+            "-c",
+            'set -euo pipefail; source "$RELEASE_FUNCTION"; python_bin="$RELEASE_PYTHON"; part="$RELEASE_PART"; '
+            'ci_started=1700000000; release_docker; echo "status=$?"',
+        ],
+        env={
+            **environment,
+            "PATH": f"{folder / 'bin'}:{environment['PATH']}",
+            "RELEASE_FUNCTION": str(folder / "release_function.sh"),
+            "RELEASE_PYTHON": str(folder / "python_bin"),
+            "RELEASE_PART": part,
+            "STUB_LOG": str(log),
+            "STUB_EXIT": launcher_exit,
+            **extra,
+        },
+        timeout=60,
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    return {"code": result.returncode, "calls": calls, "output": result.stdout + result.stderr}
+
+
+def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Gate case 9: ``run_ci.sh`` releases Docker once after a run on macOS, never changes its exit status, and skips under the gate, on hosted CI, off macOS,
+    in a list-only run and in the gates part."""
+    ci = (ROOT / "scripts/run_ci.sh").read_text()
+    finish = function_text(ci, "finish") or ""
+    wanted = "-m orchestration.launcher docker-release --owner --since 1700000000 --deadline 600"
+    results: list[dict[str, Any]] = []
+    run = release_docker_run(scratch, "release_runs", {})
+    results.append(
+        {
+            "case": "run_ci_releases_docker_after_a_run_on_macos",
+            "passed": run["code"] == 0 and run["calls"] == [wanted] and "status=0" in run["output"],
+            "run": run,
+        }
+    )
+    skipped: dict[str, tuple[dict[str, str], dict[str, Any], str]] = {
+        "outer": ({"HAI_DOCKER_RELEASE": "outer"}, {}, "the pre-push gate releases Docker"),
+        "github": ({"GITHUB_ACTIONS": "true"}, {}, "hosted CI has no Docker Desktop"),
+        "linux": ({}, {"system": "Linux"}, "this is not macOS"),
+        "list_only": ({"CI_LIST_ONLY": "1"}, {}, "no group ran Docker"),
+        "gates": ({}, {"part": "gates"}, "no group ran Docker"),
+    }
+    for label, (extra, options, reason) in skipped.items():
+        run = release_docker_run(scratch, f"release_skipped_{label}", extra, **options)
+        results.append(
+            {
+                "case": f"run_ci_skips_its_docker_release_{label}",
+                "passed": run["code"] == 0 and run["calls"] == [] and f"Docker release skipped: {reason}" in run["output"] and "status=0" in run["output"],
+                "run": run,
+            }
+        )
+    run = release_docker_run(scratch, "release_refused", {}, launcher_exit="3")
+    results.append(
+        {
+            "case": "run_ci_docker_release_failure_keeps_the_exit_status",
+            "passed": run["code"] == 0
+            and run["calls"] == [wanted]
+            and "status=0" in run["output"]
+            and "Docker release did not quit Docker (exit 3)" in run["output"],
+            "run": run,
+        }
+    )
+    results.append(
+        {
+            "case": "run_ci_finish_releases_after_the_scratch_folder_and_the_trap_keeps_its_rule",
+            "passed": "release_docker" in finish
+            and ci.index("ci_started=") < ci.index("trap 'finish;")
+            and "trap 'finish; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
+        }
+    )
+    planted = release_docker_run(
+        scratch,
+        "release_planted",
+        {"HAI_DOCKER_RELEASE": "outer"},
+        transform=lambda text: text.replace('"${HAI_DOCKER_RELEASE:-}" == "outer"', '"${HAI_DOCKER_RELEASE:-}" == "never"'),
+    )
+    results.append(
+        {"case": "planted_release_under_the_gate_caught_by_run_ci_skips_its_docker_release_outer", "passed": planted["calls"] == [wanted], "run": planted}
+    )
+    return results
+
+
 def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
     """The pre-push run selects the groups of the pushed range as hosted CI does, escalates to the full scope for selector and CI script changes, and
     every step has a deadline that fails visibly."""
@@ -3569,7 +3845,8 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
     hooks = [steps.get(f"hooks_{group}", {}).get("argv", []) for group in config["hook_groups"]]
     matches = {
         "scope": plan["scope"] == "range" and plan["start"] == base and plan["end"] == head,
-        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END"},
+        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE"},
+        "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
         "env_values": local.get("env", {}).get("CI_SCOPE") == hosted_env["CI_SCOPE"]
         and local.get("env", {}).get("RANGE_START") == base
         and local.get("env", {}).get("RANGE_END") == head,
@@ -3590,7 +3867,7 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
             "case": "pre_push_full_plan_runs_the_full_scope_once",
             "passed": bool(full)
             and full["scope"] == "full"
-            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full"}
+            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer"}
             and not any(name.startswith("hooks_") or name == "acquisition" for name in full_steps),
             "steps": list(full_steps),
         }
@@ -3634,6 +3911,7 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
         }
     )
     results += [hook_partition_case(scratch), hook_failure_case(scratch), hook_deadline_case(scratch)]
+    results += gate_release_cases(scratch) + run_ci_release_cases(scratch)
     serial_jobs = 'jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])'
     serial_kinds = 'SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})'
     results += [
@@ -4093,6 +4371,7 @@ EXPECTED_CONTROLS = (
     "ACQUISITION_EXPECT",
     "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
+    "HAI_DOCKER_RELEASE",
     "PRE_COMMIT_FROM_REF",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
@@ -4105,7 +4384,7 @@ EXPECTED_CONTROLS = (
     "PRE_COMMIT_RUNNING_LEGACY",
     "_PRE_COMMIT_SKIP_POST_CHECKOUT",
 )
-STEP_SETS = {"run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END"}, "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"}}
+STEP_SETS = {"run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE"}, "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"}}
 
 
 def inherited_controls_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:

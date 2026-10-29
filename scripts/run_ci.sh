@@ -50,11 +50,34 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 # to the job summary in a fixed order, also when a gate or a unit failed.
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
+# release_docker: after the run, ask the launcher to quit Docker Desktop. The launcher skips it unless a group created a container since ci_started and refuses
+# it while any other container or registry work runs. Nothing here changes the exit status of the run (failure mode R25). It is skipped under the pre-push gate
+# (HAI_DOCKER_RELEASE=outer, the gate releases once after all its steps), on hosted CI, off macOS, in a list-only run and in the gates part.
+ci_started="$(date +%s)"
+release_docker() {
+  local skip=""
+  if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then
+    skip="the pre-push gate releases Docker"
+  elif [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    skip="hosted CI has no Docker Desktop"
+  elif [[ "$(uname)" != "Darwin" ]]; then
+    skip="this is not macOS"
+  elif [[ "${CI_LIST_ONLY:-0}" == "1" || "$part" == "gates" ]]; then
+    skip="no group ran Docker"
+  fi
+  if [[ -n "$skip" ]]; then
+    printf 'Docker release skipped: %s\n' "$skip"
+    return 0
+  fi
+  "$python_bin" -m orchestration.launcher docker-release --owner --since "$ci_started" --deadline 600 || printf 'Docker release did not quit Docker (exit %s); the run result stands\n' "$?"
+  return 0
+}
 finish() {
   if [[ -s "$scratch/main.timing" ]]; then
     timing_table "${timing_files[@]}" >>"$summary"
   fi
   rm -rf "$scratch"
+  release_docker
 }
 # Only a run that sets ci_finished=1 exits 0: bash 3.2 (macOS /bin/bash) reports status 0 to this trap when an unbound
 # variable ends the script, so the trap fails every other exit itself.

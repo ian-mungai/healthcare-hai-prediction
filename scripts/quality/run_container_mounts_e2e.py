@@ -611,7 +611,7 @@ def ci_case(source: dict[str, str], workspace: Path, deadline: float, name: str 
             timeout=remaining(deadline, 15),
         )
         selected[path] = result.returncode == 0 and "repository_code_checks" in json.loads(result.stdout)["run"]
-    environment.update(CI_PART="core", CI_SCOPE="full", PYTHON_BIN=str(PYTHON))
+    environment.update(CI_PART="core", CI_SCOPE="full", PYTHON_BIN=str(PYTHON), HAI_DOCKER_RELEASE="outer")
     result = bounded("/bin/bash", ["scripts/run_ci.sh"], folder, environment, deadline)
     output = result.stdout + result.stderr
     commands = ("-m scripts.quality.container_mounts", "-m scripts.quality.run_container_mounts_e2e")

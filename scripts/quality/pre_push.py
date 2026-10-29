@@ -27,6 +27,11 @@ in ``report.json``; a reference at the checked-out commit is checked; any other 
     .venv/bin/python -m scripts.quality.pre_push check-shim
 
 The head is ``--head``, else ``HEAD``.
+After the steps, in a ``finally`` path (also after a failed step or Ctrl-C), the run asks the launcher to quit Docker Desktop
+(``python -m orchestration.launcher docker-release --owner --since <start of the run>``, one ``RELEASE_SECONDS`` deadline). The launcher skips it unless
+a container was created since the start and refuses it while any other container or registry work runs. A skipped, refused or failed release never changes the
+exit code: the run prints one line and records ``docker_release`` in ``report.json``. ``--release-registry DIR`` (for tests of this script only) passes
+``--test-registry`` to the launcher.
 E2E: ``.venv/bin/python -m scripts.quality.run_ci_groups_e2e --selection-only``.
 """
 
@@ -48,12 +53,15 @@ from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
+RELEASE_SECONDS = 600
 SHIM_NAME = "hai-push-input"
 SHIM_COMMAND = ".venv/bin/python -m scripts.quality.pre_push run --hook"
 MINIMUM_GIT = (2, 54)
 INSTALL_HINT = ".venv/bin/python -m scripts.quality.pre_push install-shim"
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
+# The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
+OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
     "CI_PART",
@@ -70,6 +78,7 @@ EXECUTION_CONTROLS = (
     "ACQUISITION_EXPECT",
     "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
+    "HAI_DOCKER_RELEASE",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
     "PRE_COMMIT_FROM_REF",
@@ -172,7 +181,9 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
             {"name": "removed_names", "kind": "repo_checks", "arguments": ["removed-names"], "env": {"PRE_COMMIT_FROM_REF": start, "PRE_COMMIT_TO_REF": end}},
         ]
     if scope == "range":
-        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end}})
+        steps.append(
+            {"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE}}
+        )
         steps.append(
             {
                 "name": "acquisition",
@@ -191,7 +202,7 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
             for group in config["hook_groups"]
         ]
     else:
-        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full"}})
+        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE}})
     for step in steps:
         step["timeout_seconds"] = seconds
         step["argv"] = command(root, step)
@@ -238,6 +249,55 @@ def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dic
         finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
     rows: dict[str, dict[str, Any]] = {row["name"]: row for job in finished for row in job}
     return [rows[step["name"]] for step in steps]
+
+
+def release(root: Path, started: float, registry: str = "") -> dict[str, Any]:
+    """Ask the launcher to quit Docker Desktop after a run that began at ``started``; never raises (owner answer 1, failure modes P3 to P5).
+
+    The result holds ``outcome`` (``quit``, ``skipped``, ``refused`` or ``failed``), ``detail`` and ``seconds``.
+    """
+    python = str(root / ".venv/bin/python")
+    registry_arguments = ["--test-registry", registry] if registry else []
+    begun = time.monotonic()
+    try:
+        result = run_command(
+            python,
+            ["-m", "orchestration.launcher", *registry_arguments, "docker-release", "--owner", "--since", f"{started:.3f}"],
+            cwd=root,
+            env=step_environment({"env": {}}),
+            timeout=RELEASE_SECONDS,
+        )
+    except TimeoutExpired:
+        return {"outcome": "failed", "detail": f"exceeded {RELEASE_SECONDS} s and was stopped", "seconds": round(time.monotonic() - begun, 1)}
+    except OSError as error:
+        return {"outcome": "failed", "detail": f"could not start: {error}", "seconds": round(time.monotonic() - begun, 1)}
+    seconds = round(time.monotonic() - begun, 1)
+    message = (result.stderr.strip() or result.stdout.strip()).splitlines()
+    if result.returncode == 3:
+        return {"outcome": "refused", "detail": message[0] if message else "refused", "seconds": seconds}
+    if result.returncode != 0:
+        return {"outcome": "failed", "detail": f"exit {result.returncode}: {message[-1] if message else 'no output'}", "seconds": seconds}
+    try:
+        answer = json.loads(result.stdout)
+        outcome, detail = str(answer["outcome"]), str(answer.get("reason") or answer.get("seconds") or "")
+    except (ValueError, KeyError, TypeError):
+        return {"outcome": "failed", "detail": f"unreadable answer: {result.stdout.strip()[-200:]}", "seconds": seconds}
+    return {"outcome": outcome, "detail": detail, "seconds": seconds}
+
+
+def release_line(released: dict[str, Any]) -> str:
+    """The one line the gate prints for the release."""
+    outcome, detail = released["outcome"], released["detail"]
+    if outcome == "quit":
+        return f"pre-push: Docker release: Docker Desktop quit in {released['seconds']} s (VM memory freed)\n"
+    if outcome == "skipped":
+        return f"pre-push: Docker release: skipped ({detail})\n"
+    if outcome == "refused":
+        return f"pre-push: Docker release: refused ({detail}); Docker left running\n"
+    return (
+        f"pre-push: Docker release: failed ({detail}); the gate result stands; "
+        "run .venv/bin/python -m orchestration.launcher docker-start --owner before the next heavy run\n"
+    )
 
 
 def parse_updates(text: str) -> list[tuple[str, str]]:
@@ -295,11 +355,14 @@ def refuse(problems: list[str]) -> int:
     return 1
 
 
-def record(output: Path, plan_made: dict[str, Any] | None, results: list[dict[str, Any]], decisions: list[dict[str, str]]) -> None:
-    (output / "report.json").write_text(json.dumps({"plan": plan_made, "results": results, "refs": decisions}, indent=2) + "\n")
+def record(
+    output: Path, plan_made: dict[str, Any] | None, results: list[dict[str, Any]], decisions: list[dict[str, str]], released: dict[str, Any] | None = None
+) -> None:
+    report = {"plan": plan_made, "results": results, "refs": decisions, "docker_release": released}
+    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
-def run(root: Path, base: str, head: str, full: bool, push_input: str | None = None) -> int:
+def run(root: Path, base: str, head: str, full: bool, push_input: str | None = None, release_registry: str = "") -> int:
     decisions: list[dict[str, str]] = []
     if push_input is not None:
         try:
@@ -325,13 +388,19 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
     output = Path(chosen["output"])
     output.mkdir(parents=True, exist_ok=True)
     sys.stdout.write(f"pre-push: scope {chosen['scope']}: {chosen['reason']}\n")
-    results = run_steps(root, output, chosen["steps"])
+    started = time.time()
+    try:
+        results = run_steps(root, output, chosen["steps"])
+    finally:
+        released = release(root, started, release_registry)
+        sys.stdout.write(release_line(released))
+        sys.stdout.flush()
     for result in results:
         sys.stdout.write(f"pre-push: {'PASS' if result['exit'] == 0 else 'FAIL'} {result['name']} ({result['seconds']} s)\n")
         if result["exit"] != 0:
             sys.stdout.write("\n".join(result["output"].splitlines()[-80:]) + "\n" + result["error"] + "\n")
     failed = [result["name"] for result in results if result["exit"] != 0]
-    record(output, chosen, [{k: v for k, v in result.items() if k != "output"} for result in results], decisions)
+    record(output, chosen, [{k: v for k, v in result.items() if k != "output"} for result in results], decisions, released)
     if failed:
         sys.stdout.write(f"pre-push: failed steps: {', '.join(failed)}; logs in {output}\n")
         return 1
@@ -375,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head", default="")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--hook", action="store_true", help="read the push input from standard input and judge every updated reference")
+    parser.add_argument("--release-registry", default="", help="a launcher test registry folder for the Docker release (for tests of this script only)")
     args = parser.parse_args(argv)
     root = args.root.resolve()
     if args.command == "plan":
@@ -386,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         return install_shim(root)
     for name in EXECUTION_CONTROLS:
         os.environ.pop(name, None)
-    return run(root, args.base, args.head, args.full, sys.stdin.read() if args.hook else None)
+    return run(root, args.base, args.head, args.full, sys.stdin.read() if args.hook else None, args.release_registry)
 
 
 if __name__ == "__main__":
