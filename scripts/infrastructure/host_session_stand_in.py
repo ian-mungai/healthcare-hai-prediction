@@ -57,6 +57,7 @@ class StandInHost:
 
     ``faults`` may hold: ``never_register``, ``never_terminate``, ``run_task_failure``, ``exit_code:<family key>=<n>``, ``never_stable``, ``pending_stuck``,
     ``late_provider:<n>`` (the instance joins the capacity provider n virtual seconds after it registers), ``never_provider`` (it never joins),
+    ``other_provider`` (it reports another capacity provider's name),
     ``throttle:<n>`` (the next n describe calls fail), ``api_error`` (every describe call fails) and
     ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt), ``signal_run_task`` (a run-task call receives a real SIGTERM),
     ``second_signal:<name>`` (the cleanup's set-desired-capacity call to 0 receives a real SIGINT, SIGTERM or SIGHUP once),
@@ -120,7 +121,7 @@ class StandInHost:
     def provider_member(self) -> bool:
         """True when the registered container instance has joined the capacity provider."""
         joined = self.instance_up_at is not None and self.now >= self.instance_up_at + self.provider_delay
-        return joined and "never_provider" not in self.faults
+        return joined and "never_provider" not in self.faults and "other_provider" not in self.faults
 
     def runner(self, argv: list[str], **kwargs: Any) -> CompletedProcess[str]:
         """The ``AwsCli`` runner: answer one command line."""
@@ -184,6 +185,8 @@ class StandInHost:
         instance: dict[str, Any] = {"status": "ACTIVE" if active else "REGISTERING", "agentConnected": active}
         if self.provider_member():
             instance["capacityProviderName"] = PROVIDER
+        elif "other_provider" in self.faults and active:
+            instance["capacityProviderName"] = "other-provider"
         return {"containerInstances": [instance]}
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
