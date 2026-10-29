@@ -104,7 +104,17 @@ hai:
           provider: credential_chain
           refresh: auto
           region: "{{ env_var('AWS_REGION') }}"
-        - *reader_catalog_secret
+        - <<: *reader_catalog_secret
+          oauth2_server_uri: "{{ env_var('POLARIS_URI') }}/v1/oauth/tokens"
+      attach:
+        - path: hai_lakehouse
+          alias: lakehouse
+          type: iceberg
+          read_only: true
+          options:
+            endpoint: "{{ env_var('POLARIS_URI') }}"
+            secret: lakehouse_catalog
+            access_delegation_mode: none
     fixture_bounded:
       <<: *fixture
       settings:

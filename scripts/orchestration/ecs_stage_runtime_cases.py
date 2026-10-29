@@ -7,6 +7,7 @@ import base64
 import copy
 import errno
 import hashlib
+import importlib
 import inspect
 import io
 import json
@@ -952,7 +953,7 @@ def engine_configuration(folder: Path) -> None:
         require(receipt["runtime_measurements"]["import"]["verified_input_bytes"] == len(part), "actual_import_byte_measurement")
         require(receipt["runtime_measurements"]["complete_peak"] is False, "sampled_peak_not_acceptance")
 
-    import yaml
+    yaml = importlib.import_module("yaml")
 
     profiles = yaml.safe_load((ROOT / "dbt/profiles.yml").read_text())["hai"]["outputs"]
     for profile in ("pinned_silver_bounded", "fixture_bounded", "lakehouse_session_bounded", "lakehouse_task"):
@@ -966,6 +967,11 @@ def engine_configuration(folder: Path) -> None:
 
     builder_values: dict[str, Any] = {}
 
+    class SparkResult(dict[str, Any]):
+        @property
+        def conf(self) -> Any:
+            return types.SimpleNamespace(set=self.__setitem__)
+
     class SparkBuilder:
         def appName(self, value: str) -> SparkBuilder:
             return self
@@ -978,7 +984,7 @@ def engine_configuration(folder: Path) -> None:
             return self
 
         def getOrCreate(self) -> Any:
-            return builder_values
+            return SparkResult(builder_values)
 
     fake_spark: Any = types.ModuleType("pyspark.sql")
     fake_spark.SparkSession = types.SimpleNamespace(builder=SparkBuilder())
