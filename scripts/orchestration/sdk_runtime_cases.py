@@ -9,12 +9,14 @@ import hashlib
 import http.client
 import json
 import os
+import secrets
 import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from scripts.orchestration.sdk_standins import Scenario, WorkerStandin
+from scripts.process_group import Member, Snapshot, process_snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATHS = (
@@ -39,6 +42,16 @@ SOURCE_PATHS = (
 REAPERS = frozenset({"wait", "waitpid", "waitid", "wait3", "wait4"})
 SIGNAL_FUNCTIONS = frozenset({"kill", "killpg", "signal_group", "signal_owned", "waitpid"})
 SLOW_MODES = ("delay_headers", "drip_headers", "hang_body", "drip_body")
+
+
+def _without_foreign_workers(snapshot: Snapshot) -> Snapshot:
+    """Drop workers whose marker names another spawner, because a recovery sweep adopts each unrecorded one as an unproven group and pauses dispatch."""
+    return replace(snapshot, members=tuple(member for member in snapshot.members if member.marker_parent in {None, os.getpid()}))
+
+
+def _own_workers_snapshot(deadline: float, witness: str | None = None, witnesses: Mapping[str, tuple[int, str]] | None = None) -> Snapshot:
+    """Read the real process table as this run's recovery sweeps see it: its own workers only, never a neighbor run's live ones."""
+    return _without_foreign_workers(process_snapshot(deadline, witness, witnesses))
 
 
 def _call_name(call: ast.Call, aliases: dict[str, str]) -> str:
@@ -501,6 +514,48 @@ def stray_client_cases() -> list[dict[str, Any]]:
     ]
 
 
+def isolation_cases(folder: Path) -> list[dict[str, Any]]:
+    """Keep a fresh session's recovery sweep from adopting a live worker that another process spawned."""
+    from orchestration.ecs_api import EcsApi, WorkerConfig
+    from scripts.process_group import spawn_owned, stop_owned
+
+    scratch = Path(tempfile.mkdtemp(prefix="sdk_foreign_", dir=folder))
+    script = scratch / "foreign_worker.py"
+    script.write_text("import time\nuntil = time.monotonic() + 30\nwhile time.monotonic() < until:\n    time.sleep(0.1)\n")
+    nonce, witness = secrets.token_hex(16), secrets.token_hex(32)
+    command = [sys.executable, "-I", "-B", str(script), "--hai-worker", f"{os.getppid()}:{nonce}"]
+    foreign = spawn_owned(
+        command, {"HAI_WORKER_WITNESS": witness}, witness=witness, nonce=nonce, session="foreign", lane="data", owner="foreign", deadline=time.monotonic() + 5
+    )
+    try:
+        with WorkerStandin(Scenario("run_task", "normal", lifetime_s=15)) as standin:
+            api = EcsApi(WorkerConfig(region="us-west-2", test_endpoint=standin.endpoint), scratch / "registry")
+            paused, alert = api.dispatch_paused, api.recovery.alert
+            cleanup = api.close(deadline=time.monotonic() + 10)
+    finally:
+        stopped = stop_owned(foreign, time.monotonic() + 10)
+    own, other = os.getpid(), os.getpid() + 1
+    synthetic = Snapshot(
+        "seen",
+        (
+            Member(10, 10, "S", "python", marker_parent=own, marker_nonce="a" * 32),
+            Member(11, 11, "S", "python", marker_parent=other, marker_nonce="b" * 32),
+            Member(12, 12, "S", "ps"),
+        ),
+    )
+    return [
+        {
+            "case": "foreign_marker_filter",
+            "checks": {"keeps_own_and_unmarked_members": [member.pid for member in _without_foreign_workers(synthetic).members] == [10, 12]},
+        },
+        {
+            "case": "foreign_worker_isolation",
+            "checks": {"fresh_session_dispatch_open": not paused, "own_cleanup_confirmed": cleanup["confirmed"], "foreign_stop_confirmed": stopped.confirmed},
+            "alert_kind": alert["kind"] if alert else None,
+        },
+    ]
+
+
 def parameter_cases(folder: Path) -> list[dict[str, Any]]:
     """Read every selected version through one-shot workers and reject a mismatched reply."""
     from orchestration.ecs_api import WorkerConfig
@@ -598,6 +653,7 @@ def main() -> int:
             "concurrency",
             "recovery",
             "stray_clients",
+            "isolation",
             "parameters",
             "stderr",
             "reader_failures",
@@ -641,6 +697,8 @@ def main() -> int:
             )
             + "\n"
         )
+        isolated_sweeps = patch("orchestration.worker_recovery.process_snapshot", new=_own_workers_snapshot)
+        isolated_sweeps.start()
         try:
             for name, function in (("deadlines", deadline_cases), ("retries", retry_cases)):
                 if args.cases in {"all", name}:
@@ -651,6 +709,7 @@ def main() -> int:
                 ("pool", pool_cases),
                 ("concurrency", concurrency_cases),
                 ("recovery", recovery_cases),
+                ("isolation", isolation_cases),
                 ("parameters", parameter_cases),
                 ("stderr", stderr_cases),
             ):
@@ -671,6 +730,8 @@ def main() -> int:
             rows.append({"case": "cleanup_unconfirmed", "checks": {"confirmed": False}, "evidence": error.record})
         except (OSError, ValueError, RuntimeError, TimeoutError, EOFError, KeyError, TypeError, KeyboardInterrupt) as error:
             rows.append({"case": "native_case_error", "checks": {"completed": False}, "error_type": type(error).__name__})
+        finally:
+            isolated_sweeps.stop()
     rows.append(
         {"case": "frozen_sources", "checks": {"unchanged": hashes == {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in sources}}}
     )
