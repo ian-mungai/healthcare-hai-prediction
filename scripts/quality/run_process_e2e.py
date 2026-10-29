@@ -1742,6 +1742,8 @@ def planted_round7_cases(base: Path) -> list[dict[str, Any]]:
 
 
 def main() -> int:
+    # The cases are outer launches: a run_ci.sh worker sets the session marker for its own launches, which would make every case a nested one.
+    os.environ.pop(process.SESSION_VARIABLE, None)
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
     base = Path(tempfile.mkdtemp(prefix="process_e2e."))

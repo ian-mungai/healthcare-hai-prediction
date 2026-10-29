@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import SubprocessError, TimeoutExpired, run_command, start
+from scripts.process import SESSION_VARIABLE, SubprocessError, TimeoutExpired, run_command, start
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = str(ROOT / ".venv" / "bin" / "python")
@@ -870,6 +870,8 @@ def run_planted(base: Path, case_name: str, dispatcher: str) -> dict[str, Any]:
 
 
 def main() -> int:
+    # The cases are outer launches: a run_ci.sh worker sets the session marker for its own launches, which would make every case a nested one.
+    os.environ.pop(SESSION_VARIABLE, None)
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
     base = Path(tempfile.mkdtemp(prefix="worker_deadline_e2e."))
