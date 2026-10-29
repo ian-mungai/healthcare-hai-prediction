@@ -332,6 +332,8 @@ The supported declarations are:
   and the `/workspace` mount rule. Its action mounts shadow the snapshot beneath them. An unresolved root, mount target or module fails the check.
   A conditional module resolves only when both branches are literal strings. The mount rule must be the comprehension
   `(str(path), f"/workspace/{path.name}", True) for path in sorted((folder / "code").iterdir())`. Any other form fails and names the part that differs.
+  The folder must be a name that the builder assigns once and passes to a call named `verify_snapshot`.
+  Accepted detector limit: the check does not prove that call is the real `code_digest.verify_snapshot` or that it runs before the mount.
 - Literal Python files copied by a final Dockerfile stage to an absolute destination, including the analytics UI relay.
   The check reads the Dockerfile in the declared build context. It does not build or inspect an image.
 
