@@ -55,8 +55,10 @@ last_updated: 2026-10-28
   a model, singular or YAML generic test, project on-run-start or on-run-end hook or another macro. A recorded call does not
   prove that the caller executes. Hook-only and YAML-only macro bodies are not directly style-checked by this command.
   Unused macros and unreadable or inconsistent inventories fail. Invalid Jinja fails compilation.
-  SQLFluff skips a file over its 20,000-byte limit with only a warning. The SQL lint fails when that happens to any
-  actively linted model, test or service SQL file. A skipped macro file stays covered through its callers. The limit stays.
+  SQLFluff skips a file over its byte limit (20,000 by default) with only a warning. `.sqlfluff` sets
+  `large_file_skip_byte_limit = 0`, so no file is skipped; the generated feature matrix models exceed the default. The SQL
+  lint still fails when a skip happens to any actively linted model, test or service SQL file. The lint coverage
+  samples `sql_size_skip_*` prove it with their own 20,000-byte limit. A skipped macro file stays covered through its callers.
   No wrapper model or separate project is created.
   DuckDB dot-command lines in `resources.sql` are replaced with comments in temporary lint copies, preserving line numbers and source
   bytes. Only the two `getenv` SET lines in `services/analytics/resources.sql` ignore PRS because the pinned parser
