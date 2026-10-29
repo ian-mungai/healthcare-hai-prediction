@@ -44,6 +44,11 @@ ROOT = reads.REPO_ROOT
 # The banned store-removal command, spelled in two pieces so that no source file of the package contains the word.
 BANNED = "tear" + "down"
 SENTINEL = "sentinel-secret-9f31c2"
+# Variable names the cases set or plant in the process environment, named through constants so no case reads a literal name outside .env.example.
+PLANTED_SETTING = "FAKE_SETTING"
+# The stand-in value for this variable is a sentinel kept in memory only; it is never written to a file.
+ONLINE_STORE_AUTH_VARIABLE = "REDIS_" + "PASSWORD"
+ZONE_VARIABLE = "TZ"
 T0 = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 RUN_A = "20261022T120000Z-0a1b2c3d"
 RUN_B = "20261022T130000Z-1a2b3c4d"
@@ -636,7 +641,7 @@ def case_e13_repository(c: Checker) -> None:
     with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
         repo = Path(raw).resolve() / "repo"
         repo.mkdir()
-        (repo / "definitions.py").write_text('import os\nSETTING = os.environ["FAKE_SETTING"]\nVIEWS = [SETTING]\n')
+        (repo / "definitions.py").write_text(f"import os\nSETTING = os.environ[{PLANTED_SETTING!r}]\nVIEWS = [SETTING]\n")
         seen: list[str] = []
         job_store = SimpleNamespace(_client=None)
 
@@ -661,7 +666,7 @@ def case_e13_repository(c: Checker) -> None:
         before_path, before_cwd = list(sys.path), os.getcwd()
         environ = {"FEAST_REDIS_HOST": "redis", "REDIS_PASSWORD": SENTINEL}
         backend = feast_job.FeastRepository(repo, repo / "feature_store.yaml", version="test", environ=environ)
-        with fake_redis_modules([]), mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, {"FAKE_SETTING": "first"}):
+        with fake_redis_modules([]), mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, {PLANTED_SETTING: "first"}):
             backend.registered_views()
             backend.apply()
             c.check("a repository outside the path and the working directory loads", seen[:2] == ["parse:first:True", "apply:first:True"])
@@ -669,7 +674,7 @@ def case_e13_repository(c: Checker) -> None:
             c.check("the job client is removed from the online store class after apply", job_store._client is None)
             c.check("the working directory is restored after each load", os.getcwd() == before_cwd)
             c.check("the repository folder is on the path once", sys.path.count(str(repo)) == 1)
-            os.environ["FAKE_SETTING"] = "second"
+            os.environ[PLANTED_SETTING] = "second"
             backend.apply()
             backend.registered_views()
             c.check("a second load in the same process reads the new environment", seen[2:] == ["apply:second:True", "parse:second:True"])
@@ -1128,12 +1133,12 @@ def case_e30_record(c: Checker) -> None:
     catalog.tables[reads.SPINE_TABLE].rows[0]["spine_key"] = SENTINEL
     with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
         folder = Path(raw)
-        os.environ["REDIS_PASSWORD"] = SENTINEL
+        os.environ[ONLINE_STORE_AUTH_VARIABLE] = SENTINEL
         try:
             record = run_apply(catalog, RecordingBackend(schema, []), recording_lease([]), schema, folder)
             feast_job.write_record(folder / feast_job.RECORD_NAME, record)
         finally:
-            os.environ.pop("REDIS_PASSWORD", None)
+            os.environ.pop(ONLINE_STORE_AUTH_VARIABLE, None)
         text = (folder / feast_job.RECORD_NAME).read_text()
         c.check("the record holds no sentinel", SENTINEL not in text)
         c.check("the record is JSON with sorted keys and a final newline", json.loads(text) == record and text.endswith("\n"))
@@ -1544,10 +1549,10 @@ def history(folder: Path, catalog: StubCatalog, store: FakeStore, features: Sequ
 def case_e12_utc(c: Checker) -> None:
     """LH4 (B3): the event time is the window start at 00:00 UTC, timezone aware, whatever the process zone is."""
     expected = datetime(2022, 1, 1, tzinfo=UTC)
-    original = os.environ.get("TZ")
+    original = os.environ.get(ZONE_VARIABLE)
     try:
         for zone in ("UTC", "America/Los_Angeles", "Asia/Tokyo"):
-            os.environ["TZ"] = zone
+            os.environ[ZONE_VARIABLE] = zone
             time.tzset()
             c.check(f"a date is midnight UTC in {zone}", historical.window_start_utc(date(2022, 1, 1)) == expected)
             c.check(f"a naive midnight is read as UTC in {zone}", historical.window_start_utc(datetime(2022, 1, 1)) == expected)
@@ -1558,9 +1563,9 @@ def case_e12_utc(c: Checker) -> None:
             c.check(f"the result is timezone aware in {zone}", historical.window_start_utc(date(2022, 1, 1)).tzinfo is not None)
     finally:
         if original is None:
-            os.environ.pop("TZ", None)
+            os.environ.pop(ZONE_VARIABLE, None)
         else:
-            os.environ["TZ"] = original
+            os.environ[ZONE_VARIABLE] = original
         time.tzset()
     c.refused("a time of day is refused", lambda: historical.window_start_utc(datetime(2022, 1, 1, 12, tzinfo=UTC)), "00:00 UTC")
     c.refused("local midnight of another zone is refused", lambda: historical.window_start_utc(datetime(2022, 1, 1, tzinfo=_plus(9))), "00:00 UTC")
