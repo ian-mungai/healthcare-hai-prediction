@@ -548,6 +548,35 @@ CASES = [
         True,
         message=f"fix: tidy\n# {CREDIT}: Claude <x@example.invalid>\n{SCISSORS}\n+{CREDIT}: Claude <x@example.invalid>\n",
     ),
+    Case(
+        "ordinary hex, CSS and commit hash text",
+        "commit-msg",
+        True,
+        message="fix(ui): keep the B1 class\n\nThe colour #B1B1B1 and byte 0xB1 stay. Fixed on 54551af and bd71c0d (B1 is a column).\n",
+    ),
+    Case(
+        "review words without a round number",
+        "commit-msg",
+        True,
+        message="fix(api): recheck the lane markers\n\nThe check reviewed the patch and the diff after round trips.\n",
+    ),
+    Case(
+        "decimal snapshot ID and long hash without patch",
+        "commit-msg",
+        True,
+        message="fix(lakehouse): read snapshot 6891234567890123456\n\nThe file SHA-256 7b1aeea20f2c01b0 matches.\n",
+    ),
+    Case("lane A in the subject", "commit-msg", False, message="feat(training): add lane A static part\n"),
+    Case("unit code after a keyword", "commit-msg", False, message="fix(api): handle retries\n\nUnit U4 covers the retry path.\n"),
+    Case("failure mode code", "commit-msg", False, message="fix(api): handle retries\n\nCovers failure mode T9.\n"),
+    Case("bracketed unit codes", "commit-msg", False, message="fix(api): handle retries\n\nThe pair is reset (P1, P3 to P5).\n"),
+    Case("recheck round", "commit-msg", False, message="fix(api): handle retries\n\nAccepted at Recheck 2 of the review.\n"),
+    Case("fix round", "commit-msg", False, message="fix(api): handle retries\n\nDone in fix round 2.\n"),
+    Case("review number", "commit-msg", False, message="fix(api): handle retries\n\nFound in review #3.\n"),
+    Case("accepted patch hash", "commit-msg", False, message="fix(api): handle retries\n\nFrom the accepted patch (SHA-256 399813a5f1ca75a0).\n"),
+    Case("staged diff hash", "commit-msg", False, message="fix(api): handle retries\n\nThe staged diff hash 7b1aeea20f2c01b0 was accepted.\n"),
+    Case("worktree snapshot ID", "commit-msg", False, message="fix(api): handle retries\n\nEqual to the snapshot ffa86ab.\n"),
+    Case("not independently reviewed", "commit-msg", False, message="fix(api): handle retries\n\nNot  independently reviewed as its own change.\n"),
     Case("agent credit trailer", "commit-msg", False, message=f"docs(readme): update setup\n\nBody.\n\n{CREDIT}: Claude Opus 5.5 <{VENDOR_ADDRESS}>\n"),
     Case("agent credit, lower case", "commit-msg", False, message=f"fix: tidy\n\n{CREDIT.lower()}:codex <codex@example.invalid>\n"),
     Case("vendor address only", "commit-msg", False, message=f"fix: tidy\n\n{CREDIT}: Assistant <{VENDOR_ADDRESS}>\n"),
@@ -675,7 +704,9 @@ def run_case(case: Case) -> tuple[bool, str]:
         output = result.stdout + result.stderr
         correct = passed == case.expect_pass and "Traceback (most recent call last)" not in output
         if not case.expect_pass and case.hook == "commit-msg":
-            correct = correct and any(marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message"))
+            correct = correct and any(
+                marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message", "internal plan reference in commit message:")
+            )
         if case.hook == "privacy-scan":
             added = len(ALLOWLIST_SOURCE.splitlines()) + 1
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
@@ -701,8 +732,16 @@ def run_range_case() -> tuple[bool, str]:
         git(repo, "commit", "--allow-empty", "-qm", f"fix: bad credit\n\n{SCISSORS}\n{CREDIT}: Claude <{VENDOR_ADDRESS}>")
         bad = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         invalid = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", "missing-ref", "HEAD"], cwd=repo)
+        git(repo, "reset", "-q", "--hard", "HEAD~1")
+        git(repo, "commit", "--allow-empty", "-qm", "fix: handle retries\n\nAccepted at recheck 2 of lane A.")
+        plan = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         ok = good.returncode == 0 and bad.returncode == 1 and "AI attribution in commit message" in bad.stderr and invalid.returncode != 0
-        return ok, f"clean range exit={good.returncode}; attributed range exit={bad.returncode}; missing revision exit={invalid.returncode}\n" + bad.stderr
+        ok = ok and plan.returncode == 1 and "internal plan reference in commit message: review-round name" in plan.stderr
+        return (
+            ok,
+            f"clean range exit={good.returncode}; attributed range exit={bad.returncode}; "
+            f"missing revision exit={invalid.returncode}; plan range exit={plan.returncode}\n" + bad.stderr + plan.stderr,
+        )
 
 
 def workflow_value(value: str, context: dict[str, str]) -> str:

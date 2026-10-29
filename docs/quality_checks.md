@@ -152,7 +152,13 @@ last_updated: 2026-10-28
   pushed commit. AI credit and agent-session lines are rejected; human
   co-authors and factual tool mentions are allowed. Detection uses an explicit
   agent and vendor list, so new forms need a failing sample before the check is
-  extended. Review pull request text separately; a Git hook cannot read it.
+  extended. It also rejects internal plan references: unit and lane codes
+  (`lane A`, `unit U4`, `failure mode T9`, a bracketed `(P7)`), review-round
+  names (`recheck 2`, `fix round 2`, `review #3`), a patch or diff hash prefix
+  (12 or more hex characters after `hash` or `SHA-256` on a line that names a
+  patch or diff), a snapshot ID in hex and "Not independently reviewed". A bare
+  `B1` (hex, CSS class) and a short commit hash pass. A finding names the form,
+  never the text. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example` and every variable listed there is read by code, a script,
   a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document

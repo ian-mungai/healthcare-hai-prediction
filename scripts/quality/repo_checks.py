@@ -125,6 +125,26 @@ AI_CREDIT = re.compile(r"^\s*(?:co-authored-by|co-developed-by|assisted-by|gener
 AI_GENERATED = re.compile(r"^\s*(?:[🤖✨]\s*)?(?:generated (?:with|by)|written by)\b(.*)$", re.IGNORECASE)
 AI_SESSION = re.compile(rf"^\s*(?:{'|'.join(AI_AGENTS)})-session\s*:", re.IGNORECASE)
 
+# Internal plan references: they point at plan and review records that live outside the repository. A finding names the
+# form and never echoes the matched text, so the check log holds no message text. Codes need a keyword or brackets, so a
+# bare "B1" (hex fragment, CSS class) passes; snapshot IDs need a digit and a letter, so Iceberg's decimal IDs pass.
+PLAN_CODE = r"[UBPT]\d{1,2}"
+PATCH_HASH = r"(?:hash|sha-?256|checksum)\W+[0-9a-f]{12,64}\b"
+PLAN_REFERENCES = (
+    ("unit or lane code", re.compile(rf"\b(?:[Ll]ane [A-Z]\b|(?i:unit|lane|failure mode|task|slice|step) {PLAN_CODE}\b)")),
+    ("bracketed unit code", re.compile(rf"[(\[]{PLAN_CODE}(?:(?:, | to | and ){PLAN_CODE})*[)\]]")),
+    (
+        "review-round name",
+        re.compile(r"\b(?:re-?check\s+#?\d+|fix\s+round\s+#?\d+|review\s+(?:round\s+\d+|#\d+)|round\s+\d+\s+of\s+(?:the|its|their)\s+review)\b", re.IGNORECASE),
+    ),
+    (
+        "accepted-patch hash",
+        re.compile(rf"\b(?:patch|diff)\b.*\b{PATCH_HASH}|\b{PATCH_HASH}.*\b(?:patch|diff)\b", re.IGNORECASE),
+    ),
+    ("worktree snapshot ID", re.compile(r"\bsnapshot\s+(?:id\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b", re.IGNORECASE)),
+    ("review status note", re.compile(r"\bnot\s+independently\s+reviewed\b", re.IGNORECASE)),
+)
+
 PRIVACY_RULE = f"{POLICY}: privacy scan"
 PRIVACY_FIX = (
     "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid) or read it from configuration;"
@@ -826,10 +846,29 @@ def attribution_findings(location: str, message: str) -> list[Finding]:
     return findings
 
 
+def plan_reference_findings(location: str, message: str, *, comments: bool = False) -> list[Finding]:
+    """Check each message line for internal plan references; Git's comment lines are not part of the message."""
+    findings = []
+    for number, line in enumerate(message.splitlines(), 1):
+        if comments and line.startswith("#"):
+            continue
+        for form, pattern in PLAN_REFERENCES:
+            if pattern.search(line):
+                findings.append(
+                    Finding(
+                        f"{location}:{number}",
+                        f"internal plan reference in commit message: {form}",
+                        f"{POLICY}: commit messages",
+                        "say what changed in plain words; keep unit and lane codes, review rounds, patch hashes and snapshot IDs in the plan records",
+                    )
+                )
+    return findings
+
+
 def message_findings(location: str, message: str, *, comments: bool = False) -> list[Finding]:
-    """Apply the subject and attribution policies without printing message bodies into check logs."""
+    """Apply the subject, attribution and plan-reference policies without printing message bodies into check logs."""
     subject = next((line for line in message.splitlines() if not (comments and line.startswith("#"))), "")
-    return commit_subjects([(location, subject)]) + attribution_findings(location, message)
+    return commit_subjects([(location, subject)]) + attribution_findings(location, message) + plan_reference_findings(location, message, comments=comments)
 
 
 def commit_message(path: str) -> list[Finding]:
