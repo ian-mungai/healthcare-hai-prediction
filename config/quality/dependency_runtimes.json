@@ -68,7 +68,7 @@
       "code": []
     },
     "dvc": {
-      "reason": "A tool environment (.tools/dvc) with no project code: the pinned DVC and its S3 remote for the training baseline (decision 20).",
+      "reason": "A tool environment (.tools/dvc) with no project code: the pinned DVC and its S3 remote for the training baseline.",
       "requirements": ["scripts/quality/dvc/requirements.txt", "scripts/quality/dvc/build_requirements.txt"],
       "code": []
     }
