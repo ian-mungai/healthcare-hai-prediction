@@ -516,7 +516,8 @@ One commit per reviewed change stays the rule.
   gate runs `.venv/bin/python -m orchestration.launcher docker-release --owner --since <start of the gate>` under one 600 second
   deadline (`RELEASE_SECONDS`). The launcher skips the release unless a container was created since the gate started, stops this
   registry's idle catalog and quits Docker Desktop to free the VM's memory. It refuses while a container it did not create runs or other
-  registry work is open. The gate prints one line and records `docker_release` (`outcome`, `detail`, `seconds`) in `report.json`:
+  registry work is open. The gate prints one line and records `docker_release` (`outcome`, `detail`, `seconds`) in `report.json`, except after Ctrl-C,
+  which prints the line but writes no report:
   `Docker release: Docker Desktop quit in N s (VM memory freed)`, `skipped (<reason>)`, `refused (<reason>); Docker left running` or
   `failed (<cause>); the gate result stands; run .venv/bin/python -m orchestration.launcher docker-start --owner before the next heavy run`.
   A skipped, refused or failed release never changes the gate's exit code or blocks the push. Another project's session that is about to

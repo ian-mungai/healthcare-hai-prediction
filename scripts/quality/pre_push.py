@@ -30,8 +30,8 @@ The head is ``--head``, else ``HEAD``.
 After the steps, in a ``finally`` path (also after a failed step or Ctrl-C), the run asks the launcher to quit Docker Desktop
 (``python -m orchestration.launcher docker-release --owner --since <start of the run>``, one ``RELEASE_SECONDS`` deadline). The launcher skips it unless
 a container was created since the start and refuses it while any other container or registry work runs. A skipped, refused or failed release never changes the
-exit code: the run prints one line and records ``docker_release`` in ``report.json``. ``--release-registry DIR`` (for tests of this script only) passes
-``--test-registry`` to the launcher.
+exit code: the run prints one line and records ``docker_release`` in ``report.json`` (after Ctrl-C it prints the line but writes no report).
+``--release-registry DIR`` (for tests of this script only) passes ``--test-registry`` to the launcher.
 E2E: ``.venv/bin/python -m scripts.quality.run_ci_groups_e2e --selection-only``.
 """
 

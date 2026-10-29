@@ -211,6 +211,8 @@ class Env:
             "lakehouse_state": str(self.temp / "lakehouse"),
             "runs_root": str(self.temp / "runs"),
             "token_root": str(self.temp / "tokens"),
+            # No case may reach the real Docker Desktop: a case that needs these commands sets a stand-in.
+            **dict.fromkeys(("start_command", "quit_command", "restart_command"), [NO_DESKTOP_PROGRAM, "desktop", "unset"]),
             **settings,
         }
         self.write_settings()
@@ -2973,6 +2975,9 @@ def catalog_down_barrier(env: Env) -> dict[str, bool]:
     return results
 
 
+NO_DESKTOP_PROGRAM = "hai-e2e-no-docker-desktop"
+
+
 def restart_command(env: Env, delay: float, down: float) -> list[str]:
     """A restart command for the settings: after a delay it tells the fake daemon to restart."""
     code = (
@@ -3045,8 +3050,9 @@ def docker_restart_command_and_client(env: Env) -> dict[str, bool]:
         catalog.TEST_REGISTRY = saved_registry
     env.daemon.containers.pop(foreign)
     return {
-        "the default restart command starts the docker program with desktop restart": default_config.restart_command == ("docker", "desktop", "restart")
-        and launcher.Config.__dataclass_fields__["restart_command"].default == ("docker", "desktop", "restart"),
+        "the default restart command starts the docker program with desktop restart": launcher.Config.__dataclass_fields__["restart_command"].default
+        == ("docker", "desktop", "restart"),
+        "the case's registry never reaches the real Docker Desktop": default_config.restart_command[0] == NO_DESKTOP_PROGRAM,
         "a refused restart (a foreign container runs) is a nonzero exit of the client": code == 1,
         "the failure text names the refusal and no success line is printed": "Docker not quit" in stderr.getvalue(),
         "the restart did not run": not env.daemon.calls_matching("POST", "/restart"),
@@ -3372,10 +3378,9 @@ def docker_desktop_defaults(env: Env) -> dict[str, bool]:
         env.daemon.containers.pop(rogue)
     future = cli("docker-release", "--owner", "--since", str(time.time() + 3600))
     return {
-        "the default start command is docker desktop start": default_config.start_command == ("docker", "desktop", "start")
-        and fields["start_command"].default == ("docker", "desktop", "start"),
-        "the default quit command is docker desktop stop": default_config.quit_command == ("docker", "desktop", "stop")
-        and fields["quit_command"].default == ("docker", "desktop", "stop"),
+        "the default start command is docker desktop start": fields["start_command"].default == ("docker", "desktop", "start"),
+        "the default quit command is docker desktop stop": fields["quit_command"].default == ("docker", "desktop", "stop"),
+        "the case's registry never reaches the real Docker Desktop": default_config.start_command[0] == default_config.quit_command[0] == NO_DESKTOP_PROGRAM,
         "the default restart command is docker desktop restart": fields["restart_command"].default == ("docker", "desktop", "restart"),
         "the program is also searched in the Docker Desktop folders": launcher.DOCKER_PROGRAM_FOLDERS
         == ("/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin"),
@@ -7521,6 +7526,8 @@ def catalog_client(env: Env) -> dict[str, bool]:
     )
     catalog_script(env, others_run_forever=False)
     env.settings["restart_command"] = restart_command(env, 0.2, 0.5)
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=0.2")
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
     env.write_settings()
     outputs: dict[str, str] = {}
     fixture_writer: list[str | None] = []
@@ -7627,7 +7634,8 @@ def catalog_client(env: Env) -> dict[str, bool]:
         ),
         "the Spark heap line is printed": "Spark heap " in outputs["job_e2e"],
         "down stopped the catalog": "Catalog services stopped" in outputs["down"] and catalog_phase(env) == "down",
-        "release restarted Docker": released.startswith("Docker restarted"),
+        "release quit Docker Desktop through the stand-in quit command": released.startswith("Docker Desktop quit")
+        and bool((env.temp / "quit.log").read_text().strip()),
         "an unknown job is refused": refused_job is not None and "unknown job" in refused_job,
         "no credentials file or compose file exists": not (state / "secrets").exists() and not (env.temp / "compose.env").exists(),
     }
