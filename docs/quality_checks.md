@@ -512,6 +512,18 @@ One commit per reviewed change stays the rule.
   `scripts/acquisition/run_checks_ci.sh` does), so the hook's own path list decides whether the 12 to 14 minute suite
   runs and an acquisition change earlier in the range still counts. In the full scope the shards of `scripts/run_ci.sh`
   run it. The native hook of the push skips. `pre_push plan` prints the scope and steps without running them.
+  **Docker release:** after the last step ends, in a `finally` path that also covers a failed step, a step deadline and Ctrl-C, the
+  gate runs `.venv/bin/python -m orchestration.launcher docker-release --owner --since <start of the gate>` under one 600 second
+  deadline (`RELEASE_SECONDS`). The launcher skips the release unless a container was created since the gate started, stops this
+  registry's idle catalog and quits Docker Desktop to free the VM's memory. It refuses while a container it did not create runs or other
+  registry work is open. The gate prints one line and records `docker_release` (`outcome`, `detail`, `seconds`) in `report.json`:
+  `Docker release: Docker Desktop quit in N s (VM memory freed)`, `skipped (<reason>)`, `refused (<reason>); Docker left running` or
+  `failed (<cause>); the gate result stands; run .venv/bin/python -m orchestration.launcher docker-start --owner before the next heavy run`.
+  A skipped, refused or failed release never changes the gate's exit code or blocks the push. Another project's session that is about to
+  start a container but has none yet is not detected, so the quit can interrupt it. The gate sets `HAI_DOCKER_RELEASE=outer` for its
+  `scripts/run_ci.sh` step so that script skips its own release. The next heavy run starts Docker Desktop again
+  (`scripts.lakehouse.catalog up` calls `docker-start` first). `--release-registry DIR` passes `--test-registry` to the launcher and is for
+  tests of the gate only.
   The gate is the Git config hook `hook.hai-push-input`, which `install-shim` registers. Git starts it for every push
   with the whole push input, before the hook of pre-commit, so the gate does not depend on the reference that
   pre-commit hands its own hooks. The gate judges each updated reference. A deletion passes without checks. A
@@ -524,7 +536,7 @@ One commit per reviewed change stays the rule.
   `git push --no-verify` skips both. The gate and every step start without the variables that change what
   `scripts/run_ci.sh` or pre-commit runs (`EXECUTION_CONTROLS` in `scripts/quality/pre_push.py`: `CI_SCOPE`,
   `CI_PART`, `CI_UNITS`, `CI_LIST_ONLY`, `RANGE_START`, `RANGE_END`, `LAUNCHER_SHARD`, `FEATURE_SHARD`, the
-  `ACQUISITION_*` selectors, `GITHUB_ACTIONS`, the `PRE_COMMIT_*` reference variables, `SKIP`,
+  `ACQUISITION_*` selectors, `GITHUB_ACTIONS`, `HAI_DOCKER_RELEASE`, the `PRE_COMMIT_*` reference variables, `SKIP`,
   `PRE_COMMIT_ALLOW_NO_CONFIG`, `PRE_COMMIT_RUNNING_LEGACY` and `_PRE_COMMIT_SKIP_POST_CHECKOUT`) and without the Git
   repository variables of the caller. A case scans the installed pre-commit source and fails on a new variable that
   is neither cleared nor classed as harmless.
@@ -596,6 +608,12 @@ retain the ignored local documentation review record (see Docs match the code ab
 `scripts/run_ci.sh` is the dispatcher: the gates, timing, parts, scopes, the parallel unit runner and the exit trap. The commands of each check group are in
 `scripts/ci/groups/<group>.sh`, one file for each group of `config/quality/ci_groups.json` (the gold layer's three units are in `lakehouse_gold.sh` and the
 launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no file because their commands are the scripts in `scripts/acquisition/`.
+
+`scripts/run_ci.sh` also releases Docker. Its exit trap calls `release_docker` after the timing table. The function runs
+`docker-release --owner --since <start of the run> --deadline 600`, so the launcher skips it unless a group created a container. It prints
+`Docker release skipped: <reason>` and does nothing when `HAI_DOCKER_RELEASE=outer` (the pre-push gate releases once after all its steps),
+`GITHUB_ACTIONS=true`, `uname` is not `Darwin`, `CI_LIST_ONLY=1` or the part is `gates`. A failed release prints one line and never changes
+the exit status of the run.
 
 - **Each group runs in its own shell process.** The dispatcher starts `bash --noprofile --norc` for every group, loads only `scripts/quality/timing.sh` (the
   `timed` wrapper) and that group's file and calls the entry function: the group name, `launcher_e2e` for the launcher and `lakehouse_gold_<unit>` for each

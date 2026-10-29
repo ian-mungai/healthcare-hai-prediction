@@ -228,6 +228,14 @@ exits 3 and names every running container the launcher did not create (or the fi
 running. Otherwise it stops the idle catalog, quits Docker Desktop, waits until the daemon stops answering (120 s by default; exit 5 when it
 still answers, exit 4 when the command fails) and shuts the launcher down. `docker-restart --owner` stays for a manual restart.
 
+### Session end
+
+Before a session ends and in the break procedure, run `.venv/bin/python -m orchestration.launcher docker-release --owner`. Without `--since` it
+always acts: it stops this registry's idle catalog and quits Docker Desktop when no registry work is open and no container the launcher did not
+create runs. When it refuses (exit 3) it names each running container and the first registry blocker. Relay those names to the owner and leave Docker
+running. Another project's session that has no container yet is not detected, so the quit can interrupt it. A session that starts a heavy run later
+needs no manual start, because `scripts.lakehouse.catalog up` runs `docker-start` first.
+
 ## Bronze
 
 The lakehouse jobs run in the Spark container. The bronze E2E uses a throwaway local catalog and synthetic files, never
