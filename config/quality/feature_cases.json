@@ -170,6 +170,8 @@
     "model_gives_an_extra_column",
     "contract_stops_the_build_on_an_extra_column",
     "column_check_does_not_build_a_rejected_project",
-    "post_hook_on_a_filter_model_leaves_its_table_alone"
+    "post_hook_on_a_filter_model_leaves_its_table_alone",
+    "model_in_two_yaml_files",
+    "committed_models_documented_once"
   ]
 }

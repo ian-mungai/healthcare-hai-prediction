@@ -57,6 +57,11 @@
         "openlineage": "the provider and client in the pinned official Airflow image constraints"
       }
     },
+    "feature_store": {
+      "reason": "The Feast repository and the Feast, online-store and historical-read jobs run in the Feast image (services/feature_store/Dockerfile). Until the hash-pinned lock requirements.txt exists, the approved versions in requirements.in are the runtime's requirements; switch to the lock at lock review.",
+      "requirements": ["services/feature_store/requirements.in"],
+      "code": ["feature_store/*.py"]
+    },
     "sqlfluff": {
       "reason": "A tool environment (.tools/sqlfluff) with no project code.",
       "requirements": ["scripts/quality/sqlfluff/requirements.txt"],

@@ -1,9 +1,16 @@
 {
  "models": {
+  "feature_matrix_care_compare": ["int_hospital_spine", "int_spine_care_compare_measures"],
+  "feature_matrix_county_context": ["fct_pos_snapshot", "int_hospital_spine", "int_spine_county_context"],
+  "feature_matrix_county_measures": ["int_hospital_spine", "int_spine_county_measures"],
+  "feature_matrix_hospital": ["int_hospital_spine", "int_spine_hospital_measures"],
+  "feature_matrix_hospital_window": ["int_hospital_spine"],
+  "feature_matrix_operations": ["int_hospital_spine", "int_spine_operations_measures"],
   "int_cmi_holds": ["fct_cmi_observation"],
   "int_cmi_hospital_data_years": ["fct_cmi_observation"],
   "int_cmi_hospital_years": ["fct_cmi_observation"],
   "int_cost_report_measures": ["cost_report_measures_recipe", "dim_registry_control", "fct_cost_report"],
+  "int_county_adjacency": ["bridge_county_neighbor"],
   "int_hai_outcome_values": ["dim_measure", "dim_registry_control", "feature_bridge_hai_outcome_measures", "int_spine_hai_outcomes"],
   "int_hospital_hgi_history": ["fct_hgi_release"],
   "int_hospital_ownership_history": ["fct_hospital_owner_release"],
@@ -22,7 +29,8 @@
   "int_spine_operations_measures": ["dim_registry_control", "fct_enrollment_release", "fct_hhs_capacity_week", "fct_hospital_owner_release", "fct_onc_ehr_product", "fct_ownership_change", "feature_bridge_ownership_measures", "hhs_onc_measures_recipe", "int_hospital_spine", "ownership_release_periods"],
   "int_spine_validation_measures": ["dim_measure", "dim_registry_control", "fct_hac_program_year", "fct_validation_program_hold", "fct_validation_window_hold", "feature_bridge_validation_measures", "int_hospital_spine", "int_validation_measure_windows", "int_validation_program_values"],
   "int_validation_measure_windows": ["dim_measure", "dim_registry_control", "fct_complications_deaths_window", "fct_hrrp_window", "fct_unplanned_visits_window", "feature_bridge_validation_measures"],
-  "int_validation_program_values": ["dim_measure", "dim_registry_control", "fct_hac_program_year", "fct_vbp_program_year", "feature_bridge_validation_measures"]
+  "int_validation_program_values": ["dim_measure", "dim_registry_control", "fct_hac_program_year", "fct_vbp_program_year", "feature_bridge_validation_measures"],
+  "label_matrix_hai_outcomes": ["int_hospital_spine", "int_spine_hai_outcomes"]
  },
  "tests": {
   "assert_care_compare_as_of_start": ["int_spine_care_compare_measures"],

@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration import launcher, pipeline_session
+from orchestration import launcher, online_store, pipeline_session
 from scripts.infrastructure import sts_stand_in
 from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.infrastructure.sts_stand_in import StandInSts
@@ -4868,7 +4868,7 @@ class NotingRenderer(launcher.Renderer):
     """A renderer that notes the template of every render that returns a specification, to show which templates a case rendered. It watches the
     public render calls, so a template that builds its specification without ``assemble`` (the probe) is seen like any other."""
 
-    ENTRY_POINTS = ("render", "render_service", "render_orchestration_service", "render_lineage_service")
+    ENTRY_POINTS = ("render", "render_service", "render_orchestration_service", "render_lineage_service", "render_online_store_service")
 
     def __init__(self, *arguments: Any, noted: set[str], **options: Any) -> None:
         super().__init__(*arguments, **options)
@@ -4989,7 +4989,18 @@ def pipeline_hostname_checks(
         checks[f"pipeline hostname/{name}/command"] = f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", f"scripts.lakehouse.{module}"] and f[
             "cmd"
         ] == [*args, *local_args]
-    for layer in ("silver", "gold"):
+    for job, module, args in (
+        ("pin_gold", "scripts.features.features_input", ["pin", *common_args, "--record", "/workspace/out/gold_pins.json"]),
+        ("read_gold", "scripts.features.features_input", ["read", *common_args, "--expected-pin-sha256", pipeline["gold_pin"]["sha256"]]),
+        ("record_features_snapshot", "scripts.features.features_publish", ["record", *common_args, "--record", "/workspace/out/features_snapshot.json"]),
+    ):
+        name = f"snapshot/{job}"
+        f = observe(name, input_for("pipeline_spark", {"job": job}), "none", common_mounts | {local_mount}, True)
+        checks[f"pipeline hostname/{name}/command"] = f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", module] and f["cmd"] == [
+            *args,
+            *local_args,
+        ]
+    for layer in ("silver", "gold", "features"):
         for step in ("candidates", "reconcile", "backup", "commit"):
             name = f"publish/{layer}/{step}"
             f = observe(name, input_for("pipeline_publish", {"layer": layer, "step": step}), "none", common_mounts | {local_mount}, True)
@@ -4997,7 +5008,7 @@ def pipeline_hostname_checks(
                 launcher.DEADLINE_ENTRYPOINT,
                 "python",
                 "-m",
-                f"scripts.lakehouse.{layer}_publish",
+                "scripts.features.features_publish" if layer == "features" else f"scripts.lakehouse.{layer}_publish",
             ] and f["cmd"] == [
                 step,
                 *common_args,
@@ -5028,16 +5039,21 @@ def pipeline_hostname_checks(
         "-m",
         "scripts.lakehouse.gold_maintenance",
     ] and f["cmd"] == [*common_args, "--protected", "/workspace/out/publish/protected.json", *local_args]
-    for layer in ("silver", "gold"):
-        observe(
+    schema_mount = (str(renderer.checkout / "data_contracts/features"), "/workspace/data_contracts/features", True)
+    for layer in ("silver", "gold", "features"):
+        f = observe(
             f"non-Spark/build/{layer}",
             input_for("pipeline_dbt", {"layer": layer}),
             "none",
-            common_mounts | {(str(snapshot / "project"), "/workspace/dbt", True), (str(snapshot / "packages"), "/workspace/packages", True)},
+            common_mounts
+            | {(str(snapshot / "project"), "/workspace/dbt", True), (str(snapshot / "packages"), "/workspace/packages", True)}
+            | ({schema_mount} if layer == "features" else set()),
             False,
         )
+        build_module = "scripts.features.features_build" if layer == "features" else "scripts.lakehouse.pipeline_build"
+        checks[f"pipeline hostname/non-Spark/build/{layer}/module"] = f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", build_module]
         completion = pipeline["layer_completions"][layer]
-        observe(
+        f = observe(
             f"non-Spark/export/{layer}",
             input_for("pipeline_export", {"layer": layer}),
             "none",
@@ -5048,6 +5064,8 @@ def pipeline_hostname_checks(
             },
             False,
         )
+        export_module = "scripts.features.features_export" if layer == "features" else f"scripts.lakehouse.{layer}_export"
+        checks[f"pipeline hostname/non-Spark/export/{layer}/module"] = f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", export_module]
     for role in ("offline", "lakehouse_read", "lakehouse_write"):
         mounts = common_mounts - {(str(run_folder), "/workspace/out", False)}
         if role != "offline":
@@ -5364,6 +5382,177 @@ def role_session_history(env: Env) -> dict[str, bool]:
         and saved == b""
     )
     out["the premise held: the unguarded child returned the session it saved"] = isinstance(unguarded, pipeline_session.RoleSession)
+    return out
+
+
+def feature_store_render_checks(
+    env: Env,
+    renderer: launcher.Renderer,
+    config: Any,
+    registry_id: str,
+    values: dict[str, str],
+    run_folder: Path,
+    snapshot: Path,
+    pipeline: dict[str, Any],
+    rendered_templates: set[str],
+) -> dict[str, bool]:
+    """The feature-store templates: Feast jobs (fixture on the online-store network only, real on the read class network joined to it, the probe
+    without it) and the online store's Redis service; every check also holds that no credential value reaches a command or a mount."""
+    out: dict[str, bool] = {}
+    online_network = online_store.network_name(registry_id)
+
+    def feast_input(step: str, mode: str, state: dict[str, Any] | None = None, extra_values: dict[str, str] | None = None) -> launcher.RenderInput:
+        return launcher.RenderInput(
+            "pipeline_feast",
+            "owner",
+            f"feast-{step}",
+            1,
+            1,
+            "op-feast",
+            {**values, **(extra_values or {})},
+            2_000_000_600,
+            [],
+            {"step": step},
+            {"hai.registry_id": registry_id},
+            run_folder=run_folder,
+            snapshot=snapshot,
+            run_mode=mode,
+            pipeline=state or pipeline,
+        )
+
+    online_store.forget_test_password(config.registry.path)
+    refused = expect_error_of(lambda: renderer.render(feast_input("apply", "publish_fixture"), registry_id))
+    out["pipeline_feast: refused while the launcher holds no test Redis password"] = (
+        isinstance(refused, launcher.LauncherError) and refused.code == "spec" and "test Redis password" in str(refused)
+    )
+    password = online_store.test_password(config.registry.path)
+    repository = {
+        (str(ROOT / "scripts"), "/workspace/scripts", True),
+        (str(ROOT / "orchestration"), "/workspace/orchestration", True),
+        (str(ROOT / "feature_store"), "/workspace/feature_store", True),
+        (str(ROOT / "data_contracts/features"), "/workspace/data_contracts/features", True),
+        (str(run_folder), "/workspace/out", False),
+    }
+    for step in ("apply", "materialize"):
+        rendered = renderer.render(feast_input(step, "publish_fixture"), registry_id)
+        f = facts(rendered)
+        out[f"pipeline_feast {step} fixture: only the online-store network, read-only code, catalog and schema, the run folder writable"] = (
+            f["image"] == renderer.image("feature-store")
+            and f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", "scripts.features.feast_job"]
+            and f["cmd"] == [step, "--run", run_folder.name, "--mode", "publish_fixture"]
+            and f["network"] == online_network
+            and f["joins"] == {}
+            and f["mounts"] == repository | {(str(pipeline["local_catalog"]), "/workspace/local_catalog", True)}
+            and f["body"]["HostConfig"]["CapDrop"] == ["ALL"]
+            and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+        )
+        out[f"pipeline_feast {step} fixture: SQL catalog of features_e2e, no AWS, catalog principal or proxy, password only in the environment"] = (
+            f["env"].get("FEAST_NAMESPACE") == "features_e2e"
+            and f["env"].get("FEAST_CATALOG_TYPE") == "sql"
+            and f["env"].get("FEAST_REGISTRY_PATH") == "/workspace/out/feast/registry.pb"
+            and f["env"].get("FEAST_REDIS_HOST") == "redis"
+            and f["env"].get(online_store.AUTH_ENV) == password
+            and online_store.AUTH_ENV in rendered.secret_env
+            and not any(key.startswith(("AWS", "POLARIS", "HTTP", "http")) for key in f["env"])
+            and password not in json.dumps([f["entrypoint"], f["cmd"], sorted(map(list, f["mounts"]))])
+        )
+    down = {**pipeline, "online_store": {"phase": "starting", "network": online_network}}
+    stopped = expect_error_of(lambda: renderer.render(feast_input("materialize", "publish_fixture", down), registry_id))
+    out["pipeline_feast: refused while the online store is not up"] = isinstance(stopped, launcher.LauncherError) and "online store is not up" in str(stopped)
+    probe_fixture = expect_error_of(lambda: renderer.render(feast_input("probe", "publish_fixture"), registry_id))
+    out["pipeline_feast: the probe is refused in fixture mode"] = isinstance(probe_fixture, launcher.LauncherError)
+    synthetic = {
+        "AWS_REGION": "synthetic-region",
+        "PIPELINE_READER_AWS_PROFILE": "synthetic-profile",
+        "POLARIS_READER_CLIENT_ID": "unused-synthetic-id",
+        "POLARIS_READER_CLIENT_SECRET": "unused-synthetic-placeholder",
+    }
+    read_network = pipeline["network"]["names"]["lakehouse_read"]
+    with mock.patch.object(launcher.pipeline_render, "apply_credentials", return_value=None) as injector:
+        f = facts(renderer.render(feast_input("apply", "real", extra_values=synthetic), registry_id))
+        out["pipeline_feast apply real: read class network joined to the online-store network, REST catalog of features, registry key"] = (
+            f["network"] == read_network
+            and f["joins"] == {online_network: []}
+            and f["env"].get("FEAST_NAMESPACE") == "features"
+            and f["env"].get("FEAST_CATALOG_TYPE") == "rest"
+            and f["env"].get("FEAST_REGISTRY_KEY") == "lakehouse/feast/registry.pb"
+            and "FEAST_REGISTRY_PATH" not in f["env"]
+            and not any(target == "/workspace/local_catalog" for _, target, _ in f["mounts"])
+            and f["body"]["Labels"].get("hai.network_class") == "lakehouse_read"
+        )
+        f = facts(renderer.render(feast_input("probe", "real", extra_values=synthetic), registry_id))
+        out["pipeline_feast probe real: read class network only, the test registry key, no Redis password"] = (
+            f["network"] == read_network
+            and f["joins"] == {}
+            and f["env"].get("FEAST_REGISTRY_KEY") == "lakehouse/feast_e2e/registry.pb"
+            and online_store.AUTH_ENV not in f["env"]
+        )
+        out["pipeline_feast: the real renders reached the credential boundary"] = injector.call_count == 2
+    online_model = launcher.ComposeModel(ROOT / online_store.COMPOSE)
+    online_renderer = NotingRenderer(config, online_model, ROOT, ROOT, b"k" * 32, noted=rendered_templates)
+    limits = online_store.limits(512 * 1024**2)
+
+    def online_input() -> launcher.RenderInput:
+        return launcher.RenderInput(
+            online_store.TEMPLATE,
+            "online_store",
+            "online-store",
+            1,
+            1,
+            "op-online",
+            limits,
+            0,
+            [],
+            {"service": online_store.SERVICE},
+            {"hai.registry_id": registry_id},
+        )
+
+    rendered = online_renderer.render_online_store_service(online_input(), registry_id)
+    f = facts(rendered)
+    body = f["body"]
+    out["online_store_service: pinned image, own limit, no deadline wrapper, unprivileged user, no privilege gain"] = (
+        f["image"] == online_renderer.image(online_store.SERVICE)
+        and "@sha256:" in online_model.image(online_store.SERVICE)
+        and f["memory"] == int(limits["HAI_ONLINE_MEM"])
+        and f["entrypoint"] == online_store.ENTRYPOINT
+        and f["cmd"] == []
+        and "HAI_DEADLINE_UTC" not in f["env"]
+        and body["User"] == "999:999"
+        and body["HostConfig"]["CapDrop"] == ["ALL"]
+        and body["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+        and body["Healthcheck"]["Test"] == online_store.HEALTHCHECK
+        and body["Labels"][launcher.LABEL_STACK] == online_store.STACK
+        and f["init"] is True
+    )
+    out["online_store_service: internal online-store network as redis, no port, configuration read-only, nothing else mounted"] = (
+        f["network"] == online_network
+        and body["NetworkingConfig"]["EndpointsConfig"] == {online_network: {"Aliases": [online_store.ALIAS]}}
+        and f["joins"] == {}
+        and f["ports"] == {}
+        and f["mounts"] == {(str(ROOT / online_store.CONFIG), online_store.CONFIG_TARGET, True)}
+    )
+    out["online_store_service: the password only in the environment (held as a secret), never in a command, check or mount"] = (
+        f["env"] == {online_store.AUTH_ENV: password, "REDIS_MAXMEMORY": limits["HAI_ONLINE_MAXMEMORY"]}
+        and online_store.AUTH_ENV in rendered.secret_env
+        and password not in json.dumps([body.get("Entrypoint"), body.get("Cmd"), body.get("Healthcheck"), body["HostConfig"]["Mounts"]])
+    )
+    online_store.forget_test_password(config.registry.path)
+    lost = expect_error_of(lambda: online_renderer.render_online_store_service(online_input(), registry_id))
+    out["online_store_service: refused while the launcher holds no test Redis password"] = isinstance(lost, launcher.LauncherError) and lost.code == "spec"
+    online_store.test_password(config.registry.path)
+    bad = expect_error_of(
+        lambda: online_renderer.render_online_store_service(replace(online_input(), values={**limits, "HAI_ONLINE_PORT": "6379"}), registry_id)
+    )
+    out["online_store_service: settings other than the two memory values are refused"] = isinstance(bad, launcher.LauncherError) and bad.code == "spec"
+    leftovers = [
+        path
+        for folder in (env.work, config.registry.path.parent)
+        if folder.exists()
+        for path in folder.rglob("*")
+        if path.is_file() and not path.is_symlink() and path.stat().st_size <= 64 << 20
+    ]
+    out["no file under the work or registry folders holds the Redis password"] = not any(password.encode() in path.read_bytes() for path in leftovers)
+    online_store.forget_test_password(config.registry.path)
     return out
 
 
@@ -5763,10 +5952,13 @@ def render_templates(env: Env) -> dict[str, bool]:
         "bronze_sha256": "c" * 64,
         "silver_pin": {"sha256": "c" * 64},
         "silver_input": {"pins_sha256": "c" * 64, "sha256": "e" * 64},
-        "layer_completions": {layer: layer_completion for layer in ("silver", "gold")},
-        "layer_exports": {layer: {"sha256": accepted, "sealed_sha256": sealed_sha, "generation": 1} for layer in ("silver", "gold")},
+        "gold_pin": {"sha256": "d" * 64},
+        "gold_input": {"pins_sha256": "d" * 64, "sha256": "f" * 64},
+        "layer_completions": {layer: layer_completion for layer in ("silver", "gold", "features")},
+        "layer_exports": {layer: {"sha256": accepted, "sealed_sha256": sealed_sha, "generation": 1} for layer in ("silver", "gold", "features")},
         "local_catalog": str(env.work / "pipeline_catalog"),
         "network": {"phase": "ready", "names": names},
+        "online_store": {"phase": "up", "network": online_store.network_name(registry_id)},
     }
 
     def pipeline_facts(name: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -5810,7 +6002,7 @@ def render_templates(env: Env) -> dict[str, bool]:
     )
     hostname_checks, _ = pipeline_hostname_checks(renderer, registry_id, values, run_folder, snapshot, pipeline)
     out.update(hostname_checks)
-    for kind in ("silver", "gold", "cross"):
+    for kind in ("silver", "gold", "cross", "features"):
         name = f"pipeline_validate_{kind}"
         f = pipeline_facts(
             name,
@@ -5828,7 +6020,16 @@ def render_templates(env: Env) -> dict[str, bool]:
             and f["network"] == "none"
             and (str(ROOT / "orchestration"), "/workspace/orchestration", True) in f["mounts"]
             and credential_free(f)
+            and (
+                kind != "features"
+                or {
+                    (str(ROOT / "data_contracts/lakehouse"), "/workspace/data_contracts/lakehouse", True),
+                    (str(ROOT / "data_contracts/features"), "/workspace/data_contracts/features", True),
+                }
+                <= f["mounts"]
+            )
         )
+    out.update(feature_store_render_checks(env, renderer, config, registry_id, values, run_folder, snapshot, pipeline, rendered_templates))
     for role in (*network_policy.CLASSES, "offline"):
         f = pipeline_facts("pipeline_probe", {"class": role, "case": "traffic"})
         out[f"pipeline_probe/{role}"] = (

@@ -1,0 +1,168 @@
+{
+  "name": "features_keys",
+  "description": "Every published features table has a unique, non-null merge key (the key the MERGE INTO of the publish uses)",
+  "expectations": [
+    {
+      "id": "feature_build_inputs.grain",
+      "table": "feature_build_inputs",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"build_key\" FROM {batch} GROUP BY \"build_key\" HAVING count(*) > 1 OR \"build_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_matrix_care_compare.grain",
+      "table": "feature_matrix_care_compare",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_matrix_county_context.grain",
+      "table": "feature_matrix_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_matrix_county_measures.grain",
+      "table": "feature_matrix_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_matrix_hospital.grain",
+      "table": "feature_matrix_hospital",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_matrix_hospital_window.grain",
+      "table": "feature_matrix_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_matrix_operations.grain",
+      "table": "feature_matrix_operations",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_county_adjacency.grain",
+      "table": "int_county_adjacency",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"edge_key\" FROM {batch} GROUP BY \"edge_key\" HAVING count(*) > 1 OR \"edge_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_spine.grain",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_care_compare_measures.grain",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_context.grain",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_measures.grain",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hai_outcomes.grain",
+      "table": "int_spine_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"outcome_key\" FROM {batch} GROUP BY \"outcome_key\" HAVING count(*) > 1 OR \"outcome_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hospital_measures.grain",
+      "table": "int_spine_hospital_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_linkage.grain",
+      "table": "int_spine_linkage",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_operations_measures.grain",
+      "table": "int_spine_operations_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_validation_measures.grain",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "label_matrix_hai_outcomes.grain",
+      "table": "label_matrix_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    }
+  ]
+}

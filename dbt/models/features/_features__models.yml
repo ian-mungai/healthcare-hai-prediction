@@ -1445,10 +1445,12 @@ models:
   - name: int_spine_validation_measures
     description: >
       AL5: one row per spine hospital-window and validation control and measure (the gold control bridge, source_seed
-      validation_measures). Validation outcomes are compared with the HAI window, never used to predict it, so each
-      takes the published period that matches the window itself: the equal calendar-year window first, otherwise the
-      largest overlap, then the latest end. HAC and VBP program years are placed by the HAI measure period HAC
-      publishes for each fiscal year. No predictor model reads this table.
+      validation_measures). PSI-90 and PSI-13 take the latest period ending strictly before the window start.
+      Other validation outcomes take the published period that matches the window itself: the equal calendar-year
+      window first, otherwise the largest overlap, then the latest end. HAC and VBP program years are placed by the
+      HAI measure period HAC publishes for each fiscal year. This is a non-Feast training support table.
+      Validation outcomes are compared with the HAI window, never used to predict it: no predictor model reads this
+      table.
     meta:
       classification: Confidential
     columns:
@@ -1510,7 +1512,7 @@ models:
         description: Release date of the matched period.
       - name: overlap_days
         data_type: bigint
-        description: Days the chosen period shares with the HAI window.
+        description: Days the chosen period shares with the HAI window, zero for a strictly prior PSI period.
       - name: is_primary_population
         data_type: boolean
         description: In the primary model population, as in int_hospital_spine.
@@ -1902,3 +1904,60 @@ models:
     meta:
       classification: Public
     columns: *bridge_columns
+
+  - name: int_county_adjacency
+    description: >
+      One row per published county, neighbor and vintage from the pinned gold adjacency bridge.
+      Training support for spatial diagnostics, never a predictor or Feast feature view.
+    meta:
+      classification: Public
+    columns:
+      - name: member_sha256
+        data_type: varchar
+        description: SHA-256 of the published adjacency source file.
+      - name: source_row_number
+        data_type: bigint
+        description: Row number in the source file.
+      - name: vintage
+        data_type: varchar
+        description: Census adjacency vintage.
+      - name: county_fips
+        data_type: varchar
+        description: County FIPS with leading zeros preserved.
+      - name: county_name
+        data_type: varchar
+        description: Published county name.
+      - name: county_published
+        data_type: varchar
+        description: County identifier as published.
+      - name: neighbor_fips
+        data_type: varchar
+        description: Neighbor FIPS with leading zeros preserved.
+      - name: neighbor_name
+        data_type: varchar
+        description: Published neighbor name.
+      - name: neighbor_published
+        data_type: varchar
+        description: Neighbor identifier as published.
+      - name: shared_border_length_m
+        data_type: double
+        description: Published shared border length in meters, with missing values retained.
+      - name: length_published
+        data_type: varchar
+        description: Border length as published.
+      - name: county_scope
+        data_type: varchar
+        description: Published county scope.
+      - name: edge_key
+        data_type: varchar
+        description: Unique county, neighbor and vintage key of the gold bridge.
+        data_tests: [unique, not_null]
+      - name: is_self_link
+        data_type: boolean
+        description: True for a county linked to itself.
+      - name: is_isolated
+        data_type: boolean
+        description: True for an isolated county.
+      - name: is_connecticut
+        data_type: boolean
+        description: True for a Connecticut county.

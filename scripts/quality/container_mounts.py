@@ -25,7 +25,14 @@ RULE = "docs/quality_checks.md#container-imports"
 PRIVATE = {".git", ".venv", ".tools", ".aws", ".codex", ".agents", "data", "plans", "node_modules"}
 VARIABLE = re.compile(r"\$\{([^}:]+)(?::[^}]*)?\}")
 PYTHON = re.compile(r"python(?:\d+(?:\.\d+)*)?$")
-PYTHON_SOURCES = {"scripts": "imports", "orchestration": "imports", "dags": "entry", "services/lineage": "entry", "services/analytics": "entry"}
+PYTHON_SOURCES = {
+    "scripts": "imports",
+    "orchestration": "imports",
+    "dags": "entry",
+    "services/lineage": "entry",
+    "services/analytics": "entry",
+    "feature_store": "entry",
+}
 
 
 def inventory(root: Path) -> set[str]:

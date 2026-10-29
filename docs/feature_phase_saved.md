@@ -1,10 +1,10 @@
 ---
-title: Saved for the Feature Phase
+title: Saved for the feature phase
 description: The saved silver models, now the feature phase in dbt/models/features, as described when they were silver models.
-last_updated: 2026-10-22
+last_updated: 2026-10-23
 ---
 
-# Saved for the Feature Phase
+# Saved for the feature phase
 
 These models are the feature phase. They sit in `dbt/models/features/` with their macros in `dbt/macros/features/` and their
 singular tests in `dbt/tests/features/`. dbt builds them as views after gold, never inside the gold build. They read gold
@@ -140,10 +140,18 @@ and product count from the latest performance period, private-equity and REIT ow
 before the start (direct, indirect and partnership owners only; a blank is `not_reported`, never no). Changes of
 ownership count those in the year before the start, with the completed months since the latest one.
 `int_spine_validation_measures` (step AL5) places the validation outcomes (HAC and VBP program years, HRRP, unplanned
-visits and 30-day mortality) against each HAI window's own period, because they are compared with the window, never used
-to predict it: the published window equal to the calendar year first, otherwise the one with the largest overlap. HAC
-and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
-check fails if one does.
+visits and 30-day mortality) against each HAI window's own period: the published window equal to the calendar year
+first, otherwise the one with the largest overlap. HAC and VBP years are placed by the HAI measure period HAC publishes
+for each fiscal year. PSI-90 and PSI-13 use the latest measurement period ending strictly before the window starts. A
+prior PSI period has zero overlap days. Missing and held values retain their statuses. The validation outcomes are
+compared with the window, never used to predict it, so no predictor model reads this table.
+
+`int_county_adjacency` carries every column of the pinned gold `bridge_county_neighbor`, with one row per `edge_key`. It
+preserves vintages, self-links and isolated counties for spatial diagnostics. Both tables are published with the feature
+tables as non-Feast training support. Consumers read their publication snapshot IDs inside
+`publication_reads.consistent_read`. Neither table is registered as a Feast view or accepted as a predictor reference.
+See [the feature store read contract](lakehouse_usage.md#feature-store).
+
 `int_spine_county_measures` (step AL4a) adds the county context from PLACES, Medicare Geographic Variation, CDC WONDER,
 Mapping Medicare Disparities and RUCC through the spine's county: the latest data year (RUCC vintage) that ends
 before the window starts. PLACES counts only all-state measure-years and takes the latest release of each data year;
