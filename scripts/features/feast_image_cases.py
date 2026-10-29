@@ -32,6 +32,10 @@ from scripts.features.feast_harness import Checker
 
 RUN_A = "20261022T120000Z-0a1b2c3d"
 RUN_B = "20261022T130000Z-1a2b3c4d"
+# Settings the container reads from its environment; the cases set them on the process, so the names go through constants.
+CATALOG_URI_VARIABLE = "FEAST_SQL_CATALOG_URI"
+WAREHOUSE_VARIABLE = "FEAST_SQL_WAREHOUSE"
+ZONE_VARIABLE = "TZ"
 SPINE_KEYS = [("AAA001", 2021), ("AAA001", 2022), ("AAA001", 2023), ("BBB002", 2022), ("CCC003", 2021), ("DDD004", 2023), ("EEE005", 2022)]
 EXACT = 0.12345678901234568
 OWN_VALUE = 7.25
@@ -391,8 +395,8 @@ def case_e11_published(c: Checker) -> None:
         try:
             warehouse = fixture.folder / "published/warehouse"
             export_hadoop_layout(fixture, warehouse)
-            os.environ["FEAST_SQL_CATALOG_URI"] = f"sqlite:///{fixture.folder}/feast/published.db"
-            os.environ["FEAST_SQL_WAREHOUSE"] = f"file://{warehouse}"
+            os.environ[CATALOG_URI_VARIABLE] = f"sqlite:///{fixture.folder}/feast/published.db"
+            os.environ[WAREHOUSE_VARIABLE] = f"file://{warehouse}"
             record = apply_fixture(fixture, register=True)
             c.check(
                 "apply found the committed set in an empty SQL catalog and applied it", fixture.registry.is_file() and record["publication"]["run_id"] == RUN_A
@@ -420,7 +424,7 @@ def case_e12(c: Checker) -> None:
             features = references(fixture, per_table=2)
             outcomes = []
             for zone in ("America/Los_Angeles", "UTC", "Asia/Tokyo"):
-                os.environ["TZ"] = zone
+                os.environ[ZONE_VARIABLE] = zone
                 time.tzset()
                 result = read_history(fixture, features)
                 outcomes.append((zone, result.frame.to_pylist()))
