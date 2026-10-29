@@ -145,8 +145,8 @@ run "read_roles_without_writers" {
   }
 
   assert {
-    condition     = aws_iam_role.job["try_writer"].description == "Write-only upper bound for staged try outputs."
-    error_message = "The try output role description must identify its write-only bound."
+    condition     = aws_iam_role.job["try_writer"].description == "Upper bound for staged try outputs and the authority epoch read."
+    error_message = "The try output role description must name its output writes and its one epoch read."
   }
 
   assert {
