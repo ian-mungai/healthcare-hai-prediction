@@ -1,0 +1,14 @@
+raw_decision,closeout_decision
+dropped,dropped
+closed_unavailable,dropped
+retired,retired
+redefined,redefined
+continues without APIC,narrowed
+continues without HASC,narrowed
+continues without HASC and NDNQI,narrowed
+"continues without HASC, NDNQI and IROQ detail",narrowed
+continues without LEAP,narrowed
+AHA definition dropped,narrowed
+plan collection,narrowed
+published_id_named,id_assigned
+exact_field_assigned,id_assigned
