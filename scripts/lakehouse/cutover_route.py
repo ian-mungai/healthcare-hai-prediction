@@ -29,7 +29,7 @@ from typing import Any
 
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
-from scripts.lakehouse.catalog_journal import durable_directory
+from scripts.lakehouse.catalog_journal import durable_directory, private_directory
 
 CATALOG_PORT = 8181
 CATALOG_ANSWERS = (200, 401)
@@ -351,7 +351,7 @@ class LiveRouteProbe:
     def observe_port(self, deadline: float) -> Observation:
         if CATALOG_PORT in (self.spec.tunnel_port, self.spec.relay_port):
             return port_observation(self.spec, 0, 0)
-        durable_directory(self.registry)
+        private_directory(self.registry)
         self.transport = CatalogTransport(self.registry)
         try:
             endpoint = self.transport.start(self.spec, deadline=deadline, ready_deadline=min(deadline, time.monotonic() + 120))
