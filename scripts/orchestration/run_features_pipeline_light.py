@@ -32,6 +32,7 @@ from typing import Any
 
 from orchestration import graph, launcher, online_store, pipeline_protocol, pipeline_render
 from orchestration.interface import SubmissionRefused, SubmissionRequest
+from orchestration.pipeline_session import CLASS_ROLE, RoleSession
 from scripts.lakehouse import run_lock
 from scripts.orchestration import broker as broker_module
 from scripts.orchestration import pipeline_control, run_control
@@ -39,7 +40,7 @@ from scripts.orchestration.ledger import schema_validator
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE_REVISION = "2826418"
+BASE_REVISION = "214ff3f2e156c00da96a8c610ee211a889df6d78"
 RUN_SECONDS = 120
 RUN = "20261022T120000Z-0a1b2c3d"
 GOLD_RUN = "20261021T110000Z-1a2b3c4d"
@@ -76,8 +77,6 @@ SHA = {name: character * 64 for name, character in (("source", "a"), ("bronze", 
 SHA.update({"gold_pin": "e" * 64, "gold_input": "f" * 64, "sealed": "1" * 64})
 FAKE_VALUES = {
     "AWS_REGION": "us-test-1",
-    "PIPELINE_READER_AWS_PROFILE": "hai-test-reader",
-    "PIPELINE_WRITER_AWS_PROFILE": "hai-test-writer",
     "POLARIS_READER_CLIENT_ID": "reader-id-fake",
     "POLARIS_READER_CLIENT_SECRET": "reader-secret-fake",
     "POLARIS_SILVER_WRITER_CLIENT_ID": "silver-id-fake",
@@ -87,6 +86,7 @@ FAKE_VALUES = {
     "POLARIS_FEATURES_WRITER_CLIENT_ID": "features-id-fake",
     "POLARIS_FEATURES_WRITER_CLIENT_SECRET": "features-secret-fake",
 }
+SESSION_KEY = "FAKEKEYID"
 ENVIRONMENT = {"JOB_THREADS": "1", "DUCKDB_MEMORY_LIMIT": "1GB", "SPARK_JOB_MEMORY": "1g"}
 
 Checks = dict[str, bool]
@@ -147,14 +147,6 @@ class Fixture:
         (self.snapshot / "packages").mkdir()
         self.catalog = base / "catalog"
         self.catalog.mkdir()
-        self.credentials = base / "auth"
-        for role, profile in (("reader", FAKE_VALUES["PIPELINE_READER_AWS_PROFILE"]), ("writer", FAKE_VALUES["PIPELINE_WRITER_AWS_PROFILE"])):
-            folder = self.credentials / role
-            folder.mkdir(parents=True, mode=0o700)
-            (folder / "config").write_text(f"[profile {profile}]\nregion = us-test-1\n")
-            (folder / "credentials").write_text(f"[{profile}]\naws_access_key_id = FAKEKEYID\naws_secret_access_key = fake-secret\n")
-            for name in ("config", "credentials"):
-                (folder / name).chmod(0o600)
         self.result_sha = write_json(self.publish / "consumer_result.json", {"run_id": RUN})
 
     def pipeline(self, mode: str) -> dict[str, Any]:
@@ -182,7 +174,11 @@ class Fixture:
         state = self.pipeline(mode) if pipeline is None else pipeline
         inp = Input(template, self.folder, mode, [], dict(params), state, ENVIRONMENT, self.snapshot, {"PROVENANCE_FAKE": "1"}, 1)
         values = {key: FAKE_VALUES[key] for key in module.needed_values(template, dict(params), mode) if key in FAKE_VALUES}
-        return module.build(inp, ROOT, self.credentials, values)
+        selected = module.job_class(template, dict(params), mode)
+        # A real job of an AWS class gets the role session of its class; an offline job and every fixture run get none.
+        needs_session = mode == "real" and selected != "offline" and template != "pipeline_probe"
+        session = RoleSession(CLASS_ROLE[selected], SESSION_KEY, "fake-secret", "fake-token", 2**40) if needs_session else None
+        return module.build(inp, ROOT, values, session)
 
 
 def spec_dict(spec: Any) -> dict[str, Any]:
@@ -447,7 +443,7 @@ def case_fixture_isolation(fixture: Fixture, scratch: Path) -> Checks:
     checks["real_feast_reader_only"] = (
         real.network_class == "lakehouse_read"
         and real.environment.get("POLARIS_CLIENT_ID") == FAKE_VALUES["POLARIS_READER_CLIENT_ID"]
-        and real.environment.get("AWS_PROFILE") == FAKE_VALUES["PIPELINE_READER_AWS_PROFILE"]
+        and real.environment.get("AWS_ACCESS_KEY_ID") == SESSION_KEY
     )
     checks["real_feast_no_java_options"] = "JAVA_TOOL_OPTIONS" not in real.environment
     checks["redis_host_fixed"] = fixture_feast.get("FEAST_REDIS_HOST") == "redis" and real.environment.get("FEAST_REDIS_HOST") == "redis"
