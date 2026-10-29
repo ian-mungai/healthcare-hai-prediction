@@ -3161,7 +3161,7 @@ MANUAL_FINGERPRINTS = {
     "suppressions": "eda6794008b9",
     "subprocess-imports": "7bae5ddf818b",
     "docker-calls": "2f3e46d94779",
-    "test-checks": "78d7844409b8",
+    "test-checks": "0328ad4bb1bd",
     "test-documentation-review": "db426284e54a",
 }
 
