@@ -1323,7 +1323,7 @@
         "scripts/process.py": "sha256:485962a460b4394fa468c4f6e4a115380b619a48f8c6567982de37778feb3ea4",
         "scripts/quality/ci_groups.py": "sha256:860df8d304a12e4d20f884b9a724bdc3cf08be66ad67d69e0221f50bb824a535",
         "scripts/quality/launcher_inputs.py": "sha256:1aa85bd54b2d0b2dbf1c61128f20f50e0d2a1be053fe8447305f459ad378834a",
-        "scripts/quality/pre_push.py": "sha256:0891a15b8ca29f9b10d45225203adda2417c61af360b4c2d9114afe4641c5fb6",
+        "scripts/quality/pre_push.py": "sha256:c27465609b53b85f724983e6bd8d9aa9d5d1aa2794bce941bbaf5623771d09e0",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347",
         "scripts/quality/source_reads.py": "sha256:a75832c95797a070247cd5e14dfd8324f6c22948e2e474e17b738d34ccd5e211"
@@ -1341,7 +1341,7 @@
         "scripts/process.py": "sha256:485962a460b4394fa468c4f6e4a115380b619a48f8c6567982de37778feb3ea4",
         "scripts/quality/ci_groups.py": "sha256:860df8d304a12e4d20f884b9a724bdc3cf08be66ad67d69e0221f50bb824a535",
         "scripts/quality/launcher_inputs.py": "sha256:1aa85bd54b2d0b2dbf1c61128f20f50e0d2a1be053fe8447305f459ad378834a",
-        "scripts/quality/pre_push.py": "sha256:0891a15b8ca29f9b10d45225203adda2417c61af360b4c2d9114afe4641c5fb6",
+        "scripts/quality/pre_push.py": "sha256:c27465609b53b85f724983e6bd8d9aa9d5d1aa2794bce941bbaf5623771d09e0",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347",
         "scripts/quality/source_reads.py": "sha256:a75832c95797a070247cd5e14dfd8324f6c22948e2e474e17b738d34ccd5e211"
