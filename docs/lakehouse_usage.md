@@ -527,7 +527,9 @@ The job environment carries the whole configuration. No file holds any of it.
 | `REDIS_PASSWORD` | Must be unset. The job reads the password from the secret store at run time and keeps it in memory only |
 
 The preparation has four bounded phases under one 180-second deadline: the secret fetch (30 s), a Redis check (10 s), the token exchange and a check that loads
-`publish_runs` (30 s). A phase that does not answer ends the job with its name and the error type.
+`publish_runs` (30 s). Every call of a phase, the opening of the secret-store, Redis and catalog clients included, waits at most its phase limit or the time left
+of the deadline, whichever is shorter. The catalog is not handed to the job after the deadline has passed. A phase that does not answer ends the job with its
+name and the error type. The secret store is asked once and is not retried.
 
 The materialization job is the row `{"template": "pipeline_feast", "step": "materialize", "class": "lakehouse_read"}` in `config/orchestration/ecs_jobs.json`.
 It is off with the rest of the table because `enabled` stays `false`. The owner must switch on three things before it can run on AWS:
@@ -537,6 +539,9 @@ It is off with the rest of the table because `enabled` stays `false`. The owner 
 2. The host Redis. It runs on the AWS host with `requirepass` and is reachable from the job's network. `FEAST_REDIS_HOST` names it.
 3. The secret. A SecureString parameter holds the Redis password under the name that `scripts/infrastructure/secret_store.py` calls `REDIS_PASSWORD`.
    The job's task role may read that one parameter.
+
+**Accepted limit, awaiting the owner's agreement.** The jobs schema accepts a `pipeline_feast` row without `step`. Such a row matches the apply and probe
+steps too. The committed row has `step` set to `materialize` and `enabled` stays `false`, so nothing can dispatch it. The schema does not require the field.
 
 The cases use stand-ins only. No run against the AWS catalog, the host Redis or Parameter Store has happened. The S3 settings for PyIceberg on ECS are
 unproven.
