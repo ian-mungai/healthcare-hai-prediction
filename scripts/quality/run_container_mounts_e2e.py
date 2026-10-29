@@ -72,6 +72,11 @@ def scenarios(source: dict[str, str]) -> list[Case]:
             messages=(RUNTIME, "orchestration.training_contract", "container services/orchestration/docker-compose.orchestration.yaml:airflow-scheduler"),
         ),
         Case(
+            "training_job_import_outside_mounts",
+            {"scripts/training/job.py": "import dags.training_dag\n"},
+            messages=("scripts/training/job.py:1:", "dags.training_dag", "container launcher:training", "Entry points: scripts.training.job"),
+        ),
+        Case(
             "past_quality_engine",
             {QUALITY: quality_import, engine: engine_code},
             messages=(engine, "orchestration.pipeline_protocol", "container docker-compose.yaml:quality"),
@@ -610,6 +615,13 @@ def checker_mutations() -> list[tuple[str, str, str, str, str]]:
         ),
         ("no_class_scan", imports, "ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)", "ast.FunctionDef | ast.AsyncFunctionDef)", "class_method_import"),
         ("no_container_identity", CHECKER, "{container.name}", "unrelated", "past_quality_engine"),
+        (
+            "training_invocations_skipped",
+            CHECKER,
+            'if function.name == "render_pipeline" and dotted(target) == "spec.module":',
+            'if function.name in {"render_pipeline", "render_training"} and dotted(target) == "spec.module":',
+            "training_job_import_outside_mounts",
+        ),
     ]
 
 
