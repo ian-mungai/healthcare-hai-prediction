@@ -211,6 +211,8 @@ class Timings:
     docker_call_timeout: float = 120.0
     health_wait: float = 180.0
     restart_wait: float = 300.0
+    # After the restart command returns, how long the daemon may stay unreachable before the restart fails and its record is cleared.
+    restart_answer: float = 240.0
     # After a pool's cancellations persist, how long its workers keep polling an unreachable launcher before failing visibly.
     cancel_settle: float = 75.0
     # How long a client keeps retrying a submit or status exchange that times out (a launcher busy on a loaded machine) before failing.
@@ -9066,14 +9068,14 @@ class Launcher:
         if restart["phase"] == "restart":
             if "restart:cmd" not in self.inflight:
                 actions.append(lambda: self.spawn("restart:cmd", "restartcmd", self.run_restart_command))
-        elif (
-            restart["phase"] == "wait"
-            and self.status == "serving"
-            and self.docker_ok
-            and "restart:ping" not in self.inflight
-            and time.time() - restart.get("started", time.time()) > 1
-        ):
-            actions.append(lambda: self.spawn("restart:ping", "restartping", self.docker.ping))
+        elif restart["phase"] == "wait":
+            waited = time.time() - restart.get("started", time.time())
+            if waited > self.timings.restart_answer:
+                state["launcher"]["restart"] = None
+                message = f"Docker did not answer within {self.timings.restart_answer:g} s after the restart"
+                actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
+            elif self.status == "serving" and self.docker_ok and "restart:ping" not in self.inflight and waited > 1:
+                actions.append(lambda: self.spawn("restart:ping", "restartping", self.docker.ping))
 
     def run_restart_command(self) -> int:
         """Worker: the restart command of the Docker application."""

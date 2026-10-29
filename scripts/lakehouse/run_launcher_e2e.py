@@ -3053,6 +3053,32 @@ def docker_restart_command_and_client(env: Env) -> dict[str, bool]:
     }
 
 
+@case("docker_restart_answer_deadline", timings={"restart_answer": 4})
+def docker_restart_answer_deadline(env: Env) -> dict[str, bool]:
+    """911 and R14: the restart command returns but the daemon stays down; the restart fails at its answer deadline and the launcher accepts requests again."""
+    env.settings["restart_command"] = restart_command(env, 0.5, 600.0)
+    env.write_settings()
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    began = time.monotonic()
+    failed = expect_error(lambda: client.call("docker_restart", {"owner": True}, owner, timeout=60))
+    seconds = time.monotonic() - began
+    status = client.call("status", {"what": "launcher"})
+    during = expect_error(lambda: client.call("allocate", {}))
+    env.daemon.down_until = 0.0
+    env.wait(lambda: env.ping().get("status") == "serving", 30, "serving once the daemon answers")
+    alloc_id = client.allocate(1)
+    client.release_allocation(alloc_id)
+    return {
+        "the restart failed as degraded and names the deadline": refused(failed, "degraded", "did not answer within 4 s after the restart"),
+        "it failed after the deadline and before the client gave up": 4 <= seconds < 30,
+        "the restart record is cleared": status["restart"] is None and env.state()["launcher"]["restart"] is None,
+        "a request is refused as degraded, no longer as a running restart": refused(during, "degraded") and "restart" not in str(during),
+        "allocate works again once the daemon answers": bool(alloc_id),
+    }
+
+
 @case("secret_commitment")
 def secret_commitment(env: Env) -> dict[str, bool]:
     """911 and 916: a secret value changed while its source stays the same fails the commitment and the adoption is refused."""
@@ -9695,6 +9721,7 @@ ALL_CASES = (
     queued_cutoff_timeout,
     run_allocation_growth_reserve,
     docker_restart_command_and_client,
+    docker_restart_answer_deadline,
     effective_spec_mutations,
     mount_fence_other_checkouts,
     template_owner_predicates,
