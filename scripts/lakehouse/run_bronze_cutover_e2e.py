@@ -1101,10 +1101,9 @@ def tunnel_route(folder: Path) -> dict[str, bool]:
     )
     settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
     spec = TransportSpec("i-0123456789abcdef0", "synthetic", "us-east-1", 18181, 18182)
-    tags = [{"Key": "Project", "Value": "synthetic_project"}]
     untagged = ingress_host([{"Key": "Project", "Value": "other"}])
-    closed = [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}]
-    variants = [*ingress_variants(tags), ("a host without the project tag is refused", untagged, closed, False)]
+    closed = [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}, source_group("synthetic_project")]
+    variants = [*ingress_variants("synthetic_project"), ("a host without the project tag is refused", untagged, closed, False)]
     for label, instance, groups, accepted in variants:
         aws = AwsCli(settings, runner=describe_runner(instance, groups))
         code, _ = code_of(functools.partial(bronze_cutover.network_acceptance, spec, aws, "synthetic_project", deadline=time.monotonic() + 10))
@@ -1269,10 +1268,16 @@ INGRESS_OWNER = "111122223333"
 
 
 def ingress_rule(**sources: Any) -> dict[str, Any]:
-    """One inbound rule on the catalog port; by default its only source is a task security group of the same account."""
+    """One inbound rule on the catalog port; by default its only source is the project's task security group."""
     rule = {"IpProtocol": "tcp", "FromPort": 8181, "ToPort": 8181, "IpRanges": [], "Ipv6Ranges": [], "PrefixListIds": []}
     rule["UserIdGroupPairs"] = [{"GroupId": "sg-0task", "UserId": INGRESS_OWNER}]
     return {**rule, **sources}
+
+
+def source_group(project_tag: str, group: str = "sg-0task", **changes: Any) -> dict[str, Any]:
+    """A source security group: by default the project's, in the host's VPC and account, with the project tag."""
+    found = {"GroupId": group, "OwnerId": INGRESS_OWNER, "VpcId": "vpc-0project", "Tags": [{"Key": "Project", "Value": project_tag}], "IpPermissions": []}
+    return {**found, **changes}
 
 
 def ingress_host(tags: list[dict[str, str]], extra_interface_group: bool = False) -> dict[str, Any]:
@@ -1280,6 +1285,7 @@ def ingress_host(tags: list[dict[str, str]], extra_interface_group: bool = False
     interface_groups = [{"GroupId": "sg-0host"}] + ([{"GroupId": "sg-0extra"}] if extra_interface_group else [])
     return {
         "State": {"Name": "running"},
+        "VpcId": "vpc-0project",
         "PublicIpAddress": "192.0.2.1",
         "SecurityGroups": [{"GroupId": "sg-0host"}],
         "NetworkInterfaces": [{"Association": {"PublicIp": "192.0.2.1"}, "Groups": interface_groups}],
@@ -1287,37 +1293,58 @@ def ingress_host(tags: list[dict[str, str]], extra_interface_group: bool = False
     }
 
 
-def ingress_variants(tags: list[dict[str, str]]) -> list[tuple[str, dict[str, Any] | None, list[dict[str, Any]] | None, bool]]:
-    """(label, instance, security groups, accepted): the host is accepted only when every inbound source is a same-account security group."""
-    host = ingress_host(tags)
-    closed = [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}]
+def ingress_variants(project_tag: str) -> list[tuple[str, dict[str, Any] | None, list[dict[str, Any]] | None, bool]]:
+    """(label, instance, security groups, accepted): accepted only when every inbound source is a project security group of the host's VPC."""
+    host = ingress_host([{"Key": "Project", "Value": project_tag}])
+    task = source_group(project_tag)
+
+    def groups(*rules: dict[str, Any], extra: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        return [{"GroupId": "sg-0host", "IpPermissions": list(rules) or [ingress_rule()]}, task, *(extra or [])]
+
+    unrelated = [{"GroupId": "sg-0other", "UserId": INGRESS_OWNER}]
     return [
-        ("a public address with only project security group sources passes", host, closed, True),
-        ("an IPv4 world range is refused", host, [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "0.0.0.0/0"}])]}], False),
-        ("a narrow IPv4 range is refused", host, [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "198.51.100.7/32"}])]}], False),
-        ("an IPv6 range is refused", host, [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(Ipv6Ranges=[{"CidrIpv6": "::/0"}])]}], False),
-        (
-            "a prefix list source is refused",
-            host,
-            [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(PrefixListIds=[{"PrefixListId": "pl-0abc"}])]}],
-            False,
-        ),
+        ("a public address with only project security group sources passes", host, groups(), True),
+        ("an IPv4 world range is refused", host, groups(ingress_rule(IpRanges=[{"CidrIp": "0.0.0.0/0"}])), False),
+        ("a narrow IPv4 range is refused", host, groups(ingress_rule(IpRanges=[{"CidrIp": "198.51.100.7/32"}])), False),
+        ("an IPv6 range is refused", host, groups(ingress_rule(Ipv6Ranges=[{"CidrIpv6": "::/0"}])), False),
+        ("a prefix list source is refused", host, groups(ingress_rule(PrefixListIds=[{"PrefixListId": "pl-0abc"}])), False),
         (
             "a security group of another account is refused",
             host,
-            [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(UserIdGroupPairs=[{"GroupId": "sg-0other", "UserId": "444455556666"}])]}],
+            groups(
+                ingress_rule(UserIdGroupPairs=[{"GroupId": "sg-0other", "UserId": "444455556666"}]),
+                extra=[source_group(project_tag, "sg-0other", OwnerId="444455556666")],
+            ),
             False,
         ),
         (
-            "an open group on an interface only is refused",
-            ingress_host(tags, extra_interface_group=True),
-            closed + [{"GroupId": "sg-0extra", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "0.0.0.0/0"}])]}],
+            "a same-account group of another application is refused",
+            host,
+            groups(ingress_rule(UserIdGroupPairs=unrelated), extra=[source_group("other_application", "sg-0other")]),
             False,
         ),
-        ("a security group missing from the reply is refused", ingress_host(tags, extra_interface_group=True), closed, False),
+        (
+            "a project group in another VPC is refused",
+            host,
+            groups(ingress_rule(UserIdGroupPairs=unrelated), extra=[source_group(project_tag, "sg-0other", VpcId="vpc-0elsewhere")]),
+            False,
+        ),
+        ("a source group missing from the reply is refused", host, groups(ingress_rule(UserIdGroupPairs=unrelated)), False),
+        (
+            "an open group on an interface only is refused",
+            ingress_host([{"Key": "Project", "Value": project_tag}], extra_interface_group=True),
+            groups(extra=[{"GroupId": "sg-0extra", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "0.0.0.0/0"}])]}]),
+            False,
+        ),
+        (
+            "a host security group missing from the reply is refused",
+            ingress_host([{"Key": "Project", "Value": project_tag}], extra_interface_group=True),
+            groups(),
+            False,
+        ),
         ("a host with no security group is refused", {**host, "SecurityGroups": [], "NetworkInterfaces": [{}]}, [], False),
         ("a failed security group call is refused", host, None, False),
-        ("a stopped host is refused", {**host, "State": {"Name": "stopped"}}, closed, False),
+        ("a stopped host is refused", {**host, "State": {"Name": "stopped"}}, groups(), False),
     ]
 
 
@@ -1349,20 +1376,21 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
     """Route acceptance, Mac side (owner decision Oct 28 2026): the host check, the catalog answer through the relay and the container probe."""
     checks: dict[str, bool] = {}
     settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
-    tags = [{"Key": "Project", "Value": "hai"}]
 
     def host_result(instance: dict[str, Any] | None, groups: list[dict[str, Any]] | None) -> tuple[bool | None, bytes]:
         aws = AwsCli(settings, runner=describe_runner(instance, groups))
         return cutover_route.observe_host(aws, "i-0123456789abcdef0", "hai", deadline=time.monotonic() + 10)
 
-    for label, instance, groups, accepted in ingress_variants(tags):
+    for label, instance, groups, accepted in ingress_variants("hai"):
         result, evidence = host_result(instance, groups)
         expected = None if groups is None else accepted
         checks[f"host observation: {label}"] = result is expected
         checks[f"host observation evidence holds no address or group ID: {label}"] = (
             b"192.0.2" not in evidence and b"sg-0" not in evidence and b"198.51" not in evidence
         )
-    checks["a host without the project tag fails"] = host_result(ingress_host([]), [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}])[0] is False
+    checks["a host without the project tag fails"] = (
+        host_result(ingress_host([]), [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}, source_group("hai")])[0] is False
+    )
     checks["a failed describe call is recorded as not observed"] = host_result(None, [])[0] is None
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
