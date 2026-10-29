@@ -1155,7 +1155,7 @@ def checksum_results(base: Path, only: list[str] | None = None) -> list[dict[str
                     "expected": f"{len(built)} built relations, {len(built) - tables} views and {tables} tables, each readable (the md5 is empty without rows)",
                     "unreadable": sorted(set(built) - real),
                     "with_rows_and_an_md5": with_rows,
-                    "ok": len(built) == 23 and tables == 4 and real == set(built) and bool(with_rows),
+                    "ok": len(built) == 31 and tables == 4 and real == set(built) and bool(with_rows),
                 }
             )
             results[-1]["seconds"] = round(time.monotonic() - started, 3)
