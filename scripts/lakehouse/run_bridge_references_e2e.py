@@ -14,6 +14,7 @@ the case ``absent_contract_does_not_pass`` shows the same for the reference chec
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import shutil
@@ -85,6 +86,33 @@ def rekey(file: str, fact: str, control: str, old: str, new: str) -> Callable[[R
         for row in hits:
             row["measure_key"] = new
         return rows
+
+    return change
+
+
+def first_value(column: str, value: str) -> Callable[[Rows], Rows]:
+    """Return a change that sets a column of the first row to a value."""
+
+    def change(rows: Rows) -> Rows:
+        rows[0][column] = value
+        return rows
+
+    return change
+
+
+def append_row(row: dict[str, str]) -> Callable[[Rows], Rows]:
+    """Return a change that adds a row at the end."""
+    return lambda rows: [*rows, dict(row)]
+
+
+def remove_where(column: str, value: str) -> Callable[[Rows], Rows]:
+    """Return a change that removes the rows whose column holds the value; it must remove at least one."""
+
+    def change(rows: Rows) -> Rows:
+        kept = [row for row in rows if row[column] != value]
+        if len(kept) == len(rows):
+            raise refs.ReferenceInputError(f"no row holds {column} {value!r}")
+        return kept
 
     return change
 
@@ -181,6 +209,56 @@ def cases(seeds: Path, recipes: Path) -> list[tuple[str, Callable[[], None], str
             "registry_controls.csv differs from what the authoritative files generate",
         ),
         (
+            "family_drift",
+            lambda: edit(seeds / "registry_controls.csv", first_value("family", "Outcome")),
+            "registry_controls.csv differs from what the authoritative files generate",
+        ),
+        (
+            "closeout_drift",
+            lambda: edit(seeds / "registry_controls.csv", first_value("closeout_decision", "dropped")),
+            "registry_controls.csv differs from what the authoritative files generate",
+        ),
+        (
+            "family_supplement_row_removed",
+            lambda: edit(seeds / refs.FAMILY_SUPPLEMENT, remove_where("measure_control", "C285")),
+            "control C285 has no source family and no row in registry_family_supplement.csv",
+        ),
+        (
+            "family_supplement_for_sourced_control",
+            lambda: edit(seeds / refs.FAMILY_SUPPLEMENT, append_row({"measure_control": "C001", "family": "Structure"})),
+            "control C001 has a source family; remove it from the supplement",
+        ),
+        (
+            "family_supplement_control_unknown",
+            lambda: edit(seeds / refs.FAMILY_SUPPLEMENT, append_row({"measure_control": "C999", "family": "Structure"})),
+            "control C999 is not in the registry",
+        ),
+        (
+            "family_supplement_control_twice",
+            lambda: edit(seeds / refs.FAMILY_SUPPLEMENT, lambda rows: [*rows, dict(rows[0])]),
+            "control C285 appears twice",
+        ),
+        (
+            "family_supplement_family_invented",
+            lambda: edit(seeds / refs.FAMILY_SUPPLEMENT, first_value("family", "Mixed")),
+            "control C285 has family 'Mixed'",
+        ),
+        (
+            "closeout_spelling_not_mapped",
+            lambda: edit(seeds / refs.CLOSEOUT_SPELLINGS, remove_where("raw_decision", "retired")),
+            "has closeout spelling 'retired', which registry_closeout_spellings.csv does not map",
+        ),
+        (
+            "closeout_spelling_twice",
+            lambda: edit(seeds / refs.CLOSEOUT_SPELLINGS, lambda rows: [*rows, dict(rows[0])]),
+            "spelling 'dropped' appears twice",
+        ),
+        (
+            "closeout_value_invented",
+            lambda: edit(seeds / refs.CLOSEOUT_SPELLINGS, first_value("closeout_decision", "closed")),
+            "spelling 'dropped' maps to 'closed'",
+        ),
+        (
             "inventory_group_removed",
             lambda: edit(recipes / "recipe_groups.csv", lambda rows: [row for row in rows if row["measure_control"] != "C250"]),
             "is not in the inventory",
@@ -207,6 +285,51 @@ def absent_contract_case() -> dict[str, Any]:
     }
 
 
+def registry_damage_cases() -> list[dict[str, Any]]:
+    """Return the cases that damage the registry in memory (the registry is one fixed file): each must give its message and no family or decision."""
+    registry = json.loads(refs.REGISTRY.read_text())
+    additions = json.loads(refs.ADDITIONS.read_text())
+    supplement = refs.read_rows(refs.GOLD_SEEDS / refs.FAMILY_SUPPLEMENT)
+    spellings = refs.read_rows(refs.GOLD_SEEDS / refs.CLOSEOUT_SPELLINGS)
+
+    def first_sourced_control(damaged: dict[str, Any]) -> dict[str, Any]:
+        return next(control for control in damaged["measure_controls"] if control["id"] == "C001")
+
+    def two_domains(damaged: dict[str, Any]) -> None:
+        sources = {source["source_id"]: source for source in damaged["sources"]}
+        source = sources[first_sourced_control(damaged)["source_ids"][0]]
+        own = {refs.domain_of(family["dimension"]) for family in damaged["source_families"] if family["id"] in source["original_source_family_ids"]}
+        other = next(family["id"] for family in damaged["source_families"] if refs.domain_of(family["dimension"]) not in own)
+        source["original_source_family_ids"] = [*source["original_source_family_ids"], other]
+
+    def unmapped_dimension(damaged: dict[str, Any]) -> None:
+        damaged["source_families"][0]["dimension"] = "Quality: a new dimension"
+
+    def unknown_source(damaged: dict[str, Any]) -> None:
+        control = first_sourced_control(damaged)
+        control["source_ids"] = [*control["source_ids"], "NOT_A_SOURCE"]
+
+    def new_spelling(damaged: dict[str, Any]) -> None:
+        control = next(control for control in damaged["measure_controls"] if control.get("effective_closeout_decision"))
+        control["effective_closeout_decision"]["decision"] = "closed for a new reason"
+
+    damage: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
+        ("registry_control_in_two_domains", two_domains, "control C001 resolves to the domains"),
+        ("registry_dimension_without_domain", unmapped_dimension, "has dimension 'Quality: a new dimension', which maps to no domain"),
+        ("registry_control_names_unknown_source", unknown_source, "control C001 names source NOT_A_SOURCE, which is not in the registry"),
+        ("registry_new_closeout_spelling", new_spelling, "has closeout spelling 'closed for a new reason', which registry_closeout_spellings.csv does not map"),
+    ]
+    results: list[dict[str, Any]] = []
+    for name, change, expected in damage:
+        damaged = copy.deepcopy(registry)
+        change(damaged)
+        records = refs.registry_records(damaged, additions)
+        problems = [*refs.control_families(damaged, records, supplement)[1], *refs.closeout_decisions(records, spellings)[1]]
+        matched = [problem for problem in problems if expected in problem]
+        results.append({"case": name, "expected": expected, "matched": matched[:3], "problems": len(problems), "ok": bool(matched)})
+    return results
+
+
 def run(output: Path) -> dict[str, Any]:
     """Run every case on scratch copies and return the report; without the contract no case runs and the status is fail."""
     results: list[dict[str, Any]] = []
@@ -227,6 +350,7 @@ def run(output: Path) -> dict[str, Any]:
     else:
         skipped = f"every case was skipped: {refs.CONTRACT} is absent, so no check that needs the gold contract ran"
         results.append({"case": "committed_files", "problems": [skipped], "ok": False})
+    results.extend(registry_damage_cases())
     results.append(absent_contract_case())
     report: dict[str, Any] = {
         "written_utc": datetime.now(UTC).isoformat(),
