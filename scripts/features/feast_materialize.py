@@ -14,6 +14,7 @@ import importlib
 import importlib.metadata
 from collections.abc import Callable, MutableMapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from scripts.features import feast_job, historical
@@ -124,17 +125,23 @@ def run_materialize(
     loader: Callable[..., Any] | None = None,
     exchange: Callable[[str, str, str], str] | None = None,
     register: bool = True,
+    session: Callable[[], contextlib.AbstractContextManager[reads.IcebergCatalog]] | None = None,
+    settings_file: Path = feast_job.SETTINGS_FILE,
 ) -> dict[str, Any]:
-    """Run the materialize step and write ``feast_materialize.json`` (names, counts and hashes) into the run folder."""
+    """Run the materialize step and write ``feast_materialize.json`` (names, counts and hashes) into the run folder.
+
+    ``session`` replaces ``feast_job.catalog_session`` and ``settings_file`` names the Feast settings of the profile (the AWS profile passes both).
+    """
     deadline = reads.monotonic_deadline(feast_job.JOB_SECONDS)
     document, schema_sha256 = schema if schema is not None else reads.read_schema()
-    with feast_job.catalog_session(settings, environ, loader=loader, exchange=exchange, register=register) as catalog:
+    opened = session() if session is not None else feast_job.catalog_session(settings, environ, loader=loader, exchange=exchange, register=register)
+    with opened as catalog:
         deadline("selecting the publication")
         publication = reads.read_publication(catalog, reads.NAMESPACES[settings.mode])
         version = importlib.metadata.version("feast") if hooks_for is None else "test"
         plan = load_plan(catalog, publication, document, schema_sha256, version)
         if hooks_for is None:
-            hooks: online.LoadHooks = FeastHooks(catalog, publication, document, historical.default_store(environ), version)
+            hooks: online.LoadHooks = FeastHooks(catalog, publication, document, historical.default_store(environ, settings_file), version)
         else:
             hooks = hooks_for(catalog, publication, document)
         # Feast's own Redis client (materialize writes through it) gets the job bounds and zero retries; the cases that pass their own hooks use no Feast.

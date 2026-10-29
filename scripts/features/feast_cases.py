@@ -3,6 +3,7 @@
 
     .venv/bin/python -B -m scripts.features.feast_cases --part local [--case E17_during ...]      # now: stub catalogs, no Feast, no PyIceberg, no Docker
     python -B -m scripts.features.feast_cases --part image [--case E16 ...]                        # inside the Feast image (the lead runs it)
+    .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]               # the AWS profile against stand-ins (``feast_aws_cases``)
 
 ``--part local`` runs the logic that needs neither Feast nor PyIceberg: head verification and publication selection against a stub catalog, the schema
 and view comparison, settings and registry-key handling, the token exchange against a loopback server, the private ``.pyiceberg.yaml``, the apply order
@@ -1738,12 +1739,16 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument("--part", choices=("local", "image"), required=True)
+    parser.add_argument("--part", choices=("local", "image", "aws"), required=True)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--report-dir", type=Path)
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.part == "local":
         cases = LOCAL_CASES
+    elif args.part == "aws":
+        from scripts.features import feast_aws_cases
+
+        cases = feast_aws_cases.CASES
     else:
         from scripts.features import feast_image_cases
 

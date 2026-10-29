@@ -124,7 +124,7 @@ def load_jobs(root: Path) -> dict[str, Any]:
         schema = json.loads((root / "config/orchestration/ecs_jobs.schema.json").read_text())
         if list(Draft202012Validator(schema).iter_errors(value)):
             raise PlacementError("ECS jobs violate their schema")
-        keys = [(row["template"], row.get("layer"), row["class"]) for row in value["jobs"]]
+        keys = [(row["template"], row.get("layer"), row.get("step"), row["class"]) for row in value["jobs"]]
         if len(keys) != len(set(keys)):
             raise PlacementError("ECS jobs contain duplicate selectors")
         return value
@@ -133,9 +133,14 @@ def load_jobs(root: Path) -> dict[str, Any]:
 
 
 def row_for(jobs: Mapping[str, Any], template: str, params: Mapping[str, Any], job_class: str) -> dict[str, Any] | None:
-    """Return the exact closed template, layer and class row or no eligibility."""
+    """Return the exact closed template, layer, step and class row or no eligibility."""
     for row in jobs["jobs"]:
-        if row["template"] == template and row["class"] == job_class and ("layer" not in row or row["layer"] == params.get("layer")):
+        if (
+            row["template"] == template
+            and row["class"] == job_class
+            and ("layer" not in row or row["layer"] == params.get("layer"))
+            and ("step" not in row or row["step"] == params.get("step"))
+        ):
             return dict(row)
     return None
 

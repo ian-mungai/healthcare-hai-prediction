@@ -17,8 +17,9 @@
         "additionalProperties": false,
         "required": ["template", "class"],
         "properties": {
-          "template": {"enum": ["pipeline_dbt", "pipeline_validate_silver", "pipeline_validate_gold", "pipeline_validate_cross", "pipeline_export", "pipeline_spark", "pipeline_publish"]},
+          "template": {"enum": ["pipeline_dbt", "pipeline_validate_silver", "pipeline_validate_gold", "pipeline_validate_cross", "pipeline_export", "pipeline_spark", "pipeline_publish", "pipeline_feast"]},
           "layer": {"enum": ["silver", "gold"]},
+          "step": {"const": "materialize"},
           "class": {"enum": ["offline", "lakehouse_read"]}
         }
       }

@@ -127,7 +127,8 @@ class FeastRepository:
             operations.apply_total(config, self.repo, skip_source_validation=True)
 
     def object_list(self) -> list[dict[str, Any]]:
-        store = importlib.import_module("feast").FeatureStore(repo_path=str(self.repo))
+        options = {} if self.settings_file == SETTINGS_FILE else {"fs_yaml_file": self.settings_file}
+        store = importlib.import_module("feast").FeatureStore(repo_path=str(self.repo), **options)
         objects: list[dict[str, Any]] = []
         for entity in store.list_entities(allow_cache=False):
             objects.append({"kind": "entity", "name": entity.name, "join_key": entity.join_key})
@@ -338,12 +339,16 @@ def run(
     loader: Callable[..., Any] | None = None,
     exchange: Callable[[str, str, str], str] | None = None,
     register: bool = True,
+    session: Callable[[], contextlib.AbstractContextManager[reads.IcebergCatalog]] | None = None,
 ) -> dict[str, Any]:
-    """Run the apply step for the settings and write its record into the run folder after the apply returned."""
+    """Run the apply step for the settings and write its record into the run folder after the apply returned.
+
+    ``session`` replaces ``catalog_session`` (the AWS profile prepares its own environment and catalog).
+    """
     deadline = reads.monotonic_deadline(JOB_SECONDS)
     document, schema_sha256 = schema if schema is not None else reads.read_schema()
     writer_lease = lease if lease is not None else protocol_lease(environ)
-    with catalog_session(settings, environ, loader=loader, exchange=exchange, register=register) as catalog:
+    with session() if session is not None else catalog_session(settings, environ, loader=loader, exchange=exchange, register=register) as catalog:
         record = apply(
             catalog,
             settings,
@@ -373,6 +378,12 @@ def main(argv: Sequence[str] | None = None, environ: MutableMapping[str, str] | 
         return 2
     live = os.environ if environ is None else environ
     try:
+        from scripts.features import feast_aws
+
+        if feast_aws.selected_profile(live) == "aws":
+            record = feast_aws.run_job(args.step, args.run, args.mode, live)
+            sys.stdout.write(json.dumps({key: record[key] for key in record if key in SUMMARY_KEYS}, sort_keys=True) + "\n")
+            return 0
         settings = job_settings(live, args.step, args.run, args.mode)
         if args.step == "materialize":
             from scripts.features import feast_materialize
