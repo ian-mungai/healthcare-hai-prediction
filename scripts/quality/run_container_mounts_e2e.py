@@ -355,7 +355,14 @@ def scenarios(source: dict[str, str]) -> list[Case]:
             ),
             Case(
                 "pipeline_mount_edit",
-                {PIPELINE: replaced(source[PIPELINE], '        (str(checkout / "orchestration"), "/workspace/orchestration", True),\n', "")},
+                {
+                    PIPELINE: replaced(
+                        source[PIPELINE],
+                        '        (str(checkout / "orchestration"), "/workspace/orchestration", True),\n'
+                        '        (str(checkout / "data_contracts/lakehouse"), "/workspace/data_contracts/lakehouse", True),\n',
+                        '        (str(checkout / "data_contracts/lakehouse"), "/workspace/data_contracts/lakehouse", True),\n',
+                    )
+                },
                 messages=("orchestration.pipeline_protocol", "container launcher:pipeline/probe_spec"),
             ),
             Case(
