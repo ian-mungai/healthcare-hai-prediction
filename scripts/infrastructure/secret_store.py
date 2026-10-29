@@ -66,7 +66,6 @@ AWS_POLARIS_VARIABLES = (
     *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold") for part in ("id", "secret")),
 )
 ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
-LEGACY_VARIABLES = ("airflow_admin_legacy_secret_name",)
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
 VARIABLES = "infra/iam/variables.tf"
 LOOPBACK = {"127.0.0.1", "localhost"}
@@ -165,10 +164,10 @@ def variable_names(variables: Path) -> dict[str, str]:
     stack passes the same variables to its own policy templates, so the Python checks and Terraform read one default per name.
     """
     defaults = terraform_variables(variables)
-    missing = [name for name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES, *LEGACY_VARIABLES) if name not in defaults]
+    missing = [name for name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES) if name not in defaults]
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
-    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES, *LEGACY_VARIABLES) or value.startswith(PREFIX)]
+    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES) or value.startswith(PREFIX)]
     return {name.upper(): defaults[name] for name in wanted}
 
 

@@ -126,17 +126,6 @@ variable "airflow_admin_secret_name" {
   }
 }
 
-variable "airflow_admin_legacy_secret_name" {
-  description = "Secrets Manager name of the hand-made Airflow administrator password; the project may read it to clone it once into Parameter Store."
-  type        = string
-  default     = "healthcare-hai-prediction/airflow-admin"
-
-  validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.airflow_admin_legacy_secret_name)) && !can(regex("[*?]", var.airflow_admin_legacy_secret_name))
-    error_message = "Use a Secrets Manager name of 1 to 512 letters, digits and the characters /_+=.@- with no wildcard."
-  }
-}
-
 variable "postgres_password_name" {
   description = "Parameter Store SecureString name of the local catalog database password; the project may read, create and put it."
   type        = string

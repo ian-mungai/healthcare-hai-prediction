@@ -229,7 +229,7 @@ DEFECTS = (
     ScriptDefect(
         "the lakehouse role names are not read from the variables",
         SECRET_STORE,
-        "if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES, *LEGACY_VARIABLES) or value.startswith(PREFIX)]",
+        "if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES) or value.startswith(PREFIX)]",
         "if value.startswith(PREFIX)]",
         NAME_SOURCE,
     ),

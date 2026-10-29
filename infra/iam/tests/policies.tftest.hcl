@@ -823,18 +823,13 @@ run "project_secret_names" {
   }
 
   assert {
-    condition     = output.project_secret_names.clone_secrets == ["healthcare-hai-prediction/airflow-admin"]
-    error_message = "The only clone source is the hand-made Airflow administrator password in Secrets Manager."
-  }
-
-  assert {
     condition     = length(output.project_secret_names.aws_polaris_pairs) == 10 && length(distinct(output.project_secret_names.aws_polaris_pairs)) == 10 && alltrue([for name in output.project_secret_names.aws_polaris_pairs : startswith(name, "/healthcare_hai_prediction/aws_polaris_")])
     error_message = "The project user sets up exactly ten distinct AWS Polaris pair names under /healthcare_hai_prediction/aws_polaris_."
   }
 
   assert {
     condition = alltrue([
-      for name in concat(output.project_secret_names.shared_secrets, output.project_secret_names.clone_secrets, output.project_secret_names.read_parameters) : !strcontains(name, "*") && !strcontains(name, "?")
+      for name in concat(output.project_secret_names.shared_secrets, output.project_secret_names.read_parameters) : !strcontains(name, "*") && !strcontains(name, "?")
     ])
     error_message = "No granted name holds a wildcard."
   }

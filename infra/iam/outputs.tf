@@ -58,12 +58,11 @@ output "lakehouse_role_arns" {
 }
 
 output "project_secret_names" {
-  description = "The names the project user's policy files grant: the shared API keys in Secrets Manager (read only), the project parameters in Parameter Store (read), the managed ones among them (written) and the hand-made Airflow password secret (read once to clone it) and the ten AWS Polaris pair names the project user sets up."
+  description = "The names the project user's policy files grant: the shared API keys in Secrets Manager (read only), the project parameters in Parameter Store (read), the managed ones among them (written) and the ten AWS Polaris pair names the project user sets up."
   value = {
     shared_secrets     = local.shared_secret_names
     read_parameters    = local.read_parameter_names
     managed_parameters = local.managed_parameter_names
-    clone_secrets      = [var.airflow_admin_legacy_secret_name]
     aws_polaris_pairs = [
       var.aws_polaris_reader_client_id_name, var.aws_polaris_reader_client_secret_name,
       var.aws_polaris_e2e_client_id_name, var.aws_polaris_e2e_client_secret_name,
@@ -75,9 +74,9 @@ output "project_secret_names" {
 
   precondition {
     condition = length(distinct(concat(
-      local.shared_secret_names, [var.airflow_admin_legacy_secret_name], local.read_parameter_names,
+      local.shared_secret_names, local.read_parameter_names,
       [var.aws_polaris_silver_client_id_name, var.aws_polaris_silver_client_secret_name, var.aws_polaris_gold_client_id_name, var.aws_polaris_gold_client_secret_name],
-    ))) == length(local.shared_secret_names) + 1 + length(local.read_parameter_names) + 4
+    ))) == length(local.shared_secret_names) + length(local.read_parameter_names) + 4
     error_message = "Each secret name must be different."
   }
 }
