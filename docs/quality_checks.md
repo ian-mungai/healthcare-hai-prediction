@@ -679,7 +679,7 @@ worker. A member that survives KILL fails the run with the worker's name. An exi
 its stop step is a new process in the dispatcher's session that an outer stop would also signal. An alarm ends that step after its grace period plus 25 seconds. Worker sessions
 are not members of the dispatcher's session: the deadline of `scripts/quality/pre_push.py` reaches the workers through that exit trap. When the dispatcher is killed before its trap
 runs, each worker's watchdog stops its session. A process that starts its own session without the
-launcher is outside the worker's session. Accepted limits that wait for the owner's agreement (rule 8.7), not built: (1) A worker that has just ended and is not yet seen by the
+launcher is outside the worker's session. Accepted limits, not built: (1) A worker that has just ended and is not yet seen by the
 dispatcher's half-second poll has no watchdog, because the session leader ends with its program. If the dispatcher is killed (KILL) inside that window while a descendant of the
 worker is left, that descendant survives. Likelihood low; the fix keeps the leader alive until it has stopped and confirmed the worker's remaining session, then returns the status. (2) When the
 alarm of the exit trap's stop step ends, it kills the step but not a stalled `ps` lister and its pipe holder. `run_worker_deadline_e2e` also has no alarm-expiry case. Likelihood very low
