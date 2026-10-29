@@ -297,8 +297,49 @@ class Declarations:
         if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
             return {expr.value}
         if isinstance(expr, ast.IfExp):
-            return self.module_choices(expr.body) | self.module_choices(expr.orelse)
+            body, other = self.module_choices(expr.body), self.module_choices(expr.orelse)
+            return body | other if body and other else set()
         return set()
+
+    @staticmethod
+    def snapshot_comprehension_problem(comprehension: ast.AST | None, entry: ast.Tuple) -> str | None:
+        """Name the first part of the `/workspace/{path.name}` code mount comprehension that differs from the supported form."""
+        if not isinstance(comprehension, ast.ListComp | ast.SetComp | ast.GeneratorExp) or comprehension.elt is not entry:
+            return "the target must come from a comprehension over the snapshot code folder"
+        if len(comprehension.generators) != 1 or comprehension.generators[0].ifs or comprehension.generators[0].is_async:
+            return "the comprehension must have one plain generator without conditions"
+        generator = comprehension.generators[0]
+        if not isinstance(generator.target, ast.Name):
+            return "the comprehension variable must be a plain name"
+        variable = generator.target.id
+        source = generator.iter
+        if not (
+            isinstance(source, ast.Call)
+            and dotted(source.func) == "sorted"
+            and len(source.args) == 1
+            and not source.keywords
+            and isinstance(source.args[0], ast.Call)
+            and isinstance(source.args[0].func, ast.Attribute)
+            and source.args[0].func.attr == "iterdir"
+            and isinstance(source.args[0].func.value, ast.BinOp)
+            and isinstance(source.args[0].func.value.op, ast.Div)
+            and isinstance(source.args[0].func.value.left, ast.Name)
+            and isinstance(source.args[0].func.value.right, ast.Constant)
+        ):
+            return 'the iterator must be sorted((folder / "code").iterdir())'
+        if source.args[0].func.value.right.value != "code":
+            return f'the iterator folder {source.args[0].func.value.right.value!r} is not the snapshot "code" folder'
+        source_word, target = entry.elts[0], entry.elts[1]
+        if not (isinstance(source_word, ast.Call) and dotted(source_word.func) == "str" and len(source_word.args) == 1 and not source_word.keywords):
+            return "the bind source must be str(<variable>)"
+        if not (isinstance(source_word.args[0], ast.Name) and source_word.args[0].id == variable):
+            return "the bind source must be the comprehension variable"
+        if not isinstance(target, ast.JoinedStr) or len(target.values) != 2 or not isinstance(target.values[1], ast.FormattedValue):
+            return "the bind target must be an f-string of the workspace prefix and one name"
+        part = target.values[1]
+        if part.conversion != -1 or part.format_spec is not None or dotted(part.value) != f"{variable}.name":
+            return f"the bind target must name the comprehension variable's own file name ({variable}.name), not {ast.unparse(part.value)}"
+        return None
 
     def training(self) -> tuple[tuple[Bind, ...], set[str]]:
         """Derive the training snapshot binds, action mounts and entry modules from the digest roots and the renderer's specification builder."""
@@ -317,6 +358,7 @@ class Declarations:
             binds.append(Bind(root, f"{WORKSPACE}/{root}"))
         snapshot_rule = False
         modules: set[str] = set()
+        comprehensions = {id(node.elt): node for node in ast.walk(build) if isinstance(node, ast.ListComp | ast.SetComp | ast.GeneratorExp)}
         for node in ast.walk(build):
             if isinstance(node, ast.Tuple) and len(node.elts) == 3 and isinstance(node.elts[2], ast.Constant) and isinstance(node.elts[2].value, bool):
                 target = node.elts[1]
@@ -330,6 +372,8 @@ class Declarations:
                             break
                         prefix += str(part.value)
                     if dynamic and prefix == f"{WORKSPACE}/" and len(target.values) == 2:
+                        if problem := self.snapshot_comprehension_problem(comprehensions.get(id(node)), node):
+                            raise ValueError(f"{TRAINING}:{node.lineno}: unsupported snapshot mount form: {problem}")
                         snapshot_rule = True
                         continue
                 else:
