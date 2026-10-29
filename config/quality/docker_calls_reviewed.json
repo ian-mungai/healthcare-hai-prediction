@@ -1379,7 +1379,7 @@
       "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4b38004e3db28e03e20602694d73be2085e53ecfb9f428839af330721b711609",
+      "file_sha256": "6d41457fbf3068a0b9d593c20833323f992021ec97fd105fe7be51d3b854d3c5",
       "dependencies": {
         "orchestration/worker_stderr.py": "sha256:b789fbb6d329adf6e571344079066028bb80b9a78be9e9f0700dbdac855898d1",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
@@ -1388,11 +1388,11 @@
     },
     {
       "path": "services/hai/bootstrap/supervisor.py",
-      "line": 190,
+      "line": 196,
       "code_sha256": "e04455b966ee42c025febd778484dd49f717f35b4a6c634d5fe6ca84d406d795",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "3bb6e7e0b2e654579d45d57f37973f0233d1efaabb674d0cab26439116e1bae9",
+      "file_sha256": "da92f8f69ada3dbca925050a79f3458d0a54eb012776072de4e34e51dbe77a5c",
       "dependencies": {},
       "reason": "the in-image supervisor starts sys.executable -I -B with its own sdk_worker.py (or the worker its caller passes in the source smoke), never another program; never Docker"
     },
