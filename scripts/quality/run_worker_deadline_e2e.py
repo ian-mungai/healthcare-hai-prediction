@@ -17,6 +17,8 @@ session), a worker that ends with a background process left in its session leave
 listing stalls.
 Fix round 6: a worker's leader stops a left descendant while the dispatcher is paused, an alarm of the exit trap's stop step leaves no stalled
 lister or pipe holder, and a deadline stop that cannot be confirmed is named.
+Fix round 7: the stop helper and the worker's leader (whose fallback no longer signals its own group) exit with status 70 when the session cannot be
+listed, and the dispatcher keeps that status through its exit trap.
 Planted defects run the cases against a changed copy of the dispatcher (no deadline, which is the plain wait; a stop of the direct process only; the
 old whole-second comparison; a stop of the worker's process group without the rest of its session). Each counts as caught only when the named
 check of its case is false and the case raised nothing.
@@ -29,6 +31,8 @@ import contextlib
 import hashlib
 import json
 import os
+import re
+import shlex
 import shutil
 import signal
 import sys
@@ -143,6 +147,26 @@ echo $$ >"$STUB_DIR/lister.pid"
 sleep 60 &
 echo $! >"$STUB_DIR/lister_child.pid"
 wait
+"""
+# Appended to the sandbox copy of scripts/process.py: the session lister does not exist, so every listing fails (the fix round 7 reproductions).
+MISSING_LISTER = '\nSESSION_LISTING = ("/missing-review-lister",)\n'
+# A worker command (argv: the stub folder) that leaves a member in a group of its own, ignoring TERM with output closed, and ends once the member is recorded.
+LEFT_MEMBER = """
+import os, signal, sys, time
+folder = sys.argv[1]
+open(os.path.join(folder, 'worker.pid'), 'w').write(str(os.getpid()))
+if os.fork() == 0:
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    null = os.open(os.devnull, os.O_RDWR)
+    for descriptor in (0, 1, 2):
+        os.dup2(null, descriptor)
+    open(os.path.join(folder, 'orphan.pid'), 'w').write(str(os.getpid()))
+    time.sleep(90)
+    os._exit(0)
+end = time.monotonic() + 5
+while not os.path.exists(os.path.join(folder, 'orphan.pid')) and time.monotonic() < end:
+    time.sleep(0.01)
 """
 # Seconds a worker may outlive the death of its dispatcher: the leader's poll, the grace period, the 5 s confirmation and slack for a loaded machine.
 WATCHDOG_BOUND_SECONDS = 0.5 + GRACE_SECONDS + 5 + 3
@@ -618,6 +642,74 @@ def alarm_expiry(base: Path) -> dict[str, Any]:
     return case("alarm_expiry_leaves_no_lister_or_holder", base, body)
 
 
+def missing_lister_files(sandbox: Sandbox) -> None:
+    """Make every session listing of the sandbox copy of scripts/process.py fail: the lister is not on PATH."""
+    path = sandbox.root / "scripts/process.py"
+    path.write_text(path.read_text(encoding="utf-8") + MISSING_LISTER, encoding="utf-8")
+
+
+def sandbox_function(sandbox: Sandbox, pattern: str) -> str:
+    """The text a pattern selects in the sandbox copy of the dispatcher (the planted copy in a plant run)."""
+    match = re.search(pattern, (sandbox.root / "scripts/run_ci.sh").read_text(encoding="utf-8"), re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise ValueError(f"the dispatcher has no text for {pattern}")
+    return match.group(1) if match.groups() else match.group(0)
+
+
+def stop_helper_status(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The reviewer's probe: the exact stop helper of the dispatcher, run on a session whose listing fails. It prints that the stop is not confirmed and must
+        # exit with status 70, not 1.
+        missing_lister_files(sandbox)
+        helper = sandbox_function(sandbox, r"^stop_sessions\(\) \{\n.*?^\}")
+        subject = start([sys.executable, "-B", "-c", "import time; time.sleep(60)"], sandbox.root, None, new_session=True)
+        # The script holds the helper and its call; the call's values are quoted into it, so the program that runs is a literal script path.
+        call = f"repo_root={shlex.quote(str(sandbox.root))}\npython_bin={shlex.quote(sys.executable)}\nstop_sessions 1 {subject.pid}\n"
+        (sandbox.root / "stop_helper.sh").write_text(f"{helper}\n{call}", encoding="utf-8")
+        try:
+            done = run_command("/bin/bash", ["stop_helper.sh"], cwd=sandbox.root, timeout=30)
+            end = time.monotonic() + 3
+            while subject.poll() is None and time.monotonic() < end:
+                time.sleep(0.05)
+            stopped = subject.poll() is not None
+        finally:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(subject.pid, signal.SIGKILL)
+            subject.wait(timeout=5)
+            for pipe in (subject.stdout, subject.stderr):
+                if pipe is not None:
+                    pipe.close()
+        return {
+            "helper_exit_status_is_70": done.returncode == 70,
+            "helper_says_the_stop_is_not_confirmed": "not confirmed" in done.stderr,
+            "leader_group_still_stopped_by_the_fallback": stopped,
+            "exit_status_seen": done.returncode,
+        }
+
+    return case("stop_helper_keeps_status_70", base, body)
+
+
+def leader_status(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The reviewer's probe: the worker ends and leaves a member in another group of its session while the session cannot be listed. The leader runs the
+        # real worker_session_step. It must not kill itself in the fallback: it reports that the stop is not confirmed and exits with status 70.
+        missing_lister_files(sandbox)
+        step = sandbox_function(sandbox, r"worker_session_step='(.*?)'\n")
+        # The dispatcher starts the step as a background job (not a group leader, so its setsid works): this script does the same.
+        arguments = [sys.executable, "-I", "-c", step, str(sandbox.root), "0.1", sys.executable, "-B", "-c", LEFT_MEMBER, str(sandbox.stub)]
+        (sandbox.root / "start_step.sh").write_text(f"{shlex.join(arguments)} </dev/null &\nwait $!\n", encoding="utf-8")
+        done = run_command("/bin/bash", ["start_step.sh"], cwd=sandbox.root, timeout=30)
+        return {
+            "member_started": sandbox.pid("orphan") is not None,
+            "leader_was_not_killed_by_its_own_fallback": done.returncode < 128,
+            "leader_says_the_stop_is_not_confirmed": "not confirmed" in done.stderr,
+            "leader_exit_status_is_70": done.returncode == 70,
+            "exit_status_seen": done.returncode,
+        }
+
+    return case("leader_with_a_missing_lister_reports_status_70", base, body)
+
+
 def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         # The deadline stop cannot list the session (every listing stalls). The failure entry must say that the stop is not confirmed, and the dispatcher
@@ -627,6 +719,7 @@ def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
         return {
             "run_did_not_hang": not run["timed_out"],
             "exit_nonzero": run["exit"] not in (None, 0),
+            "exit_status_is_70": run["exit"] == 70,
             "failure_names_the_group_and_the_unconfirmed_stop": f"Local CI failed in: python_lint (deadline {LIMIT_SECONDS} s, stop not confirmed)"
             in run["text"],
             "no_pass_line": "All local CI checks passed" not in run["text"],
@@ -678,6 +771,8 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "ended_worker_session_is_stopped_before_the_leader_exits": ended_worker_leader,
     "alarm_expiry_leaves_no_lister_or_holder": alarm_expiry,
     "deadline_stop_that_cannot_be_confirmed_is_named": unconfirmed_deadline_stop,
+    "stop_helper_keeps_status_70": stop_helper_status,
+    "leader_with_a_missing_lister_reports_status_70": leader_status,
 }
 
 # plant name -> (pairs of text replaced in the dispatcher, {case that must fail: the check that must be false in it}). The first plant is the plain wait
@@ -715,6 +810,25 @@ PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
     "unconfirmed_stop_not_named": (
         (('s, stop not confirmed)")', 's)")'),),
         {"deadline_stop_that_cannot_be_confirmed_is_named": "failure_names_the_group_and_the_unconfirmed_stop"},
+    ),
+    # Fix round 7: the stop helper, the worker's leader and the exit trap end with status 1 again instead of 70. The helper and the leader end with os._exit,
+    # because the unconfirmed stop on record (scripts/process.py) would make the interpreter exit with 70 at exit anyway.
+    "helper_exits_1": (
+        (("sys.exit(UNCONFIRMED_EXIT_STATUS if outcome else 0)'", "import os; sys.stderr.flush(); os._exit(1 if outcome else 0)'"),),
+        {"stop_helper_keeps_status_70": "helper_exit_status_is_70"},
+    ),
+    "leader_exits_1": (
+        (
+            (
+                "sys.exit(UNCONFIRMED_EXIT_STATUS if outcome else (0 if status is None else status))'",
+                "sys.stderr.flush(); os._exit(1 if outcome else (0 if status is None else status))'",
+            ),
+        ),
+        {"leader_with_a_missing_lister_reports_status_70": "leader_exit_status_is_70"},
+    ),
+    "trap_exits_1": (
+        (('exit "$unconfirmed_status"; fi; }', "exit 1; fi; }"),),
+        {"deadline_stop_that_cannot_be_confirmed_is_named": "exit_status_is_70"},
     ),
     "worker_group_only": (
         (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM -- "-$pid"; sleep 1; kill -KILL -- "-$pid"; } 2>/dev/null || true'),),

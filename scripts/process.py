@@ -22,6 +22,12 @@ memory in the process (``record_unconfirmed``) and printed to standard error whe
 with ``take_unconfirmed`` to report it itself. A ``LaunchPool`` counts a job's end as no cleanup: it raises ``LaunchesNotStopped`` when it is left with
 any unconfirmed stop of its jobs, with or without an interrupt. The lister of the session listing is killed and reaped on every way out of the listing
 (its own deadline, an alarm, an interrupt).
+A top-level launch also finalizes its session when the program ends normally (``finalize_session``): a member the program left behind (a child that outlives
+a command that exits at its own deadline) is stopped, and one that survives KILL is recorded and raised as ``LaunchesNotStopped``; a nested launch is not
+finalized (its members are in the outer session, which is finalized when the outer command ends). A stop that is cut short by any ``BaseException`` (an alarm
+handler that raises ``SystemExit``) is recorded as unconfirmed, the leader's group gets a last KILL, and the call raises the named failure chained from it.
+The fallback of a session that cannot be listed never signals the caller's own group (the CI worker's confirming leader): it reports the failure and returns
+the unconfirmed outcome.
 Other scripts import
 ``run_command`` from here instead of ``subprocess``, so the lint exception for starting a process exists on one line. Run scripts that import it as
 modules from the repository root, for example ``.venv/bin/python -m scripts.quality.scan_secrets``.
@@ -174,9 +180,14 @@ def note_unconfirmed(text: str) -> None:
         os.write(2, f"process launcher: {text}\n".encode(errors="replace"))
 
 
+def program_name(command: Any) -> str:
+    """The name of the program in a command (the list of a launch, or its text), for messages."""
+    return os.path.basename(str(command[0])) if isinstance(command, Sequence) and command and not isinstance(command, str) else str(command)
+
+
 def record_unconfirmed(command: Any, session: int, outcome: StopOutcome, cancellation: Cancellation | None = None) -> str:
     """Record an unconfirmed stop of a launch: for the process, and for the pool whose job made it. Returns the text."""
-    program = os.path.basename(str(command[0])) if isinstance(command, Sequence) and command and not isinstance(command, str) else str(command)
+    program = program_name(command)
     text = f"the stop of {program} (session or process group {session}) is not confirmed ({outcome.describe()})"
     if cancellation is not None:
         cancellation.unconfirmed.append((session, text))
@@ -211,11 +222,16 @@ atexit.register(exit_with_unconfirmed)
 
 def named_failure(outcome: StopOutcome, command: Any, cause: BaseException) -> BaseException:
     """The exception for an unconfirmed stop after ``cause`` (an interrupt or an error): it names the stop and keeps the survivors."""
-    program = os.path.basename(str(command[0])) if isinstance(command, Sequence) and command and not isinstance(command, str) else str(command)
+    program = program_name(command)
     return LaunchesNotStopped(
         f"the stop of {program} is not confirmed after {type(cause).__name__} ({outcome.describe()})",
         outcome.survivors,
     )
+
+
+def caller_group() -> int:
+    """The process group of the caller: the fallback of a failed session listing never signals it (the caller is the one that must report)."""
+    return os.getpgrp()
 
 
 def group_alive(process_group: int) -> bool:
@@ -291,17 +307,18 @@ def list_processes() -> list[tuple[int, int, str]]:
     return rows
 
 
-def session_members(sessions: Collection[int], parent: int) -> set[int]:
+def session_members(sessions: Collection[int], parent: int | None) -> set[int]:
     """The live members of the sessions, without zombies and without the caller.
 
-    A session's leader counts while it is ``parent``'s child even before it has made its session (a worker whose ``setsid`` has not run yet).
+    A session's leader counts while it is ``parent``'s child even before it has made its session (a worker whose ``setsid`` has not run yet). ``parent``
+    is None when the leader has ended and been reaped: its pid is then only a session id, and a new child with that pid is not a member.
     """
     members: set[int] = set()
     own = os.getpid()
     for pid, parent_pid, state in list_processes():
         if pid == own or state.startswith("Z"):
             continue
-        if pid in sessions and parent_pid == parent:
+        if parent is not None and pid in sessions and parent_pid == parent:
             members.add(pid)
             continue
         try:
@@ -379,7 +396,7 @@ def stop_sessions(
     if os.getsid(0) in targets and not allow_own:
         raise ValueError(f"refusing to stop session {os.getsid(0)}: it is the caller's own session")
     grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
-    owner = os.getpid() if parent is None else parent
+    owner = None if leader is not None and leader.returncode is not None else (os.getpid() if parent is None else parent)
     members: set[int] = set()
     try:
         for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
@@ -399,17 +416,24 @@ def stop_sessions(
                     break
                 time.sleep(POLL_SECONDS)
     except SessionListingFailed as listing_failure:
+        reason = f"the sessions could not be listed: {listing_failure}"
+        # The failure is on record and on standard error before any signal: the fallback may be the last thing this process does.
+        note_unconfirmed(f"{reason}; the leaders' groups of {sorted(targets)} are stopped without a confirmation of the sessions")
+        own_group = caller_group()
+        groups = [session for session in targets if session != own_group]
         for signal_number in (signal.SIGTERM, signal.SIGKILL):
-            for session in targets:
+            for session in groups:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(session, signal_number)
         end = time.monotonic() + CONFIRM_SECONDS
-        while any(group_alive(session) for session in targets) and time.monotonic() < end:
+        while any(group_alive(session) for session in groups) and time.monotonic() < end:
             if leader is not None:
                 leader.poll()
             time.sleep(POLL_SECONDS)
-        left = frozenset(session for session in targets if group_alive(session))
-        return StopOutcome(True, left or frozenset(targets), f"the sessions could not be listed: {listing_failure}")
+        left = frozenset(session for session in targets if session == own_group or group_alive(session))
+        if own_group in targets:
+            reason += f"; the caller's own group {own_group} was not signalled and its members are not confirmed stopped"
+        return StopOutcome(True, left or frozenset(targets), reason)
     return StopOutcome(True, frozenset(members), "members of the sessions were still alive after KILL")
 
 
@@ -463,26 +487,42 @@ JOB = threading.local()
 
 def stop_recorded(
     process: subprocess.Popen[str], grace_seconds: float | None, nested: bool, cancellation: Cancellation | None
-) -> tuple[StopOutcome, KeyboardInterrupt | None]:
+) -> tuple[StopOutcome, BaseException | None]:
     """Stop what a launch started, close its pipes and record an unconfirmed outcome (for the process and for the pool of the job), on every path.
 
-    SIGINT is held meanwhile; one that arrived is returned (not raised), so the caller can name the failure and chain it. A stop that raises counts as
-    unconfirmed, with the error as its reason: the call must never end with only the exception of the stop, or with none.
+    SIGINT is held meanwhile; one that arrived is returned (not raised), so the caller can name the failure and chain it. A stop that raises anything,
+    ``SystemExit`` of an alarm handler included, counts as unconfirmed, with the error as its reason; it is returned as well, and the leader's group
+    gets a last KILL because the stop did not finish: the call must never end with only the exception of the stop, or with none.
     """
-    late: KeyboardInterrupt | None = None
+    late: BaseException | None = None
     outcome = StopOutcome()
     try:
         with interrupts_deferred():
             try:
                 outcome = as_outcome(stop_launch(process.pid, process, grace_seconds, session=not nested), process.pid)
-            except Exception as failure:
+            except BaseException as failure:
+                late = failure
                 outcome = StopOutcome(True, frozenset({process.pid}), f"the stop failed with {type(failure).__name__}: {failure}")
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(TimeoutExpired):
+                    process.wait(timeout=REAP_SECONDS)
             close_pipes(process)
             if outcome.unconfirmed:
                 record_unconfirmed(process.args, process.pid, outcome, cancellation)
     except KeyboardInterrupt as interrupt:
-        late = interrupt
+        late = late or interrupt
     return outcome, late
+
+
+def finalize_session(
+    process: subprocess.Popen[str], grace_seconds: float | None, cancellation: Cancellation | None
+) -> tuple[StopOutcome, BaseException | None]:
+    """Stop what a top-level program left in its session after it ended normally, and record a stop that is not confirmed.
+
+    The leader has ended and been reaped, so its pid is only the session id. The usual case is an empty session: one listing, no signal.
+    """
+    return stop_recorded(process, grace_seconds, False, cancellation)
 
 
 def communicate(process: subprocess.Popen[str], timeout: float, cancellation: Cancellation | None) -> tuple[str, str]:
@@ -710,6 +750,17 @@ def run_command(
             if late is not None:
                 raise late from failure
         raise
+    if not nested:
+        # A normal end is no proof that the session is empty: a member that the program left (a child of a command that exited at its own deadline) is
+        # stopped here, and one that survives is named, recorded and never a success.
+        outcome, late = finalize_session(process, grace_seconds, cancellation)
+        if outcome.unconfirmed:
+            program = program_name(process.args)
+            raise LaunchesNotStopped(
+                f"{program} ended, but the stop of the members it left in its session is not confirmed ({outcome.describe()})", outcome.survivors
+            ) from late
+        if late is not None:
+            raise late
     if check and process.returncode:
         raise CalledProcessError(process.returncode, process.args, output=stdout, stderr=stderr)
     return CompletedProcess(process.args, process.returncode, stdout, stderr)

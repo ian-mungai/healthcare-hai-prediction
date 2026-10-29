@@ -59,10 +59,14 @@ timing_files=("$CI_TIMING_FILE")
 # control starts with them ignored), sets PROCESS_LAUNCH_SESSION=1 (a scripts/process.py launch inside the worker stays in its session) and starts a new bash. setsid cannot run
 # inside a bash subshell, so that bash reads the functions and the variables a worker uses from a private state file (write_worker_state). The step stays as the session's leader
 # and watchdog. When the bash ends, the step stops every other member of its session (TERM, KILL after the grace period) and confirms that none is left before it exits with
-# the bash's status (1, with a message, when a member survives or the session cannot be listed), so a descendant that the worker left has no unwatched moment. When its parent
+# the bash's status (70, with a message, when a member survives or the session cannot be listed; its fallback never signals the leader's own group), so a descendant that the worker left has no unwatched moment. When its parent
 # (this script) has died, even by KILL, it does the same (its arguments: the repository and the grace seconds) within 0.2 s plus the grace period plus the 5 s confirmation.
 # The live workers are listed in worker_pids; each pid is also the worker's session id.
 worker_pids=()
+# The exit status of a run with a stop that is not confirmed (UNCONFIRMED_EXIT_STATUS of scripts/process.py). ci_unconfirmed is set when the stop helper fails, when a
+# worker's leader exits with this status (its session, or a launch inside it, is not confirmed stopped) and when a worker session still has members after its stop.
+unconfirmed_status=70
+ci_unconfirmed=0
 worker_state="$scratch/worker_state.sh"
 # shellcheck disable=SC2016
 worker_session_step='import os, signal, sys, time
@@ -87,11 +91,11 @@ while os.getppid() == dispatcher:
 for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
     signal.signal(number, signal.SIG_IGN)
 sys.path.insert(0, sys.argv[1])
-from scripts.process import stop_sessions
+from scripts.process import UNCONFIRMED_EXIT_STATUS, stop_sessions
 outcome = stop_sessions({os.getpid()}, float(sys.argv[2]), allow_own=True)
 if outcome:
     sys.stderr.write("The worker session " + str(os.getpid()) + " is not confirmed stopped: " + outcome.describe() + "\n")
-sys.exit(1 if outcome else (0 if status is None else status))'
+sys.exit(UNCONFIRMED_EXIT_STATUS if outcome else (0 if status is None else status))'
 # The worker's bash: $1 state file, $2 item, $3 "stream" (a single item: its output also goes to the log through tee) or "buffer".
 # shellcheck disable=SC2016
 worker_body='set -euo pipefail
@@ -104,9 +108,10 @@ if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$w
   exit 2
 fi
 # stop_sessions <grace seconds> <session>...: stop every member of the worker sessions with scripts/process.py stop_sessions (TERM, KILL after the grace period, then a
-# confirmation of at most 5 s). Fails when a member survives KILL or when the sessions cannot be listed; the leaders' groups are still stopped then. An alarm ends the step
+# confirmation of at most 5 s). Fails with status 70 (UNCONFIRMED_EXIT_STATUS of scripts/process.py) when a member survives KILL or when the sessions cannot be listed; the
+# leaders' groups are still stopped then. An alarm ends the step
 # after the grace period plus 25 s (the listing and the confirmation of both phases and of the fallback), so the exit trap cannot wait on it forever: the alarm raises an error
-# in the step, which unwinds through the listing (the stalled lister and the process that holds its pipes are killed), prints the failure and exits 1.
+# in the step, which unwinds through the listing (the stalled lister and the process that holds its pipes are killed), prints the failure and exits 70.
 # shellcheck disable=SC2016
 stop_sessions() {
   "$python_bin" -I -c 'import signal, sys
@@ -115,15 +120,15 @@ def expired(_number, _frame):
 signal.signal(signal.SIGALRM, expired)
 signal.alarm(int(float(sys.argv[2])) + 25)
 sys.path.insert(0, sys.argv[1])
-from scripts.process import stop_sessions
+from scripts.process import UNCONFIRMED_EXIT_STATUS, stop_sessions
 try:
     outcome = stop_sessions({int(session) for session in sys.argv[4:]}, float(sys.argv[2]), parent=int(sys.argv[3]))
 except TimeoutError as error:
     sys.stderr.write("The stop of the worker sessions did not finish: " + str(error) + "\n")
-    sys.exit(1)
+    sys.exit(UNCONFIRMED_EXIT_STATUS)
 if outcome:
     sys.stderr.write("The stop of the worker sessions is not confirmed: " + outcome.describe() + "\n")
-sys.exit(1 if outcome else 0)' "$repo_root" "$1" "$$" "${@:2}"
+sys.exit(UNCONFIRMED_EXIT_STATUS if outcome else 0)' "$repo_root" "$1" "$$" "${@:2}"
 }
 # forget_worker <pid>: take a worker that has ended out of the live list.
 forget_worker() {
@@ -143,6 +148,7 @@ stop_workers() {
   worker_pids=()
   if ! stop_sessions 2 "${pids[@]}"; then
     printf 'Local CI could not stop every worker session: %s\n' "${pids[*]}" >&2
+    ci_unconfirmed=1
     return 1
   fi
 }
@@ -155,8 +161,9 @@ finish() {
   rm -rf "$scratch"
 }
 # Only a run that sets ci_finished=1 exits 0: bash 3.2 (macOS /bin/bash) reports status 0 to this trap when an unbound
-# variable ends the script, so the trap fails every other exit itself.
-trap 'finish; [[ "${ci_finished:-0}" == 1 ]] || exit 1' EXIT
+# variable ends the script, so the trap fails every other exit itself. A stop that is not confirmed keeps its own status (70) through every exit.
+end_unconfirmed() { if ((ci_unconfirmed)); then exit "$unconfirmed_status"; fi; }
+trap 'finish; end_unconfirmed; [[ "${ci_finished:-0}" == 1 ]] || exit 1' EXIT
 # Workers are in their own sessions, so a signal to this script's group does not reach them: these traps end the script, and the exit trap stops them.
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -432,9 +439,11 @@ run_items() {
         # the worker is forgotten. A stop that is not confirmed keeps the worker in the live list, so the exit trap tries again.
         if ! stop_sessions "$worker_grace" "$pid"; then
           printf 'The ended worker %s left members in its session %s that survived KILL, or the session could not be listed.\n' "${items[$index]}" "$pid" >&2
-          status=1
+          status=$unconfirmed_status
           stop_unconfirmed=1
         fi
+        # A worker whose leader (or a launch inside the worker) reports an unconfirmed stop exits with this status.
+        if ((status == unconfirmed_status)); then ci_unconfirmed=1; fi
         if ((status != 0)); then
           failed+=("${items[$index]}")
         fi
@@ -450,6 +459,7 @@ run_items() {
           printf 'The session %s still has members after KILL, or it could not be listed.\n' "$pid" >&2
           failed+=("${items[$index]} (deadline ${limits[$index]} s, stop not confirmed)")
           stop_unconfirmed=1
+          ci_unconfirmed=1
         fi
       else
         continue

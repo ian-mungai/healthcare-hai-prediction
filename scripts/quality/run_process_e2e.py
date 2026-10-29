@@ -16,7 +16,9 @@ Planted defects run the same cases with a broken stop (the direct child only, TE
 real parameters of ``stop_launch`` and counts as caught only when the named check of each named case is false and the case raised nothing.
 Fix round 6 (unreported cleanup failures): an unconfirmed deadline stop that overlaps an interrupt, two futures on one worker, an unconfirmed stop after an
 interrupt without a pool, a stop that raises, a caller that swallows the timeout, a pool step with an unconfirmed deadline stop and an alarm during the listing,
-with six plants. A member that starts its own session is outside the launch's session; that limit is documented in scripts/process.py and not tested here.
+with six plants. Fix round 7 (the recheck of round 6): an alarm that raises ``SystemExit`` during the stop, a failed session listing in the CI worker's
+own session, a member left after a normal end (also in the credential-process shape) and a finalization that cannot be confirmed, with four plants.
+A member that starts its own session is outside the launch's session; that limit is documented in scripts/process.py and not tested here.
 The report goes to data/e2e/process/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 
@@ -803,7 +805,7 @@ PRINTER = "import sys; print(sys.argv[1])"
 # mode ("interrupt" or "survivor": a session stop that is never confirmed) and plant ("" or the name of a planted defect). The runner is interrupted
 # twice (the parent sends SIGINT, then again 0.3 s later) and records, at the moment the interrupt returns to it, which subjects are still alive.
 THREADED_RUNNER = """
-import json, os, signal, sys
+import json, os, signal, sys, threading
 from pathlib import Path
 from unittest import mock
 root, folder, mode, plant = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
@@ -819,7 +821,11 @@ SUBJECT = (
     "while True:\\n"
     "    time.sleep(1)\\n"
 )
+SURVIVOR = threading.local()
+def survivor_session_left(members):
+    return bool(members) or getattr(SURVIVOR, "on", False)
 def launch(_root, step, _environment):
+    SURVIVOR.on = mode == "survivor"
     return process.run_command(sys.executable, ["-B", "-c", SUBJECT, str(folder / (step["name"] + ".pid")), step["name"]], timeout=60, grace_seconds=0.5)
 def alive(pid):
     try:
@@ -835,7 +841,7 @@ steps = [
 ]
 patches = [mock.patch.object(pre_push, "launch", launch), mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 3.0, create=True)]
 if mode == "survivor":
-    patches += [mock.patch("scripts.process.session_left", lambda _members: True), mock.patch("scripts.process.CONFIRM_SECONDS", 0.5)]
+    patches += [mock.patch("scripts.process.session_left", survivor_session_left), mock.patch("scripts.process.CONFIRM_SECONDS", 0.5)]
 if plant == "no_cancellation_flag":
     patches.append(mock.patch.object(process.Cancellation, "cancelled", lambda self: False))
 if plant == "no_session_stop":
@@ -947,7 +953,7 @@ def threaded_normal_run(base: Path) -> dict[str, Any]:
 
 
 def plant_patches(plant: str) -> list[Any]:
-    """The patches of a fix round 6 planted defect (an empty list for no plant); a runner process embeds this function's source."""
+    """The patches of a planted defect of fix round 6 or 7 (an empty list for no plant); a runner process embeds this function's source."""
     table: dict[str, list[Any]] = {
         # The pool takes a job's end for cleanup and ignores the stops that were not confirmed.
         "pool_ignores_unconfirmed": [mock.patch.object(process.LaunchPool, "unconfirmed_problems", lambda self: [])],
@@ -959,10 +965,17 @@ def plant_patches(plant: str) -> list[Any]:
         "listing_not_unwound": [mock.patch("scripts.process.end_lister", lambda *_arguments, **_keywords: None)],
         # The interrupt path raises the interrupt and drops the outcome of the stop.
         "interrupt_drops_the_outcome": [mock.patch("scripts.process.named_failure", lambda _outcome, _command, cause: cause)],
+        # Fix round 7: the fallback of a failed listing signals the caller's own group again.
+        "own_group_signalled": [mock.patch("scripts.process.caller_group", lambda: -1)],
+        # Fix round 7: a normal end leaves the session alone.
+        "no_finalization": [mock.patch("scripts.process.finalize_session", lambda *_arguments, **_keywords: (StopOutcome(), None))],
     }
     return table.get(plant, [])
 
 
+# A launch of a pool job that must end with an unconfirmed stop sets ``SURVIVOR.on`` in its thread: ``session_left`` then reports a member left, for that
+# thread only (any other launch, such as the git calls of ``pre_push``, is confirmed as usual).
+SURVIVOR_SOURCE = "SURVIVOR = threading.local()\ndef survivor_session_left(members):\n    return bool(members) or getattr(SURVIVOR, 'on', False)\n"
 # The runners of fix round 6 start with the same lines: the repository on the path, Python's SIGINT handler, the planted patches.
 ROUND6_PREFIX = (
     "import json, os, signal, sys, threading\n"
@@ -973,7 +986,7 @@ ROUND6_PREFIX = (
     "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
     "from scripts import process\n"
     "from scripts.quality import pre_push\n"
-    "from typing import Any\n" + inspect.getsource(plant_patches) + "def living(pid):\n"
+    "from typing import Any\n" + inspect.getsource(plant_patches) + SURVIVOR_SOURCE + "def living(pid):\n"
     "    try:\n"
     "        os.kill(pid, 0)\n"
     "    except ProcessLookupError:\n"
@@ -1004,6 +1017,8 @@ began = threading.Event()
 main_thread = threading.get_ident()
 real_stop = process.stop_launch
 def stop(*arguments, **keywords):
+    if SUBJECT not in arguments[1].args:
+        return real_stop(*arguments, **keywords)
     began.set()
     process.JOB.cancellation.event.wait(8)
     with mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)):
@@ -1057,13 +1072,14 @@ POOL_TIMEOUT_RUNNER = (
     ROUND6_PREFIX
     + """
 def launch(_root, _step, _environment):
+    SURVIVOR.on = True
     return process.run_command(sys.executable, ["-B", "-c", "import time; time.sleep(30)"], timeout=0.5, grace_seconds=0.2)
 output = folder / "output"
 output.mkdir()
 step = {"name": "survivor", "kind": "repo_checks", "arguments": [], "env": {}, "timeout_seconds": 60}
 patches = [
     mock.patch.object(pre_push, "launch", launch),
-    mock.patch("scripts.process.session_left", lambda _members: True),
+    mock.patch("scripts.process.session_left", survivor_session_left),
     mock.patch("scripts.process.CONFIRM_SECONDS", 0.5),
     *plant_patches(plant),
 ]
@@ -1304,6 +1320,218 @@ def interrupted_listing(base: Path, plant: str = "") -> dict[str, Any]:
     return case("interrupted_listing_leaves_no_lister", base, body)
 
 
+# Fix round 7. The leader of this program (argv: case folder) forks a member that moves to a group of its own, ignores TERM, closes its output and waits,
+# then ends at once with success: a normal end that leaves a member in the session.
+LEFT_MEMBER = """
+import os, signal, sys, time
+folder = sys.argv[1]
+open(os.path.join(folder, 'leader.pid'), 'w').write(str(os.getpid()))
+if os.fork() == 0:
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    null = os.open(os.devnull, os.O_RDWR)
+    for descriptor in (0, 1, 2):
+        os.dup2(null, descriptor)
+    open(os.path.join(folder, 'member.pid'), 'w').write(str(os.getpid()))
+    time.sleep(90)
+    os._exit(0)
+end = time.monotonic() + 5
+while not os.path.exists(os.path.join(folder, 'member.pid')) and time.monotonic() < end:
+    time.sleep(0.01)
+"""
+# The shape of botocore's credential process (the inspected IAM ``Deadline``): the command starts a child that stays in its group with its output
+# closed, then exits with status 2 at its own deadline before the outer one; the child lives on in the session.
+CREDENTIAL_SHAPE = """
+import os, sys, time
+folder = sys.argv[1]
+open(os.path.join(folder, 'leader.pid'), 'w').write(str(os.getpid()))
+if os.fork() == 0:
+    null = os.open(os.devnull, os.O_RDWR)
+    for descriptor in (0, 1, 2):
+        os.dup2(null, descriptor)
+    open(os.path.join(folder, 'member.pid'), 'w').write(str(os.getpid()))
+    time.sleep(90)
+    os._exit(0)
+end = time.monotonic() + 5
+while not os.path.exists(os.path.join(folder, 'member.pid')) and time.monotonic() < end:
+    time.sleep(0.01)
+sys.exit(2)
+"""
+# A CI worker's leader (it stops its own session, allow_own) whose session cannot be listed (the lister is missing) and that has a member in a group of its own.
+OWN_SESSION_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import time
+if os.fork() == 0:
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    null = os.open(os.devnull, os.O_RDWR)
+    for descriptor in (0, 1, 2):
+        os.dup2(null, descriptor)
+    (folder / "member.pid").write_text(str(os.getpid()))
+    time.sleep(90)
+    os._exit(0)
+end = time.monotonic() + 5
+while not (folder / "member.pid").exists() and time.monotonic() < end:
+    time.sleep(0.01)
+patches = [mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)), *plant_patches(plant)]
+for patch in patches:
+    patch.start()
+outcome = process.stop_sessions({os.getpid()}, 0.1, allow_own=True)
+(folder / "result.json").write_text(json.dumps({"unconfirmed": bool(outcome), "reason": outcome.describe()}))
+"""
+)
+
+
+def gone_within(pid: int | None, seconds: float = 3.0) -> bool:
+    """Whether the process has ended within ``seconds`` (a killed member is reaped by init a moment after the stop)."""
+    if pid is None:
+        return False
+    end = time.monotonic() + seconds
+    while alive(pid):
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.02)
+    return True
+
+
+def stop_recorded_exception_only(process_: Any, grace_seconds: float | None, nested: bool, cancellation: Any) -> tuple[StopOutcome, BaseException | None]:
+    """The planted defect of fix round 7: the stop catches only ``Exception``, as before, so a ``SystemExit`` of an alarm handler escapes unrecorded."""
+    outcome = StopOutcome()
+    try:
+        outcome = process.as_outcome(process.stop_launch(process_.pid, process_, grace_seconds, session=not nested), process_.pid)
+    except Exception as failure:
+        outcome = StopOutcome(True, frozenset({process_.pid}), f"the stop failed with {type(failure).__name__}: {failure}")
+    process.close_pipes(process_)
+    if outcome.unconfirmed:
+        process.record_unconfirmed(process_.args, process_.pid, outcome, cancellation)
+    return outcome, None
+
+
+# A program with a member in a group of its own that ignores TERM (argv: case folder), which waits: the deadline stop of the alarm case.
+WAITING_MEMBER = """
+import os, signal, sys, time
+folder = sys.argv[1]
+open(os.path.join(folder, 'leader.pid'), 'w').write(str(os.getpid()))
+if os.fork() == 0:
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    open(os.path.join(folder, 'member.pid'), 'w').write(str(os.getpid()))
+while True:
+    time.sleep(1)
+"""
+
+
+def alarm_during_the_stop(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The reviewer's probe: the program reaches its deadline, the stop lists the session with a stalled lister, and the real alarm handler of the scratch
+        # worktree runner (``stop_run``: ``SystemExit``) fires during that listing.
+        from scripts.quality.scratch_worktree import stop_run
+
+        caught: BaseException | None = None
+        lister_script = "import os, sys, time\nopen(os.path.join(sys.argv[1], 'lister.pid'), 'w').write(str(os.getpid()))\ntime.sleep(60)\n"
+        patches: list[Any] = [
+            mock.patch("scripts.process.SESSION_LISTING", (sys.executable, "-B", "-c", lister_script, str(scratch.folder))),
+            mock.patch("scripts.process.LISTING_SECONDS", 10.0),
+        ]
+        if plant == "stop_catches_exception_only":
+            patches.append(mock.patch("scripts.process.stop_recorded", stop_recorded_exception_only))
+        earlier = signal.signal(signal.SIGALRM, stop_run)
+        try:
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                signal.setitimer(signal.ITIMER_REAL, 0.8)
+                try:
+                    run_command(sys.executable, ["-B", "-c", WAITING_MEMBER, str(scratch.folder)], cwd=ROOT, timeout=0.2, grace_seconds=0.1)
+                except BaseException as error:
+                    caught = error
+                finally:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, earlier)
+        recorded = acknowledge_unconfirmed()
+        pids = scratch.pids()
+        return {
+            "subject_and_lister_started": "leader" in pids and "member" in pids and "lister" in pids,
+            "failure_is_named": isinstance(caught, ProcessGroupSurvived),
+            "system_exit_is_the_cause": isinstance(getattr(caught, "__cause__", None), SystemExit),
+            "message_says_the_stop_is_not_confirmed": caught is not None and "not confirmed" in str(caught),
+            "outcome_is_recorded": bool(recorded),
+            "lister_gone": gone_within(pids.get("lister")),
+            "leader_stopped_by_the_last_kill": gone_within(pids.get("leader")),
+            "exception_seen": type(caught).__name__,
+        }
+
+    return case("alarm_during_the_stop_is_named", base, body)
+
+
+def leader_with_a_missing_lister(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, status, error_text = run_round6_runner(scratch, OWN_SESSION_RUNNER, plant, seconds=30)
+        return {
+            "caller_survived_the_fallback_to_report": "unconfirmed" in result,
+            "outcome_is_unconfirmed": result.get("unconfirmed", False),
+            "outcome_says_the_own_group_was_not_signalled": "own group" in result.get("reason", ""),
+            "listing_failure_written_to_standard_error": "could not be listed" in error_text,
+            "exit_status_marks_the_unconfirmed_stop": exit_status_marks_unconfirmed(status),
+            "exit_status_seen": -1 if status is None else status,
+        }
+
+    return case("missing_lister_fallback_spares_the_confirming_caller", base, body)
+
+
+def normal_end_finalizes(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The reviewer's probes: a pool job and a plain call end normally (status 0, and status 2 in the credential-process shape) and leave a member in the
+        # session; the launch must stop it and record nothing, because the stop is confirmed.
+        shape = Scratch(scratch.folder, "shape")
+        try:
+            with contextlib.ExitStack() as stack:
+                for patch in plant_patches(plant):
+                    stack.enter_context(patch)
+                with process.LaunchPool(max_workers=1) as pool:
+                    left = ["-B", "-c", LEFT_MEMBER, str(scratch.folder)]
+                    ended = pool.submit(lambda: run_command(sys.executable, left, timeout=20, grace_seconds=0.2)).result(30)
+                credential = run_command(sys.executable, ["-B", "-c", CREDENTIAL_SHAPE, str(shape.folder)], cwd=ROOT, timeout=20, grace_seconds=0.2)
+            recorded = acknowledge_unconfirmed()
+            pids, shape_pids = scratch.pids(), shape.pids()
+            return {
+                "member_started": "member" in pids and "member" in shape_pids,
+                "status_of_the_pool_job_kept": ended.returncode == 0,
+                "status_of_the_credential_shape_kept": credential.returncode == 2,
+                "member_gone_after_the_pool_job_ended": gone_within(pids.get("member")),
+                "credential_shape_child_gone_after_exit_2": gone_within(shape_pids.get("member")),
+                "nothing_recorded_for_a_confirmed_stop": not recorded,
+            }
+        finally:
+            shape.cleanup()
+
+    return case("normal_end_finalizes_the_session", base, body)
+
+
+def unconfirmed_finalization(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # A program ends normally and its session cannot be confirmed empty (a member survives KILL): the call is named, not a success.
+        caught: BaseException | None = None
+        with short_grace(survivor_probe=lambda _group: True), contextlib.ExitStack() as stack:
+            for patch in plant_patches(plant):
+                stack.enter_context(patch)
+            try:
+                run_command(sys.executable, ["-B", "-c", "pass"], cwd=ROOT, timeout=20)
+            except BaseException as error:
+                caught = error
+        recorded = acknowledge_unconfirmed()
+        return {
+            "failure_is_named": type(caught).__name__ == "LaunchesNotStopped",
+            "message_says_the_stop_is_not_confirmed": caught is not None and "not confirmed" in str(caught),
+            "outcome_is_recorded": bool(recorded),
+            "exception_seen": type(caught).__name__,
+        }
+
+    return case("unconfirmed_finalization_is_named", base, body)
+
+
 def default_periods(base: Path) -> dict[str, Any]:
     return {
         "case": "default_grace_periods_are_set",
@@ -1344,6 +1572,10 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "unconfirmed_stop_survives_a_swallowing_caller": swallowing_caller,
     "pool_reports_an_unconfirmed_timeout_stop": pool_timeout_report,
     "interrupted_listing_leaves_no_lister": interrupted_listing,
+    "alarm_during_the_stop_is_named": alarm_during_the_stop,
+    "missing_lister_fallback_spares_the_confirming_caller": leader_with_a_missing_lister,
+    "normal_end_finalizes_the_session": normal_end_finalizes,
+    "unconfirmed_finalization_is_named": unconfirmed_finalization,
     "default_grace_periods_are_set": default_periods,
 }
 REAL_STOP = process.stop_launch
@@ -1476,6 +1708,39 @@ def planted_round6_cases(base: Path) -> list[dict[str, Any]]:
     return results
 
 
+# fix round 7 plant name -> (case function, the plant label the case passes on, {case name: the check that must be false in it})
+ROUND7_PLANTS: dict[str, tuple[Callable[..., dict[str, Any]], str, dict[str, str]]] = {
+    "stop_catches_exception_only": (
+        alarm_during_the_stop,
+        "stop_catches_exception_only",
+        {"alarm_during_the_stop_is_named": "failure_is_named"},
+    ),
+    "own_group_signalled": (
+        leader_with_a_missing_lister,
+        "own_group_signalled",
+        {"missing_lister_fallback_spares_the_confirming_caller": "caller_survived_the_fallback_to_report"},
+    ),
+    "no_finalization": (normal_end_finalizes, "no_finalization", {"normal_end_finalizes_the_session": "member_gone_after_the_pool_job_ended"}),
+    "no_finalization_report": (unconfirmed_finalization, "no_finalization", {"unconfirmed_finalization_is_named": "failure_is_named"}),
+}
+
+
+def planted_round7_cases(base: Path) -> list[dict[str, Any]]:
+    """Each plant breaks one part of the fix round 7 mechanism; its case must fail on the named check and raise nothing."""
+    results: list[dict[str, Any]] = []
+    for name, (function, plant, wanted) in ROUND7_PLANTS.items():
+        result = function(base / f"plant_{name}", plant)
+        ((case_name, check),) = wanted.items()
+        results.append(
+            {
+                "case": f"planted_{name}_is_caught",
+                "passed": result["case"] == case_name and caught_on(result, check),
+                "checks": {check: result["checks"].get(check), "exception_seen": result["checks"].get("exception_seen")},
+            }
+        )
+    return results
+
+
 def main() -> int:
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
@@ -1488,6 +1753,7 @@ def main() -> int:
             results.extend(planted_cases(base))
             results.extend(planted_threaded_cases(base))
             results.extend(planted_round6_cases(base))
+            results.extend(planted_round7_cases(base))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     after = {name: sha256_of(ROOT / name) for name in WATCHED}
