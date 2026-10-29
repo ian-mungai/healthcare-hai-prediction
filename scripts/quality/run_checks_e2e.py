@@ -95,7 +95,9 @@ OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
 FOLDER_NAME = "run" + "books"
 OLD_NOTES = "old" + "_notes.md"
-UNUSED_PACKAGE = "tabu" + "late"
+# No requirements file under scripts/ may pin this name, even as a transitive pin: the scratch repository copies those files and would then
+# count the sample import as declared.
+UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
 DASH_M_MODULE = "nightly" + "_report"
