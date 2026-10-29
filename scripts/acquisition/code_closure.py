@@ -2,8 +2,10 @@
 
 import ast
 import hashlib
+import os
 import posixpath
 import re
+import stat
 from pathlib import Path
 
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, require
@@ -17,14 +19,6 @@ COMPILED_SUFFIXES = (".so", ".pyd", ".pyc")
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".ksh", ".csh", ".fish", ".ps1", ".bat", ".cmd", ".pl", ".rb", ".js", ".php"}
 PATH_FUNCTIONS = {"Path", "PurePath", "PosixPath", "PurePosixPath", "join", "joinpath", "normpath", "abspath", "realpath", "relpath"}
 LONGEST_PATH = 1024
-
-
-def is_file(path: Path) -> bool:
-    """True when the path is a file. A name the system cannot look up is not a file."""
-    try:
-        return path.is_file()
-    except (OSError, ValueError):
-        return False
 
 
 def compiled_file(base: Path, root: Path) -> Path | None:
@@ -185,41 +179,90 @@ def path_texts(tree: ast.Module) -> set[str]:
     return found
 
 
-def repository_paths(text: str, root: Path, relative: str) -> list[str]:
-    """The repository-relative paths a text can name, normalized and tested from the root and from the folder of the file that holds it.
+def status_of(path: str) -> os.stat_result | None:
+    """The status of the file or folder a path reaches on disk, links followed, else None when the system cannot look it up."""
+    try:
+        return os.stat(path)
+    except (OSError, ValueError):
+        return None
 
-    A relative path that leaves the repository and names an existing file is refused. An absolute path outside the repository is not followed."""
+
+def code_index(root: Path, code_directories: tuple[str, ...]) -> dict[tuple[int, int], list[str]]:
+    """The stored repository-relative names of each regular file under the code directories, keyed by device and inode.
+
+    A hard link gives one file several names. The index is built for each closure, so a file added or linked later is seen."""
+    index: dict[tuple[int, int], list[str]] = {}
+    for directory in code_directories:
+        for folder, _, names in os.walk(root / directory):
+            for name in names:
+                full = Path(folder, name)
+                status = full.lstat()
+                if stat.S_ISREG(status.st_mode):
+                    index.setdefault((status.st_dev, status.st_ino), []).append(full.relative_to(root).as_posix())
+    return {key: sorted(names) for key, names in index.items()}
+
+
+def inside(path: str, root: Path) -> bool:
+    """True when a parent folder of the path, with every link resolved, is the repository root, compared by device and inode."""
+    home = os.stat(root)
+    for folder in Path(os.path.realpath(path)).parents:
+        found = status_of(str(folder))
+        if found and (found.st_dev, found.st_ino) == (home.st_dev, home.st_ino):
+            return True
+    return False
+
+
+def spellings(text: str, root: Path, relative: str) -> dict[str, bool]:
+    """Each path on disk a text can name, as written and normalized, from the root and from the folder of the file that holds it.
+
+    The value is True when the text is absolute."""
     if "\n" in text or "\0" in text or len(text) > LONGEST_PATH:
-        return []
-    found: list[str] = []
+        return {}
+    found: dict[str, bool] = {}
     for form in dict.fromkeys([text, text.replace("\\", "/")]):
         for base in dict.fromkeys(["", posixpath.dirname(relative)]):
-            joined = posixpath.normpath(posixpath.join(base, form))
-            if joined.startswith("/"):
-                try:
-                    joined = Path(joined).relative_to(root).as_posix()
-                except ValueError:
-                    continue
-            elif joined == ".." or joined.startswith("../"):
-                require(not is_file(root / joined), f"Cannot bind code: {relative} names {text}, a file outside the repository")
-                continue
-            if joined != "." and joined not in found:
-                found.append(joined)
+            joined = posixpath.join(root.as_posix(), base, form)
+            for full in (joined, posixpath.normpath(joined)):
+                found.setdefault(full, form.startswith("/"))
     return found
 
 
-def refuse_executable(text: str, root: Path, relative: str, code_directories: tuple[str, ...]) -> None:
-    """Refuse a named file, already normalized, that runs code the closure cannot read: a script by suffix, an executable bit or, in code, a #! line."""
-    target = root / text
-    if text.casefold().endswith(".py"):
+def refuse_executable(full: str, status: os.stat_result, names: list[str], text: str, relative: str) -> None:
+    """Refuse a reached file that runs code the closure cannot read: a script by suffix, an executable bit or, in code, a #! line.
+
+    A file stored under a .py name is Python, which the closure reads instead. Every spelling of the file counts, in any letter case."""
+    real = os.path.realpath(full)
+    if any(name.casefold().endswith(".py") for name in names or [real]):
         return
-    executable = target.suffix.lower() in SCRIPT_SUFFIXES or bool(target.stat().st_mode & 0o111)
-    if not executable and text.split("/")[0].casefold() in {d.casefold() for d in code_directories}:
-        executable = target.read_bytes()[:2] == b"#!"
+    executable = any(Path(name).suffix.lower() in SCRIPT_SUFFIXES for name in [full, real, *names]) or bool(status.st_mode & 0o111)
+    if not executable and names:
+        executable = Path(full).read_bytes()[:2] == b"#!"
     require(not executable, f"Cannot bind code: {relative} names {text}, an executable file whose own dependencies are not bound")
 
 
-def references(relative: str, root: Path, code_directories: tuple[str, ...]) -> set[str]:
+def reached_files(text: str, root: Path, relative: str, index: dict[tuple[int, int], list[str]]) -> set[str]:
+    """The code files a path text reaches on disk, matched by device and inode, so any spelling of a repository file binds it.
+
+    A folder stands for the __main__.py Python runs in it. A relative spelling that reaches a file outside the repository is refused.
+    An absolute spelling outside the repository is not followed."""
+    found: set[str] = set()
+    for full, absolute in spellings(text, root, relative).items():
+        status = status_of(full)
+        if status is not None and stat.S_ISDIR(status.st_mode):
+            full = posixpath.join(full, "__main__.py")
+            status = status_of(full)
+        if status is None or not stat.S_ISREG(status.st_mode):
+            continue
+        names = index.get((status.st_dev, status.st_ino), [])
+        if not names and not inside(full, root):
+            require(absolute, f"Cannot bind code: {relative} names {text}, a file outside the repository")
+            continue
+        refuse_executable(full, status, names, text, relative)
+        found.update(names)
+    return found
+
+
+def references(relative: str, root: Path, index: dict[tuple[int, int], list[str]]) -> set[str]:
     """Every repository file this file names: imports, literal dynamic imports, module names and code paths held in string literals."""
     try:
         tree = ast.parse((root / relative).read_text(encoding="utf-8"), filename=relative)
@@ -266,11 +309,7 @@ def references(relative: str, root: Path, code_directories: tuple[str, ...]) -> 
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and MODULE_LITERAL.fullmatch(node.value):
             add_module(node.value, exact=True)
     for text in sorted(path_texts(tree)):
-        for path in repository_paths(text, root, relative):
-            if is_file(root / path):
-                refuse_executable(path, root, relative, code_directories)
-                if path.split("/")[0].casefold() in {d.casefold() for d in code_directories}:
-                    found.add(path)
+        found |= reached_files(text, root, relative, index)
     return found
 
 
@@ -285,6 +324,7 @@ def closure(entry: str, root: Path | None = None, code_directories: tuple[str, .
     base = REPO_ROOT if root is None else root
     start = module_file(entry.split("."), base)
     require(start is not None, f"Cannot bind code: entry module {entry} is not in the repository")
+    index = code_index(base, code_directories)
     seen: set[str] = set()
     pending = [str(start)]
     while pending:
@@ -292,7 +332,7 @@ def closure(entry: str, root: Path | None = None, code_directories: tuple[str, .
         if current in seen:
             continue
         seen.add(current)
-        pending.extend(parent_packages(current, base) | (references(current, base, code_directories) if current.casefold().endswith(".py") else set()))
+        pending.extend(parent_packages(current, base) | (references(current, base, index) if current.casefold().endswith(".py") else set()))
     return sorted(seen)
 
 
