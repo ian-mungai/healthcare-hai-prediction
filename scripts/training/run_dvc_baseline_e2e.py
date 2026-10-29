@@ -1,9 +1,10 @@
 """E2E for the DVC training baseline (decision 20): record a training matrix and load the exact file back from a run.
 
 Run from the repository root after ``python -m scripts.quality.install_dvc``: ``python -m scripts.training.run_dvc_baseline_e2e``. Every case uses the real
-pinned DVC in a throwaway project in a temporary folder, a local folder as the DVC remote and a local stand-in for the MLflow run store that keeps the MLflow
-file store layout (``<run>/artifacts/<path>`` and ``<run>/tags/<key>``) and the call shapes the helper uses. The matrix is a real Parquet file written by
-DuckDB. Planted defects must fail visibly: a missing matrix, empty snapshot IDs, a wrong hash tag, a missing metafile, a missing baseline, an unwritable
+pinned DVC in a throwaway Git checkout in a temporary folder (the tracked ``.dvc/config`` and ``.dvcignore`` copied in, a ``.gitignore`` that ignores
+``data/`` and the matrix under ``data/``, as in the repository), a local folder as the DVC remote and a local stand-in for the MLflow run store that keeps the
+MLflow file store layout (``<run>/artifacts/<path>`` and ``<run>/tags/<key>``) and the call shapes the helper uses. The matrix is a real Parquet file written
+by DuckDB. Planted defects must fail visibly: a missing matrix, empty snapshot IDs, a wrong hash tag, a missing metafile, a missing baseline, an unwritable
 remote, a deadline, a replaced remote object and a rerun that must change nothing.
 Results go to ``data/e2e/dvc_baseline/<UTC>/report.json``.
 """
@@ -79,11 +80,16 @@ class Workspace:
         self.remote.mkdir()
         self.store = LocalRunStore(top / "mlruns")
         self.run = Run(self.store, "run1")
-        for args in (["init", "--no-scm", "--quiet"], ["remote", "add", "--default", "store", str(self.remote)], ["config", "core.analytics", "false"]):
-            if run_command(DVC, args, cwd=self.project, timeout=120).returncode:
-                raise SubprocessError(f"dvc {args[0]} failed in the temporary project")
-        (self.project / "training").mkdir()
-        self.matrix = self.project / "training" / "matrix.parquet"
+        (self.project / ".dvc").mkdir()
+        for name in (".dvc/config", ".dvc/.gitignore", ".dvcignore"):
+            shutil.copyfile(ROOT / name, self.project / name)
+        (self.project / ".gitignore").write_text("data/\n")
+        for command, args in (("git", ["init", "--quiet"]), (DVC, ["remote", "add", "--local", "--default", "store", str(self.remote)])):
+            if run_command(command, args, cwd=self.project, timeout=120).returncode:
+                raise SubprocessError(f"{Path(command).name} {args[0]} failed in the temporary project")
+        self.folder = self.project / "data" / "training" / "run1"
+        self.folder.mkdir(parents=True)
+        self.matrix = self.folder / "matrix.parquet"
         duckdb.sql("SELECT range AS id, range % 2 AS label FROM range(500)").write_parquet(str(self.matrix))
         self.original = hashlib.sha256(self.matrix.read_bytes()).hexdigest()
 
@@ -93,7 +99,7 @@ class Workspace:
     def wipe_local_copies(self) -> None:
         """Remove the workspace file, its metafile and the DVC cache so that only the remote and the run keep the data."""
         self.matrix.unlink(missing_ok=True)
-        (self.project / "training" / "matrix.parquet.dvc").unlink(missing_ok=True)
+        (self.folder / "matrix.parquet.dvc").unlink(missing_ok=True)
         shutil.rmtree(self.project / ".dvc" / "cache", ignore_errors=True)
 
     def load(self) -> Path:
@@ -110,13 +116,16 @@ def expect_error(action: Callable[[], object], needle: str) -> Problems:
 
 def round_trip(top: Path) -> Problems:
     work = Workspace(top)
-    work.record()
     problems: Problems = []
+    for ignored in (work.matrix, work.folder / "matrix.parquet.dvc"):
+        if run_command("git", ["check-ignore", "--quiet", str(ignored)], cwd=work.project, timeout=60).returncode:
+            problems.append(f"{ignored.name} is not ignored by Git in the test checkout, so the case does not cover the repository layout")
+    work.record()
     tags = work.store.get_tags("run1")
     for key, value in SNAPSHOTS.items():
         if tags.get(f"iceberg_snapshot.{key}") != value:
             problems.append(f"snapshot tag for {key} missing or wrong")
-    metafile = work.project / "training" / "matrix.parquet.dvc"
+    metafile = work.folder / "matrix.parquet.dvc"
     if tags.get("dvc_metafile_sha256") != hashlib.sha256(metafile.read_bytes()).hexdigest():
         problems.append("the metafile hash tag does not match the metafile")
     if not (work.store.run_folder("run1") / "artifacts" / "dvc" / "matrix.parquet.dvc").is_file():
@@ -131,9 +140,9 @@ def round_trip(top: Path) -> Problems:
 def idempotent_record(top: Path) -> Problems:
     work = Workspace(top)
     work.record()
-    first = (dict(work.store.get_tags("run1")), (work.project / "training" / "matrix.parquet.dvc").read_bytes())
+    first = (dict(work.store.get_tags("run1")), (work.folder / "matrix.parquet.dvc").read_bytes())
     work.record()
-    second = (dict(work.store.get_tags("run1")), (work.project / "training" / "matrix.parquet.dvc").read_bytes())
+    second = (dict(work.store.get_tags("run1")), (work.folder / "matrix.parquet.dvc").read_bytes())
     return [] if first == second else ["a second record changed the tags or the metafile"]
 
 
@@ -165,7 +174,7 @@ def missing_matrix(top: Path) -> Problems:
     work = Workspace(top)
     work.matrix.unlink()
     problems = expect_error(work.record, "matrix")
-    if work.store.get_tags("run1") or (work.project / "training" / "matrix.parquet.dvc").exists():
+    if work.store.get_tags("run1") or (work.folder / "matrix.parquet.dvc").exists():
         problems.append("a failed record left tags or a metafile behind")
     return problems
 
@@ -173,7 +182,7 @@ def missing_matrix(top: Path) -> Problems:
 def empty_snapshots(top: Path) -> Problems:
     work = Workspace(top)
     problems = expect_error(lambda: dvc_baseline.record(work.matrix, work.run, {}, project=work.project), "snapshot")
-    if (work.project / "training" / "matrix.parquet.dvc").exists():
+    if (work.folder / "matrix.parquet.dvc").exists():
         problems.append("dvc add ran although no snapshot IDs were given")
     return problems
 

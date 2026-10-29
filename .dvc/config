@@ -1,3 +1,4 @@
 [core]
     analytics = false
     autostage = false
+    no_scm = true
