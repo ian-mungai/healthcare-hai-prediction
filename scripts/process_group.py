@@ -53,8 +53,8 @@ class Member:
     state: str
     name: str
     witness: bool = False
-    marker_parent: int | None = None
     marker_nonce: str | None = None
+    started: str = ""
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def process_snapshot(deadline: float, witness: str | None = None, witnesses: Map
     args = ["-A", "-ww"]
     if witness is not None or witnesses is not None:
         args.append("-E" if sys_platform_is_mac() else "e")
-    args += ["-o", "pid=,pgid=,stat=,command="]
+    args += ["-o", "pid=,pgid=,stat=,lstart=,command="]
     try:
         result = run_command("ps", args, env={"PATH": os.defpath, "LC_ALL": "C"}, timeout=remaining)
     except TimeoutExpired:
@@ -91,14 +91,14 @@ def process_snapshot(deadline: float, witness: str | None = None, witnesses: Map
     seen_nonces = set()
     token = re.compile(r"(?:^|\s)HAI_WORKER_WITNESS=" + re.escape(witness) + r"(?:\s|$)") if witness else None
     for line in result.stdout.splitlines():
-        fields = line.split(None, 3)
-        if len(fields) != 4 or not fields[0].isdigit() or not fields[1].isdigit():
+        fields = line.split(None, 8)
+        if len(fields) != 9 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
-        command = fields[3]
+        command = fields[8]
         for nonce, (pgid, value) in (witnesses or {}).items():
             if pgid == int(fields[1]) and value and re.search(r"(?:^|\s)HAI_WORKER_WITNESS=" + re.escape(value) + r"(?:\s|$)", command):
                 seen_nonces.add(nonce)
-        marker = re.search(r"(?:^|\s)--hai-worker\s+([0-9]+):([a-f0-9]{16,128})(?:\s|$)", command)
+        marker = re.search(r"(?:^|\s)--hai-worker\s+(?:[0-9]+:)?([a-f0-9]{16,128})(?:\s|$)", command)
         members.append(
             Member(
                 int(fields[0]),
@@ -106,11 +106,21 @@ def process_snapshot(deadline: float, witness: str | None = None, witnesses: Map
                 fields[2],
                 Path(command.split()[0]).name,
                 bool(token and token.search(command)),
-                int(marker[1]) if marker else None,
-                marker[2] if marker else None,
+                marker[1] if marker else None,
+                " ".join(fields[3:8]),
             )
         )
     return Snapshot("seen", tuple(members), frozenset(seen_nonces))
+
+
+def normalize_start(text: str) -> str:
+    """Collapse the padding of a process-table start time so two reads of one process compare equal."""
+    return " ".join(text.split())
+
+
+def start_epoch(text: str) -> float:
+    """Convert a process-table start time to seconds since the epoch, with the table's one-second resolution."""
+    return time.mktime(time.strptime(normalize_start(text), "%a %b %d %H:%M:%S %Y"))
 
 
 def sys_platform_is_mac() -> bool:
@@ -177,9 +187,18 @@ class StopResult:
 
 
 def spawn_owned(
-    command: Sequence[str], environment: Mapping[str, str], *, witness: str, nonce: str, session: str, lane: str, owner: str, deadline: float
+    command: Sequence[str],
+    environment: Mapping[str, str],
+    *,
+    witness: str,
+    nonce: str,
+    session: str,
+    lane: str,
+    owner: str,
+    deadline: float,
+    spawn_utc: str | None = None,
 ) -> OwnedProcess:
-    """Create one group leader and its private pipes before the first request can be sent."""
+    """Create one group leader and its private pipes before the first request can be sent. A recorded intent passes its own spawn time."""
     if time.monotonic() >= deadline:
         raise TimeoutError("worker_spawn_deadline")
     prepare_parent()
@@ -216,7 +235,18 @@ def spawn_owned(
     for fd in (control_write, reply_read, error_read):
         os.set_blocking(fd, False)
     return OwnedProcess(
-        child, child, control_write, reply_read, error_read, witness, nonce, session, lane, owner, f"unreaped:{child}", datetime.now(UTC).isoformat()
+        child,
+        child,
+        control_write,
+        reply_read,
+        error_read,
+        witness,
+        nonce,
+        session,
+        lane,
+        owner,
+        f"unreaped:{child}",
+        spawn_utc or datetime.now(UTC).isoformat(),
     )
 
 
@@ -231,7 +261,7 @@ def record_leader_start(handle: OwnedProcess, deadline: float) -> None:
         raise RuntimeError("worker_start_evidence_unavailable") from error
     if result.returncode or not result.stdout.strip():
         raise RuntimeError("worker_start_evidence_unavailable")
-    handle.leader_start = result.stdout.strip()
+    handle.leader_start = normalize_start(result.stdout)
 
 
 def _close_pipes(handle: OwnedProcess) -> None:

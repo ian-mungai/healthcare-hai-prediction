@@ -10,13 +10,13 @@ import http.client
 import json
 import os
 import secrets
+import shutil
 import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,7 +24,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from scripts.orchestration.sdk_standins import Scenario, WorkerStandin
-from scripts.process_group import Member, Snapshot, process_snapshot
+from scripts.process_group import process_snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATHS = (
@@ -42,16 +42,6 @@ SOURCE_PATHS = (
 REAPERS = frozenset({"wait", "waitpid", "waitid", "wait3", "wait4"})
 SIGNAL_FUNCTIONS = frozenset({"kill", "killpg", "signal_group", "signal_owned", "waitpid"})
 SLOW_MODES = ("delay_headers", "drip_headers", "hang_body", "drip_body")
-
-
-def _without_foreign_workers(snapshot: Snapshot) -> Snapshot:
-    """Drop workers whose marker names another spawner, because a recovery sweep adopts each unrecorded one as an unproven group and pauses dispatch."""
-    return replace(snapshot, members=tuple(member for member in snapshot.members if member.marker_parent in {None, os.getpid()}))
-
-
-def _own_workers_snapshot(deadline: float, witness: str | None = None, witnesses: Mapping[str, tuple[int, str]] | None = None) -> Snapshot:
-    """Read the real process table as this run's recovery sweeps see it: its own workers only, never a neighbor run's live ones."""
-    return _without_foreign_workers(process_snapshot(deadline, witness, witnesses))
 
 
 def _call_name(call: ast.Call, aliases: dict[str, str]) -> str:
@@ -161,6 +151,10 @@ def source_checks(root: Path = ROOT) -> dict[str, bool]:
     recovery_aliases = {alias.asname or alias.name: alias.name for node in ast.walk(recovery) if isinstance(node, ast.ImportFrom) for alias in node.names}
     checks["recovery:signal_imports_closed"] = not any(
         alias.name in SIGNAL_FUNCTIONS for node in ast.walk(recovery) if isinstance(node, ast.ImportFrom) for alias in node.names
+    )
+    checks["recovery:no_spawner_pid_read"] = not any(
+        (isinstance(node, ast.Attribute) and node.attr in {"marker_parent", "getpid", "getppid"}) or (isinstance(node, ast.Name) and node.id == "marker_parent")
+        for node in ast.walk(recovery)
     )
     for function in (node for node in ast.walk(recovery) if isinstance(node, ast.FunctionDef)):
         checks[f"recovery:{function.name}:no_signal_or_reap"] = not any(
@@ -515,7 +509,7 @@ def stray_client_cases() -> list[dict[str, Any]]:
 
 
 def isolation_cases(folder: Path) -> list[dict[str, Any]]:
-    """Keep a fresh session's recovery sweep from adopting a live worker that another process spawned."""
+    """Keep a fresh session's recovery sweep from pausing on a live worker that another registry owns."""
     from orchestration.ecs_api import EcsApi, WorkerConfig
     from scripts.process_group import spawn_owned, stop_owned
 
@@ -531,29 +525,297 @@ def isolation_cases(folder: Path) -> list[dict[str, Any]]:
         with WorkerStandin(Scenario("run_task", "normal", lifetime_s=15)) as standin:
             api = EcsApi(WorkerConfig(region="us-west-2", test_endpoint=standin.endpoint), scratch / "registry")
             paused, alert = api.dispatch_paused, api.recovery.alert
+            listed = foreign.pid in {row["pid"] for row in api.recovery.unresolved}
+            reply = api.call("run_task", {"cluster": "synthetic", "task_definition": "synthetic", "count": 1}, deadline=time.monotonic() + 8)
             cleanup = api.close(deadline=time.monotonic() + 10)
     finally:
         stopped = stop_owned(foreign, time.monotonic() + 10)
-    own, other = os.getpid(), os.getpid() + 1
-    synthetic = Snapshot(
-        "seen",
-        (
-            Member(10, 10, "S", "python", marker_parent=own, marker_nonce="a" * 32),
-            Member(11, 11, "S", "python", marker_parent=other, marker_nonce="b" * 32),
-            Member(12, 12, "S", "ps"),
-        ),
-    )
     return [
         {
-            "case": "foreign_marker_filter",
-            "checks": {"keeps_own_and_unmarked_members": [member.pid for member in _without_foreign_workers(synthetic).members] == [10, 12]},
-        },
-        {
             "case": "foreign_worker_isolation",
-            "checks": {"fresh_session_dispatch_open": not paused, "own_cleanup_confirmed": cleanup["confirmed"], "foreign_stop_confirmed": stopped.confirmed},
+            "checks": {
+                "fresh_session_dispatch_open": not paused,
+                "foreign_worker_listed_unresolved": listed,
+                "run_task_not_refused_by_recovery": reply.get("error", {}).get("message") != "worker_recovery_unproven",
+                "own_cleanup_confirmed": cleanup["confirmed"],
+                "foreign_stop_confirmed": stopped.confirmed,
+            },
             "alert_kind": alert["kind"] if alert else None,
-        },
+        }
     ]
+
+
+PLANT_SCRIPT = "import time\nuntil = time.monotonic() + 40\nwhile time.monotonic() < until:\n    time.sleep(0.1)\n"
+
+
+def _plant(scratch: Path, stack: contextlib.ExitStack, nonce: str, spawner: int, *, marked: bool = True) -> Any:
+    """Start one real sleeper whose arguments carry a worker marker and stop it when the stack closes."""
+    from scripts.process_group import spawn_owned, stop_owned
+
+    script = scratch / "plant.py"
+    script.write_text(PLANT_SCRIPT)
+    witness = secrets.token_hex(32)
+    command = [sys.executable, "-I", "-B", str(script), *(["--hai-worker", f"{spawner}:{nonce}"] if marked else [])]
+    handle = spawn_owned(
+        command, {"HAI_WORKER_WITNESS": witness}, witness=witness, nonce=nonce, session="plant", lane="data", owner="plant", deadline=time.monotonic() + 5
+    )
+    stack.callback(lambda: stop_owned(handle, time.monotonic() + 10))
+    return handle
+
+
+def _recorded(ledger: Any, handle: Any, session: str, *, started: str | None = None, witness: str | None = None) -> None:
+    """Write the intent row and then the spawn row the way a live owner does, for a worker that owner no longer supervises."""
+    from scripts.process_group import record_leader_start
+
+    deadline = time.monotonic() + 3
+    ledger.append_intent(
+        {"nonce": handle.nonce, "spawn_utc": handle.spawn_utc, "session": session, "lane": "data", "owner": session, "witness": handle.witness},
+        deadline=deadline,
+    )
+    record_leader_start(handle, deadline)
+    record = dict(handle.spawn_record(), session=session, owner=session)
+    if started is not None:
+        record["leader_start"] = started
+    if witness is not None:
+        record["witness"] = witness
+    ledger.append_spawn(record, deadline=deadline)
+
+
+def _sweeper(registry: Path, *, grace: float = 0.0) -> Any:
+    from orchestration.worker_recovery import Recovery, WorkerLedger
+
+    return Recovery(WorkerLedger(registry), "sweeper", intent_grace=grace)
+
+
+def _sweep(recovery: Any) -> list[dict[str, Any]]:
+    return list(recovery.sweep(deadline=time.monotonic() + 6))
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _ago(seconds: float) -> str:
+    return datetime.fromtimestamp(time.time() - seconds, UTC).isoformat()
+
+
+def _intent(nonce: str) -> dict[str, Any]:
+    return {"nonce": nonce, "spawn_utc": _now(), "session": "crashed_owner", "lane": "data", "owner": "crashed_owner", "witness": "w"}
+
+
+def _pids(rows: list[dict[str, Any]]) -> set[int]:
+    return {row["pid"] for row in rows}
+
+
+def _spawn_rows(registry: Path) -> list[dict[str, Any]]:
+    path = registry / "workers.jsonl"
+    return [row for row in map(json.loads, path.read_text().splitlines()) if row["event"] == "spawn"] if path.exists() else []
+
+
+def records_cases(folder: Path) -> list[dict[str, Any]]:
+    """Plant each rule of records-only recovery with real marked processes and real ledger rows."""
+    from orchestration.worker_recovery import WorkerLedger
+    from scripts.process_group import Member, Snapshot
+
+    scratch = Path(tempfile.mkdtemp(prefix="sdk_records_", dir=folder))
+    rows: list[dict[str, Any]] = []
+    with contextlib.ExitStack() as stack:
+        # Rule 2: a crashed owner's recorded worker is adopted and pauses; its process is not signalled.
+        crashed = _plant(scratch, stack, secrets.token_hex(16), os.getpid())
+        recorded = scratch / "recorded"
+        _recorded(WorkerLedger(recorded), crashed, "crashed_owner")
+        recovery = _sweeper(recorded)
+        entries = _sweep(recovery)
+        rows.append(
+            {
+                "case": "crashed_owner_recovered",
+                "checks": {
+                    "recorded_worker_pauses": recovery.dispatch_paused and crashed.pid in _pids(entries),
+                    "leader_matches_pid_and_start": any(entry["evidence"].get("leader") == "match" for entry in entries if entry["pid"] == crashed.pid),
+                    "not_listed_unresolved": crashed.pid not in _pids(recovery.unresolved),
+                    "process_not_signalled": crashed.pid in {m.pid for m in process_snapshot(time.monotonic() + 2).members if not m.state.startswith("Z")},
+                },
+            }
+        )
+
+        # Rule 3: another registry's live worker, a tokenless orphan and a copied nonce are listed and pause nothing.
+        other = _plant(scratch, stack, secrets.token_hex(16), os.getppid())
+        orphan = _plant(scratch, stack, secrets.token_hex(16), 2147483000)
+        copied = _plant(scratch, stack, crashed.nonce, os.getpid())
+        empty = _sweeper(scratch / "empty_registry")
+        _sweep(empty)
+        listed = _pids(empty.unresolved)
+        rows.append(
+            {
+                "case": "unrecorded_workers_unresolved",
+                "checks": {
+                    "other_registry_worker_listed": other.pid in listed,
+                    "tokenless_orphan_listed": orphan.pid in listed,
+                    "copied_nonce_listed": copied.pid in listed,
+                    "nothing_pauses": not empty.dispatch_paused and empty.alert is None,
+                    "listed_read_only": all(set(row) >= {"pid", "pgid", "reason"} and row["reason"] == "no_registry_record" for row in empty.unresolved),
+                    "report_carries_list": other.pid in _pids(empty.report()["unresolved"]) and empty.report()["paused"] is False,
+                },
+            }
+        )
+
+        # A copied nonce next to a recorded worker: the record binds pid and start, so only the real one pauses.
+        both = _sweep(recovery)
+        rows.append(
+            {
+                "case": "copied_nonce_beside_record",
+                "checks": {"only_recorded_pid_pauses": _pids(both) == {crashed.pid}, "copy_listed": copied.pid in _pids(recovery.unresolved)},
+            }
+        )
+
+        # Spawner pid reuse: a spawner pid that names a live unrelated process, or this process, changes nothing.
+        reuse = scratch / "reuse"
+        reused = _plant(scratch, stack, secrets.token_hex(16), 1)
+        own = _plant(scratch, stack, secrets.token_hex(16), os.getpid())
+        _recorded(WorkerLedger(reuse), reused, "crashed_owner")
+        reuse_recovery = _sweeper(reuse)
+        reuse_entries = _sweep(reuse_recovery)
+        rows.append(
+            {
+                "case": "spawner_pid_ignored",
+                "checks": {
+                    "recorded_worker_with_live_spawner_pid_pauses": _pids(reuse_entries) == {reused.pid},
+                    "unrecorded_worker_with_own_pid_spawner_listed": own.pid in _pids(reuse_recovery.unresolved),
+                    "unrecorded_worker_pauses_nothing": own.pid not in _pids(reuse_entries),
+                },
+            }
+        )
+
+        # Rule 1, crash between spawn and spawn record: the nonce plus a start after the intent adopts the worker.
+        between = scratch / "between"
+        pending = _plant(scratch, stack, secrets.token_hex(16), os.getpid())
+        ledger = WorkerLedger(between)
+        intent_time = _ago(2)
+        ledger.append_intent({**_intent(pending.nonce), "spawn_utc": intent_time, "witness": pending.witness}, deadline=time.monotonic() + 3)
+        adopting = _sweeper(between)
+        adopted = _sweep(adopting)
+        again = _sweep(adopting)
+        late = dict(
+            pending.spawn_record(),
+            session="crashed_owner",
+            owner="crashed_owner",
+            spawn_utc=intent_time,
+            leader_start=next(iter(adopted))["leader_start"] if adopted else "x",
+        )
+        try:
+            ledger.append_spawn(late, deadline=time.monotonic() + 3)
+            late_ok = True
+        except ValueError:
+            late_ok = False
+        rows.append(
+            {
+                "case": "intent_adopts_started_worker",
+                "checks": {
+                    "adopted_and_paused": adopting.dispatch_paused and pending.pid in _pids(adopted),
+                    "one_spawn_row_after_two_sweeps": len(_spawn_rows(between)) == 1 and _pids(again) == _pids(adopted),
+                    "owner_late_record_is_noop": late_ok and len(_spawn_rows(between)) == 1,
+                    "intent_not_pending": not adopting.pending_intents,
+                },
+            }
+        )
+
+        # Rule 1, crash between intent and spawn: no process means the intent closes and nothing pauses.
+        gone = scratch / "gone"
+        WorkerLedger(gone).append_intent({**_intent(secrets.token_hex(16)), "spawn_utc": _ago(60)}, deadline=time.monotonic() + 3)
+        closing = _sweeper(gone, grace=10.0)
+        _sweep(closing)
+        young = WorkerLedger(scratch / "young")
+        young.append_intent(_intent(secrets.token_hex(16)), deadline=time.monotonic() + 3)
+        waiting = _sweeper(scratch / "young", grace=10.0)
+        _sweep(waiting)
+        rows.append(
+            {
+                "case": "intent_without_worker_closed",
+                "checks": {
+                    "old_intent_closed": not closing.ledger.open_intents(deadline=time.monotonic() + 3) and not closing.dispatch_paused,
+                    "young_intent_kept_within_grace": len(waiting.ledger.open_intents(deadline=time.monotonic() + 3)) == 1 and not waiting.dispatch_paused,
+                    "young_intent_reported_pending": len(waiting.pending_intents) == 1,
+                },
+            }
+        )
+
+        # A worker that started before the intent keeps its nonce but is not adopted.
+        early = _plant(scratch, stack, secrets.token_hex(16), os.getpid())
+        time.sleep(2.2)
+        before = scratch / "before"
+        WorkerLedger(before).append_intent(_intent(early.nonce), deadline=time.monotonic() + 3)
+        before_recovery = _sweeper(before)
+        before_entries = _sweep(before_recovery)
+        rows.append(
+            {
+                "case": "copied_nonce_before_intent",
+                "checks": {
+                    "not_adopted": early.pid not in _pids(before_entries) and not before_recovery.dispatch_paused,
+                    "listed_unresolved": early.pid in _pids(before_recovery.unresolved),
+                },
+            }
+        )
+
+        # Worker pid reuse: the pid exists with another start time and no witness, so the record matches nothing.
+        replaced = scratch / "replaced"
+        bystander = _plant(scratch, stack, secrets.token_hex(16), os.getpid(), marked=False)
+        _recorded(WorkerLedger(replaced), bystander, "crashed_owner", started="Mon Jan  1 00:00:00 2001", witness="unrelated")
+        replaced_recovery = _sweeper(replaced)
+        replaced_entries = _sweep(replaced_recovery)
+        rows.append(
+            {
+                "case": "worker_pid_reused_not_matched",
+                "checks": {
+                    "no_pause_on_other_start": not replaced_entries and not replaced_recovery.dispatch_paused,
+                    "record_stays_open": len(replaced_recovery.ledger.open_entries(deadline=time.monotonic() + 3)) == 1,
+                },
+            }
+        )
+
+        # Deleted or recreated registry: records are gone, so the live worker is listed and pauses nothing.
+        deleted = scratch / "deleted"
+        victim = _plant(scratch, stack, secrets.token_hex(16), os.getpid())
+        _recorded(WorkerLedger(deleted), victim, "crashed_owner")
+        shutil.rmtree(deleted)
+        gone_recovery = _sweeper(deleted)
+        gone_entries = _sweep(gone_recovery)
+        WorkerLedger(deleted).append_intent(_intent(secrets.token_hex(16)), deadline=time.monotonic() + 3)
+        recreated = _sweeper(deleted)
+        recreated_entries = _sweep(recreated)
+        rows.append(
+            {
+                "case": "deleted_registry_lists_worker",
+                "checks": {
+                    "deleted_registry_pauses_nothing": not gone_entries and not gone_recovery.dispatch_paused,
+                    "worker_listed_after_delete": victim.pid in _pids(gone_recovery.unresolved),
+                    "worker_listed_after_recreate": victim.pid in _pids(recreated.unresolved) and not recreated_entries,
+                },
+            }
+        )
+
+        # Snapshots the recovery cannot trust change nothing; a marked child of a group is not a leader.
+        synthetic = scratch / "synthetic"
+        WorkerLedger(synthetic).append_intent({**_intent("c" * 32), "spawn_utc": _ago(60)}, deadline=time.monotonic() + 3)
+        blind = _sweeper(synthetic)
+        for status in ("timed_out", "denied"):
+            with patch("orchestration.worker_recovery.process_snapshot", return_value=Snapshot(status)):
+                _sweep(blind)
+        kept = len(blind.ledger.open_intents(deadline=time.monotonic() + 3))
+        child_only = Snapshot("seen", (Member(41, 40, "S", "python", started=time.strftime("%a %b %d %H:%M:%S %Y"), marker_nonce="c" * 32),))
+        with patch("orchestration.worker_recovery.process_snapshot", return_value=child_only):
+            leaderless = _sweeper(synthetic)
+            _sweep(leaderless)
+        rows.append(
+            {
+                "case": "snapshot_unavailable_changes_nothing",
+                "checks": {
+                    "intent_kept_when_ps_fails": kept == 1,
+                    "no_pause_when_ps_fails": not blind.dispatch_paused,
+                    "child_with_marker_ignored": not leaderless.unresolved and not leaderless.dispatch_paused and not _spawn_rows(synthetic),
+                },
+            }
+        )
+    return rows
 
 
 def parameter_cases(folder: Path) -> list[dict[str, Any]]:
@@ -654,6 +916,7 @@ def main() -> int:
             "recovery",
             "stray_clients",
             "isolation",
+            "records",
             "parameters",
             "stderr",
             "reader_failures",
@@ -697,8 +960,6 @@ def main() -> int:
             )
             + "\n"
         )
-        isolated_sweeps = patch("orchestration.worker_recovery.process_snapshot", new=_own_workers_snapshot)
-        isolated_sweeps.start()
         try:
             for name, function in (("deadlines", deadline_cases), ("retries", retry_cases)):
                 if args.cases in {"all", name}:
@@ -710,6 +971,7 @@ def main() -> int:
                 ("concurrency", concurrency_cases),
                 ("recovery", recovery_cases),
                 ("isolation", isolation_cases),
+                ("records", records_cases),
                 ("parameters", parameter_cases),
                 ("stderr", stderr_cases),
             ):
@@ -730,8 +992,6 @@ def main() -> int:
             rows.append({"case": "cleanup_unconfirmed", "checks": {"confirmed": False}, "evidence": error.record})
         except (OSError, ValueError, RuntimeError, TimeoutError, EOFError, KeyError, TypeError, KeyboardInterrupt) as error:
             rows.append({"case": "native_case_error", "checks": {"completed": False}, "error_type": type(error).__name__})
-        finally:
-            isolated_sweeps.stop()
     rows.append(
         {"case": "frozen_sources", "checks": {"unchanged": hashes == {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in sources}}}
     )

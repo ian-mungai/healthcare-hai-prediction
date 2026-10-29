@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import os
 import re
@@ -13,6 +14,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -82,6 +84,7 @@ class CatalogTransport:
                 raise RuntimeError("catalog_transport_closing")
             nonce = secrets.token_hex(16)
             witness = secrets.token_hex(32)
+            spawn_utc = datetime.now(UTC).isoformat()
             environment = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR") if name in os.environ}
             environment.update(PYTHONDONTWRITEBYTECODE="1", HAI_WORKER_WITNESS=witness)
             command = [
@@ -90,16 +93,33 @@ class CatalogTransport:
                 "-B",
                 str(Path(__file__).with_name("catalog_transport_child.py")),
                 "--hai-worker",
-                f"{os.getpid()}:{nonce}",
+                nonce,
                 "--role",
                 role,
                 *arguments,
             ]
             previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
             try:
-                handle = spawn_owned(
-                    command, environment, witness=witness, nonce=nonce, session=self.session, lane="catalog_transport", owner=self.session, deadline=deadline
+                self.ledger.append_intent(
+                    {"nonce": nonce, "spawn_utc": spawn_utc, "session": self.session, "lane": "catalog_transport", "owner": self.session, "witness": witness},
+                    deadline=deadline,
                 )
+                try:
+                    handle = spawn_owned(
+                        command,
+                        environment,
+                        witness=witness,
+                        nonce=nonce,
+                        session=self.session,
+                        lane="catalog_transport",
+                        owner=self.session,
+                        deadline=deadline,
+                        spawn_utc=spawn_utc,
+                    )
+                except BaseException:
+                    with contextlib.suppress(OSError, ValueError, TimeoutError):
+                        self.ledger.close_intent(nonce, "spawn_failed", deadline=max(deadline, time.monotonic() + 1))
+                    raise
                 self.handles.append(handle)
                 record_leader_start(handle, deadline)
                 self.ledger.append_spawn(handle.spawn_record(), deadline=deadline)

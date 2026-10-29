@@ -112,7 +112,8 @@ class WorkerPool:
     def _spawn(self, lane: str, pool_key: str | None, one_shot: bool, deadline: float, *, secret_stream: bool) -> Worker:
         nonce = secrets.token_hex(16)
         witness = secrets.token_hex(32)
-        command = [self.config.python, "-I", "-B", str(self.config.worker), "--hai-worker", f"{os.getpid()}:{nonce}", "--region", self.config.region]
+        spawn_utc = datetime_utc()
+        command = [self.config.python, "-I", "-B", str(self.config.worker), "--hai-worker", nonce, "--region", self.config.region]
         for flag, value in (
             ("--profile", self.config.profile),
             ("--test-endpoint", self.config.test_endpoint),
@@ -125,9 +126,25 @@ class WorkerPool:
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         worker: Worker | None = None
         try:
-            handle = spawn_owned(
-                command, self._environment(witness), witness=witness, nonce=nonce, session=self.session, lane=lane, owner=self.session, deadline=deadline
+            self.ledger.append_intent(
+                {"nonce": nonce, "spawn_utc": spawn_utc, "session": self.session, "lane": lane, "owner": self.session, "witness": witness}, deadline=deadline
             )
+            try:
+                handle = spawn_owned(
+                    command,
+                    self._environment(witness),
+                    witness=witness,
+                    nonce=nonce,
+                    session=self.session,
+                    lane=lane,
+                    owner=self.session,
+                    deadline=deadline,
+                    spawn_utc=spawn_utc,
+                )
+            except BaseException:
+                with contextlib.suppress(OSError, ValueError, TimeoutError):
+                    self.ledger.close_intent(nonce, "spawn_failed", deadline=max(deadline, time.monotonic() + 1))
+                raise
             worker = Worker(handle, lane, pool_key, time.monotonic(), one_shot)
             self.workers.append(worker)
             record_leader_start(handle, deadline)
