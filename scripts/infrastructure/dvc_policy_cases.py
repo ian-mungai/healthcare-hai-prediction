@@ -27,9 +27,9 @@ def cases() -> list[Case]:
     for action in OBJECT_ACTIONS:
         add(f"dvc object {action}", action, OBJECT, True)
         add(f"dvc object in the other bucket {action}", action, OBJECT.replace(BUCKET, OTHER_BUCKET), False)
-    for prefix in ("dvc/", "dvc/files/md5/6c/", "dvc"):
+    for prefix in ("dvc/", "dvc/files/md5/6c/"):
         add(f"list under {prefix}", "s3:ListBucket", BUCKET, True, {"s3:prefix": (prefix,)})
-    for prefix in ("", "lakehouse/", "lakehouse/gold/", "dvc-other/", "dvcs", "cms/dvc/", "../dvc/"):
+    for prefix in ("", "lakehouse/", "lakehouse/gold/", "dvc", "dvc-private/x", "dvc-other/", "dvcs", "cms/dvc/", "../dvc/"):
         add(f"list outside dvc/ with prefix {prefix!r}", "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
     add("list without a prefix", "s3:ListBucket", BUCKET, False)
     add("list in the other bucket", "s3:ListBucket", OTHER_BUCKET, False, {"s3:prefix": ("dvc/",)})

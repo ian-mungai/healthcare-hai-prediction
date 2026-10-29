@@ -289,7 +289,7 @@ verification evidence remain untracked under
 `data/infrastructure/lifecycle_deployment/`.
 
 **DVC baseline grant.** `infra/iam/owner_policies/job_dvc_baseline.json` is the policy for the training job role: `s3:GetObject`, `s3:PutObject`,
-`s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on `dvc/*` of the data bucket. It also grants `s3:ListBucket` only with an `s3:prefix` of `dvc` or `dvc/*`. It
+`s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on `dvc/*` of the data bucket. It also grants `s3:ListBucket` only with an `s3:prefix` of `dvc/*`, so listing the bare prefix `dvc` (which would also list `dvc-private/`) is denied. It
 grants no delete, no version read or listing, no bucket-location read and nothing outside `dvc/`. No stack attaches it yet because the training job role
 does not exist; the owner attaches it when that role is defined. `scripts.infrastructure.run_jobs_iam_e2e` evaluates it with
 `scripts/infrastructure/dvc_policy_cases.py` and plants six scope defects that each must be caught.
