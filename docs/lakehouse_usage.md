@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
 description: Commands and checks for the launcher, bronze and its AWS cutover, staging, silver, gold, features, run lock, fixtures.
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 ---
 
 # Lakehouse usage
@@ -499,12 +499,47 @@ generate and check:
 .tools/sqlfluff/bin/python -m scripts.features.run_feature_store_e2e --mode build_local   # fixture build, validation with planted defects, export; no Docker; report: data/e2e/feature_store/
 .venv/bin/python -m scripts.features.feast_cases --part local      # Feast job and historical helper against stub catalogs; report: data/e2e/feast_cases/
 .venv/bin/python -m scripts.features.online_cases --part fake      # online protocol against an in-process fake Redis
+.venv/bin/python -B -m scripts.features.feast_cases --part aws         # AWS profile against a fake catalog, a fake Redis and a secret-store stand-in; no AWS
 .venv/bin/python -m scripts.orchestration.run_features_pipeline_light   # renders, broker approval and DAG graphs; nothing is started
 ```
 
 The heavy runs need the launcher and Docker and run outside the CI group: `run_feature_store_e2e --mode publish_offline` (the Spark case suite on a local
 catalog), the Feast image parts of `feast_cases` and `online_cases` and the real Redis service. The CI group `lakehouse_features` runs the first two schema
 and static commands and the light commands (see Quality Checks, Lakehouse layers).
+
+### Feast profiles on the Mac and on AWS
+
+Training and serving read the one definitions file `feature_store/definitions.py` in both profiles. `FEAST_PROFILE` picks the profile. Unset or `local` is the Mac
+launcher path above, with `feature_store/feature_store.yaml`, the Polaris container and the launcher's Redis container. `aws` is the AWS profile
+(`scripts/features/feast_aws.py`, settings file `feature_store/feature_store_aws.yaml`): the offline store is the Iceberg `features` namespace read through the AWS
+catalog with Feast's `IcebergSource` and the DuckDB offline store. The online store is the self-hosted Redis on the AWS host. The run mode fixes the namespace:
+`real` reads `features` and `publish_fixture` reads `features_e2e`. A fixture run also uses the separate `lakehouse/feast_e2e/` registry key, so it cannot replace
+the real registry. The profile never writes a table. It writes only the registry key of its step and Redis databases 1 and 2.
+
+The job environment carries the whole configuration. No file holds any of it.
+
+| Variable | Meaning |
+| --- | --- |
+| `POLARIS_URI` | Catalog endpoint, exactly `http://<host>:<port>/api/catalog` |
+| `POLARIS_CLIENT_ID`, `POLARIS_CLIENT_SECRET` | Reader pair, exchanged once for a token and then removed from the environment |
+| `FEAST_REDIS_HOST` | Address of the host Redis (port 6379) |
+| `FEAST_REGISTRY_BUCKET`, `AWS_REGION` | Registry bucket and region; AWS access comes from the task role |
+| `REDIS_PASSWORD` | Must be unset. The job reads the password from the secret store at run time and keeps it in memory only |
+
+The preparation has four bounded phases under one 180-second deadline: the secret fetch (30 s), a Redis check (10 s), the token exchange and a check that loads
+`publish_runs` (30 s). A phase that does not answer ends the job with its name and the error type.
+
+The materialization job is the row `{"template": "pipeline_feast", "step": "materialize", "class": "lakehouse_read"}` in `config/orchestration/ecs_jobs.json`.
+It is off with the rest of the table because `enabled` stays `false`. The owner must switch on three things before it can run on AWS:
+
+1. The job row. Set `enabled` to `true` after the ECS placement lane is accepted. The jobs export also needs a task definition for the Feast image. It lists no
+   Feast definition today.
+2. The host Redis. It runs on the AWS host with `requirepass` and is reachable from the job's network. `FEAST_REDIS_HOST` names it.
+3. The secret. A SecureString parameter holds the Redis password under the name that `scripts/infrastructure/secret_store.py` calls `REDIS_PASSWORD`.
+   The job's task role may read that one parameter.
+
+The cases use stand-ins only. No run against the AWS catalog, the host Redis or Parameter Store has happened. The S3 settings for PyIceberg on ECS are
+unproven.
 
 ## Run lock, registry and fixture kit
 

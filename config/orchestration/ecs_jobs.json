@@ -9,6 +9,7 @@
     {"template": "pipeline_validate_cross", "class": "offline"},
     {"template": "pipeline_export", "class": "offline"},
     {"template": "pipeline_spark", "class": "lakehouse_read"},
-    {"template": "pipeline_publish", "class": "lakehouse_read"}
+    {"template": "pipeline_publish", "class": "lakehouse_read"},
+    {"template": "pipeline_feast", "step": "materialize", "class": "lakehouse_read"}
   ]
 }

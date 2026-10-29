@@ -123,12 +123,13 @@ def checked_references(schema: Mapping[str, Any], features: Sequence[str]) -> tu
     return tuple(features)
 
 
-def default_store(environ: Mapping[str, str]) -> Any:
+def default_store(environ: Mapping[str, str], settings_file: Path = SETTINGS_FILE) -> Any:
     """The Feast store of the repository, after the settings file's variables are shown to be set."""
-    missing = reads.unresolved_variables(SETTINGS_FILE.read_text(), environ)
+    missing = reads.unresolved_variables(settings_file.read_text(), environ)
     if missing:
-        raise ReadError(f"feature_store.yaml variables are unset or unresolved: {', '.join(missing)}")
-    return importlib.import_module("feast").FeatureStore(repo_path=str(REPO))
+        raise ReadError(f"{settings_file.name} variables are unset or unresolved: {', '.join(missing)}")
+    options = {} if settings_file == SETTINGS_FILE else {"fs_yaml_file": settings_file}
+    return importlib.import_module("feast").FeatureStore(repo_path=str(REPO), **options)
 
 
 def default_catalog(environ: Mapping[str, str], publication_run: str | None = None, register: bool = True) -> reads.IcebergCatalog:

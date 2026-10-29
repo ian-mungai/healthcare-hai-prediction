@@ -32,11 +32,12 @@ lakehouse_features_combine() {
 
 lakehouse_features_store() {
   # The feature store's own gates, all offline and light: the generated schema, models, YAML and Feast definitions are what the generator writes; the static
-  # cases (pin, plan, contract, masks, no teardown, closed settings); the Feast job and historical helper against stub catalogs; the online protocol against an
+  # cases (pin, plan, contract, masks, no teardown, closed settings); the Feast job and historical helper against stub catalogs; the AWS profile against stand-ins; the online protocol against an
   # in-process fake Redis; and the feature pipeline's renders, broker approval and DAG graphs. The builds, the Feast image and the real Redis stay in the heavy lane.
   timed "lakehouse_features: feature schema check" "$python_bin" -m scripts.features.feature_schema check
   timed "lakehouse_features: feature store static E2E" "$python_bin" -m scripts.features.run_feature_store_e2e --mode static
   timed "lakehouse_features: Feast local cases" "$python_bin" -m scripts.features.feast_cases --part local
+  timed "lakehouse_features: Feast AWS profile cases with stand-ins" "$python_bin" -m scripts.features.feast_cases --part aws
   timed "lakehouse_features: online protocol cases with fake Redis" "$python_bin" -m scripts.features.online_cases --part fake
   timed "lakehouse_features: features pipeline light E2E" "$python_bin" -m scripts.orchestration.run_features_pipeline_light
 }
