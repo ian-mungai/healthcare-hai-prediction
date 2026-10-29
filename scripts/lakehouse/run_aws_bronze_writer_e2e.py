@@ -85,9 +85,7 @@ def snapshot() -> dict[str, str]:
     names += [str(path.relative_to(ROOT)) for path in sorted((ROOT / "infra/modules/bronze_writer_job").rglob("*.tf"))]
     names += [str(path.relative_to(ROOT)) for path in sorted((ROOT / "infra/modules/bronze_writer_job/tests").glob("*.tftest.hcl"))]
     names += ["infra/iam/tests/bronze_writer.tftest.hcl"]
-    names += [
-        f"infra/iam/owner_policies/{name}.json" for name in ("bronze_writer_storage", "bronze_reader_storage", "bronze_execution", "bronze_project_delta")
-    ]
+    names += [f"infra/iam/owner_policies/{name}.json" for name in ("bronze_writer_storage", "job_reader_e2e", "bronze_execution", "bronze_project_delta")]
     names += json.loads((ROOT / "config/lakehouse/aws_bronze_templates.json").read_text()).get("stage_files", [])
     return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(names)) if (ROOT / name).is_file()}
 

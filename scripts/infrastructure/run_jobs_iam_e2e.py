@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.iam.scripts.render_policy import load_documents, non_whitespace_length, render_template, terraform_names
-from scripts.infrastructure import job_writer_policy_cases
+from scripts.infrastructure import job_writer_policy_cases, layer_writer_policy_cases
 from scripts.infrastructure.policy_evaluator import Request, decide
 from scripts.infrastructure.secret_store import terraform_variables
 
@@ -104,14 +104,16 @@ def cases() -> list[Case]:
             result.append((f"pass {role} to {service}", "project", "iam:PassRole", f"{IAM}job_{role}_dev", allowed, {"iam:PassedToService": (service,)}))
     result.append(
         (
-            "cannot pass a writer role",
+            "can pass a prepared layer writer role",
             "project",
             "iam:PassRole",
             f"{IAM}job_write_silver_task_dev",
-            False,
+            True,
             {"iam:PassedToService": ("ecs-tasks.amazonaws.com",)},
         )
     )
+    for role in ("try_writer", "unrelated_task"):
+        result.append((f"cannot pass {role}", "project", "iam:PassRole", f"{IAM}job_{role}_dev", False, {"iam:PassedToService": ("ecs-tasks.amazonaws.com",)}))
     for action in ("iam:GetRole", "ec2:CreateVpcEndpoint", "ec2:AuthorizeSecurityGroupEgress"):
         result.append((f"project has no {action}", "project", action, "*", False, {}))
     for session, allowed in (("hai_try_example", True), ("unrelated", False)):
@@ -167,6 +169,13 @@ def main() -> int:
         REPO / "infra/iam/job_writer_variables.tf",
         REPO / "infra/iam/tests/job_writer.tftest.hcl",
         *(directory / f"{name}.json" for name in job_writer_policy_cases.POLICIES),
+        REPO / "scripts/infrastructure/layer_writer_policy_cases.py",
+        REPO / "infra/iam/bronze_writer.tf",
+        REPO / "infra/iam/bronze_writer_variables.tf",
+        REPO / "infra/iam/job_outputs.tf",
+        REPO / "infra/iam/tests/job_writer_layers.tftest.hcl",
+        REPO / "config/lakehouse/bronze_tables.json",
+        *(directory / f"{name}.json" for name in layer_writer_policy_cases.POLICIES),
     ]
     before = {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}
     report: dict[str, Any] = {
@@ -236,6 +245,9 @@ def main() -> int:
         writer_checks, writer_defects = job_writer_policy_cases.verify(REPO, documents, output)
         checks.extend(writer_checks)
         defects.extend(writer_defects)
+        layer_checks, layer_defects = layer_writer_policy_cases.verify(REPO, documents, output)
+        checks.extend(layer_checks)
+        defects.extend(layer_defects)
         for name, document in documents.items():
             (output / f"{name}.json").write_text(json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         after = {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}

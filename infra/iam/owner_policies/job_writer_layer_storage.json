@@ -2,15 +2,15 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadBronzeNamespaceObjects",
+      "Sid": "LayerTableObjects",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
       "Resource": ${TABLE_OBJECT_ARNS}
     },
     {
-      "Sid": "ListBronzeNamespacePrefixes",
+      "Sid": "ListLayerTablePrefixes",
       "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+      "Action": ["s3:ListBucket"],
       "Resource": "${BUCKET_ARN}",
       "Condition": {"StringLike": {"s3:prefix": ${TABLE_LIST_PREFIXES}}}
     }

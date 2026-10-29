@@ -107,10 +107,6 @@ def cases() -> list[Case]:
         add(f"pass test role {service}", "project", "iam:PassRole", ROLE, expected, {"iam:PassedToService": (service,)})
     add("pass test role needs service", "project", "iam:PassRole", ROLE, False)
     for resource in (
-        ROLE.replace("write_e2e", "write_silver"),
-        ROLE.replace("write_e2e", "write_gold"),
-        ROLE.replace("write_e2e", "write_features"),
-        ROLE.replace("write_e2e", "write_bronze"),
         ROLE.replace("write_e2e_task", "unrelated_task"),
         ROLE.replace("111111111111", "222222222222"),
         ROLE.replace("_dev", "_prod"),
