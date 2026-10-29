@@ -2,6 +2,7 @@
 -- and 30-day mortality windows): the published period that matches the HAI window itself, because these outcomes are
 -- compared with it, never used to predict it. Kept apart from every predictor table (alignment step AL5, failure modes
 -- 597 to 603, plans/alignment_20261008/failure_modes_al5.md).
+-- PSI-90 and PSI-13 instead use the latest period ending strictly before the window start.
 
 with
 
@@ -82,6 +83,7 @@ periods as (
 
 candidates as (
     -- The equal calendar-year window first, then the largest overlap, then the latest end [597].
+    -- PSI-90 and PSI-13 instead take the latest period ending strictly before the window start.
     select
         periods.measure_control,
         periods.ccn,
@@ -94,20 +96,28 @@ candidates as (
         periods.release_date,
         periods.fiscal_year,
         spine.spine_key,
-        least(periods.period_end, spine.window_end) - greatest(periods.period_start, spine.window_start) + 1 as overlap_days,
+        greatest(0, least(periods.period_end, spine.window_end) - greatest(periods.period_start, spine.window_start) + 1) as overlap_days,
         row_number() over (
             partition by spine.spine_key, periods.measure_control, periods.measure
             order by
                 periods.period_start = spine.window_start and periods.period_end = spine.window_end desc,
-                least(periods.period_end, spine.window_end) - greatest(periods.period_start, spine.window_start) desc,
-                periods.period_end desc
+                greatest(0, least(periods.period_end, spine.window_end) - greatest(periods.period_start, spine.window_start) + 1) desc,
+                periods.period_end desc,
+                periods.release_date desc,
+                periods.period_start desc
         ) as match_rank
     from spine
     inner join periods
         on
             spine.ccn = periods.ccn
-            and spine.window_end >= periods.period_start
-            and spine.window_start <= periods.period_end
+            and (
+                (periods.measure in ('PSI_90', 'PSI_13') and spine.window_start > periods.period_end)
+                or (
+                    periods.measure not in ('PSI_90', 'PSI_13')
+                    and spine.window_end >= periods.period_start
+                    and spine.window_start <= periods.period_end
+                )
+            )
 ),
 
 chosen as (
@@ -125,6 +135,7 @@ any_period as (
 
 held as (
     -- Windows or program years staging held that overlap the HAI window [601].
+    -- Held PSI-90 and PSI-13 windows instead end strictly before the HAI window starts.
     select distinct
         spine.spine_key,
         holds.measure_id as measure
@@ -132,8 +143,14 @@ held as (
     inner join spine
         on
             holds.entity_id = spine.ccn
-            and holds.window_start <= spine.window_end
-            and holds.window_end >= spine.window_start
+            and (
+                (holds.measure_id in ('PSI_90', 'PSI_13') and holds.window_end < spine.window_start)
+                or (
+                    holds.measure_id not in ('PSI_90', 'PSI_13')
+                    and holds.window_start <= spine.window_end
+                    and holds.window_end >= spine.window_start
+                )
+            )
     union
     select distinct
         spine.spine_key,

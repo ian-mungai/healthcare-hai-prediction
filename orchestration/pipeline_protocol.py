@@ -14,8 +14,10 @@ from typing import Any, Protocol
 
 from scripts.lakehouse.gold_publish_record import IDENT_MAX, RUN_ID, SHA256, PublishError, accept_consumer
 
-LAYERS = ("silver", "gold")
+LAYERS = ("silver", "gold", "features")
 SILVER_NAMESPACE = {"publish_fixture": "silver_e2e", "real": "silver"}
+# The namespaces a pin of each source layer may name, by run mode: a consumer pins only committed sets of its own source layer.
+PIN_NAMESPACES = {"silver": SILVER_NAMESPACE, "gold": {"publish_fixture": "gold_e2e", "real": "gold"}}
 MAX_RECORD = 32 << 20
 MATERIALIZATION_GATE = ".runstore_pending.json"
 COPY_SECONDS = 600.0
@@ -63,12 +65,17 @@ def require_materialized(root: Path) -> None:
         raise PipelineError("remote materialization is pending recovery")
 
 
+def source_namespace(source: str, mode: str) -> str:
+    """The namespace of a pinned source layer (silver or gold) in a publish mode; any other layer or mode has none."""
+    namespace = PIN_NAMESPACES.get(source, {}).get(mode)
+    if namespace is None:
+        raise PipelineError(f"run mode {mode!r} has no {source} namespace; the publish modes are {' and '.join(PIN_NAMESPACES.get(source, {}))}")
+    return namespace
+
+
 def silver_namespace(mode: str) -> str:
     """The silver namespace of a publish mode; any other mode has none."""
-    namespace = SILVER_NAMESPACE.get(mode)
-    if namespace is None:
-        raise PipelineError(f"run mode {mode!r} has no silver namespace; the publish modes are {' and '.join(SILVER_NAMESPACE)}")
-    return namespace
+    return source_namespace("silver", mode)
 
 
 def read_bytes(root: Path, relative: str, limit: int = MAX_RECORD) -> bytes:
@@ -127,7 +134,7 @@ def digest_file(path: Path) -> str:
 
 
 def fixed_layer(layer: str) -> str:
-    """Require one of the two supported publication layers."""
+    """Require one of the supported publication layers."""
     if layer not in LAYERS:
         raise PipelineError("the publication layer is unknown")
     return layer
@@ -278,18 +285,18 @@ def accept_export(state: Mapping[str, Any], run_id: str, layer: str, attempt_id:
     return {"attempt_id": attempt_id, "sha256": digest, "sealed_sha256": completion["sha256"], "generation": completion["generation"]}
 
 
-def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
-    """Require a complete silver pin for one consumer, mode and committed producer."""
-    wanted = silver_namespace(mode)
+def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str], source: str = "silver") -> None:
+    """Require a complete pin of the ``source`` layer (silver or gold) for one consumer, mode and committed producer."""
+    wanted = source_namespace(source, mode)
     if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} or record.get("schema") != 1:
-        raise PipelineError("the silver pin has an unsupported shape")
+        raise PipelineError(f"the {source} pin has an unsupported shape")
     if record["run_id"] != run_id or record["mode"] != mode or record["namespace"] != wanted or not RUN_ID.fullmatch(str(record["source_run_id"])):
-        raise PipelineError("the silver pin identity does not match this consumer")
+        raise PipelineError(f"the {source} pin identity does not match this consumer")
     snapshots = record["snapshot_set"]
     if not isinstance(snapshots, dict) or set(snapshots) != tables:
-        raise PipelineError("the silver pin does not name exactly the publication tables")
+        raise PipelineError(f"the {source} pin does not name exactly the publication tables")
     if any(type(value) is not int or not 0 < value <= 9223372036854775807 for value in snapshots.values()):
-        raise PipelineError("the silver pin contains an invalid snapshot ID")
+        raise PipelineError(f"the {source} pin contains an invalid snapshot ID")
 
 
 def safe_name(value: str) -> str:

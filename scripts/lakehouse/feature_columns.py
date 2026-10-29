@@ -4,7 +4,8 @@ Run from the repository root:
 
     .venv/bin/python -m scripts.lakehouse.feature_columns --check [--root DIR] [--database FILE]
 
-The YAML is ``dbt/models/features/_features__models.yml``. dbt enforces the column contract of every feature model when it builds (``+contract`` in
+The YAML is every ``_*.yml`` file under ``dbt/models/features/`` (``_features__models.yml`` and the generated ``matrix/_feature_matrix__models.yml``); a
+model documented in two files fails. dbt enforces the column contract of every feature model when it builds (``+contract`` in
 ``dbt/dbt_project.yml``). This check does not rely on it: it builds the feature phase once more on a scratch DuckDB file whose gold tables are empty
 (the columns and types of ``data_contracts/lakehouse/gold_contract.json``, the real seeds, the control bridge) with the contract switched off, reads
 the columns the database gives each model and compares them with the YAML. It fails on a model without a YAML entry, a YAML entry without a model, a
@@ -48,6 +49,7 @@ yaml: Any = importlib.import_module("yaml")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS = "dbt/models/features"
 MODELS_YAML = f"{MODELS}/_features__models.yml"
+YAML_PATTERN = "_*.yml"
 GOLD_CONTRACT = "data_contracts/lakehouse/gold_contract.json"
 ISOLATION_RULE = "the feature phase reads gold only (see docs/feature_phase_saved.md)"
 RULE = "every output column of a feature model is documented with its data type and description (sql_and_dbt.md item 8, design: frozen output columns)"
@@ -100,6 +102,27 @@ def documented(path: Path) -> dict[str, dict[str, dict[str, str]]]:
         }
         for model in document.get("models") or []
     }
+
+
+def yaml_files(root: Path) -> list[Path]:
+    """Every ``_*.yml`` file under the feature models folder (the main YAML and the generated matrix YAML), sorted by path."""
+    return sorted((root / MODELS).rglob(YAML_PATTERN))
+
+
+def documented_all(root: Path) -> tuple[dict[str, dict[str, dict[str, str]]], list[str]]:
+    """The documented columns of every model in every YAML file under the feature models folder, and a problem for each model documented twice."""
+    docs: dict[str, dict[str, dict[str, str]]] = {}
+    owners: dict[str, str] = {}
+    problems: list[str] = []
+    for path in yaml_files(root):
+        name = path.relative_to(root).as_posix()
+        for model, columns in documented(path).items():
+            if model in docs:
+                problems.append(f"{name}:1: model {model} is documented here and in {owners[model]}; keep one entry. Rule: {RULE}.")
+                continue
+            docs[model] = columns
+            owners[model] = name
+    return docs, problems
 
 
 def compare(models: list[str], built: dict[str, list[list[str]]], docs: dict[str, dict[str, dict[str, str]]]) -> list[str]:
@@ -438,7 +461,7 @@ def read_columns(database: Path, models: list[str], tool_root: Path = REPO_ROOT)
 def check(root: Path = REPO_ROOT, database: Path | None = None) -> tuple[list[str], dict[str, int]]:
     """Problems between the feature models' built columns and the YAML, and the counts of what was compared."""
     models = sql_models(root)
-    docs = documented(root / MODELS_YAML)
+    docs, duplicates = documented_all(root)
     try:
         if database is None:
             with tempfile.TemporaryDirectory(prefix="feature_columns_") as folder:
@@ -450,7 +473,7 @@ def check(root: Path = REPO_ROOT, database: Path | None = None) -> tuple[list[st
             built = read_columns(database, models)
     except BuildError as error:
         return [f"{MODELS_YAML}:1: the scratch build could not run, so the columns were not compared: {error}. Rule: {RULE}."], {}
-    problems = compare(models, built, docs)
+    problems = [*duplicates, *compare(models, built, docs)]
     return problems, {"models": len(models), "columns": sum(len(columns) for columns in built.values())}
 
 

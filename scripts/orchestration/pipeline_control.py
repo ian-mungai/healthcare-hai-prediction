@@ -12,7 +12,19 @@ from orchestration.pipeline_protocol import LocalRunStore, PipelineError, RunSto
 from scripts.orchestration.broker import Broker, LauncherUnavailable
 from scripts.orchestration.run_control import ControlFailed, ControlRefused
 
-ACTIONS = ("catalog_up", "catalog_release", "snapshot_project", "reserve_silver", "seal_silver", "seal_gold", "fixture_pin", "fixture_verify")
+ACTIONS = (
+    "catalog_up",
+    "catalog_release",
+    "snapshot_project",
+    "reserve_silver",
+    "seal_silver",
+    "seal_gold",
+    "fixture_pin",
+    "fixture_verify",
+    "reserve_gold",
+    "seal_features",
+    "online_store_up",
+)
 WAIT_SECONDS = 600.0
 
 
@@ -95,11 +107,17 @@ def perform(broker: Broker, request: SubmissionRequest, action: str, params: dic
             return wait_for(
                 "project snapshot", lambda left: broker.call("snapshot", payload, principal, timeout=left), lambda view: view.get("state") == "complete"
             )
+        if action == "online_store_up":
+            return wait_for(
+                "online store startup",
+                lambda left: broker.call("pipeline_online_store_up", {}, principal, timeout=left),
+                lambda view: view.get("phase") == "up",
+            )
         if action in ("fixture_pin", "fixture_verify"):
             return broker.call(f"pipeline_{action}", {}, principal)
-        if action == "reserve_silver":
-            return broker.call("pipeline_reserve_silver", {}, principal)
-        if action in ("seal_silver", "seal_gold", "fixture_pin", "fixture_verify"):
+        if action in ("reserve_silver", "reserve_gold"):
+            return broker.call(f"pipeline_{action}", {}, principal)
+        if action in ("seal_silver", "seal_gold", "seal_features"):
             layer = action.removeprefix("seal_")
             result = validation(broker, request, f"{layer}_validate")
             (store if store is not None else LocalRunStore(folder)).seal(layer, str(result["sha256"]))
@@ -124,6 +142,9 @@ def completed(broker: Broker, request: SubmissionRequest, attempt: dict[str, Any
         "gold_export": ("pipeline_accept_export", {"layer": "gold"}),
         "pin_silver": ("pipeline_accept_pin", {}),
         "read_silver": ("pipeline_accept_input", {}),
+        "features_export": ("pipeline_accept_export", {"layer": "features"}),
+        "pin_gold": ("pipeline_accept_gold_pin", {}),
+        "read_gold": ("pipeline_accept_gold_input", {}),
     }
     if request.template not in methods:
         return {}

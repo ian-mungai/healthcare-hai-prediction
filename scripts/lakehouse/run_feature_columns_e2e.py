@@ -36,6 +36,8 @@ Docs = dict[str, dict[str, dict[str, str]]]
 MODEL = "int_spine_hospital_measures"
 COLUMN = "value_code"
 SQL_MODEL = f"dbt/models/features/{MODEL}.sql"
+MATRIX_MODEL = "feature_matrix_care_compare"
+MATRIX_COLUMN = "c119__value__number"
 SCRATCH_FILES = ("data_contracts/lakehouse/gold_contract.json",)
 FILTER_MODEL = "dbt/models/features/bridge/feature_bridge_geography_measures.sql"
 FILTER_HOOK = "{{ config(materialized='table', post_hook=\"insert into {{ this }} select * from {{ ref('bridge_measure_control') }}\") }}"
@@ -67,8 +69,12 @@ def cases() -> list[tuple[str, Callable[[Docs], None], str | None]]:
     def no_description(docs: Docs) -> None:
         docs[MODEL][COLUMN]["description"] = ""
 
+    def drop_matrix_column(docs: Docs) -> None:
+        del docs[MATRIX_MODEL][MATRIX_COLUMN]
+
     return [
         ("committed_files", lambda docs: None, None),
+        ("matrix_column_missing", drop_matrix_column, f"{MATRIX_MODEL}.{MATRIX_COLUMN} (double) is an output column that the YAML does not document"),
         ("undocumented_column", drop_column, f"{MODEL}.{COLUMN} (varchar) is an output column that the YAML does not document"),
         ("undocumented_model", drop_model, f"model {MODEL} has no entry in the YAML"),
         ("stale_column", add_column, f"{MODEL}.column_that_is_gone is documented in the YAML but the model does not give it"),
@@ -114,6 +120,26 @@ def rejected_project_case(folder: Path) -> dict[str, Any]:
     }
 
 
+def two_yaml_files_case(folder: Path) -> dict[str, Any]:
+    """A model documented in two YAML files of the feature models folder is named; the committed folder has none."""
+    root = folder / "two_yaml"
+    shutil.copytree(columns.REPO_ROOT / columns.MODELS, root / columns.MODELS, ignore=shutil.ignore_patterns("*.sql"))
+    clean = columns.documented_all(root)[1]
+    duplicate = root / columns.MODELS / "matrix" / "_duplicate__models.yml"
+    duplicate.write_text(
+        f"version: 2\nmodels:\n  - name: {MATRIX_MODEL}\n    columns:\n      - name: spine_key\n        data_type: varchar\n        description: Again.\n"
+    )
+    problems = columns.documented_all(root)[1]
+    expected = f"model {MATRIX_MODEL} is documented here and in"
+    return {
+        "case": "model_in_two_yaml_files",
+        "expected": expected,
+        "problems": len(problems),
+        "clean_problems": len(clean),
+        "ok": not clean and len(problems) == 1 and expected in problems[0],
+    }
+
+
 def hooked_filter_case(folder: Path) -> dict[str, Any]:
     """A post-hook on a bridge filter model must not reach its table: the table holds the rows of its own seed only."""
     root = folder / "hooked"
@@ -150,6 +176,8 @@ def case_names() -> list[str]:
         "contract_stops_the_build_on_an_extra_column",
         "column_check_does_not_build_a_rejected_project",
         "post_hook_on_a_filter_model_leaves_its_table_alone",
+        "model_in_two_yaml_files",
+        "committed_models_documented_once",
     ]
 
 
@@ -160,7 +188,7 @@ def run(output: Path, only: list[str] | None = None, shard: str = "") -> dict[st
     before = feature_shards.snapshot("columns")
     results: list[dict[str, Any]] = []
     models = columns.sql_models(columns.REPO_ROOT)
-    docs = columns.documented(columns.REPO_ROOT / columns.MODELS_YAML)
+    docs, committed_duplicates = columns.documented_all(columns.REPO_ROOT)
     with tempfile.TemporaryDirectory(prefix="feature_columns_e2e_") as folder:
         base = Path(folder) / "base"
         base.mkdir()
@@ -227,6 +255,21 @@ def run(output: Path, only: list[str] | None = None, shard: str = "") -> dict[st
         if "post_hook_on_a_filter_model_leaves_its_table_alone" in selected:
             with feature_shards.timed_case("columns", "post_hook_on_a_filter_model_leaves_its_table_alone") as started:
                 results.append(hooked_filter_case(Path(folder)))
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
+        if "model_in_two_yaml_files" in selected:
+            with feature_shards.timed_case("columns", "model_in_two_yaml_files") as started:
+                results.append(two_yaml_files_case(Path(folder)))
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
+        if "committed_models_documented_once" in selected:
+            with feature_shards.timed_case("columns", "committed_models_documented_once") as started:
+                results.append(
+                    {
+                        "case": "committed_models_documented_once",
+                        "expected": "no duplicate",
+                        "problems": committed_duplicates[:3],
+                        "ok": not committed_duplicates,
+                    }
+                )
                 results[-1]["seconds"] = round(time.monotonic() - started, 3)
     report: dict[str, Any] = {
         "written_utc": datetime.now(UTC).isoformat(),

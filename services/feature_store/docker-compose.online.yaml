@@ -1,0 +1,26 @@
+# The launcher-managed online feature store (design section 4.2). Only the launcher renders this file (orchestration/online_store.py holds its
+# closed shape); it is never run with docker compose. The network is the launcher's internal online-store network: no host port, no egress.
+name: hai-online-store
+
+services:
+  online-store:
+    # redis 8.10.1, linux/arm64 manifest, pinned by digest (Docker Hub registry API, read on 2026-10-23).
+    image: redis:8.10.1@sha256:2e940b1efbe5bae595d9cc7c4f5ecdc84497a63b2a8e1bfe7624a0fae2f05127
+    # Redis reads requirepass and maxmemory from stdin after the file (redis-server <file> -, Redis 8.10.1 src/config.c lines 719 to 722), written
+    # by the shell's printf builtin, so the password is in no process argument and no file.
+    entrypoint: [sh, -c, 'printf "requirepass %s\nmaxmemory %s\n" "$REDIS_PASSWORD" "$REDIS_MAXMEMORY" | exec redis-server /usr/local/etc/redis/redis.conf -']
+    user: "999:999"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_MAXMEMORY: ${HAI_ONLINE_MAXMEMORY}
+    mem_limit: ${HAI_ONLINE_MEM}
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks: [online]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli -n 2 ping | grep -qx PONG']
+      interval: 5s
+      timeout: 2s
+      retries: 20
