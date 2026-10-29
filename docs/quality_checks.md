@@ -649,9 +649,10 @@ the exit status of the run.
   needed for that and is not part of this change.
 - A body file is listed in its own group's path list and in no other list. An edit to it selects that group, the lakehouse layers downstream of it (a bronze file
   selects all four layers, a silver file selects silver, gold and features and a gold file selects gold and features) and `repository_code_checks`, which matches every `.sh` file and runs the guard. It selects no
-  other group. The launcher list holds no other file of this folder (the computed list below never names them).
+  other group in the core and layer parts. The launcher list holds no other file of this folder (the computed list below never names them), but the launcher
+  part selects every path while the always-select modules below are unreviewed, so it also runs for an edit to a body file.
 - The dispatcher, the timing wrapper, the selector, `config/quality/ci_groups.json`, `.github/workflows/`, `.github/actions/`, `.pre-commit-config.yaml`, the
-  requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group.
+  requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group of the core and layer parts. The launcher part still selects them (see "Launcher selection").
 - The guard `scripts/quality/ci_group_files.py` runs in `repository_code_checks`. It fails with the file and the group named when a group has no body file or
   a body file belongs to no group, when a file lacks its entry function, when the dispatcher text declares a function of a group (continued lines, quotes,
   backslashes and `$'...'` escapes in names are removed first), when a body file is missing from its group's list or another list also matches it. It also requires every configured group to have a hosted job that runs its part through `scripts/run_ci.sh`. A missing feature matrix entry names the workflow and the uncovered feature group. Bash lists the
@@ -673,14 +674,16 @@ the exit status of the run.
 ## Launcher selection
 
 The `launcher` group (the launcher E2E suite, `scripts/lakehouse/run_launcher_e2e.py`, about 14 minutes) runs only when a change can affect what that suite
-runs. It no longer matches `^orchestration/`, `^scripts/`, `^config/`, `^services/`, `^data_contracts/` and `^dbt/` as a whole. The list is computed and checked:
+runs. It no longer matches `^orchestration/`, `^scripts/`, `^config/`, `^services/`, `^data_contracts/` and `^dbt/` as a whole. The list is computed and
+checked. Until the always-select modules below are reviewed one at a time, every path still selects the group (the narrowing applies once they are narrowed):
 
 - `config/quality/launcher_inputs.json` holds the hand-written `entry_points`, `extra_inputs`, `ignored_reads` and `inventory_reads` and the computed `files`,
   `folders`, `dynamic_sites` and `inventory_sites`. Each `ignored_reads` entry names a module and a text, the reason the suite does not read it and the
   stripped source `lines` of the occurrences it covers. `--check` fails when those occurrences change. `--write` never updates them. An ignore removes
   only its own text: a file that another text of the module names stays listed. Each `inventory_reads` entry names a module that lists files instead of
-  naming them (a `git ls-files` call or a glob or walk over `ROOT`), the path `pattern` of the files it reads (or none, with the reason) and why.
-  `docker_calls.check`, which the suite runs, parses every Python file, so `\.py$` selects the group for any Python file, present or future.
+  naming them (a `git ls-files` call, a `glob`, `iglob`, `rglob`, `iterdir`, `walk`, `scandir` or `listdir` call over any folder or a `find` or `ls` program),
+  the path `pattern` of the files it reads (or none, with the reason) and why. `docker_calls.check`, which the suite runs, parses every Python file, so `\.py$`
+  selects the group for any Python file, present or future. The pattern `.` selects the group for every path (see "Always-select modules").
 - `scripts/quality/launcher_inputs.py` computes the list from the entry point: every module a Python file imports (also inside functions and in code held in
   strings), every module a string, an f-string or a shell, YAML or template file names, every tracked file a string, a `/` join (also one that starts at
   `ROOT`) or an f-string names (`scripts/quality/source_reads.py`, moved from the E2E runner) and the same for each file found. A folder that a module names is
@@ -689,13 +692,26 @@ runs. It no longer matches `^orchestration/`, `^scripts/`, `^config/`, `^service
   `--trace FILE`.
 - `scripts/quality/ci_groups.py` adds each `inventory_reads` pattern, one exact-path pattern per listed file and one prefix per folder to the group. The hand-written patterns are the group
   body, the tool and the list. `global` paths and the unclassified-path rule still select every group.
-- A change to a module the suite imports or a file it reads selects the group. So does a change to any Python file. A change to an unrelated non-Python
-  file (for example `infra/main.tf` or `config/quality/mypy_runtimes.json`) does not. A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
+- A change to a module the suite imports or a file it reads selects the group. So does a change to any Python file. While the always-select modules below
+  carry the pattern `.`, a change to any path also selects it, also an unrelated one (`infra/main.tf`, `config/quality/mypy_runtimes.json`, a document or the pull request template:
+  the `launcher_always_selected_by_*` cases). A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
   `--write` is run and the diff is reviewed. The same E2E fails when a listed file is not selected by the group, when a pattern matches no tracked file and
   for planted defects in a small sample repository (stale entry, missing module, package, read file, module named in a text file, folder file or folder, a
   new dynamic import, a changed entry point, a missed file in a trace, an undeclared or stale inventory read, a new occurrence of an ignored text and an exact
   read beside an ignored folder). It also adds an exact read of `config/quality/mypy_runtimes.json` to the suite's `docker_calls_check` case for its own
-  process only and requires the list check to name that file.
+  process only and requires the list check to name that file. It also adds a wrapped `rglob`, an `os.walk(top=ROOT)` and a `find` run by path to the same case and
+  requires the list check to name the suite's changed inventory count. A sample module that calls a bare `listdir` is named as an undeclared inventory.
+- **Always-select modules.** The inventory scan counts every enumeration call and listing command whatever its receiver: it cannot prove which folder a call
+  lists or whether the result depends on file contents, so a counted site is an inventory of the whole repository. Owner decision 1 (project decision 15):
+  every module the scan flags carries an `inventory_reads` entry with the pattern `.` and the reason "not reviewed", so any change selects the group, as it did
+  before this selection existed (the suite itself has 21 sites). The entries are 34 modules with 87 sites:
+  `orchestration/` `launcher` and `lineage`; `scripts/acquisition/` `batch`, `bls_api_contract`, `history_routes`, `redownload_controls`, `reuse_capture` and
+  `s3_store`; `scripts/infrastructure/sts_stand_in`; `scripts/orchestration/` `in_image_checks`, `ledger` and `run_control`; and 22 modules of
+  `scripts/lakehouse/` (`catalog_journal`, `dbt_package_archive`, `geography_file_periods`, `gold_checks`, `gold_publish`, `ownership_release_periods`,
+  `package_fixture`, `pipeline_build`, `pos_file_periods`, `provenance`, `run_bronze_e2e`, `run_gold_e2e`, `run_gold_publish_cases`, `run_launcher_e2e`,
+  `run_launcher_real_fixture`, `run_lock_e2e`, `run_pins_e2e`, `run_silver_e2e`, `run_staging_e2e`, `silver`, `silver_input` and `silver_quality`). With
+  `docker_calls` (`\.py$`, 1 site) the list holds 35 modules and 88 sites. Narrow one module at a time: review its sites, replace `.` with a hand-written
+  pattern (or `null` with the reason that the result does not depend on file contents) in a reviewed change and run `--write`. Do not narrow several at once.
 - Not provable by a static scan: a path built at run time from a variable, an environment variable or a glob over `ROOT`. Control: run the suite once under
   file-open tracing and check the trace with `--trace` (commands in the report of the change). Until that run is recorded, `extra_inputs` and every folder
   read whole stay in the list.
