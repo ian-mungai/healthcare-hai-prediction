@@ -9,6 +9,10 @@ Run from the repository root:
 sources' original source families. A control with no source family takes the domain of ``registry_family_supplement.csv``, a reviewed list. A control whose
 sources fall in two domains, a dimension that maps to no domain and a control that resolves to none or to two values stop the run.
 
+``registry_controls.csv`` carries each control's ``closeout_decision`` too: one of dropped, retired, redefined, narrowed or id_assigned, or empty. It maps the
+``effective_closeout_decision.decision`` text of the registry through ``registry_closeout_spellings.csv``, a reviewed list. A spelling the list lacks stops the
+run, so a new spelling must be reviewed before it reaches gold. The registry keeps the raw text.
+
 ``gold_contract_columns.csv`` is generated from the frozen gold contract (every column of every gold model with its explicit footnote column and
 whether it is the model's published measure-key column). ``registry_controls.csv`` is generated from the registry of revision 3 and its append-only
 additions. ``gold_measure_key_evidence.csv`` lists the published measure key of each ACS, impact, HAI hospital and BLS bridge row with the reviewed file that
@@ -55,12 +59,15 @@ SVI_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_context_columns.sql", "sv
 GV_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_health_columns.sql", "gv_identifier_columns")
 REGISTRY_REVISION = 3
 CONTRACT_COLUMNS = ("gold_model", "column_name", "footnote_column", "is_measure_key")
-CONTROL_COLUMNS = ("measure_control", "parent_control", "origin", "family")
+CONTROL_COLUMNS = ("measure_control", "parent_control", "origin", "family", "closeout_decision")
 FAMILY_SUPPLEMENT = "registry_family_supplement.csv"
 SUPPLEMENT_COLUMNS = ("measure_control", "family")
 # The analytic domains a control's family takes; the dimension of a source family maps to one of them by its text before ":" or "/", or by the linkage list.
 DOMAINS = ("Structure", "Process", "Outcome", "Context", "Linkage")
 LINKAGE_DIMENSIONS = ("Geographic linkage", "Spatial context", "Community context")
+CLOSEOUT_SPELLINGS = "registry_closeout_spellings.csv"
+SPELLING_COLUMNS = ("raw_decision", "closeout_decision")
+CLOSEOUT_VALUES = ("dropped", "retired", "redefined", "narrowed", "id_assigned")
 EVIDENCE_COLUMNS = ("fact", "measure_key", "measure_control", "basis")
 RULE_COLUMNS = ("fact", "rule", "value")
 INVENTORY_COLUMNS = ("recipe", "measure_control", "source_row", "rule", "inputs")
@@ -310,10 +317,40 @@ def control_families(
     return families, problems
 
 
-def registry_rows(records: Mapping[str, tuple[str, dict[str, Any]]], families: Mapping[str, str]) -> list[dict[str, str]]:
-    """Return one row per registry control with its parent, origin and family; a control that resolves to no family holds an empty family."""
+def closeout_decisions(records: Mapping[str, tuple[str, dict[str, Any]]], spellings: list[dict[str, str]]) -> tuple[dict[str, str], list[str]]:
+    """Return each closed-out control's normalized decision and what is wrong: a repeated or invalid mapping row, or a registry spelling the list lacks."""
+    problems: list[str] = []
+    mapping: dict[str, str] = {}
+    for row in spellings:
+        raw, value = row["raw_decision"], row["closeout_decision"]
+        if raw in mapping:
+            problems.append(f"{CLOSEOUT_SPELLINGS}: spelling {raw!r} appears twice")
+        if value not in CLOSEOUT_VALUES:
+            problems.append(f"{CLOSEOUT_SPELLINGS}: spelling {raw!r} maps to {value!r}, not one of {list(CLOSEOUT_VALUES)}")
+        mapping[raw] = value
+    decisions: dict[str, str] = {}
+    for control_id, (_, control) in records.items():
+        effective = control.get("effective_closeout_decision")
+        if not effective:
+            continue
+        raw = effective.get("decision")
+        if raw not in mapping:
+            problems.append(f"control {control_id} has closeout spelling {raw!r}, which {CLOSEOUT_SPELLINGS} does not map")
+        else:
+            decisions[control_id] = mapping[raw]
+    return decisions, problems
+
+
+def registry_rows(records: Mapping[str, tuple[str, dict[str, Any]]], families: Mapping[str, str], decisions: Mapping[str, str]) -> list[dict[str, str]]:
+    """Return one row per registry control with its parent, origin, family and closeout decision; an unresolved family or no decision is empty."""
     rows = [
-        {"measure_control": control_id, "parent_control": control.get("parent_id") or "", "origin": origin, "family": families.get(control_id, "")}
+        {
+            "measure_control": control_id,
+            "parent_control": control.get("parent_id") or "",
+            "origin": origin,
+            "family": families.get(control_id, ""),
+            "closeout_decision": decisions.get(control_id, ""),
+        }
         for control_id, (origin, control) in records.items()
     ]
     return sorted(rows, key=lambda row: (row["origin"], row["measure_control"]))
@@ -339,6 +376,16 @@ def read_table(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 def read_rows(path: Path) -> list[dict[str, str]]:
     """Return a CSV file's rows."""
     return read_table(path)[1]
+
+
+def reviewed_rows(path: Path, columns: tuple[str, ...]) -> list[dict[str, str]]:
+    """Return the rows of a reviewed input seed; a missing file or other columns stop the run."""
+    if not path.exists():
+        raise ReferenceInputError(f"{path.name} is missing")
+    header, rows = read_table(path)
+    if header != list(columns):
+        raise ReferenceInputError(f"{path.name} has columns {header}, expected {list(columns)}")
+    return rows
 
 
 def tokens(text: str, separator: str | None = None) -> list[str]:
@@ -590,14 +637,12 @@ def generated(contract_path: Path, contract_optional: bool, seeds_dir: Path) -> 
     """Return the text each reference seed must have, the contract's columns per model (None when the contract is absent and optional) and key problems."""
     registry = json.loads(REGISTRY.read_text())
     records = registry_records(registry, json.loads(ADDITIONS.read_text()))
-    supplement_header, supplement = read_table(seeds_dir / FAMILY_SUPPLEMENT) if (seeds_dir / FAMILY_SUPPLEMENT).exists() else ([], [])
-    if supplement_header != list(SUPPLEMENT_COLUMNS):
-        raise ReferenceInputError(f"{FAMILY_SUPPLEMENT} has columns {supplement_header}, expected {list(SUPPLEMENT_COLUMNS)}")
-    families, family_problems = control_families(registry, records, supplement)
-    texts = {"registry_controls.csv": as_csv(CONTROL_COLUMNS, registry_rows(records, families))}
+    families, family_problems = control_families(registry, records, reviewed_rows(seeds_dir / FAMILY_SUPPLEMENT, SUPPLEMENT_COLUMNS))
+    decisions, closeout_problems = closeout_decisions(records, reviewed_rows(seeds_dir / CLOSEOUT_SPELLINGS, SPELLING_COLUMNS))
+    texts = {"registry_controls.csv": as_csv(CONTROL_COLUMNS, registry_rows(records, families, decisions))}
     bridge = [row for path in sorted(seeds_dir.glob("*_bridge.csv")) for row in read_rows(path)]
     evidence, key_problems = key_evidence(bridge)
-    key_problems = [*family_problems, *key_problems]
+    key_problems = [*family_problems, *closeout_problems, *key_problems]
     texts["gold_measure_key_evidence.csv"] = as_csv(EVIDENCE_COLUMNS, evidence)
     texts["gold_measure_key_rules.csv"] = as_csv(RULE_COLUMNS, key_rules())
     if not contract_path.exists():

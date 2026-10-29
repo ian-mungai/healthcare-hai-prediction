@@ -1013,8 +1013,8 @@ models:
               - code_system
               - code
   - name: dim_registry_control
-    description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The closeout
-      decision is deferred.
+    description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The family and
+      the closeout decision are generated into the registry_controls seed.
     meta:
       classification: Public
     columns:
@@ -1066,6 +1066,19 @@ models:
                   - Linkage
               config:
                 where: measure_control <> '<unknown>'
+      - name: closeout_decision
+        description: The normalized closeout decision of the control. dropped, retired, redefined, narrowed (the control continues without a source
+          or on a plan) or id_assigned (a published ID or exact field is named). Null for a control with no closeout decision and on the unknown member.
+          The raw decision text stays in the registry.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - dropped
+                  - retired
+                  - redefined
+                  - narrowed
+                  - id_assigned
       - name: review_decision
         description: The review decision carried on the control's bridge seed rows; null for a control with no bridge row.
   - name: dim_release
