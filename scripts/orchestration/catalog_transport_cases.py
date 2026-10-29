@@ -47,7 +47,7 @@ ROUTE_CASES = (
     "relay_rebind",
     "relay_live_conflict",
 )
-CASES = ("normal", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
+CASES = ("normal", "half_close", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
 BODY = b'{"catalog":"synthetic"}'
 
 
@@ -66,6 +66,17 @@ def _request(endpoint: str) -> bytes:
         return connection.getresponse().read()
     finally:
         connection.close()
+
+
+def _half_closed_request(endpoint: str) -> bytes:
+    """Send a whole request, close only the sending side as a tunnel peer may, then read until the relay ends the stream."""
+    with socket.create_connection(("127.0.0.1", urlsplit(endpoint).port or 0), timeout=3) as peer:
+        peer.sendall(b"GET / HTTP/1.1\r\nHost: synthetic\r\nX-Synthetic-Client: catalog\r\nConnection: close\r\n\r\n")
+        peer.shutdown(socket.SHUT_WR)
+        reply = bytearray()
+        while chunk := peer.recv(65536):
+            reply.extend(chunk)
+    return bytes(reply)
 
 
 def _unavailable(transport: CatalogTransport) -> bool:
@@ -174,6 +185,10 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
                         execute_runs_once=count == 1,
                         single_request=sum(event.kind == "request" for event in peer.events) == 1,
                     )
+                elif name == "half_close":
+                    reply = transport.execute(lambda: _half_closed_request(endpoint), deadline=lifetime)
+                    checks["half_closed_request_gets_its_whole_reply"] = reply.endswith(BODY) and reply.startswith(b"HTTP/1.1 200")
+                    checks["half_close_single_request"] = sum(event.kind == "request" for event in peer.events) == 1
                 elif name == "relay_death":
                     killed = stop_owned(transport.handles[0], min(lifetime, time.monotonic() + 5))
                     checks["relay_group_was_killed"] = killed.confirmed and group_state(transport.handles[0].pgid) == "gone"
