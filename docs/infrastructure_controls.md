@@ -272,7 +272,9 @@ initiation, with no expiration or transition of completed objects, historical
 versions or delete markers. One exception covers only `lakehouse/`, where
 Iceberg replaces and deletes its own table files: replaced versions there expire
 30 days after they are replaced and orphaned delete markers are removed; current
-lakehouse files and everything outside `lakehouse/` never expire. Local mock-plan tests, source-shape checks and live
+lakehouse files never expire. A second rule, `expire_replaced_dvc_versions`, covers only `dvc/`, the prefix of the DVC remote for the training
+baseline (decision 20): replaced versions there expire after 30 days and orphaned delete markers are removed; current DVC objects never expire. Everything
+outside `lakehouse/` and `dvc/` never expires. The storage stack and its mock-plan test hold the DVC rule; the owner applies it and it is not applied yet. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
@@ -285,6 +287,12 @@ bucket's entire lifecycle configuration, so future changes still require full
 plan review and preservation of existing rules. Private plans and live
 verification evidence remain untracked under
 `data/infrastructure/lifecycle_deployment/`.
+
+**DVC baseline grant.** `infra/iam/owner_policies/job_dvc_baseline.json` is the policy for the training job role: `s3:GetObject`, `s3:PutObject`,
+`s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on `dvc/*` of the data bucket. It also grants `s3:ListBucket` only with an `s3:prefix` of `dvc` or `dvc/*`. It
+grants no delete, no version read or listing, no bucket-location read and nothing outside `dvc/`. No stack attaches it yet because the training job role
+does not exist; the owner attaches it when that role is defined. `scripts.infrastructure.run_jobs_iam_e2e` evaluates it with
+`scripts/infrastructure/dvc_policy_cases.py` and plants six scope defects that each must be caught.
 
 **Pipeline roles.** `infra/iam/` also defines two IAM roles for pipeline jobs, a lakehouse reader and a lakehouse writer. Only the project's
 own IAM user can assume both through `sts:AssumeRole`. The reader reads the bronze, silver and gold
