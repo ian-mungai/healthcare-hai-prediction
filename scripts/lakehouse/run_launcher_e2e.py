@@ -6344,6 +6344,35 @@ def pooled_launch_capacity(env: Env) -> dict[str, bool]:
     }
 
 
+@case("queued_memory_deadline", stub_host=True, timings={"memory_wait": 3.0})
+def queued_memory_deadline(env: Env) -> dict[str, bool]:
+    """A pooled launch that waits on memory used elsewhere ends with a named cause once the memory wait deadline passes."""
+    hold_forever(env)
+    env.start()
+    alloc = env.allocate(workers=1)
+    principal = env.alloc_principal(alloc)
+    first = env.submit(principal, launch="m1", params=env.fixture_params("m1"), timeout_seconds=600)["attempt_id"]
+    env.wait_phase(first, ("started",))
+    env.client().call("cancel", {"attempt_id": first}, principal)
+    env.wait_ended(first)
+    rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
+    env.daemon.usage["external-heavy"] = 20 * GIB
+    try:
+        queued = env.submit(principal, launch="m2", params=env.fixture_params("m2"), timeout_seconds=600)["attempt_id"]
+        time.sleep(1.0)
+        waited = env.phase(queued) == "queued" and "memory" in str(env.attempt(queued).get("waiting_on", ""))
+        ended = env.wait_ended(queued, 20)
+    finally:
+        env.daemon.containers.pop(rogue, None)
+        env.daemon.usage.pop("external-heavy", None)
+    return {
+        "the attempt first waited on memory": waited,
+        "it ended as a failed create, not a timeout": ended["reason"] == "create_failed",
+        "the cause names memory and the deadline": "memory did not return within 3 s" in ended["detail"],
+        "no container was created for it": not creates(env, "-m2-"),
+    }
+
+
 @case("queued_cutoff_timeout", stub_host=True)
 def queued_cutoff_timeout(env: Env) -> dict[str, bool]:
     """912 (N1): a queued finite attempt that waits on memory past its start cutoff ends with a timeout and never creates a container."""
@@ -9364,6 +9393,7 @@ ALL_CASES = (
     staging_pool_interrupt,
     pooled_launch_capacity,
     queued_cutoff_timeout,
+    queued_memory_deadline,
     run_allocation_growth_reserve,
     docker_restart_command_and_client,
     effective_spec_mutations,
