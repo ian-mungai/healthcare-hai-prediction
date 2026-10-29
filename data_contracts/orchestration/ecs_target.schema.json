@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_target.schema.json",
-  "title": "Private ECS read target",
-  "description": "Proposed read target contract. Deployment captures and image measurements require integration review before activation.",
+  "title": "Private ECS application target",
+  "description": "Required read definitions and optional writer definitions from reviewed deployment captures and measured images.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +22,9 @@
     "mac_preparation",
     "cloud_limits",
     "deadlines",
-    "max_record_bytes"
+    "max_record_bytes",
+    "class_capacity_providers",
+    "assign_public_ip"
   ],
   "properties": {
     "schema_version": {
@@ -62,11 +64,19 @@
       "$ref": "#/$defs/job_network"
     },
     "class_networks": {
-      "const": {
-        "offline": "offline",
-        "seal": "offline",
-        "lakehouse_read": "lakehouse"
-      }
+      "enum": [
+        {
+          "offline": "offline",
+          "seal": "offline",
+          "lakehouse_read": "lakehouse"
+        },
+        {
+          "offline": "offline",
+          "seal": "offline",
+          "lakehouse_read": "lakehouse",
+          "lakehouse_write": "lakehouse"
+        }
+      ]
     },
     "definitions": {
       "type": "object",
@@ -163,6 +173,91 @@
               }
             }
           ]
+        },
+        "spark_write_e2e": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_write"
+                },
+                "task_role_key": {
+                  "const": "write_e2e_task"
+                }
+              }
+            }
+          ]
+        },
+        "spark_write_silver": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_write"
+                },
+                "task_role_key": {
+                  "const": "write_silver_task"
+                }
+              }
+            }
+          ]
+        },
+        "spark_write_gold": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_write"
+                },
+                "task_role_key": {
+                  "const": "write_gold_task"
+                }
+              }
+            }
+          ]
+        },
+        "spark_write_features": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_write"
+                },
+                "task_role_key": {
+                  "const": "write_features_task"
+                }
+              }
+            }
+          ]
+        },
+        "spark_write_bronze": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_write"
+                },
+                "task_role_key": {
+                  "const": "write_bronze_task"
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -200,6 +295,44 @@
     },
     "max_record_bytes": {
       "const": 33554432
+    },
+    "class_capacity_providers": {
+      "description": "Allowed providers by job class. Writer requests require an explicit FARGATE capacity provider strategy.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offline",
+        "seal",
+        "lakehouse_read"
+      ],
+      "properties": {
+        "offline": {
+          "const": [
+            "FARGATE_SPOT",
+            "FARGATE"
+          ]
+        },
+        "seal": {
+          "const": [
+            "FARGATE_SPOT",
+            "FARGATE"
+          ]
+        },
+        "lakehouse_read": {
+          "const": [
+            "FARGATE_SPOT",
+            "FARGATE"
+          ]
+        },
+        "lakehouse_write": {
+          "const": [
+            "FARGATE"
+          ]
+        }
+      }
+    },
+    "assign_public_ip": {
+      "const": "DISABLED"
     }
   },
   "$defs": {
@@ -258,6 +391,21 @@
           "$ref": "#/$defs/role"
         },
         "try_writer": {
+          "$ref": "#/$defs/role"
+        },
+        "write_e2e_task": {
+          "$ref": "#/$defs/role"
+        },
+        "write_silver_task": {
+          "$ref": "#/$defs/role"
+        },
+        "write_gold_task": {
+          "$ref": "#/$defs/role"
+        },
+        "write_features_task": {
+          "$ref": "#/$defs/role"
+        },
+        "write_bronze_task": {
           "$ref": "#/$defs/role"
         }
       }
@@ -387,7 +535,8 @@
           "enum": [
             "offline",
             "seal",
-            "lakehouse_read"
+            "lakehouse_read",
+            "lakehouse_write"
           ]
         },
         "image": {
@@ -397,7 +546,12 @@
           "enum": [
             "offline_task",
             "seal_task",
-            "read_task"
+            "read_task",
+            "write_e2e_task",
+            "write_silver_task",
+            "write_gold_task",
+            "write_features_task",
+            "write_bronze_task"
           ]
         },
         "execution_sha256": {
@@ -509,5 +663,172 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_e2e"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_e2e_task"
+            ]
+          },
+          "class_networks": {
+            "const": {
+              "offline": "offline",
+              "seal": "offline",
+              "lakehouse_read": "lakehouse",
+              "lakehouse_write": "lakehouse"
+            }
+          },
+          "class_capacity_providers": {
+            "required": [
+              "lakehouse_write"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_silver"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_silver_task"
+            ]
+          },
+          "class_networks": {
+            "const": {
+              "offline": "offline",
+              "seal": "offline",
+              "lakehouse_read": "lakehouse",
+              "lakehouse_write": "lakehouse"
+            }
+          },
+          "class_capacity_providers": {
+            "required": [
+              "lakehouse_write"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_gold"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_gold_task"
+            ]
+          },
+          "class_networks": {
+            "const": {
+              "offline": "offline",
+              "seal": "offline",
+              "lakehouse_read": "lakehouse",
+              "lakehouse_write": "lakehouse"
+            }
+          },
+          "class_capacity_providers": {
+            "required": [
+              "lakehouse_write"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_features"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_features_task"
+            ]
+          },
+          "class_networks": {
+            "const": {
+              "offline": "offline",
+              "seal": "offline",
+              "lakehouse_read": "lakehouse",
+              "lakehouse_write": "lakehouse"
+            }
+          },
+          "class_capacity_providers": {
+            "required": [
+              "lakehouse_write"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_bronze"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_bronze_task"
+            ]
+          },
+          "class_networks": {
+            "const": {
+              "offline": "offline",
+              "seal": "offline",
+              "lakehouse_read": "lakehouse",
+              "lakehouse_write": "lakehouse"
+            }
+          },
+          "class_capacity_providers": {
+            "required": [
+              "lakehouse_write"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

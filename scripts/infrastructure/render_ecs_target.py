@@ -1,4 +1,4 @@
-"""Write a private ECS read target from exported outputs and digest-bound image measurements."""
+"""Write a private ECS application target from exported outputs and digest-bound image measurements."""
 
 from __future__ import annotations
 
@@ -25,6 +25,13 @@ DEFINITIONS = {
     "seal": ("seal", "analytics", "seal_task"),
     "analytics_read": ("lakehouse_read", "analytics", "read_task"),
     "spark_read": ("lakehouse_read", "spark", "read_task"),
+}
+WRITER_DEFINITIONS = {
+    "spark_write_e2e": ("lakehouse_write", "spark", "write_e2e_task"),
+    "spark_write_silver": ("lakehouse_write", "spark", "write_silver_task"),
+    "spark_write_gold": ("lakehouse_write", "spark", "write_gold_task"),
+    "spark_write_features": ("lakehouse_write", "spark", "write_features_task"),
+    "spark_write_bronze": ("lakehouse_write", "spark", "write_bronze_task"),
 }
 ENTRY_POINT = ["/opt/hai/deadline_run", "python", "-I", "/opt/hai/bootstrap/run.py"]
 
@@ -104,13 +111,20 @@ def _output(outputs: dict[str, Any], name: str) -> Any:
     return item["value"]
 
 
-def _roles(roles: dict[str, Any], account: str) -> None:
+def _roles(roles: dict[str, Any], account: str, project: str) -> None:
     _validate(roles, "job_roles", "role contract")
     for role in roles.values():
         if role["arn"] != f"arn:aws:iam::{account}:role/{role['name']}":
             raise TargetError("Invalid role identity.")
     if len({role["unique_id"] for role in roles.values()}) != len(roles) or len({role["arn"] for role in roles.values()}) != len(roles):
         raise TargetError("Repeated role identity.")
+
+    for _, _, role_key in WRITER_DEFINITIONS.values():
+        if role_key not in roles:
+            continue
+        execution = re.fullmatch(re.escape(project) + r"_job_execution_(dev|prod)", roles["execution"]["name"])
+        if execution is None or roles[role_key]["name"] != f"{project}_job_{role_key}_{execution[1]}":
+            raise TargetError("Invalid writer role identity.")
 
 
 def _network(network: dict[str, Any]) -> None:
@@ -122,6 +136,61 @@ def _network(network: dict[str, Any]) -> None:
 def _reader_parameters(region: str, account: str, project: str) -> dict[str, str]:
     prefix = f"arn:aws:ssm:{region}:{account}:parameter/{project}/aws_polaris_reader_client_"
     return {"POLARIS_CLIENT_ID": prefix + "id", "POLARIS_CLIENT_SECRET": prefix + "secret"}
+
+
+def _writer_parameters(jobs: dict[str, Any], selected: set[str], region: str, account: str) -> dict[str, dict[str, str]]:
+    if not selected:
+        return {}
+    contracts = _output(jobs, "writer_dispatch_contracts")
+    if not isinstance(contracts, dict) or set(contracts) != selected:
+        raise TargetError("Invalid writer dispatch contract inventory.")
+    bindings = {}
+    for name in sorted(selected):
+        contract = contracts[name]
+        role_key = WRITER_DEFINITIONS[name][2]
+        layer = name.removeprefix("spark_write_")
+        parameters = contract.get("parameter_names") if isinstance(contract, dict) else None
+        if not isinstance(parameters, list) or len(parameters) != 2 or any(not isinstance(parameter, str) for parameter in parameters):
+            raise TargetError("Invalid writer parameter names.")
+        for parameter, suffix in zip(parameters, ("id", "secret"), strict=True):
+            if (
+                len(parameter) > 512
+                or re.fullmatch(rf"/(?:[A-Za-z0-9_]+/){{0,14}}aws_polaris_{layer}_client_{suffix}", parameter) is None
+                or re.match(r"/(?i:aws|ssm)", parameter)
+            ):
+                raise TargetError("Invalid writer parameter names.")
+        if contract != {
+            "job_class": "lakehouse_write",
+            "task_role_key": role_key,
+            "parameter_names": parameters,
+            "capacity_providers": ["FARGATE"],
+            "network": "lakehouse",
+            "assign_public_ip": "DISABLED",
+        }:
+            raise TargetError("Invalid writer dispatch contract.")
+        bindings[name] = {
+            environment: f"arn:aws:ssm:{region}:{account}:parameter{parameter}"
+            for environment, parameter in zip(("POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"), parameters, strict=True)
+        }
+    return bindings
+
+
+def _dispatch(jobs: dict[str, Any], selected: set[str]) -> dict[str, Any]:
+    contract = _output(jobs, "dispatch_contract")
+    if not isinstance(contract, dict):
+        raise TargetError("Invalid dispatch contract.")
+    writers = bool(selected & WRITER_DEFINITIONS.keys())
+    networks = {"offline": "offline", "seal": "offline", "lakehouse_read": "lakehouse"} | ({"lakehouse_write": "lakehouse"} if writers else {})
+    capacity = {name: ["FARGATE_SPOT", "FARGATE"] for name in ("offline", "seal", "lakehouse_read")} | ({"lakehouse_write": ["FARGATE"]} if writers else {})
+    if contract.get("class_networks") != networks:
+        raise TargetError("Invalid dispatch class networks.")
+    if contract.get("class_capacity_providers") != capacity or contract.get("capacity_providers") != ["FARGATE_SPOT", "FARGATE"]:
+        raise TargetError("Invalid dispatch class capacity providers.")
+    if contract.get("definition_classes") != {name: spec[0] for name, spec in (DEFINITIONS | WRITER_DEFINITIONS).items() if name in selected}:
+        raise TargetError("Invalid dispatch definition classes.")
+    if contract.get("assign_public_ip") != "DISABLED":
+        raise TargetError("Invalid dispatch public IP setting.")
+    return contract
 
 
 def _catalog(catalog: dict[str, Any] | None, region: str, account: str, project: str) -> None:
@@ -138,12 +207,12 @@ def _catalog(catalog: dict[str, Any] | None, region: str, account: str, project:
 
 
 def validate_target(target: dict[str, Any]) -> None:
-    """Validate the closed read target and its cross-field identities before a consumer uses it."""
+    """Validate the closed application target and its cross-field identities before a consumer uses it."""
     _validate(target, None, "target contract")
     account, region = target["account_id"], target["region"]
     if not target["cluster_arn"].startswith(f"arn:aws:ecs:{region}:{account}:cluster/"):
         raise TargetError("The cluster identity differs from the target account or region.")
-    _roles(target["job_roles"], account)
+    _roles(target["job_roles"], account, target["project_tag"])
     _network(target["job_network"])
     _catalog(target["catalog"], region, account, target["project_tag"])
     for definition in target["definitions"].values():
@@ -179,7 +248,9 @@ def _task_settings(task: dict[str, Any], arn: str, roles: dict[str, Any], role_k
         raise TargetError("Invalid task volumes.")
 
 
-def _container(container: dict[str, Any], job_class: str, image: str, region: str, project: str, account: str, log_group: str) -> None:
+def _container(
+    container: dict[str, Any], job_class: str, image: str, region: str, project: str, account: str, log_group: str, parameters: dict[str, str] | None = None
+) -> None:
     if container.get("image") != image:
         raise TargetError("The image digest differs from its measured image.")
     if (
@@ -214,11 +285,11 @@ def _container(container: dict[str, Any], job_class: str, image: str, region: st
     ):
         raise TargetError("Invalid plain environment.")
     secrets = container.get("secrets", [])
-    expected = (
-        [{"name": name, "valueFrom": value} for name, value in _reader_parameters(region, account, project).items()] if job_class == "lakehouse_read" else []
-    )
+    if parameters is None:
+        parameters = _reader_parameters(region, account, project) if job_class == "lakehouse_read" else {}
+    expected = [{"name": name, "valueFrom": value} for name, value in parameters.items()]
     if not isinstance(secrets, list) or any(not isinstance(row, dict) for row in secrets) or sorted(secrets, key=lambda row: str(row.get("name"))) != expected:
-        raise TargetError("Invalid reader bindings.")
+        raise TargetError("Invalid writer bindings." if job_class == "lakehouse_write" else "Invalid reader bindings.")
     logs = container.get("logConfiguration", {})
     if (
         logs.get("logDriver") != "awslogs"
@@ -240,7 +311,7 @@ def build_target(
     *,
     enabled: bool = False,
 ) -> dict[str, Any]:
-    """Build a disabled-by-default read target from explicit Terraform captures and measured image bytes."""
+    """Build a disabled-by-default application target from explicit Terraform captures and measured image bytes."""
     cluster = _output(platform, "cluster_arn")
     match = re.fullmatch(r"arn:aws:ecs:([a-z]{2}(?:-[a-z]+)+-[0-9]+):([0-9]{12}):cluster/[A-Za-z0-9_-]+", cluster) if isinstance(cluster, str) else None
     if not match:
@@ -248,7 +319,7 @@ def build_target(
     region, account = match[1], match[2]
     project = _output(platform, "project_tag")
     roles, network = _output(iam, "job_roles"), _output(iam, "job_network")
-    _roles(roles, account)
+    _roles(roles, account, project)
     _network(network)
     if network["subnet_id"] not in _output(platform, "public_subnet_ids"):
         raise TargetError("The endpoint subnet differs from the platform output.")
@@ -257,11 +328,24 @@ def build_target(
     log_group = _output(platform, "log_group_names").get("jobs")
     repositories = _output(platform, "ecr_repository_urls")
     maps = {name: _output(jobs, name) for name in ("task_definition_arns", "container_definitions", "task_definition_settings", "execution_digests")}
-    if any(not isinstance(value, dict) for value in maps.values()) or any(set(maps[name]) != set(DEFINITIONS) for name in maps if name != "execution_digests"):
-        raise TargetError("The jobs exports must contain exactly the five read definitions.")
+    if any(not isinstance(value, dict) for value in maps.values()):
+        raise TargetError("The jobs exports must contain exactly the five read definitions and only the closed optional writers.")
+    selected = set(maps["task_definition_arns"])
+    if (
+        not set(DEFINITIONS) <= selected
+        or not selected <= set(DEFINITIONS) | set(WRITER_DEFINITIONS)
+        or any(set(maps[name]) != selected for name in maps if name != "execution_digests")
+    ):
+        raise TargetError("The jobs exports must contain exactly the five read definitions and only the closed optional writers.")
+    writer_parameters = _writer_parameters(jobs, selected & set(WRITER_DEFINITIONS), region, account)
+    dispatch = _dispatch(jobs, selected)
     definitions = {}
     pin_keys = set()
-    for name, (job_class, image_name, role_key) in DEFINITIONS.items():
+    for name, (job_class, image_name, role_key) in (DEFINITIONS | WRITER_DEFINITIONS).items():
+        if name not in selected:
+            continue
+        if role_key not in roles:
+            raise TargetError("Missing writer task role binding.")
         arn = maps["task_definition_arns"][name]
         task = maps["task_definition_settings"][name]
         if not isinstance(task, dict) or not isinstance(arn, str):
@@ -275,7 +359,7 @@ def build_target(
         image = measurement["image"]
         if image.rsplit("@", 1)[0] != repositories.get(image_name):
             raise TargetError("The image digest differs from its platform repository.")
-        _container(container, job_class, image, region, project, account, log_group)
+        _container(container, job_class, image, region, project, account, log_group, writer_parameters.get(name))
         pin_key = name + "/" + str(container.get("name"))
         pin_keys.add(pin_key)
         definitions[name] = {
@@ -301,7 +385,9 @@ def build_target(
         "log_group_name": log_group,
         "job_roles": roles,
         "job_network": network,
-        "class_networks": {"offline": "offline", "seal": "offline", "lakehouse_read": "lakehouse"},
+        "class_networks": dispatch["class_networks"],
+        "class_capacity_providers": dispatch["class_capacity_providers"],
+        "assign_public_ip": dispatch["assign_public_ip"],
         "definitions": definitions,
         "catalog": catalog,
         "mac_preparation": {"enabled": False, "transport": "session_manager_owned_relay"},

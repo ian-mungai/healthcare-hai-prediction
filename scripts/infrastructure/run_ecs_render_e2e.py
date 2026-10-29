@@ -257,6 +257,251 @@ def command_cases(root: Path, folder: Path) -> dict[str, bool]:
     return checks
 
 
+def writer_cases(root: Path, folder: Path) -> dict[str, bool]:
+    """Render each closed writer binding and reject changed roles, pairs, placement and inventories."""
+    fixture = json.loads((root / SOURCES[-1]).read_text())
+    reader_target = json.loads((root / SOURCES[-2]).read_text())
+    folder.mkdir()
+    output = folder / "target.json"
+    layers = ("e2e", "silver", "gold", "features", "bronze")
+    checks: dict[str, bool] = {}
+
+    def capture(selected: tuple[str, ...]) -> dict[str, Any]:
+        value = copy.deepcopy(fixture)
+        exports = value["jobs_outputs"]
+        contracts: dict[str, Any] = {}
+        for layer in selected:
+            name, role = "spark_write_" + layer, "write_" + layer + "_task"
+            role_name = "example_project_job_" + role + "_dev"
+            role_arn = "arn:aws:iam::000000000000:role/" + role_name
+            value["iam_outputs"]["job_roles"]["value"][role] = {
+                "name": role_name,
+                "arn": role_arn,
+                "unique_id": "AROA" + ("E", "S", "G", "F", "B")[layers.index(layer)] * 17,
+            }
+            task = copy.deepcopy(exports["task_definition_settings"]["value"]["spark_read"])
+            task.update(family="example_project_dev_job_" + name, task_role_arn=role_arn)
+            exports["task_definition_settings"]["value"][name] = task
+            exports["task_definition_arns"]["value"][name] = "arn:aws:ecs:eu-west-1:000000000000:task-definition/" + task["family"] + ":1"
+            container = json.loads(exports["container_definitions"]["value"]["spark_read"])[0]
+            container["name"] = name
+            parameters = ["/example_project/aws_polaris_" + layer + "_client_" + suffix for suffix in ("id", "secret")]
+            container["secrets"] = [
+                {"name": environment, "valueFrom": "arn:aws:ssm:eu-west-1:000000000000:parameter" + parameter}
+                for environment, parameter in zip(("POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"), parameters, strict=True)
+            ]
+            exports["container_definitions"]["value"][name] = json.dumps([container])
+            exports["execution_digests"]["value"][name + "/" + name] = str(layers.index(layer) + 1) * 64
+            contracts[name] = {
+                "job_class": "lakehouse_write",
+                "task_role_key": role,
+                "parameter_names": parameters,
+                "capacity_providers": ["FARGATE"],
+                "network": "lakehouse",
+                "assign_public_ip": "DISABLED",
+            }
+        exports["writer_dispatch_contracts"] = {"sensitive": False, "type": ["map", "object"], "value": contracts}
+        dispatch = exports["dispatch_contract"]["value"]
+        dispatch["class_networks"]["lakehouse_write"] = "lakehouse"
+        dispatch["class_capacity_providers"]["lakehouse_write"] = ["FARGATE"]
+        dispatch["definition_classes"].update({"spark_write_" + layer: "lakehouse_write" for layer in selected})
+        return value
+
+    def invoke(value: dict[str, Any], *extra: str) -> Any:
+        arguments = ["-m", "scripts.infrastructure.render_ecs_target"]
+        for name in INPUTS:
+            path = folder / (name + ".json")
+            path.write_text(json.dumps(value[name]))
+            arguments += ["--" + name.replace("_", "-"), str(path)]
+        return run_command(sys.executable, [*arguments, "--output", str(output), *extra], cwd=root, timeout=10)
+
+    for selected in (*(tuple([layer]) for layer in layers), layers):
+        value = capture(selected)
+        result = invoke(value)
+        label = "all_writers" if len(selected) > 1 else selected[0] + "_writer"
+        checks[label] = result.returncode == 0 and output.exists()
+        if not checks[label]:
+            (folder / (label + "_failure.txt")).write_text(result.stdout + result.stderr)
+            continue
+        target = json.loads(output.read_text())
+        checks[label + "_closed_bindings"] = (
+            set(target["definitions"]) == set(reader_target["definitions"]) | {"spark_write_" + layer for layer in selected}
+            and all(target["definitions"][name] == definition for name, definition in reader_target["definitions"].items())
+            and target["enabled"] is False
+            and target["class_networks"] == reader_target["class_networks"] | {"lakehouse_write": "lakehouse"}
+            and target.get("class_capacity_providers")
+            == {
+                "offline": ["FARGATE_SPOT", "FARGATE"],
+                "seal": ["FARGATE_SPOT", "FARGATE"],
+                "lakehouse_read": ["FARGATE_SPOT", "FARGATE"],
+                "lakehouse_write": ["FARGATE"],
+            }
+            and target.get("assign_public_ip") == "DISABLED"
+            and all(
+                target["definitions"]["spark_write_" + layer]["job_class"] == "lakehouse_write"
+                and target["definitions"]["spark_write_" + layer]["task_role_key"] == "write_" + layer + "_task"
+                and target["definitions"]["spark_write_" + layer]["execution_sha256"] == str(layers.index(layer) + 1) * 64
+                and target["definitions"]["spark_write_" + layer]["image"] == reader_target["definitions"]["spark_read"]["image"]
+                for layer in selected
+            )
+        )
+    if not checks.get("all_writers"):
+        return checks
+    value = capture(layers)
+    invoke(value)
+    original = output.read_bytes()
+    checks["writer_render_repeats"] = invoke(value).returncode == 0 and output.read_bytes() == original
+    checks["writer_check_preserves_bytes"] = invoke(value, "--check").returncode == 0 and output.read_bytes() == original
+    checks["writer_target_is_private"] = stat.S_IMODE(output.stat().st_mode) == 0o600
+
+    def refused(label: str, altered: dict[str, Any], cause: str) -> None:
+        result = invoke(altered)
+        checks[label] = result.returncode == 2 and cause in result.stderr and output.read_bytes() == original
+
+    for layer, other in zip(layers, (*layers[1:], layers[0]), strict=True):
+        name, role = "spark_write_" + layer, "write_" + layer + "_task"
+        altered = copy.deepcopy(value)
+        altered["jobs_outputs"]["task_definition_settings"]["value"][name]["task_role_arn"] = altered["iam_outputs"]["job_roles"]["value"][
+            "write_" + other + "_task"
+        ]["arn"]
+        refused(layer + "_swapped_role", altered, "task role binding")
+        altered = copy.deepcopy(value)
+        containers = json.loads(altered["jobs_outputs"]["container_definitions"]["value"][name])
+        containers[0]["secrets"] = json.loads(altered["jobs_outputs"]["container_definitions"]["value"]["spark_write_" + other])[0]["secrets"]
+        altered["jobs_outputs"]["container_definitions"]["value"][name] = json.dumps(containers)
+        refused(layer + "_swapped_pair", altered, "writer bindings")
+        for field, replacement in (("capacity_providers", ["FARGATE_SPOT", "FARGATE"]), ("network", "offline"), ("assign_public_ip", "ENABLED")):
+            altered = copy.deepcopy(value)
+            altered["jobs_outputs"]["writer_dispatch_contracts"]["value"][name][field] = replacement
+            refused(layer + "_invalid_" + field, altered, "writer dispatch contract")
+        altered = copy.deepcopy(value)
+        altered["iam_outputs"]["job_roles"]["value"][role], altered["iam_outputs"]["job_roles"]["value"]["write_" + other + "_task"] = (
+            altered["iam_outputs"]["job_roles"]["value"]["write_" + other + "_task"],
+            altered["iam_outputs"]["job_roles"]["value"][role],
+        )
+        for changed_layer in (layer, other):
+            altered["jobs_outputs"]["task_definition_settings"]["value"]["spark_write_" + changed_layer]["task_role_arn"] = altered["iam_outputs"]["job_roles"][
+                "value"
+            ]["write_" + changed_layer + "_task"]["arn"]
+        refused(layer + "_swapped_role_inventory", altered, "writer role identity")
+        altered = copy.deepcopy(value)
+        altered["jobs_outputs"]["writer_dispatch_contracts"]["value"][name]["parameter_names"] = [
+            "/example_project/aws_polaris_" + other + "_client_" + suffix for suffix in ("id", "secret")
+        ]
+        containers = json.loads(altered["jobs_outputs"]["container_definitions"]["value"][name])
+        containers[0]["secrets"] = json.loads(altered["jobs_outputs"]["container_definitions"]["value"]["spark_write_" + other])[0]["secrets"]
+        altered["jobs_outputs"]["container_definitions"]["value"][name] = json.dumps(containers)
+        refused(layer + "_swapped_pair_inventory", altered, "writer parameter names")
+        altered = copy.deepcopy(value)
+        del altered["jobs_outputs"]["execution_digests"]["value"][name + "/" + name]
+        refused(layer + "_missing_pin", altered, "execution pins")
+    for reader in reader_target["definitions"]:
+        altered = copy.deepcopy(value)
+        for field in ("task_definition_arns", "container_definitions", "task_definition_settings"):
+            del altered["jobs_outputs"][field]["value"][reader]
+        refused("writer_capture_requires_" + reader, altered, "five read definitions")
+    altered = copy.deepcopy(value)
+    altered["iam_outputs"]["job_roles"]["value"]["write_unknown_task"] = {
+        "name": "example_project_job_write_unknown_task_dev",
+        "arn": "arn:aws:iam::000000000000:role/example_project_job_write_unknown_task_dev",
+        "unique_id": "AROA" + "U" * 17,
+    }
+    refused("unknown_writer_role", altered, "role contract")
+    altered = copy.deepcopy(value)
+    altered["jobs_outputs"].pop("writer_dispatch_contracts")
+    refused("missing_writer_dispatch_contracts", altered, "writer_dispatch_contracts")
+    altered = copy.deepcopy(value)
+    containers = json.loads(altered["jobs_outputs"]["container_definitions"]["value"]["spark_write_e2e"])
+    containers[0]["secrets"].append({"name": "EXTRA_PARAMETER", "valueFrom": "example_parameter"})
+    altered["jobs_outputs"]["container_definitions"]["value"]["spark_write_e2e"] = json.dumps(containers)
+    refused("extra_writer_parameter", altered, "writer bindings")
+    for field, dispatch_delta, cause in (
+        ("class_capacity_providers", {"lakehouse_write": ["FARGATE_SPOT"]}, "class capacity providers"),
+        ("class_networks", {"lakehouse_write": "offline"}, "class networks"),
+        ("definition_classes", {"spark_write_e2e": "offline"}, "definition classes"),
+    ):
+        altered = copy.deepcopy(value)
+        altered["jobs_outputs"]["dispatch_contract"]["value"][field].update(dispatch_delta)
+        refused("dispatch_changed_" + field, altered, cause)
+        altered = copy.deepcopy(value)
+        del altered["jobs_outputs"]["dispatch_contract"]["value"][field]
+        refused("dispatch_missing_" + field, altered, cause)
+    altered = copy.deepcopy(value)
+    del altered["jobs_outputs"]["dispatch_contract"]["value"]["class_capacity_providers"]["lakehouse_write"]
+    refused("dispatch_missing_writer_capacity", altered, "class capacity providers")
+    altered = copy.deepcopy(value)
+    altered["jobs_outputs"]["dispatch_contract"]["value"]["class_capacity_providers"]["lakehouse_read"] = ["FARGATE"]
+    refused("dispatch_changed_reader_capacity", altered, "class capacity providers")
+    altered = copy.deepcopy(value)
+    altered["jobs_outputs"]["dispatch_contract"]["value"]["assign_public_ip"] = "ENABLED"
+    refused("dispatch_public_ip", altered, "public IP")
+    altered = copy.deepcopy(value)
+    del altered["jobs_outputs"]["dispatch_contract"]
+    refused("missing_dispatch_contract", altered, "dispatch_contract")
+
+    consumer_target = json.loads(original)
+    consumer_target["enabled"] = True
+    target_path = folder / "consumer_target.json"
+    card_path = folder / "consumer_card.json"
+
+    def consume(target: dict[str, Any]) -> Any:
+        target_path.write_text(json.dumps(target))
+        return run_command(
+            sys.executable,
+            [
+                "-m",
+                "scripts.infrastructure.ecs_real_runs",
+                "--case",
+                "R1",
+                "--target",
+                str(target_path),
+                "--run-inputs",
+                str(root / "data_contracts/orchestration/examples/ecs_real_run_request.json"),
+                "--output",
+                str(card_path),
+            ],
+            cwd=root,
+            timeout=10,
+        )
+
+    result = consume(consumer_target)
+    checks["writer_target_consumer"] = result.returncode == 0 and card_path.exists()
+    if checks["writer_target_consumer"]:
+        card = card_path.read_bytes()
+        for label, strategy in (
+            ("missing_strategy", None),
+            (
+                "missing_writer_strategy",
+                {"offline": ["FARGATE_SPOT", "FARGATE"], "seal": ["FARGATE_SPOT", "FARGATE"], "lakehouse_read": ["FARGATE_SPOT", "FARGATE"]},
+            ),
+            (
+                "spot_strategy",
+                {
+                    "offline": ["FARGATE_SPOT", "FARGATE"],
+                    "seal": ["FARGATE_SPOT", "FARGATE"],
+                    "lakehouse_read": ["FARGATE_SPOT", "FARGATE"],
+                    "lakehouse_write": ["FARGATE_SPOT", "FARGATE"],
+                },
+            ),
+        ):
+            altered_target = copy.deepcopy(consumer_target)
+            if strategy is None:
+                altered_target.pop("class_capacity_providers", None)
+            else:
+                altered_target["class_capacity_providers"] = strategy
+            result = consume(altered_target)
+            checks["consumer_" + label] = result.returncode == 2 and "Invalid target contract" in result.stderr and card_path.read_bytes() == card
+        for label, public_ip in (("public_ip", "ENABLED"), ("missing_public_ip", None)):
+            altered_target = copy.deepcopy(consumer_target)
+            if public_ip is None:
+                altered_target.pop("assign_public_ip", None)
+            else:
+                altered_target["assign_public_ip"] = public_ip
+            result = consume(altered_target)
+            checks["consumer_" + label] = result.returncode == 2 and "Invalid target contract" in result.stderr and card_path.read_bytes() == card
+    return checks
+
+
 def record_cases(root: Path, folder: Path) -> dict[str, bool]:
     """Exercise the general writer's exact byte limit beyond the closed target schema's small records."""
     output = folder / "bounded_record.json"
@@ -543,6 +788,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="ecs_render_") as temporary:
         scratch = Path(temporary)
         checks["render"] = command_cases(ROOT, scratch)
+        checks["writers"] = writer_cases(ROOT, scratch / "writers")
         checks["records"] = record_cases(ROOT, scratch)
         checks["wrapper"] = wrapper_cases(ROOT, scratch)
         checks["jobs_config"] = jobs_config_cases(ROOT, scratch)
