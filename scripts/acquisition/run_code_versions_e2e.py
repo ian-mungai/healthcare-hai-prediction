@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import shutil
+import signal
 import tempfile
 from collections.abc import Callable
 from functools import partial
@@ -199,6 +200,34 @@ SYNTHETIC = {
     "pkg/runs_hard.py": "COMMAND = ['python', 'pkg/tool_hard']\n",
     "pkg/app_dir/__main__.py": "import pkg.case_hidden\n",
     "pkg/runs_dir.py": "COMMAND = ['python', 'pkg/app_dir']\n",
+    # A script or folder launched by path imports its neighbours by bare name (failure modes C33 to C36).
+    "pkg/app_local/__main__.py": "import local_mod\n",
+    "pkg/app_local/local_mod.py": "import deeper\n",
+    "pkg/app_local/deeper.py": "",
+    "pkg/app_local/extra.py": "",
+    "pkg/runs_app_local.py": "COMMAND = ['python', 'pkg/app_local']\n",
+    "pkg/script_tool.py": "import sibling_local\n",
+    "pkg/sibling_local.py": "",
+    "pkg/runs_script_tool.py": "COMMAND = ['python', 'pkg/script_tool.py']\n",
+    "pkg/runs_script_link.py": "COMMAND = ['python', 'pkg/tool_dirs/linked.py']\n",
+    "pkg/tool_dirs/note.py": "",
+    "pkg/runs_app_link.py": "COMMAND = ['python', 'pkg/app_link']\n",
+    "pkg/order_probe.py": "import extra\nCOMMAND = ['python', 'pkg/app_local']\n",
+    "pkg/bare_local.py": "import local_mod\n",
+    # A compiled target cannot be read (C39).
+    "pkg/tool.pyc": "binary\n",
+    "pkg/tool.pyo": "binary\n",
+    "pkg/tool_up.PYC": "binary\n",
+    "pkg/runs_pyc.py": "COMMAND = ['python', 'pkg/tool.pyc']\n",
+    "pkg/runs_pyo.py": "COMMAND = ['python', 'pkg/tool.pyo']\n",
+    "pkg/runs_pyc_upper.py": "COMMAND = ['python', 'pkg/tool_up.PYC']\n",
+    "pkg/runs_pyc_link.py": "COMMAND = ['python', 'pkg/link_pyc']\n",
+    "pkg/runs_so.py": "COMMAND = ['python', 'pkg/native.so']\n",
+    # A wildcard import of a package whose folder links loop (C40).
+    "wlink/__init__.py": "__all__ = []\n",
+    "wlink/real/__init__.py": "",
+    "wlink/real/leaf.py": "",
+    "pkg/wild_loop.py": "from wlink import *\n",
 }
 # On a disk that ignores letter case, each spelling runs pkg/tool_case.py, so its import must be bound too.
 CASE_VARIANTS = ["pkg.runs_case_folder", "pkg.runs_case_suffix", "pkg.runs_case_path", "pkg.runs_case_absolute", "pkg.runs_case_upper_root"]
@@ -217,6 +246,13 @@ IDENTITY = {
     "pkg.runs_hard_in": ["pkg/__init__.py", "pkg/case_hidden.py", "pkg/hard_target.py", "pkg/runs_hard_in.py", "pkg/tool_hard"],
     "pkg.runs_dir": ["pkg/__init__.py", "pkg/app_dir/__main__.py", "pkg/case_hidden.py", "pkg/runs_dir.py"],
 }
+APP_FILES = ["pkg/__init__.py", "pkg/app_local/__main__.py", "pkg/app_local/deeper.py", "pkg/app_local/local_mod.py"]
+IDENTITY["pkg.runs_app_link"] = [*APP_FILES, "pkg/runs_app_link.py"]
+IDENTITY["pkg.runs_app_out"] = [*APP_FILES, "pkg/runs_app_out.py"]
+IDENTITY["pkg.runs_script_link"] = ["pkg/__init__.py", "pkg/runs_script_link.py", "pkg/script_tool.py", "pkg/sibling_local.py"]
+# The time limit is 5 seconds: the old walk of looping folder links never ends, so the case must fail instead of hanging (C41).
+LOOP_SECONDS = 5
+LOOPS = {"pkg.wild_loop": ["pkg/__init__.py", "pkg/wild_loop.py", "wlink/__init__.py", "wlink/real/__init__.py", "wlink/real/leaf.py"]}
 EXECUTABLE_BIT = ["pkg/tool_bit"]
 EXPECTED = {
     "pkg.entry": [
@@ -254,6 +290,12 @@ EXPECTED = {
     "pkg.wild_module": ["pkg/__init__.py", "pkg/child.py", "pkg/wild_module.py"],
     # With both pkg/dual.py and pkg/dual/__init__.py, Python loads the package.
     "pkg.uses_dual": ["pkg/__init__.py", "pkg/child.py", "pkg/dual/__init__.py", "pkg/uses_dual.py"],
+    # A launch by script or folder path imports from the folder Python puts first on the import path (C33, C34, C36).
+    "pkg.runs_app_local": [*APP_FILES, "pkg/runs_app_local.py"],
+    "pkg.runs_script_tool": ["pkg/__init__.py", "pkg/runs_script_tool.py", "pkg/script_tool.py", "pkg/sibling_local.py"],
+    "pkg.order_probe": [*APP_FILES, "pkg/app_local/extra.py", "pkg/order_probe.py"],
+    # Without a launch, a bare name is not looked up in a neighbour folder.
+    "pkg.bare_local": ["pkg/__init__.py", "pkg/bare_local.py"],
 }
 REFUSED = [
     "pkg.rel_import",
@@ -324,6 +366,11 @@ REFUSED = [
     "pkg.runs_shebang",
     "pkg.runs_outside",
     "pkg.runs_link_out",
+    "pkg.runs_pyc",
+    "pkg.runs_pyo",
+    "pkg.runs_pyc_upper",
+    "pkg.runs_pyc_link",
+    "pkg.runs_so",
 ]
 
 
@@ -334,6 +381,33 @@ def refused(action: Callable[[], object]) -> bool:
     except RegistryError:
         return True
     return False
+
+
+class Deadline(Exception):
+    """An action ran past its time limit."""
+
+
+def within(seconds: float, action: Callable[[], object]) -> object:
+    """The action's result, or Deadline when it runs longer than the seconds. The timer repeats until the action ends."""
+
+    def expired(signum: int, frame: object) -> None:
+        raise Deadline(f"ran longer than {seconds} seconds")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds, 1)
+    try:
+        return action()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def finished_as(expected: object, action: Callable[[], object]) -> bool:
+    """True when the action ends within the loop time limit with exactly this result."""
+    try:
+        return within(LOOP_SECONDS, action) == expected
+    except Deadline:
+        return False
 
 
 def synthetic_cases(root: Path) -> list[dict]:
@@ -349,12 +423,28 @@ def synthetic_cases(root: Path) -> list[dict]:
     (root / "pkg/link_out").symlink_to(root.parent / "outside_tool")
     (root.parent / "link_in").symlink_to(root / "pkg/tool_case.py")
     (root / "pkg/runs_link_in.py").write_text(f"COMMAND = ['python', {str(root.parent / 'link_in')!r}]\n")
+    (root / "pkg/app_link").symlink_to("app_local")
+    (root.parent / "app_out").symlink_to(root / "pkg/app_local")
+    (root / "pkg/runs_app_out.py").write_text(f"COMMAND = ['python', {str(root.parent / 'app_out')!r}]\n")
+    (root / "pkg/tool_dirs/linked.py").symlink_to("../script_tool.py")
+    (root / "pkg/link_pyc").symlink_to("tool.pyc")
+    for alias, target in (("a", "."), ("b", "."), ("c", "real")):
+        (root / "wlink" / alias).symlink_to(target)
     (root / "pkg/tool_hard").hardlink_to(root / "pkg/hard_target.py")
     (root.parent / "hard_in").hardlink_to(root / "pkg/hard_target.py")
     (root / "pkg/runs_hard_in.py").write_text(f"COMMAND = ['python', {str(root.parent / 'hard_in')!r}]\n")
     cases = [{"name": f"closure_{entry}", "passed": code_closure.closure(entry, root, ("pkg",)) == sorted(files)} for entry, files in EXPECTED.items()]
     cases += [{"name": f"refuses_{module}", "passed": refused(partial(code_closure.closure, module, root, ("pkg",)))} for module in REFUSED]
     cases += [{"name": f"identity_{entry}", "passed": code_closure.closure(entry, root, ("pkg",)) == files} for entry, files in IDENTITY.items()]
+    cases += [
+        {"name": f"loop_{entry}", "passed": finished_as(sorted(files), partial(code_closure.closure, entry, root, ("pkg",)))} for entry, files in LOOPS.items()
+    ]
+    cases.append(
+        {
+            "name": "descendants_enter_each_folder_once",
+            "passed": finished_as([["wlink", "real"], ["wlink", "real", "leaf"]], lambda: sorted(code_closure.descendants(["wlink"], root))),
+        }
+    )
     (root / "pkg/runs_case_absolute.py").write_text(f"COMMAND = ['python', {str(root / 'PKG/tool_case.py')!r}]\n")
     (root / "pkg/runs_case_upper_root.py").write_text(f"COMMAND = ['python', {str(root).upper() + '/PKG/TOOL_CASE.PY'!r}]\n")
     for entry, spelling in CASE_REFUSED.items():
@@ -380,7 +470,7 @@ def contract_cases(tree: Path) -> list[dict]:
         with patch.object(code_closure, "REPO_ROOT", tree):
             files = code_closure.closure(entry, tree)
             entry_file = entry.replace(".", "/") + ".py"
-            imported = code_closure.references(entry_file, tree, code_closure.code_index(tree, code_closure.CODE_DIRECTORIES))
+            imported, _ = code_closure.references(entry_file, tree, code_closure.code_index(tree, code_closure.CODE_DIRECTORIES))
             direct = sorted(f for f in imported if f.endswith(".py") and f != entry_file)
             transitive = sorted(f for f in files if f.endswith(".py") and f not in imported and f != entry_file)
             outside = [
