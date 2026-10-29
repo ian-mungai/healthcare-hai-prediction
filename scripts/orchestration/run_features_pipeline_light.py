@@ -793,6 +793,34 @@ def case_features_publish_job(fixture: Fixture, scratch: Path) -> Checks:
     return checks
 
 
+def case_features_publish_prefix(fixture: Fixture, scratch: Path) -> Checks:
+    """The features publish layer meets gold's prefix and contract admission: a run's declared prefixes and the checkout's contract must match its mode."""
+    checks: Checks = {}
+    step = {"layer": "features", "step": "candidates"}
+    for mode, declared, wanted in (
+        ("real", "lakehouse/silver/", "lakehouse/features/"),
+        ("real", "lakehouse/features_e2e/", "lakehouse/features/"),
+        ("publish_fixture", "lakehouse/features/", "lakehouse/features_e2e/"),
+    ):
+        run = {"domain": "transform", "mode": mode, "write_prefixes": [declared]}
+        problem = launcher.Launcher.template_problem({"runs": {RUN: run}}, f"run:{RUN}", "pipeline_publish", step) or ""
+        checks[f"refuses_{mode}_{declared}"] = f"writes under {wanted}; run {RUN} declares {declared}" in problem
+    for mode, declared in (("real", "lakehouse/features/"), ("publish_fixture", "lakehouse/features_e2e/")):
+        run = {"domain": "transform", "mode": mode, "write_prefixes": [declared]}
+        checks[f"accepts_{mode}"] = launcher.Launcher.template_problem({"runs": {RUN: run}}, f"run:{RUN}", "pipeline_publish", step) is None
+    gold = {"domain": "transform", "mode": "real", "write_prefixes": ["lakehouse/silver/"]}
+    gold_step = {"layer": "gold", "step": "candidates"}
+    checks["gold_still_refused"] = bool(launcher.Launcher.template_problem({"runs": {RUN: gold}}, f"run:{RUN}", "pipeline_publish", gold_step))
+    checks["contract_real"] = launcher.publish_contract_problem("features", "real", ROOT) is None
+    checks["contract_fixture"] = launcher.publish_contract_problem("features", "publish_fixture", ROOT) is None
+    swapped = scratch / "checkout"
+    contract = swapped / launcher.LAYER_CONTRACT.get("features", "data_contracts/lakehouse/features_publish.json")
+    contract.parent.mkdir(parents=True)
+    contract.write_text(json.dumps({"publish": {"namespaces": {"real": "silver", "publish_fixture": "features_e2e"}}}))
+    checks["contract_mismatch_refused"] = "sends mode real to lakehouse/silver/" in (launcher.publish_contract_problem("features", "real", swapped) or "")
+    return checks
+
+
 def case_templates_launcher(fixture: Fixture, scratch: Path) -> Checks:
     """E01 (LB16): the launcher's closed table holds the feature templates with the transform domain and the publish modes."""
     checks: Checks = {}
@@ -1672,6 +1700,7 @@ CASES: dict[str, Callable[..., Checks]] = {
     "E20_online_join": case_online_join,
     "E20_online_no_secret_on_disk": case_online_no_secret_on_disk,
     "E06_features_publish_job": case_features_publish_job,
+    "E06_features_publish_prefix": case_features_publish_prefix,
 }
 NEEDS_FRAGMENT = ("E05_approval", "E05_approval_first_job", "E05_approval_reused_run", "E01_templates")
 
