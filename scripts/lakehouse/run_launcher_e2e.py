@@ -5410,7 +5410,7 @@ def feature_store_render_checks(
             1,
             "op-feast",
             {**values, **(extra_values or {})},
-            2_000_000_600,
+            int(time.time()) + 600,
             [],
             {"step": step},
             {"hai.registry_id": registry_id},
