@@ -38,6 +38,11 @@ bucket and exists only in the ignored `.dvc/config.local`, which the renderer wr
 bash scripts/infrastructure/render_project_config.sh --stack dvc
 ```
 
+A training run versions its exact matrix (a Parquet file inside the project) with `scripts.training.dvc_baseline.record(matrix, run, snapshots)`. It runs
+`dvc add` and `dvc push`, logs the `.dvc` metafile as an MLflow artifact of the run and sets the metafile's SHA-256 as a run tag beside the Iceberg snapshot ID of every
+source feature table. `load(run)` reads the metafile from the run, checks the tag, fetches the file and refuses one that does not match the metafile. Every DVC
+step has a deadline and a failure raises `BaselineError`.
+
 Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
@@ -167,6 +172,7 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_checks_e2e
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 .venv/bin/python -m scripts.quality.run_dvc_e2e
+.venv/bin/python -m scripts.training.run_dvc_baseline_e2e
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 .venv/bin/python -m scripts.infrastructure.run_host_session_e2e
 .venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e
