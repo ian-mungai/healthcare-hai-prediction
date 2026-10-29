@@ -18,7 +18,7 @@ terraform_checks() {
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
   # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam platform services modules/bronze_writer_job; do
+  for stack in storage iam platform services modules/bronze_writer_job jobs jobs/identity_probe; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"
@@ -42,13 +42,20 @@ terraform_checks() {
       mkdir -p "$test_dir/$(dirname "$relative")"
       cp "$repo_root/$file" "$test_dir/$relative"
     done < <(git -C "$repo_root" ls-files -z -- "$prefix")
+    # The jobs root uses the services flow test module as its stand-in network (source "../services/tests/flow").
+    if [[ "$stack" == "jobs" ]]; then
+      while IFS= read -r -d '' file; do
+        mkdir -p "$stack_root/$(dirname "$file")"
+        cp "$repo_root/$file" "$stack_root/$file"
+      done < <(git -C "$repo_root" ls-files -z -- infra/services/tests/flow/)
+    fi
     printf '\nChecking %s Terraform configuration\n' "$stack"
     timed "terraform_checks: $stack init" terraform -chdir="$test_dir" init -backend=false -input=false -lockfile=readonly -no-color
     timed "terraform_checks: $stack validate" terraform -chdir="$test_dir" validate -no-color
     timed "terraform_checks: $stack test" terraform -chdir="$test_dir" test -no-color
   done
   static_failed=0
-  for stack in storage iam platform services modules/bronze_writer_job; do
+  for stack in storage iam platform services modules/bronze_writer_job jobs jobs/identity_probe; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"
