@@ -39,6 +39,7 @@ AIRFLOW_API_SECRET_KEY = PREFIX + "airflow_api_secret_key"
 MARQUEZ_DB_PASSWORD = PREFIX + "marquez_db_password"
 AIRFLOW_ADMIN = PREFIX + "airflow_admin"
 REDIS_PASSWORD = PREFIX + "redis_password"
+MLFLOW_DB_PASSWORD = PREFIX + "mlflow_db_password"
 MANAGED = (
     POSTGRES_PASSWORD,
     POLARIS_ROOT_SECRET,
@@ -54,6 +55,7 @@ MANAGED = (
     AIRFLOW_API_SECRET_KEY,
     MARQUEZ_DB_PASSWORD,
     REDIS_PASSWORD,
+    MLFLOW_DB_PASSWORD,
 )
 READ_ONLY = (AIRFLOW_ADMIN,)
 SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")

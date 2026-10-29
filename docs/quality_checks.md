@@ -328,6 +328,7 @@ The supported declarations are:
 - Launcher `Mount` calls and pipeline mount tuples with literal paths under the checkout.
   The Spark and gold job tables supply their module names. Renderer defaults and fixed pipeline layer choices supply the other entry points.
   The `workdir=` argument of each renderer's `assemble` call supplies its working folder. Pipeline specifications use their launcher's declared working folder.
+  The training job renderer takes its module from the training specification at run time. The check does not follow those modules or their mounts yet.
 - Literal Python files copied by a final Dockerfile stage to an absolute destination, including the analytics UI relay.
   The check reads the Dockerfile in the declared build context. It does not build or inspect an image.
 

@@ -86,7 +86,8 @@
         "lakehouse_write",
         "collector",
         "training",
-        "serving"
+        "serving",
+        "mlflow"
       ]
     },
     "placeholder_text": {
@@ -220,7 +221,8 @@
             "fixture_verify",
             "reserve_gold",
             "seal_features",
-            "online_store_up"
+            "online_store_up",
+            "snapshot_training"
           ]
         },
         "params": {
@@ -246,7 +248,7 @@
               "items": {
                 "$ref": "#/$defs/placeholder_text"
               },
-              "minItems": 1
+              "minItems": 0
             },
             "expected_states": {
               "type": "object",

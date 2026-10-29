@@ -410,6 +410,10 @@ def build(inp: PipelineInput, checkout: Path, values: dict[str, str], session: R
 
     ``session`` is the role session of the job's class. A job that needs no AWS access, and every fixture run, refuses one.
     """
+    if inp.template in ("training_job", "training_mlflow", "training_extract"):
+        from orchestration import training_render
+
+        return training_render.build(inp, values, session)
     folder = require_publish_run(inp)
     if inp.run_mode == "publish_fixture" and inp.pipeline.get("registry_kind") != "test":
         raise PipelineError("publish_fixture requires a test registry")

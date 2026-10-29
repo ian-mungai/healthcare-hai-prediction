@@ -53,7 +53,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from orchestration import dbt_lineage, ecs_target, launcher
+from orchestration import dbt_lineage, ecs_target, launcher, training_approvals, training_contract
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
 from scripts.lakehouse import run_lock
@@ -408,7 +408,29 @@ class Broker:
 
     def row_for(self, request: SubmissionRequest) -> dict[str, Any]:
         """The mode's row, or the refusal with its reason: unknown name, unsupported mode, a class that is neither offline nor enforced, no launcher row."""
-        template = self.templates.get(request.template)
+        name = request.template
+        if request.dag_id in training_contract.DAGS:
+            try:
+                parameters = training_contract.parameters_for(request.dag_id, request.training or {})
+            except ValueError as error:
+                raise SubmissionRefused(str(error)) from None
+            chain = training_contract.TRAINING_STEPS if request.dag_id == "training_dag" else training_contract.PROMOTION_STEPS
+            tail = (
+                "catalog_release",
+                "release_accepted",
+                "release_rejected",
+                "training_final_gate_accepted",
+                "training_final_gate_rejected",
+                "promotion_final_gate_accepted",
+                "promotion_final_gate_rejected",
+            )
+            if name not in (*chain, *tail):
+                raise SubmissionRefused("the task is outside this training workflow")
+            if name == "promotion_check" and parameters.get("population") == "sensitivity":
+                return {"class": "offline", "no_op": True, "reason": "sensitivity analyses are exploratory and never promoted"}
+            if name in ("acquire_run", "run_record", "catalog_up", "catalog_release", "release_accepted", "release_rejected"):
+                name = f"training_{name}"
+        template = self.templates.get(name)
         if template is None:
             raise SubmissionRefused(f"unknown template {request.template}")
         row = template["modes"].get(request.mode)
@@ -453,6 +475,8 @@ class Broker:
             "caller_identity": request.identity(),
             "input_run_id": request.input_run_id or "latest",
         }
+        if request.training is not None:
+            payload["params"]["parameters"] = dict(request.training)
         if "dbt_nodes" in target:
             payload["capture_dbt_artifacts"] = True
         if "timeout_seconds" in target:
@@ -522,6 +546,24 @@ class Broker:
         ):
             return
         raise ApprovalRefused(f"a real {request.dag_id} run needs the owner's approval record: {problem}")
+
+    def require_training_approval(self, request: SubmissionRequest, row: dict[str, Any]) -> None:
+        """Admit an exact owner approval while retaining the cleanup path of an already admitted run."""
+        if request.dag_id not in training_contract.DAGS or request.dag_id == "training_dag" and request.mode != "real":
+            return
+        try:
+            training_approvals.read_approval(self.paths.state, request)
+            return
+        except ValueError as error:
+            problem = str(error)
+        action = (row.get("control") or {}).get("action")
+        admitted = any(
+            lines[0].get("dag_id") == request.dag_id and lines[0].get("mode") == request.mode and lines[0].get("training") == request.training
+            for lines in self.ledger.submissions(request.run_id).values()
+        )
+        if action in training_approvals.RELEASE_ACTIONS and admitted:
+            return
+        raise SubmissionRefused(f"training approval required: {problem}")
 
     def ensure_run(self, request: SubmissionRequest) -> dict[str, Any]:
         """The principal of the submission's run: the run this machine's token store already holds, or a new run acquired through the launcher.
@@ -778,11 +820,14 @@ class Broker:
                         raise SubmissionRefused("caller identity differs from the persisted submission identity")
                     if (persisted.target or "auto") != (request.target or "auto"):
                         raise SubmissionRefused("target differs from the persisted submission target")
+                    if persisted.training != request.training:
+                        raise SubmissionRefused("training parameters differ from the persisted submission")
                     if lines[-1]["event"] not in ("finished", "failed_closed"):
                         self.advance_locked(request)
                     return handle
                 row = self.row_for(request)
                 self.require_approval(request, row)
+                self.require_training_approval(request, row)
                 payload = None if row["no_op"] else self.payload_of(request, row)
                 try:
                     self.write_intent(request, row, payload)
@@ -924,6 +969,7 @@ class Broker:
             return accepted
         try:
             row = self.row_for(request)
+            self.require_training_approval(request, row)
         except SubmissionRefused as error:
             self.append_end(request, str(error))
             return None
@@ -950,10 +996,22 @@ class Broker:
             self.append_end(request, problem)
             return None
         try:
+            if request.training is not None and payload["template"] == "training_mlflow":
+                from scripts.orchestration.pipeline_control import wait_for
+
+                wait_for(
+                    "local MLflow startup",
+                    lambda left: self.call("training_mlflow_up", {}, principal, timeout=left),
+                    lambda view: view.get("phase") == "ready",
+                    seconds=300.0,
+                )
             self.record_dispatch(request)
             answer = self.call("submit", payload, principal, request_id_of(request.submission_id))
         except launcher.ClientError as error:
             self.append_end(request, f"{error} [{error.code}]")
+            return None
+        except run_control.ControlFailed as error:
+            self.append_end(request, str(error))
             return None
         self.crash("after_forward")
         forward = {
