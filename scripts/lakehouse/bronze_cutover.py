@@ -118,20 +118,20 @@ def bind_target(aws: AwsCli, group: str, *, deadline: float, clock: reg.Clock = 
 
 
 def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, deadline: float, clock: reg.Clock = time.monotonic) -> None:
-    """Accept the route only to one running project host with no public address on the instance or any interface; the catalog stays private."""
+    """Accept the route only to one running project host whose security groups admit only same-account security groups; the catalog stays private."""
     check_ports(spec)
     reg.check_deadline(deadline, clock)
     try:
-        described = aws.call_bounded("ec2", "describe-instances", ["--instance-ids", spec.instance], timeout=deadline - clock())
+        facts = cutover_route.describe_host(aws, spec.instance, project_tag, deadline=deadline, clock=clock)
     except StorageError as error:
         raise reg.RegistrationError("network", f"describing the catalog host failed ({error.code})") from None
-    if not cutover_route.host_accepted(cutover_route.host_facts(described, spec.instance, project_tag)):
-        raise reg.RegistrationError("network", "the catalog host is not one running project instance without a public address")
+    if not cutover_route.host_accepted(facts):
+        raise reg.RegistrationError("network", "the catalog host is not one running project instance whose security groups admit only project security groups")
 
 
 # The Mac-side route observations the cutover needs before its route is used (owner decision, Oct 28 2026, for this one attended cutover
 # only; scripts/lakehouse/cutover_route.py). Each must pass. They do not replace the ECS class-network matrix of docs/ecs_real_runs.md.
-ROUTE_OBSERVATIONS = ("host_without_public_address", "catalog_port_only", "mac_containers_refused")
+ROUTE_OBSERVATIONS = ("host_without_open_ingress", "catalog_port_only", "mac_containers_refused")
 ROUTE_SCOPE = (
     "Mac-side route acceptance for this one attended bronze cutover (owner decision 2026-10-28); "
     "the ECS class-network matrix stays required before any ECS job uses the catalog"
