@@ -87,6 +87,35 @@ def registration_timeout() -> dict[str, bool]:
     }
 
 
+def provider_membership_lag() -> dict[str, bool]:
+    host, session, lines = build({"late_provider:200"})
+    session.start()
+    runs = [entry for entry in host.log if entry["operation"] == "run-task"]
+    joined_at = (host.instance_up_at or 0) + host.provider_delay
+    waited = [entry for entry in host.log if entry["operation"] == "describe-container-instances" and entry["at"] < joined_at]
+    return {
+        "start waits for the instance to join the capacity provider": host.desired == 1
+        and all(service["state"] == "COMPLETED" for service in host.services.values()),
+        "RunTask is called once, and only after the instance joined": len(runs) == 1 and runs[0]["at"] >= joined_at,
+        "the wait polled the instance before it joined": len(waited) > 1,
+        "host_registered is reported after the membership": any(line.startswith("host_registered") for line in lines),
+    }
+
+
+def provider_membership_never() -> dict[str, bool]:
+    host, session, lines = build({"never_provider"})
+    message = failure(session.start)
+    return {
+        "start fails at the registration deadline": message is not None and f"{REGISTRATION_SECONDS} s" in message,
+        "the failure names the missing capacity provider membership": message is not None and "capacity provider" in message,
+        "the failure names no provider, ARN or account ID": message is not None and PROVIDER not in message and not ARN_OR_ACCOUNT.search(message),
+        "no host_registered line, no task and no deployment": not any(line.startswith("host_registered") for line in lines)
+        and "run-task" not in writes(host)
+        and "update-service" not in writes(host),
+        "host is off and verified": host.desired == 0 and host.instance_up_at is None,
+    }
+
+
 def run_task_failures() -> dict[str, bool]:
     host, session, _ = build({"run_task_failure"})
     message = failure(session.start)
@@ -396,6 +425,8 @@ def status_read_only() -> dict[str, bool]:
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "happy_start": happy_start,
     "registration_timeout": registration_timeout,
+    "provider_membership_lag": provider_membership_lag,
+    "provider_membership_never": provider_membership_never,
     "run_task_failures": run_task_failures,
     "host_prepare_nonzero": host_prepare_nonzero,
     "service_never_stable": service_never_stable,

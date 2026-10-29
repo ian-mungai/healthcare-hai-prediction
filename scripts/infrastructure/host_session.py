@@ -265,10 +265,28 @@ class Session:
         return all(self.settled(service) for service in self.service_states() if service["serviceName"] in wanted)
 
     def host_on(self) -> None:
-        """Set the desired capacity to 1 and wait for one ACTIVE, agent-connected container instance."""
+        """Set the desired capacity to 1 and wait for one ACTIVE, agent-connected container instance that belongs to the capacity provider.
+
+        An instance can be ACTIVE before ECS lists it in its capacity provider, and RunTask on the provider then fails with "contains no container
+        instances"; ``capacityProviderName`` of ``describe-container-instances`` shows the membership.
+        """
         self.call("autoscaling", "set-desired-capacity", ["--auto-scaling-group-name", self.names.group, "--desired-capacity", "1", "--no-honor-cooldown"])
         self.step("host_on_requested")
-        self.wait("host registration", lambda: len(self.active_instances()) == 1, REGISTRATION_SECONDS, POLL_SECONDS)
+        seen = [""]
+
+        def ready() -> bool:
+            active = self.active_instances()
+            seen[0] = ""
+            if len(active) != 1:
+                seen[0] = "no single ACTIVE, agent-connected container instance"
+            elif active[0].get("capacityProviderName") != self.names.provider:
+                seen[0] = "the container instance is registered but is not in the capacity provider"
+            return not seen[0]
+
+        try:
+            self.wait("host registration", ready, REGISTRATION_SECONDS, POLL_SECONDS)
+        except HostSessionError as error:
+            raise HostSessionError(f"{error}; last seen: {seen[0]}" if seen[0] else str(error)) from None
         self.step("host_registered")
 
     def host_off(self) -> None:
