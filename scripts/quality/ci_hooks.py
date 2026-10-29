@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import ProcessGroupSurvived, TimeoutExpired, run_command
 from scripts.quality.repo_checks import load_yaml
 
 
@@ -82,6 +82,8 @@ def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end:
                 if remaining <= 0
                 else f"hook {hook} exceeded the remaining {remaining:.3f} second budget for group {group}\n"
             )
+            if isinstance(error, ProcessGroupSurvived):
+                message += f"the stop of hook {hook} is not confirmed: {error}\n"
             (output / f"{hook}.log").write_text(stdout + stderr + message)
             sys.stdout.write(stdout)
             sys.stderr.write(stderr + message)

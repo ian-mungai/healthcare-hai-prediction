@@ -36,7 +36,6 @@ heavy gate body and the real hook configuration.
 
 from __future__ import annotations
 
-import ast
 import copy
 import hashlib
 import importlib
@@ -51,12 +50,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from scripts.process import clear_git_environment, find_program, run_command
 from scripts.quality import ci_groups
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
+from scripts.quality.source_reads import source_inputs
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv" / "bin" / "python"
@@ -72,6 +73,7 @@ COPIED = (
     ".yamllint",
     "README.md",
     "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
     "config/quality/feature_cases.json",
     "scripts/lakehouse/feature_shards.py",
     "scripts/lakehouse/run_feature_sources_e2e.py",
@@ -98,6 +100,8 @@ COPIED = (
     "orchestration/network_policy.py",
     "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/launcher_inputs.py",
+    "scripts/quality/source_reads.py",
     "scripts/quality/lint_sources.py",
     "scripts/quality/documentation_review.py",
     "scripts/quality/repo_checks.py",
@@ -292,6 +296,9 @@ def run_entry(work: Path, out: Path, label: str, extra: dict[str, str]) -> tuple
 def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     name = "docs_only_runs_gates" if part == "core" else f"docs_only_runs_gates_{part}_part"
     stage_readme(work)
+    # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
+    launcher_part = "launcher" in PART_GROUPS[part]
+    marker = install_launcher_stub(work) if launcher_part else None
     try:
         code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part})
     finally:
@@ -299,7 +306,10 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "conditional_groups_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part] if group != "repository_code_checks"),
+        "conditional_groups_skipped_with_reason": all(
+            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "launcher"}
+        ),
+        "launcher_selected_and_started": (marker is not None and "run launcher" in log and marker.exists()) if launcher_part else "run launcher" not in log,
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
         # sql_style is selected by path in the staged scope (always_except_commits), so a README-only change skips it with a reason.
@@ -760,107 +770,293 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
     ]
-    return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
+    return [*cases, *reader_coverage_cases(work), *entry_point_cases(), *launcher_selection_cases(work), *launcher_always_cases(work)]
+
+
+LAUNCHER_IMPORTED = (
+    "scripts/lakehouse/silver.py",
+    "orchestration/network_policy.py",
+    "scripts/quality/docker_calls.py",
+    "scripts/acquisition/new_probe.py",
+    "dbt/models/gold/new_probe.sql",
+    "scripts/quality/lint_sources.py",
+    "scripts/quality/ci_hooks.py",
+    "dags/gold_transform_dag.py",
+    "tests/orchestration/fixtures/combined_dag.py",
+    "scripts/quality/future_probe.py",
+)
+# Paths no import or read of the suite reaches. Followed modules that list files carry an ``inventory_reads`` entry with the pattern ``.``, so the group is
+# selected by every path (owner decision 1): the cases expect it until a module's entry is narrowed by a reviewed change, one module at a time.
+LAUNCHER_ALWAYS_SELECTED = (
+    "infra/main.tf",
+    "config/quality/mypy_runtimes.json",
+    "docs/data_collection.md",
+    ".github/pull_request_template.md",
+)
+# The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
+LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
+# The recheck's reproductions: inventories whose root the round 1 scan did not read (a wrapped root, a keyword argument, a listing program by path).
+LAUNCHER_INVENTORY_READS = {
+    "wrapped_rglob": '    for path in Path(ROOT).rglob("*.json"):\n        if path.is_file():\n            json.loads(path.read_text())\n',
+    "walk_keyword": "    for _folder, _names, files in os.walk(top=ROOT):\n        json.dumps(files)\n",
+    "find_by_path": '    run_command("/usr/bin/find", [str(ROOT), "-name", "*.json"], timeout=60, check=True)\n',
+}
+SAMPLE_REPOSITORY = {
+    "entry.py": (
+        "from pathlib import Path\nfrom pkg import used\n\nROOT = Path(__file__).resolve().parent\n\n\ndef run():\n    import late\n"
+        '    data = (ROOT / "config/a.json").read_text()\n    compose = (ROOT / "compose.yaml").read_text()\n'
+        '    files = sorted((ROOT / "folder").glob("*"))\n    return used, late, data, compose, files\n'
+    ),
+    "pkg/__init__.py": "",
+    "pkg/used.py": "VALUE = 1\n",
+    "late.py": "VALUE = 2\n",
+    "config/a.json": "{}\n",
+    "compose.yaml": "services:\n  worker:\n    entrypoint: [python, -m, svc.worker]\n",
+    "svc/worker.py": "VALUE = 3\n",
+    "folder/x.txt": "x\n",
+    "folder/y.txt": "y\n",
+    "unrelated.py": "VALUE = 4\n",
+    "other/z.py": "VALUE = 5\n",
+    "scripts/ci/groups/launcher.sh": 'launcher_e2e() {\n  "$python_bin" -m entry\n}\n',
+}
+SAMPLE_ENTRY = {"entry_points": ["entry.py"], "extra_inputs": []}
+FOLDER_LINE = 'files = sorted((ROOT / "folder").glob("*"))'
+
+
+def sample_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The tool on a small repository: the computed list has the imports, reads, module names in text files and whole-folder reads, and a planted defect
+    against the committed list is named by ``problems``."""
+    try:
+        from scripts.quality import launcher_inputs
+    except ImportError as error:
+        return [{"case": "launcher_inputs_tool_exists", "passed": False, "error": str(error)}]
+    root = scratch / "launcher_sample"
+    for name, text in SAMPLE_REPOSITORY.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text, encoding="utf-8")
+    tracked = set(SAMPLE_REPOSITORY)
+    computed = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], SAMPLE_ENTRY["extra_inputs"])
+    committed = {
+        **SAMPLE_ENTRY,
+        "files": computed["files"],
+        "dynamic_sites": computed["dynamic_sites"],
+        "folders": computed["folders"],
+        "inventory_sites": computed["inventory_sites"],
+        "inventory_reads": [{"module": "entry.py", "pattern": ".", "why": "sample: the glob of the folder it reads whole is not reviewed"}],
+    }
+    wanted = {"entry.py", "pkg/__init__.py", "pkg/used.py", "late.py", "config/a.json", "compose.yaml", "svc/worker.py", "folder/x.txt", "folder/y.txt"}
+    cases = [
+        {
+            "case": "launcher_inputs_sample_closure",
+            "passed": set(computed["files"]) == wanted,
+            "missing": sorted(wanted - set(computed["files"])),
+            "extra": sorted(set(computed["files"]) - wanted),
+        },
+        {"case": "launcher_inputs_sample_matches_itself", "passed": launcher_inputs.problems(root, tracked, committed) == []},
+        {"case": "launcher_inputs_sample_folder_read_whole", "passed": computed["folders"] == ["folder"], "folders": computed["folders"]},
+    ]
+
+    def planted(name: str, change: Callable[[dict[str, Any]], dict[str, Any]], named: str, files: dict[str, str] | None = None) -> dict[str, Any]:
+        changed_tracked = tracked | set(files or {})
+        for path, text in (files or {}).items():
+            (root / path).write_text(text, encoding="utf-8")
+        try:
+            found = launcher_inputs.problems(root, changed_tracked, change(copy.deepcopy(committed)))
+        finally:
+            for path in files or {}:
+                (root / path).write_text(SAMPLE_REPOSITORY.get(path, ""), encoding="utf-8")
+        return {"case": name, "passed": any(named in line for line in found), "named": named, "problems": found[:4]}
+
+    def drop(path: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        return lambda listing: {**listing, "files": [item for item in listing["files"] if item != path]}
+
+    def add(path: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        return lambda listing: {**listing, "files": sorted([*listing["files"], path])}
+
+    cases += [
+        planted("launcher_list_missing_imported_module_is_named", drop("late.py"), "late.py"),
+        planted("launcher_list_missing_package_init_is_named", drop("pkg/__init__.py"), "pkg/__init__.py"),
+        planted("launcher_list_missing_read_file_is_named", drop("config/a.json"), "config/a.json"),
+        planted("launcher_list_missing_module_named_in_text_is_named", drop("svc/worker.py"), "svc/worker.py"),
+        planted("launcher_list_missing_file_of_a_folder_read_is_named", drop("folder/y.txt"), "folder/y.txt"),
+        planted("launcher_list_missing_folder_is_named", lambda listing: {**listing, "folders": []}, "folder/"),
+        planted("launcher_list_stale_entry_is_named", add("unrelated.py"), "unrelated.py"),
+        planted("launcher_list_deleted_entry_is_named", add("gone.py"), "gone.py"),
+        planted(
+            "launcher_new_import_is_named_until_regenerated",
+            lambda listing: listing,
+            "other/z.py",
+            {"late.py": "import other.z\nVALUE = 2\n"},
+        ),
+        planted(
+            "launcher_new_dynamic_import_is_named",
+            lambda listing: listing,
+            "late.py",
+            {"late.py": "import importlib\n\n\ndef load(name):\n    return importlib.import_module(name)\n"},
+        ),
+        planted(
+            "launcher_stale_ignored_read_is_named",
+            lambda listing: {**listing, "ignored_reads": [{"module": "entry.py", "text": "nothing/here", "why": "planted"}]},
+            "nothing/here",
+        ),
+        planted("launcher_entry_point_must_match_the_group_body", lambda listing: {**listing, "entry_points": ["unrelated.py"]}, "launcher.sh"),
+        planted(
+            "launcher_undeclared_inventory_read_is_named",
+            lambda listing: listing,
+            "late.py: lists files by inventory",
+            {"late.py": 'LISTING = ["git", "ls-files", "--", "*.py"]\n'},
+        ),
+        planted(
+            "launcher_undeclared_bare_listdir_is_named",
+            lambda listing: listing,
+            "late.py: lists files by inventory",
+            {"late.py": 'from os import listdir\n\nNAMES = listdir(".")\n'},
+        ),
+        planted(
+            "launcher_stale_inventory_read_is_named",
+            lambda listing: {**listing, "inventory_reads": [{"module": "late.py", "pattern": "\\.py$", "why": "planted"}]},
+            "late.py: inventory_reads",
+        ),
+        planted(
+            "launcher_new_occurrence_of_an_ignored_text_is_named",
+            lambda listing: {**listing, "ignored_reads": [{"module": "entry.py", "text": "folder", "why": "planted", "lines": [FOLDER_LINE]}]},
+            "entry.py: ignored read 'folder'",
+            {"entry.py": SAMPLE_REPOSITORY["entry.py"] + 'COPY = ROOT / "folder"\n'},
+        ),
+    ]
+    ignoring = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    (root / "entry.py").write_text(SAMPLE_REPOSITORY["entry.py"] + 'EXACT = (ROOT / "folder/x.txt").read_text()\n', encoding="utf-8")
+    try:
+        exact = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    finally:
+        (root / "entry.py").write_text(SAMPLE_REPOSITORY["entry.py"], encoding="utf-8")
+    cases += [
+        {
+            "case": "launcher_trace_names_a_file_the_list_misses",
+            "passed": launcher_inputs.trace_gaps(["other/z.py", "entry.py", "/outside/x"], tracked, computed["files"]) == ["other/z.py"],
+        },
+        {
+            "case": "launcher_ignored_read_drops_its_folder",
+            "passed": "folder/x.txt" not in ignoring["files"] and ignoring["folders"] == [] and ("entry.py", "folder") in ignoring["ignored"],
+        },
+        {
+            "case": "launcher_ignored_read_keeps_an_exact_read_of_its_folder",
+            "passed": "folder/x.txt" in exact["files"] and "folder/y.txt" not in exact["files"] and exact["folders"] == [],
+            "files": [path for path in exact["files"] if path.startswith("folder/")],
+            "folders": exact["folders"],
+        },
+    ]
+    return cases
+
+
+def overlay_problems(tracked: set[str], committed: dict[str, Any], line: str) -> list[str]:
+    """The list check on the suite with ``line`` added after the anchor of LAUNCHER_EXACT_READ (in docker_calls_check): the source is changed only for this
+    process's reads, never on disk."""
+    from scripts.quality import launcher_inputs
+
+    target = ROOT / LAUNCHER_E2E
+    original = target.read_text(encoding="utf-8")
+    anchor = LAUNCHER_EXACT_READ[0]
+    if anchor not in original:
+        return []
+    changed = original.replace(anchor, anchor + line, 1)
+    read_text = Path.read_text
+
+    def overlay(path: Path, *args: Any, **kwargs: Any) -> str:
+        return changed if path == target else read_text(path, *args, **kwargs)
+
+    with mock.patch.object(Path, "read_text", overlay):
+        return launcher_inputs.problems(ROOT, tracked, committed)
+
+
+def launcher_always_cases(work: Path) -> list[dict[str, Any]]:
+    """The always-select pattern (``.``) selects the launcher for every changed path and takes no part in classifying paths: it is not in a group list, so a
+    path no list names still selects every group (LS27), an empty change list selects no launcher (LS28) and the configuration note states the
+    exception (LS30)."""
+    config = ci_groups.load()
+    listed = [pattern for patterns in config["groups"].values() for pattern in patterns] + config["passive"]
+    always = config.get("launcher_always", [])
+    code, plan, error = select(work, "--scope", "paths", "--part", "all")
+    note = json.loads((ROOT / ci_groups.CONFIG).read_text(encoding="utf-8"))["note"]
+    stale = ("no longer selects it", "never another group")
+    return [
+        {
+            "case": "launcher_always_pattern_is_not_a_classifier",
+            "passed": bool(always) and not any(re.search(pattern, "newtop/tool.bin") for pattern in listed),
+            "launcher_always": always,
+            "matching": [pattern for pattern in listed if re.search(pattern, "newtop/tool.bin")][:4],
+        },
+        {
+            "case": "empty_change_list_selects_no_launcher",
+            "passed": code == 0 and plan is not None and "launcher" not in plan["run"],
+            "run": plan["run"] if plan else None,
+            "error": error[-400:],
+        },
+        {
+            "case": "ci_groups_note_states_the_launcher_exception",
+            "passed": "launcher_always" in note and "inventory_reads" in note and not any(phrase in note for phrase in stale),
+            "stale_phrases": [phrase for phrase in stale if phrase in note],
+        },
+    ]
+
+
+def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
+    """The launcher group is selected by what its suite imports or reads, and by every path while a followed module that lists files carries the ``.`` pattern
+    of its ``inventory_reads`` entry (owner decision 1: every such module always selects the suite until a reviewed entry narrows it). A change to a module
+    the suite imports selects it, so does a path the suite never reaches, the committed list equals the computed one, and every computed file is selected by
+    the group's patterns."""
+    cases: list[dict[str, Any]] = [
+        selection_case(work, f"launcher_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_IMPORTED
+    ]
+    cases += [
+        selection_case(work, f"launcher_always_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_ALWAYS_SELECTED
+    ]
+    try:
+        from scripts.quality import launcher_inputs
+    except ImportError as error:
+        return [*cases, {"case": "launcher_inputs_tool_exists", "passed": False, "error": str(error)}]
+    tracked = set(git(ROOT, "ls-files").splitlines())
+    committed = json.loads((ROOT / launcher_inputs.LIST).read_text(encoding="utf-8"))
+    config = ci_groups.load()
+    gaps = launcher_inputs.selection_gaps(config, committed["files"], tracked)
+    exact = overlay_problems(tracked, committed, LAUNCHER_EXACT_READ[1])
+    inventories = {name: overlay_problems(tracked, committed, line) for name, line in LAUNCHER_INVENTORY_READS.items()}
+    with tempfile.TemporaryDirectory(prefix="launcher_sample.") as folder:
+        sample = sample_cases(Path(folder))
+    return [
+        *cases,
+        {
+            "case": "launcher_list_equals_computed",
+            "passed": launcher_inputs.problems(ROOT, tracked, committed) == [],
+            "problems": launcher_inputs.problems(ROOT, tracked, committed)[:6],
+        },
+        {
+            "case": "launcher_list_names_an_exact_read_beside_an_ignored_folder",
+            "passed": any(line.startswith("config/quality/mypy_runtimes.json: the launcher suite needs it") for line in exact),
+            "problems": exact[:4],
+        },
+        *(
+            {
+                "case": f"launcher_list_names_an_inventory_by_{name}",
+                "passed": any(line.startswith(f"{LAUNCHER_E2E}: ") and "inventory sites" in line for line in found),
+                "problems": found[:4],
+            }
+            for name, found in inventories.items()
+        ),
+        {
+            "case": "launcher_list_is_selected_by_the_group",
+            "passed": not gaps and len(committed["files"]) > 0,
+            "not_selected": gaps[:6],
+            "files": len(committed["files"]),
+        },
+        *sample,
+    ]
 
 
 def module_source(module: str) -> str:
     return (ROOT / f"{module.replace('.', '/')}.py").read_text(encoding="utf-8")
-
-
-def fills_template(template: list[str | None], path: str, names: set[str]) -> bool:
-    """True when ``path`` is the f-string ``template`` (constant parts, ``None`` per placeholder) with each placeholder replaced by a string of ``names``."""
-
-    def from_part(index: int, position: int) -> bool:
-        if index == len(template):
-            return position == len(path)
-        part = template[index]
-        if part is not None:
-            return path.startswith(part, position) and from_part(index + 1, position + len(part))
-        return any(path[position:end] in names and from_part(index + 1, end) for end in range(position + 1, len(path) + 1))
-
-    return from_part(0, 0)
-
-
-def source_inputs(source: str, tracked: set[str]) -> dict[str, str]:
-    """Every tracked file that a string anywhere in ``source`` names, in module-level constants and inside functions alike, with the text that names it.
-    A string constant, or a ``/`` join of strings (``Path(..)``, names assigned a join anywhere in the module), names a file or the files in a folder when it
-    holds a slash; a join that is only created (the receiver of ``mkdir``, ``write_text``, ``write_bytes``, ``touch`` or ``unlink``) is not read. An f-string
-    names every tracked file it matches when each placeholder is replaced by a string constant of the module (``f"dbt/models/{folder}/{name}.sql"``).
-    Docstrings and one-component names are not read as paths. The source is read, not imported."""
-    tree = ast.parse(source)
-    in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
-    docstrings = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
-    strings = {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in in_fstring and id(node) not in docstrings
-    }
-    created = {
-        id(node.func.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"mkdir", "write_text", "write_bytes", "touch", "unlink"}
-    }
-    known = {"ROOT": "", "REPO_ROOT": ""}
-
-    def operand(node: ast.expr) -> str | None:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.Name):
-            return known.get(node.id)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Path" and len(node.args) == 1:
-            return operand(node.args[0])
-        return None
-
-    def joined(top: ast.BinOp) -> list[str]:
-        parts: list[str | None] = []
-        node: ast.expr = top
-        while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            parts.append(operand(node.right))
-            node = node.left
-        parts.append(operand(node))
-        runs: list[str] = []
-        run: list[str] = []
-        for part in [*reversed(parts), None]:
-            if part is None:
-                if len(run) > 1:
-                    runs.append("/".join(piece.strip("/") for piece in run if piece.strip("/")))
-                run = []
-            else:
-                run.append(part)
-        return runs
-
-    assigned = [
-        (node.targets[0].id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id not in known
-    ]
-    for _ in range(3):
-        for name, value in assigned:
-            if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Div):
-                if len(runs := joined(value)) == 1:
-                    known[name] = runs[0]
-            elif (text := operand(value)) is not None:
-                known[name] = text
-    inner = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
-    names = set(strings)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner and id(node) not in created:
-            names.update(joined(node))
-    templates: list[list[str | None]] = [
-        [part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else None for part in node.values]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.JoinedStr)
-    ]
-    found: dict[str, str] = {}
-    for path in sorted(tracked):
-        for text in sorted(names):
-            base = text.strip("/")
-            if "/" in base and (path == base or path.startswith(f"{base}/")):
-                found.setdefault(path, text)
-        for template in templates:
-            if None in template and any(template) and fills_template(template, path, strings):
-                found.setdefault(path, 'f"' + "{}".join(part or "" for part in template) + '"')
-    return found
 
 
 def reader_inputs(modules: tuple[str, ...], tracked: set[str]) -> dict[str, str]:
@@ -1045,6 +1241,13 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         ),
         selection_case(
             work,
+            "unclassified_path_runs_all_in_part_all",
+            ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "all"],
+            [*WITH_LAYERS, "launcher"],
+            "unclassified",
+        ),
+        selection_case(
+            work,
             "launcher_path",
             ["--scope", "paths", "--path", "orchestration/launcher.py", "--part", "all"],
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "launcher"],
@@ -1067,7 +1270,6 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             ["--scope", "paths", "--path", "config/quality/mypy_runtimes.json", "--part", "core+layers"],
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "configuration_checks"],
         ),
-        selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], PART_GROUPS["all"], "full scope"),
         selection_case(
             work,
@@ -1611,6 +1813,7 @@ def timeout_cases() -> list[dict[str, Any]]:
     off = {name: (recorded[name], timeouts.get(name)) for name in recorded if timeouts.get(name) != recorded[name][1]}
     ratio = {name: round(timeout / measured, 2) for name, (measured, timeout) in recorded.items() if not (1.5 * measured <= timeout <= max(2.6 * measured, 5))}
     return [
+        *worker_limit_cases(timeouts),
         {
             "case": "job_timeouts_match_the_measured_durations",
             "passed": set(recorded) == set(timeouts) and not off and not ratio and len(recorded) >= 10,
@@ -1618,6 +1821,40 @@ def timeout_cases() -> list[dict[str, Any]]:
             "not_in_the_workflow": sorted(set(recorded) - set(timeouts)),
             "different_timeout": off,
             "outside_the_ratio": ratio,
+        },
+    ]
+
+
+WORKER_KINDS = (
+    "lakehouse_gold_checks",
+    "lakehouse_gold_writer_setup",
+    "lakehouse_gold_model_metadata_e2e",
+    "lakehouse_features_sources",
+    "lakehouse_features_columns",
+    "combine_feature_sources",
+    "combine_feature_columns",
+    "hook_privacy",
+    "hook_documentation",
+    "hook_code",
+    "acquisition_shard",
+    "acquisition_combine",
+)
+
+
+def worker_limit_cases(timeouts: dict[str, int]) -> list[dict[str, Any]]:
+    """Each worker kind of the dispatcher has a deadline in ``worker_limits`` that equals the timeout of the hosted job that runs the same work."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    limits = config["worker_limits"]
+    groups = [group for group in config["groups"] if group not in ("launcher", "lakehouse_gold", "lakehouse_features")]
+    expected = {*groups, *WORKER_KINDS}
+    different = {kind: (entry["minutes"], timeouts.get(entry["job"])) for kind, entry in limits.items() if timeouts.get(entry["job"]) != entry["minutes"]}
+    return [
+        {
+            "case": "worker_limits_match_the_hosted_jobs",
+            "passed": set(limits) == expected and not different,
+            "missing_kind": sorted(expected - set(limits)),
+            "unknown_kind": sorted(set(limits) - expected),
+            "different_from_the_job_timeout": different,
         }
     ]
 
@@ -2450,7 +2687,8 @@ def staged_edit_case(work: Path, name: str, path: str, want_run: list[str], part
 
 def body_file_cases(work: Path) -> list[dict[str, Any]]:
     """An edit to a body file selects its own group (and the layers downstream of a lakehouse layer) and the repository group, which runs the guard, and no
-    other group. The pull request template is a document; the dispatcher, the workflow and the setup action select every group."""
+    other group in the core and layer parts (the launcher part selects every path, see ``launcher_selection_cases``). The dispatcher, the workflow and the
+    setup action select every group."""
     cases = [
         {
             "case": "every_body_file_has_an_expected_selection",
@@ -2462,7 +2700,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         part = "all" if group == "launcher" else "core+layers"
         cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
-    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group_in_part_all", ".github/pull_request_template.md", [], "all"))
+    cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
     cases.append(
         staged_edit_case(work, "dispatcher_edit_selects_every_group_in_part_all", "scripts/run_ci.sh", [*WITH_LAYERS, "launcher"], "all", "selects every group")
@@ -2486,11 +2724,6 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         )
         for path in (".github/workflows/ci.yml", ".github/actions/setup/action.yml")
     ]
-    cases.append(
-        selection_case(
-            work, "pull_request_template_path_selects_no_group", ["--scope", "paths", "--path", ".github/pull_request_template.md", "--part", "all"], []
-        )
-    )
     return cases
 
 
@@ -2611,7 +2844,7 @@ def guard_cases() -> list[dict[str, Any]]:
         config["global"].append("^scripts/ci/")
 
     def broad_launcher(config: dict[str, Any]) -> None:
-        config["groups"]["launcher"] = ["^scripts/" if pattern.startswith("^scripts/(?!") else pattern for pattern in config["groups"]["launcher"]]
+        config["groups"]["launcher"].append("^scripts/")
 
     def remove_sql_file(tree: Path) -> None:
         (tree / sql).unlink()
@@ -2920,6 +3153,8 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["repository_code_checks", "sql_style"],
+        # Every path selects the launcher while a followed module carries the inventory_reads pattern ".", so the dry run starts it too.
+        "launcher_selected_by_every_path": "TIMED launcher E2E" in log and local["groups"] == {"launcher", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }
     cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
@@ -4044,6 +4279,8 @@ EXPECTED_CONTROLS = (
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
+    "CI_WORKER_LIMIT_SECONDS",
+    "CI_WORKER_GRACE_SECONDS",
     "RANGE_START",
     "RANGE_END",
     "LAUNCHER_SHARD",

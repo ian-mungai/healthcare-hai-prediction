@@ -12,7 +12,12 @@ set -euo pipefail
 # every group: the pre-push run escalates to it when the selector or the CI scripts change; run it on demand or when hosted CI is unavailable), "staged"
 # (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
-# CI_LIST_ONLY=1 prints the plan and runs nothing. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
+# CI_LIST_ONLY=1 prints the plan and runs nothing. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
+# session and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
+# worker. A worker is overdue only when the whole seconds since its start exceed its limit, so it is never stopped before its limit. At the deadline the dispatcher stops every member
+# of the worker's session (scripts/process.py stop_sessions: TERM, then KILL after CI_WORKER_GRACE_SECONDS, default 5), which includes the groups that the worker's descendants
+# started through scripts/process.py, confirms that no member is left and fails the run with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker
+# session the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
 # runs in its own shell process (run_group) that loads only scripts/quality/timing.sh and that one file, so the shell state of a group (functions, variables, options,
@@ -50,15 +55,119 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 # to the job summary in a fixed order, also when a gate or a unit failed.
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
+# Each worker leads its own session: a short Python step (worker_session_step) calls setsid, resets SIGINT and SIGQUIT (a background job of a shell without job
+# control starts with them ignored), sets PROCESS_LAUNCH_SESSION=1 (a scripts/process.py launch inside the worker stays in its session) and starts a new bash. setsid cannot run
+# inside a bash subshell, so that bash reads the functions and the variables a worker uses from a private state file (write_worker_state). The step stays as the session's leader
+# and watchdog. When the bash ends, the step stops every other member of its session (TERM, KILL after the grace period) and confirms that none is left before it exits with
+# the bash's status (70, with a message, when a member survives or the session cannot be listed; its fallback never signals the leader's own group), so a descendant that the worker left has no unwatched moment. When its parent
+# (this script) has died, even by KILL, it does the same (its arguments: the repository and the grace seconds) within 0.2 s plus the grace period plus the 5 s confirmation.
+# The live workers are listed in worker_pids; each pid is also the worker's session id.
+worker_pids=()
+# The exit status of a run with a stop that is not confirmed (UNCONFIRMED_EXIT_STATUS of scripts/process.py). ci_unconfirmed is set when the stop helper fails, when a
+# worker's leader exits with this status (its session, or a launch inside it, is not confirmed stopped) and when a worker session still has members after its stop.
+unconfirmed_status=70
+ci_unconfirmed=0
+worker_state="$scratch/worker_state.sh"
+# shellcheck disable=SC2016
+worker_session_step='import os, signal, sys, time
+os.setsid()
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+os.environ["PROCESS_LAUNCH_SESSION"] = "1"
+os.environ.pop("BASH_ENV", None)
+os.environ.pop("ENV", None)
+dispatcher = os.getppid()
+worker = os.fork()
+if worker == 0:
+    os.execv(sys.argv[3], sys.argv[3:])
+status = None
+while os.getppid() == dispatcher:
+    done, raw = os.waitpid(worker, os.WNOHANG)
+    if done:
+        code = os.waitstatus_to_exitcode(raw)
+        status = 128 - code if code < 0 else code
+        break
+    time.sleep(0.2)
+for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(number, signal.SIG_IGN)
+sys.path.insert(0, sys.argv[1])
+from scripts.process import UNCONFIRMED_EXIT_STATUS, stop_sessions
+outcome = stop_sessions({os.getpid()}, float(sys.argv[2]), allow_own=True)
+if outcome:
+    sys.stderr.write("The worker session " + str(os.getpid()) + " is not confirmed stopped: " + outcome.describe() + "\n")
+sys.exit(UNCONFIRMED_EXIT_STATUS if outcome else (0 if status is None else status))'
+# The worker's bash: $1 state file, $2 item, $3 "stream" (a single item: its output also goes to the log through tee) or "buffer".
+# shellcheck disable=SC2016
+worker_body='set -euo pipefail
+source "$1"
+if [[ "$3" == stream ]]; then run_timed_item "$2" 2>&1 | tee "$scratch/$2.log"; else run_timed_item "$2" >"$scratch/$2.log" 2>&1; fi'
+worker_grace="${CI_WORKER_GRACE_SECONDS:-5}"
+worker_override="${CI_WORKER_LIMIT_SECONDS:-}"
+if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$worker_override" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'CI_WORKER_GRACE_SECONDS and CI_WORKER_LIMIT_SECONDS must be whole numbers above 0, not %s and %s\n' "$worker_grace" "${worker_override:-unset}" >&2
+  exit 2
+fi
+# stop_sessions <grace seconds> <session>...: stop every member of the worker sessions with scripts/process.py stop_sessions (TERM, KILL after the grace period, then a
+# confirmation of at most 5 s). Fails with status 70 (UNCONFIRMED_EXIT_STATUS of scripts/process.py) when a member survives KILL or when the sessions cannot be listed; the
+# leaders' groups are still stopped then. An alarm ends the step
+# after the grace period plus 25 s (the listing and the confirmation of both phases and of the fallback), so the exit trap cannot wait on it forever: the alarm raises an error
+# in the step, which unwinds through the listing (the stalled lister and the process that holds its pipes are killed), prints the failure and exits 70.
+# shellcheck disable=SC2016
+stop_sessions() {
+  "$python_bin" -I -c 'import signal, sys
+def expired(_number, _frame):
+    raise TimeoutError("the alarm of the stop ended it")
+signal.signal(signal.SIGALRM, expired)
+signal.alarm(int(float(sys.argv[2])) + 25)
+sys.path.insert(0, sys.argv[1])
+from scripts.process import UNCONFIRMED_EXIT_STATUS, stop_sessions
+try:
+    outcome = stop_sessions({int(session) for session in sys.argv[4:]}, float(sys.argv[2]), parent=int(sys.argv[3]))
+except TimeoutError as error:
+    sys.stderr.write("The stop of the worker sessions did not finish: " + str(error) + "\n")
+    sys.exit(UNCONFIRMED_EXIT_STATUS)
+if outcome:
+    sys.stderr.write("The stop of the worker sessions is not confirmed: " + outcome.describe() + "\n")
+sys.exit(UNCONFIRMED_EXIT_STATUS if outcome else 0)' "$repo_root" "$1" "$$" "${@:2}"
+}
+# forget_worker <pid>: take a worker that has ended out of the live list.
+forget_worker() {
+  local pid keep=()
+  for pid in ${worker_pids[@]+"${worker_pids[@]}"}; do
+    if [[ "$pid" != "$1" ]]; then keep+=("$pid"); fi
+  done
+  worker_pids=(${keep[@]+"${keep[@]}"})
+}
+# stop_workers: stop every member of every live worker session (the exit trap, so also after Ctrl-C and TERM). It waits 2 s after TERM, less than the 5 s that scripts/process.py
+# gives this script after its own TERM. The stop step is a new process in this script's session, which an outer session stop signals too, so TERM, INT and HUP are ignored first:
+# the step inherits that and finishes its KILL; an outer KILL still ends it.
+stop_workers() {
+  if ((${#worker_pids[@]} == 0)); then return 0; fi
+  trap '' TERM INT HUP
+  local pids=("${worker_pids[@]}")
+  worker_pids=()
+  if ! stop_sessions 2 "${pids[@]}"; then
+    printf 'Local CI could not stop every worker session: %s\n' "${pids[*]}" >&2
+    ci_unconfirmed=1
+    return 1
+  fi
+}
 finish() {
+  # A stop that is not confirmed fails the run, also when everything else passed.
+  stop_workers || ci_finished=0
   if [[ -s "$scratch/main.timing" ]]; then
     timing_table "${timing_files[@]}" >>"$summary"
   fi
   rm -rf "$scratch"
 }
 # Only a run that sets ci_finished=1 exits 0: bash 3.2 (macOS /bin/bash) reports status 0 to this trap when an unbound
-# variable ends the script, so the trap fails every other exit itself.
-trap 'finish; [[ "${ci_finished:-0}" == 1 ]] || exit 1' EXIT
+# variable ends the script, so the trap fails every other exit itself. A stop that is not confirmed keeps its own status (70) through every exit.
+end_unconfirmed() { if ((ci_unconfirmed)); then exit "$unconfirmed_status"; fi; }
+trap 'finish; end_unconfirmed; [[ "${ci_finished:-0}" == 1 ]] || exit 1' EXIT
+# Workers are in their own sessions, so a signal to this script's group does not reach them: these traps end the script, and the exit trap stops them.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 plan_args=(--scope "$scope" --part "$part" --format shell)
 if [[ "$scope" == "range" ]]; then
@@ -181,6 +290,11 @@ acquisition_combine() {
 
 feature_counts="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json"))["feature_shards"]; print(c["sources"], c["columns"])')"
 read -r feature_sources_shards feature_columns_shards <<<"$feature_counts"
+# worker_limit_seconds_<kind>: the deadline in seconds of each kind of worker (worker_limits in config/quality/ci_groups.json, in minutes).
+worker_limits="$("$python_bin" -c 'import json; [print(kind, round(60 * entry["minutes"])) for kind, entry in json.load(open("config/quality/ci_groups.json"))["worker_limits"].items()]')"
+while read -r kind seconds; do
+  printf -v "worker_limit_seconds_$kind" '%s' "$seconds"
+done <<<"$worker_limits"
 feature_shard="${FEATURE_SHARD:-}"
 if [[ -n "$feature_shard" ]]; then
   if [[ "$part" != "feature_sources" && "$part" != "feature_columns" ]]; then
@@ -268,26 +382,94 @@ run_timed_item() {
 }
 
 failed=()
-# run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration.
-run_items() {
-  local item index pids=() items=("$@")
-  if ((${#items[@]} == 1)); then
-    item="${items[0]}"
-    printf '\n== %s ==\n' "$item"
-    run_timed_item "$item" 2>&1 | tee "$scratch/$item.log" &
-    pids+=("$!")
-    timing_files+=("$scratch/$item.timing")
-  else
-    for item in "$@"; do
-      run_timed_item "$item" >"$scratch/$item.log" 2>&1 &
-      pids+=("$!")
-      timing_files+=("$scratch/$item.timing")
-    done
+# set_worker_limit <item>: set worker_limit to the deadline in seconds of the item. A kind without a limit stops the run before anything of it starts.
+set_worker_limit() {
+  local kind="${1%_[0-9]*}" variable
+  variable="worker_limit_seconds_$kind"
+  if [[ -z "${!variable:-}" ]]; then
+    printf 'The worker %s has no limit: add "%s" to worker_limits in config/quality/ci_groups.json.\n' "$1" "$kind" >&2
+    exit 1
   fi
-  for index in ${pids[@]+"${!pids[@]}"}; do
-    if ! wait "${pids[$index]}"; then
-      failed+=("${items[$index]}")
-    fi
+  worker_limit="${worker_override:-${!variable}}"
+}
+# worker_group <item>: the check group of an item, or the item itself when it is not a group's.
+worker_group() {
+  local variable="item_group_$1"
+  printf '%s' "${!variable:-$1}"
+}
+# worker_overdue <started seconds> <limit seconds>: true when a worker has run past its limit. SECONDS counts whole wall-clock seconds, so the start and the check are each
+# truncated: the difference exceeds the limit only when the worker's real age is above it (at most about 1.5 s late with the poll), while ">=" would stop it up to 1 s early.
+worker_overdue() { ((SECONDS - $1 > $2)); }
+# write_worker_state: write the functions of this script and the variables that workers read to the private state file (mode 600 in the private scratch folder).
+write_worker_state() {
+  local name
+  (
+    umask 077
+    {
+      declare -f
+      declare -p python_bin repo_root scratch quality_output e2e_output acquisition_dir acquisition_shards feature_sources_shards feature_columns_shards
+      for name in $(compgen -v item_); do declare -p "$name"; done
+    } >"$worker_state"
+  )
+}
+# run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration. Each item is a worker in its own session with a deadline.
+run_items() {
+  local item index pid status pids=() starts=() limits=() items=("$@") worker_limit pending mode=buffer stop_unconfirmed=0
+  if ((${#items[@]} == 1)); then mode=stream; fi
+  write_worker_state
+  for item in "$@"; do
+    set_worker_limit "$item"
+    limits+=("$worker_limit")
+    starts+=("$SECONDS")
+    if [[ "$mode" == stream ]]; then printf '\n== %s ==\n' "$item"; fi
+    "$python_bin" -I -c "$worker_session_step" "$repo_root" "$worker_grace" "$BASH" --noprofile --norc -c "$worker_body" ci_worker "$worker_state" "$item" "$mode" </dev/null &
+    pids+=("$!")
+    worker_pids+=("$!")
+    timing_files+=("$scratch/$item.timing")
+  done
+  pending=${#pids[@]}
+  while ((pending > 0)); do
+    for index in ${pids[@]+"${!pids[@]}"}; do
+      pid="${pids[$index]}"
+      if [[ -z "$pid" ]]; then continue; fi
+      if ! kill -0 "$pid" 2>/dev/null; then
+        status=0
+        wait "$pid" || status=$?
+        # A worker that ended can leave members in its session (a background process): its leader stopped them before it exited, and this confirms it again before
+        # the worker is forgotten. A stop that is not confirmed keeps the worker in the live list, so the exit trap tries again.
+        if ! stop_sessions "$worker_grace" "$pid"; then
+          printf 'The ended worker %s left members in its session %s that survived KILL, or the session could not be listed.\n' "${items[$index]}" "$pid" >&2
+          status=$unconfirmed_status
+          stop_unconfirmed=1
+        fi
+        # A worker whose leader (or a launch inside the worker) reports an unconfirmed stop exits with this status.
+        if ((status == unconfirmed_status)); then ci_unconfirmed=1; fi
+        if ((status != 0)); then
+          failed+=("${items[$index]}")
+        fi
+      elif worker_overdue "${starts[$index]}" "${limits[$index]}"; then
+        printf 'Local CI worker %s (check group %s) ran past its deadline of %s s: stopping its session %s.\n' \
+          "${items[$index]}" "$(worker_group "${items[$index]}")" "${limits[$index]}" "$pid" >&2
+        if stop_sessions "$worker_grace" "$pid"; then
+          printf 'Stopped: no process of the session %s is left.\n' "$pid" >&2
+          wait "$pid" 2>/dev/null || true
+          failed+=("${items[$index]} (deadline ${limits[$index]} s)")
+        else
+          # No wait for a worker whose session may still be alive: the wait has no bound.
+          printf 'The session %s still has members after KILL, or it could not be listed.\n' "$pid" >&2
+          failed+=("${items[$index]} (deadline ${limits[$index]} s, stop not confirmed)")
+          stop_unconfirmed=1
+          ci_unconfirmed=1
+        fi
+      else
+        continue
+      fi
+      if ((stop_unconfirmed == 0)); then forget_worker "$pid"; fi
+      stop_unconfirmed=0
+      pids[index]=""
+      pending=$((pending - 1))
+    done
+    if ((pending > 0)); then sleep 0.5; fi
   done
   for item in "$@"; do
     if ((${#items[@]} != 1)); then
@@ -297,6 +479,17 @@ run_items() {
     record "$item" "$(cat "$scratch/$item.seconds" 2>/dev/null || printf 'failed')"
   done
 }
+# A kind of worker without a limit stops the run before the first worker starts.
+for item in ${alone[@]+"${alone[@]}"} ${shared[@]+"${shared[@]}"}; do
+  set_worker_limit "$item"
+done
+if is_selected lakehouse_features; then
+  set_worker_limit combine_feature_sources
+  set_worker_limit combine_feature_columns
+fi
+if [[ "$part" == "all" ]] && is_selected acquisition; then
+  set_worker_limit acquisition_combine
+fi
 if ((${#alone[@]})); then
   run_items "${alone[@]}"
 fi

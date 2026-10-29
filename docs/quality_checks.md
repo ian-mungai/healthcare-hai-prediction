@@ -515,7 +515,7 @@ One commit per reviewed change stays the rule.
   It runs no check and cannot gate a push that pre-commit does not dispatch, so the Git config hook is the gate.
   `git push --no-verify` skips both. The gate and every step start without the variables that change what
   `scripts/run_ci.sh` or pre-commit runs (`EXECUTION_CONTROLS` in `scripts/quality/pre_push.py`: `CI_SCOPE`,
-  `CI_PART`, `CI_UNITS`, `CI_LIST_ONLY`, `RANGE_START`, `RANGE_END`, `LAUNCHER_SHARD`, `FEATURE_SHARD`, the
+  `CI_PART`, `CI_UNITS`, `CI_LIST_ONLY`, `CI_WORKER_LIMIT_SECONDS`, `CI_WORKER_GRACE_SECONDS`, `RANGE_START`, `RANGE_END`, `LAUNCHER_SHARD`, `FEATURE_SHARD`, the
   `ACQUISITION_*` selectors, `GITHUB_ACTIONS`, the `PRE_COMMIT_*` reference variables, `SKIP`,
   `PRE_COMMIT_ALLOW_NO_CONFIG`, `PRE_COMMIT_RUNNING_LEGACY` and `_PRE_COMMIT_SKIP_POST_CHECKOUT`) and without the Git
   repository variables of the caller. A case scans the installed pre-commit source and fails on a new variable that
@@ -604,9 +604,10 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   needed for that and is not part of this change.
 - A body file is listed in its own group's path list and in no other list. An edit to it selects that group, the lakehouse layers downstream of it (a bronze file
   selects all four layers, a silver file selects silver, gold and features and a gold file selects gold and features) and `repository_code_checks`, which matches every `.sh` file and runs the guard. It selects no
-  other group. The launcher list leaves the folder out of its `scripts/` pattern for this reason.
+  other group in the core and layer parts. The launcher list holds no other file of this folder (the computed list below never names them), but the launcher
+  part selects every path while the always-select modules below are unreviewed, so it also runs for an edit to a body file.
 - The dispatcher, the timing wrapper, the selector, `config/quality/ci_groups.json`, `.github/workflows/`, `.github/actions/`, `.pre-commit-config.yaml`, the
-  requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group.
+  requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group of the core and layer parts. The launcher part still selects them (see "Launcher selection").
 - The guard `scripts/quality/ci_group_files.py` runs in `repository_code_checks`. It fails with the file and the group named when a group has no body file or
   a body file belongs to no group, when a file lacks its entry function, when the dispatcher text declares a function of a group (continued lines, quotes,
   backslashes and `$'...'` escapes in names are removed first), when a body file is missing from its group's list or another list also matches it. It also requires every configured group to have a hosted job that runs its part through `scripts/run_ci.sh`. A missing feature matrix entry names the workflow and the uncovered feature group. Bash lists the
@@ -624,6 +625,52 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   command. These dry runs prove that a missing body file stops a run, that the full local plan names the same groups, gold units and acquisition shards as the
   GitHub jobs and that each of 15 hostile group files leaves the shell state of the other groups and of the dispatcher unchanged. Before the move the plans (`CI_LIST_ONLY=1`) and command lists of every part
   and scope were captured and compared with the result.
+
+## Launcher selection
+
+The `launcher` group (the launcher E2E suite, `scripts/lakehouse/run_launcher_e2e.py`, about 14 minutes) runs only when a change can affect what that suite
+runs. It no longer matches `^orchestration/`, `^scripts/`, `^config/`, `^services/`, `^data_contracts/` and `^dbt/` as a whole. The list is computed and
+checked. Until the always-select modules below are reviewed one at a time, every path still selects the group (the narrowing applies once they are narrowed):
+
+- `config/quality/launcher_inputs.json` holds the hand-written `entry_points`, `extra_inputs`, `ignored_reads` and `inventory_reads` and the computed `files`,
+  `folders`, `dynamic_sites` and `inventory_sites`. Each `ignored_reads` entry names a module and a text, the reason the suite does not read it and the
+  stripped source `lines` of the occurrences it covers. `--check` fails when those occurrences change. `--write` never updates them. An ignore removes
+  only its own text: a file that another text of the module names stays listed. Each `inventory_reads` entry names a module that lists files instead of
+  naming them (a `git ls-files` call, a `glob`, `iglob`, `rglob`, `iterdir`, `walk`, `scandir` or `listdir` call over any folder or a `find` or `ls` program),
+  the path `pattern` of the files it reads (or none, with the reason) and why. `docker_calls.check`, which the suite runs, parses every Python file, so `\.py$`
+  selects the group for any Python file, present or future. The pattern `.` selects the group for every path (see "Always-select modules").
+- `scripts/quality/launcher_inputs.py` computes the list from the entry point: every module a Python file imports (also inside functions and in code held in
+  strings), every module a string, an f-string or a shell, YAML or template file names, every tracked file a string, a `/` join (also one that starts at
+  `ROOT`) or an f-string names (`scripts/quality/source_reads.py`, moved from the E2E runner) and the same for each file found. A folder that a module names is
+  read whole: its files are listed, a new file in it selects the group (prefix in `folders`) and its own imports are not followed. A call that imports by a
+  computed name cannot be followed; the number of such calls per file is in `dynamic_sites`. Run `--check` (default), `--write`, `--explain PATH` or
+  `--trace FILE`.
+- `scripts/quality/ci_groups.py` adds each `inventory_reads` pattern, one exact-path pattern per listed file and one prefix per folder to the group. The hand-written patterns are the group
+  body, the tool and the list. `global` paths and the unclassified-path rule still select every group: the pattern `.` is kept out of the group lists (`launcher_always` in the loaded configuration), so it selects the launcher for every changed path and never makes an unlisted path look classified.
+- A change to a module the suite imports or a file it reads selects the group. So does a change to any Python file. While the always-select modules below
+  carry the pattern `.`, a change to any path also selects it, also an unrelated one (`infra/main.tf`, `config/quality/mypy_runtimes.json`, a document or the pull request template:
+  the `launcher_always_selected_by_*` cases). A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
+  `--write` is run and the diff is reviewed. The same E2E fails when a listed file is not selected by the group, when a pattern matches no tracked file and
+  for planted defects in a small sample repository (stale entry, missing module, package, read file, module named in a text file, folder file or folder, a
+  new dynamic import, a changed entry point, a missed file in a trace, an undeclared or stale inventory read, a new occurrence of an ignored text and an exact
+  read beside an ignored folder). It also adds an exact read of `config/quality/mypy_runtimes.json` to the suite's `docker_calls_check` case for its own
+  process only and requires the list check to name that file. It also adds a wrapped `rglob`, an `os.walk(top=ROOT)` and a `find` run by path to the same case and
+  requires the list check to name the suite's changed inventory count. A sample module that calls a bare `listdir` is named as an undeclared inventory.
+- **Always-select modules.** The inventory scan counts every enumeration call and listing command whatever its receiver: it cannot prove which folder a call
+  lists or whether the result depends on file contents, so a counted site is an inventory of the whole repository. Owner decision 1 (project decision 15):
+  every module the scan flags carries an `inventory_reads` entry with the pattern `.` and the reason "not reviewed", so any change selects the group, as it did
+  before this selection existed (the suite itself has 21 sites). The entries are 34 modules with 87 sites:
+  `orchestration/` `launcher` and `lineage`; `scripts/acquisition/` `batch`, `bls_api_contract`, `history_routes`, `redownload_controls`, `reuse_capture` and
+  `s3_store`; `scripts/infrastructure/sts_stand_in`; `scripts/orchestration/` `in_image_checks`, `ledger` and `run_control`; and 22 modules of
+  `scripts/lakehouse/` (`catalog_journal`, `dbt_package_archive`, `geography_file_periods`, `gold_checks`, `gold_publish`, `ownership_release_periods`,
+  `package_fixture`, `pipeline_build`, `pos_file_periods`, `provenance`, `run_bronze_e2e`, `run_gold_e2e`, `run_gold_publish_cases`, `run_launcher_e2e`,
+  `run_launcher_real_fixture`, `run_lock_e2e`, `run_pins_e2e`, `run_silver_e2e`, `run_staging_e2e`, `silver`, `silver_input` and `silver_quality`). With
+  `docker_calls` (`\.py$`, 1 site) the list holds 35 modules and 88 sites. Narrow one module at a time: review its sites, replace `.` with a hand-written
+  pattern (or `null` with the reason that the result does not depend on file contents) in a reviewed change and run `--write`. Do not narrow several at once.
+- **Accepted limit (not built).** The inventory scan counts enumeration calls by name and shape. It misses an aliased import (`from os import listdir as entries; entries(".")`), a saved function (`lister = os.listdir`) and a shell inventory started through `os.popen("git ls-files")`. A followed module that lists files in one of these ways has no `inventory_reads` entry. Likelihood: low (no module uses these forms; the `.` entries select the group for every path today). Cost to close: 1 to 2 hours. Closing it means counting aliased and saved references and literal shell inventories, with the three forms as cases.
+- Not provable by a static scan: a path built at run time from a variable, an environment variable or a glob over `ROOT`. Control: run the suite once under
+  file-open tracing and check the trace with `--trace` (commands in the report of the change). Until that run is recorded, `extra_inputs` and every folder
+  read whole stay in the list.
 
 ## Lakehouse layers
 
@@ -659,6 +706,32 @@ completely belongs in `always` in `config/quality/ci_groups.json`.
 command adds a row to a file of its own unit and when the run ends the rows of the gates, the launcher E2E and every unit are listed in the job
 summary as a table of command, start, end, seconds and exit code. When a work batch contains one item, including a hosted lakehouse job or feature shard, its output streams to the job log while the item runs. The same output is retained in the per-item log and its duration remains in the summary. Batches with several parallel items retain separate logs and print them in order after every item finishes, so their output does not interleave. Feature-source and feature-column shards also print and flush a timing line when each case starts and ends. The times in each line are those of the case or command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
 `set -e`. `scripts/quality/run_ci_groups_e2e.py` checks the wrapper, the failing and the interrupted command and the rows of parallel units.
+
+### Worker deadlines
+
+`scripts/run_ci.sh` runs each work item as a worker: a check group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step. Every worker starts in its own
+session and has a deadline. The deadline is the timeout of the hosted job that runs the same work, from `worker_limits` in `config/quality/ci_groups.json` (the kind of the item
+without a trailing shard number, in minutes). `run_ci_groups_e2e` keeps each value equal to the timeout of its job in `.github/workflows/ci.yml` and requires a limit for every kind. A kind
+without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. Bash counts whole
+seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. A bash subshell
+cannot call `setsid`, so a short Python step starts each worker: it calls `setsid`, resets SIGINT and SIGQUIT, sets `PROCESS_LAUNCH_SESSION=1` and starts a new bash. The step stays as
+the session's leader and watchdog. When the bash ends, the step first stops every other member of its session (TERM, KILL after the grace period) and confirms that none is left, then it
+ends with the bash's status (70, with a message, when a member survives or the session cannot be listed). So a descendant that the worker left has no unwatched moment. When the dispatcher has died, even by KILL,
+it does the same within 0.2 seconds plus the grace period plus the 5 second confirmation. That bash reads the
+dispatcher's functions and the variables that workers use from a private state file (mode 600 in the scratch folder). A program that the worker starts through `scripts/process.py` stays in
+the worker's session (see Process launcher deadline). At a deadline the dispatcher stops every member of the worker's session with `stop_sessions` of `scripts/process.py`: TERM, KILL after
+`CI_WORKER_GRACE_SECONDS` (5 by default), then a confirmation that no member is left. If the session cannot be listed, the worker's group still stops and the stop is reported as failed (the worker's own leader never signals its own group in that fallback: it reports and exits 70). It
+prints the worker, its check group and the limit, fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. When the stop is not confirmed the entry reads `(deadline <seconds> s, stop not confirmed)`, the dispatcher does not wait for that worker (the wait has no bound) and keeps it in the live list, so the exit trap tries again. The other workers keep their
+result. When a worker ends, the dispatcher stops what is left of its session (a background process) and confirms that no member is left before it forgets the
+worker. A member that survives KILL fails the run with the worker's name. An exit, Ctrl-C, TERM or HUP of the dispatcher stops every live worker session the same way (2 seconds after TERM). The exit trap ignores TERM, INT and HUP while it does so, because
+its stop step is a new process in the dispatcher's session that an outer stop would also signal. An alarm ends that step after its grace period plus 25 seconds: it raises an error in the step, which unwinds through the listing (the stalled `ps` lister and the process that holds its pipes are killed), prints the failure and exits 70. A stop that is not confirmed fails the run even when everything else passed, with exit status 70 (`UNCONFIRMED_EXIT_STATUS` of `scripts/process.py`): the stop helper, the worker's leader and the exit trap keep it, the dispatcher sets a flag when the helper fails, when a worker exits 70 or when a worker session still has members. The exit trap then exits 70, also after `Local CI failed in`. Worker sessions
+are not members of the dispatcher's session: the deadline of `scripts/quality/pre_push.py` reaches the workers through that exit trap. When the dispatcher is killed before its trap
+runs, each worker's watchdog stops its session. A process that starts its own session without the
+launcher is outside the worker's session. The two limits that earlier rounds accepted are closed (fix round 6): the leader outlives its program until the rest of its session is stopped and confirmed. The alarm unwinds through the lister cleanup. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
+worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher (once after removing the old registry, the review reproduction)
+and workers that start late in a wall-clock second (one ends 0.25 seconds before its limit and must pass; one never ends and must get TERM only after its limit). It also checks that a worker's leader stops a descendant while the dispatcher is paused, that an alarm of the stop step leaves no stalled lister or pipe holder (the sandbox copy shortens the alarm to 2 seconds) and that a deadline stop that cannot be confirmed is named with exit status 70. Fix round 7 cases: the exact stop helper and the real worker step, run on a session that cannot be listed, exit 70 with a message (the leader is not killed by its own fallback). It plants a dispatcher
+without a deadline, one that stops the direct process only, one with the old whole-second comparison, one that stops the worker's process group only, one whose leader exits at once, one whose alarm has no handler, one that writes an unconfirmed stop like a confirmed one and three that end with status 1 (the helper, the leader, the exit trap). A plant counts as caught only when
+the intended check of its case fails.
 
 ## Measured durations
 
@@ -765,6 +838,57 @@ error of the API, runs every job. A push to `main` without a pull request runs i
 compared. When the run is reused, the jobs of the workflow are skipped; "Quick Gates of a Reused Result" runs the commit-message and removed-names checks of the pushed range and
 `CI_PART=gates` (the privacy, secret, credential, data-file, writing, Markdown, documentation and source gates). The plan job's summary names the pull request, the head commit, the
 tree, the reused run and the conclusion of each required job. `.venv/bin/python -m scripts.quality.run_ci_reuse_e2e` checks the reuse and every case that must run in full.
+
+## Process launcher deadline
+
+`scripts/process.py` `run_command` starts each program in a new session (`setsid`), which the program leads, so a stop never signals the caller. Every member of that session stops
+at the deadline and when the caller is interrupted while it waits (Ctrl-C): TERM first, then KILL after `STOP_GRACE_SECONDS` (5 s), then a check that no member is left (up to
+`CONFIRM_SECONDS`, 5 s). A caller whose own deadline must hold within a shorter bound passes `grace_seconds` (the reference-document download passes at most a quarter of its limit). A
+program that ends in time gives the same result as before. A deadline raises `TimeoutExpired` with the output so far. If a member survives KILL or the session cannot be listed, the call
+raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the session, so no timeout ends silently with a live process. SIGINT is held while the program starts
+and while it is stopped. It is raised once the stop is confirmed, so a second Ctrl-C cannot cut the stop short.
+
+Every stop returns a `StopOutcome` (truthy when the stop is not confirmed; `survivors` and `reason` name what is left). The outcome is recorded on every path of `run_command`. A deadline raises
+`ProcessGroupSurvived`. A cancellation, an interrupt, an alarm or any other exception raises `LaunchesNotStopped` chained from it, instead of the plain exception. A stop that itself raises anything, `SystemExit` of an alarm handler included, counts as unconfirmed: the call records it, sends a last KILL to the leader's group and raises the named failure chained from that exception. Each
+unconfirmed stop is also kept in memory in the process and printed to standard error when it happens, so a caller that catches `TimeoutExpired` and carries on (for example the key reader, the
+storage client and the download child) cannot lose it: the interpreter then exits with status 70 (`UNCONFIRMED_EXIT_STATUS`), unless the caller took the record with `take_unconfirmed()` to report it itself.
+The lister of the session listing is killed and reaped on every way out of the listing, also on an alarm or an interrupt.
+
+A top-level launch also finalizes its session when the program ends normally, with any exit status: a member the program left (a child of a command that exits at its own deadline, the shape of a
+credential process) is stopped. One that survives KILL is recorded and raised as `LaunchesNotStopped` with the survivors, never a success. The leader has been reaped then, so its pid is only
+the session id. The usual case is an empty session: one listing, no signal (about 20 ms more per launch). A nested launch is not finalized: its members belong to the outer session, which is finalized when the outer command
+ends. Limits that stay: a member that starts its own session (`setsid`) and an external KILL of the launcher, which gives its cleanup no chance.
+
+Python delivers SIGINT to the main thread only. A program in its own session never receives the terminal's Ctrl-C. A caller that runs jobs in threads (the push gate's steps in
+`scripts/quality/pre_push.py`, the historical acquisition scripts `continue_history.py` and `history_routes.py`, the parallel cases of `run_model_metadata_e2e.py`) uses
+`LaunchPool` from `scripts/process.py` instead of `ThreadPoolExecutor`. Inside its `with` block the first SIGINT sets the pool's cancellation and raises `KeyboardInterrupt`; more are held
+until the pool is left. A job's `run_command` waits in 0.1 s slices, so it sees the cancellation, stops its own session as above and raises `LaunchCancelled`. A queued job starts nothing.
+Leaving the block drops the queued jobs and waits for every running job (up to `CANCEL_WAIT_SECONDS`, 37 s with the defaults), then forwards the interrupt. If a stop is not confirmed or a
+job does not end in that time, the block raises `LaunchesNotStopped` chained from the interrupt. A job's end is no cleanup: the block also raises it, with or without an interrupt, when any job's stop
+(a deadline included) was not confirmed. Queued jobs that the interrupt cancelled are not waited for. The push gate turns that failure into a failing `stop_confirmation` row and names an unconfirmed deadline stop in the step's own row. The pool keeps its cancellation and its futures in memory only (no registry). Limits: a
+thread outside a `LaunchPool` is unchanged; a pool created outside the main thread installs no handler; SIGTERM is not handled (the default action ends the caller; a caller inside a launch
+session is covered by the outer stop); a job that does no `run_command` call and runs long delays the interrupt up to that bound.
+
+The stop lists every live process with `ps -A -o pid=,ppid=,stat=` (macOS `pgrep` has no session option and its `ps` shows the session as 0) and signals those whose `os.getsid` is the
+session. It lists again on every 50 ms poll, so a member that starts during the stop is signalled too. Zombies are not counted. The leader is reaped only after the stop, so its pid, which is
+the session id, cannot be reused while the stop runs. A pid that ends and is reused in the moment between its listing and its signal is the remaining race. Each member's session is read again just before its signal, so a member that left the session after the listing is
+skipped. The listing fails when `ps` is missing,
+cannot start, fails, times out (5 s: its own process group then gets KILL and its reap waits at most 1 s, so a child that holds its pipes cannot block
+it) or prints a line that is not a process. It also fails when a session cannot be read. Then the stop still sends TERM and KILL to the leader's group (its id is the
+session id) and the call fails as a survivor. The failure is written to standard error and recorded before the first signal. The fallback never signals the caller's own group (the
+CI worker's leader, which stops its own session): the outcome says that the own group was not signalled. The stop refuses the caller's own session unless `allow_own` is set.
+
+The launcher names its session to the program with `PROCESS_LAUNCH_SESSION=1`. A descendant that calls `run_command` itself (for example `scripts/quality/ci_hooks.py` under the
+dispatcher) is a nested launch: it stays in that session, starts its program in a new process group and stops only that group at its own, earlier deadline. The outer stop reaches every
+nested group at any depth as a session member. It also reaches a descendant that moved to another group. A nested deadline does not reach the groups that its own nested launches started. The
+outer session stop does. A member that starts its own session (`setsid`) without the launcher is outside the session and is not stopped. A program in a new session has no controlling
+terminal, so an open of `/dev/tty` fails at once. The API key reader starts its own session only when run by hand, because a group leader cannot call `setsid`.
+`.venv/bin/python -m scripts.quality.run_process_e2e` (in `repository_code_checks`) starts a child that starts a grandchild (once with TERM ignored and once without) and nested
+launchers one and two levels deep. It checks by process ID that none is left, that a nested launch stays in the outer session and keeps its own deadline, that a descendant in a new group
+stops, that a descendant cannot hide by changing the old registry (the review reproductions), that an unrelated command is never signalled and that a failed listing fails visibly. It also
+runs the review's threaded reproduction through the real `pre_push.run_steps` in a child interpreter: two steps and a serial pair run programs (one ignores TERM), SIGINT is sent twice.
+Every program must be gone before the interrupt reaches the caller and the queued step must never start; an unconfirmed stop must raise `LaunchesNotStopped`. Fix round 6 cases: an unconfirmed deadline stop that overlaps an interrupt in the real `pre_push.run_steps` ends as `LaunchesNotStopped`; two futures on one worker leave no false wait; an unconfirmed stop after an interrupt without a pool is named; a stop that raises, a caller that swallows the timeout (exit status 70) and a pool step with an unconfirmed deadline stop are reported; an alarm during the listing leaves no lister. Fix round 7 cases: an alarm whose handler raises `SystemExit` during the stop ends as the named failure chained from it; a session leader whose session cannot be listed reports instead of dying; a normal end (also in the credential-process shape, status 2) leaves no member; a finalization that cannot be confirmed is named. It plants four defects (stop the direct child only, send TERM without KILL, skip the confirmation, stop the leader's group only). Each plant takes the real arguments of `stop_launch` and
+counts as caught only when the intended check of its case fails. Three more plants break the pool (no cancellation flag, no session stop, no wait for the jobs) and six break the outcome mechanism (the pool ignores unconfirmed stops, no record, cancelled futures counted, the lister not unwound, the interrupt path drops the outcome) and four break fix round 7 (a stop that catches only `Exception`, a fallback that signals the caller's own group, no finalization of a normal end, no report of an unconfirmed finalization).
 
 ## Practice
 

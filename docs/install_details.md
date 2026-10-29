@@ -14,7 +14,13 @@ use minus 8 GiB headroom and the Mac's free, file-backed and purgeable memory mi
 2 GiB, plus the memory Docker's VM already holds that no running container uses, less a
 2 GiB VM base, so a build that follows another can reuse it. The Mac cap is skipped once
 Docker's VM holds its full allocation.
-A container budget below 4 GiB stops the launch. DuckDB receives 80% of the container
+That figure is the free memory. An allocation takes 75% of it (`ALLOCATION_SHARE_PERCENT` in `memory_budget.py`), so a process that grows
+before the containers start still has room; the plan record shows both figures. A container budget below 4 GiB, after the 75% cap, stops the
+launch. The wait for memory used elsewhere starts at the first reading that shows too little and is stored in the attempt record, so a
+launcher restart keeps it. Once 600 seconds (`MEMORY_WAIT_DEADLINE`) have passed, the next launcher tick or reading ends the queued launch
+as a failed create whose message names memory, the free figure and the need of the last short reading. A pending or failed reading, a
+degraded launcher and a good reading that arrives after the deadline do not extend the wait; only a good reading before the deadline clears
+it. A start cutoff that comes first still ends the launch. DuckDB receives 80% of the container
 budget, rounded down to whole GB, to leave room for allocations outside its buffer
 limit. The 4 GiB floor applies to the container, so the engine allowance is smaller.
 This reserve does not guarantee that a workload cannot run out of memory.

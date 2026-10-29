@@ -58,20 +58,25 @@ def main() -> int:
     out = ROOT / "data/e2e/resource_limits" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     out.mkdir(parents=True)
     cases: dict[str, tuple[dict[str, Any], dict[str, str]]] = {
-        "docker_cap": ({}, {"JOB_MEMORY_LIMIT": str(21 * GIB), "DUCKDB_MEMORY_LIMIT": "18GB", "SPARK_JOB_MEMORY": "19g", "JOB_THREADS": "16"}),
+        # Each allocation is 75% of the free figure: Docker free 32 - 3 - 8 = 21 GiB gives 15.75 GiB.
+        "docker_cap": ({}, {"JOB_MEMORY_LIMIT": str(21 * GIB * 75 // 100), "DUCKDB_MEMORY_LIMIT": "13GB", "SPARK_JOB_MEMORY": "14g", "JOB_THREADS": "16"}),
         "mac_cap": (
             {"mac_gib": 10, "docker_cpus": 8},
-            {"JOB_MEMORY_LIMIT": str(8 * GIB), "DUCKDB_MEMORY_LIMIT": "6GB", "SPARK_JOB_MEMORY": "7g", "JOB_THREADS": "8"},
+            {"JOB_MEMORY_LIMIT": str(6 * GIB), "DUCKDB_MEMORY_LIMIT": "5GB", "SPARK_JOB_MEMORY": "5g", "JOB_THREADS": "8"},
         ),
         "vm_at_cap": (
             {"mac_gib": 3, "vm_gib": 32, "host_cpus": "6"},
-            {"JOB_MEMORY_LIMIT": str(21 * GIB), "DUCKDB_MEMORY_LIMIT": "18GB", "SPARK_JOB_MEMORY": "19g", "JOB_THREADS": "6"},
+            {"JOB_MEMORY_LIMIT": str(21 * GIB * 75 // 100), "DUCKDB_MEMORY_LIMIT": "13GB", "SPARK_JOB_MEMORY": "14g", "JOB_THREADS": "6"},
         ),
-        "container_floor": ({"mac_gib": 6}, {"JOB_MEMORY_LIMIT": str(4 * GIB), "DUCKDB_MEMORY_LIMIT": "3GB", "SPARK_JOB_MEMORY": "3g", "JOB_THREADS": "16"}),
-        # [543] Memory the VM already holds and no container uses is reusable: 6 + (14 - 1 - 2) - 2 = 15 GiB.
+        # Mac free 8 - 2 = 6 GiB gives 4.5 GiB, above the 4 GiB container floor.
+        "container_floor": (
+            {"mac_gib": 8},
+            {"JOB_MEMORY_LIMIT": str(9 * GIB // 2), "DUCKDB_MEMORY_LIMIT": "3GB", "SPARK_JOB_MEMORY": "4g", "JOB_THREADS": "16"},
+        ),
+        # [543] Memory the VM already holds and no container uses is reusable: 6 + (14 - 1 - 2) - 2 = 15 GiB free, 11.25 GiB allocated.
         "vm_holds_memory": (
             {"mac_gib": 6, "vm_gib": 14, "usage": 1 * GIB},
-            {"JOB_MEMORY_LIMIT": str(15 * GIB), "DUCKDB_MEMORY_LIMIT": "12GB", "SPARK_JOB_MEMORY": "13g", "JOB_THREADS": "16"},
+            {"JOB_MEMORY_LIMIT": str(45 * GIB // 4), "DUCKDB_MEMORY_LIMIT": "9GB", "SPARK_JOB_MEMORY": "10g", "JOB_THREADS": "16"},
         ),
     }
     results: dict[str, bool] = {}
@@ -82,6 +87,8 @@ def main() -> int:
         results[name + "_repeat"] = observed["exit"] == 0 and observed["repeat_equal"]
     failures: dict[str, tuple[dict[str, Any], str]] = {
         "below_floor": ({"mac_gib": 5}, "free for DuckDB or Spark"),
+        # Free 6 - 2 = 4 GiB meets the floor but its 75% (3 GiB) does not.
+        "cap_below_floor": ({"mac_gib": 6}, "after the 75% allocation cap"),
         "bad_total": ({"total": 0}, "Docker memory"),
         "zero_docker_cpus": ({"docker_cpus": 0}, "CPU count"),
         "invalid_host_cpus": ({"host_cpus": "invalid"}, "CPU count"),
@@ -100,6 +107,8 @@ def main() -> int:
     results["dbt_parallelism_computed"] = "env_var('JOB_THREADS')" in profiles and "threads: 4" not in profiles
     results["spark_parallelism_computed"] = "local[4]" not in (ROOT / "scripts/lakehouse/session.py").read_text()
     results.update(launch_contracts(out))
+    results.update(cap_and_deadline_contracts())
+    results.update(queued_wait_contracts())
     result = {
         "scope": "Real planner CLI and launcher, synthetic host readings, a fake Docker daemon and source configuration checks; no live container enforcement",
         "command": ".venv/bin/python -m scripts.lakehouse.run_resource_checks",
@@ -119,6 +128,124 @@ def main() -> int:
     return 0 if all(results.values()) else 1
 
 
+def cap_and_deadline_contracts() -> dict[str, bool]:
+    """The allocation cap and the memory wait deadline with stand-in figures; no process, Docker or host reading."""
+    from scripts.lakehouse import memory_budget as mb
+
+    budget = mb.compute(32 * GIB, [3 * GIB])
+    plan = mb.LaunchPlan(budget, 16)
+    pool = mb.pool_plan(plan, 2)
+    reserve = mb.Budget(total=32 * GIB, used_by_containers=0, headroom=mb.HEADROOM, growth_reserve=40 * GIB)
+    deadline = mb.MEMORY_WAIT_DEADLINE
+    failure = mb.wait_failure(100.0, 100.0 + deadline, deadline, 2 * GIB, 6 * GIB)
+    return {
+        "cap_is_a_named_share_of_free": mb.ALLOCATION_SHARE_PERCENT == 75 and budget.free == 21 * GIB and budget.allocation == 21 * GIB * 75 // 100,
+        "cap_never_exceeds_free": all(
+            mb.Budget(32 * GIB, 0, mb.HEADROOM, growth_reserve=n).allocation <= mb.Budget(32 * GIB, 0, mb.HEADROOM).free for n in (0, GIB)
+        ),
+        "cap_of_a_negative_free_figure_stays_below_the_floor": reserve.free < 0 and reserve.allocation < mb.FLOOR,
+        "plan_record_names_the_cap": budget.record()["allocation"] == budget.allocation and budget.record()["allocation_share_percent"] == 75,
+        "pool_shares_split_the_capped_allocation": pool["record"]["share"] == budget.allocation // 2 and 2 * pool["record"]["share"] <= budget.allocation,
+        "wait_deadline_is_positive_and_named": deadline > 0,
+        "wait_before_the_deadline_goes_on": mb.wait_failure(100.0, 100.0 + deadline - 1, deadline, 2 * GIB, 6 * GIB) is None,
+        "wait_at_the_deadline_names_cause_figures_and_deadline": failure is not None
+        and "memory did not return within" in failure
+        and "2.0 GiB free" in failure
+        and "6.0 GiB needed" in failure,
+        "wait_with_a_clock_set_back_does_not_expire": mb.wait_failure(100.0, 50.0, deadline, 2 * GIB, 6 * GIB) is None,
+    }
+
+
+def queued_wait_contracts() -> dict[str, bool]:
+    """The persisted memory wait deadline on queued ticks and readings, called on the launcher's methods with a stand-in launcher and clock."""
+    import time
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from orchestration import launcher as lx
+
+    def queued(**extra: Any) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "id": "at_1",
+            "phase": "queued",
+            "owner": "alloc:al_1",
+            "template": "fixture_init",
+            "params": {},
+            "args": [],
+            "cancel_intent": None,
+            "timeout_intent": None,
+            "capacity_pending": True,
+            "deadline_utc": 9000.0,
+            "memory_wait_since": 1000.0,
+            "memory_wait_free": 2 * GIB,
+            "memory_wait_need": 18 * GIB,
+        }
+        return {key: value for key, value in (record | extra).items() if value is not None or key in ("cancel_intent", "timeout_intent")}
+
+    def stand_in(state: dict[str, Any], degraded: bool = True) -> Any:
+        launcher: Any = SimpleNamespace(
+            timings=SimpleNamespace(memory_wait=600.0), docker_ok=not degraded, status="degraded" if degraded else "serving", dirty=set(), CAPACITY_RETRY=2.0
+        )
+        launcher.admissible = lambda *_: True
+        launcher.mac_write_problem = lambda *_: None
+        launcher.intent_reason = lambda a, default="exited": lx.Launcher.intent_reason(launcher, a, default)
+        launcher.finish_attempt = lambda _state, a, reason, detail="": a.update({"phase": "ended", "reason": reason, "detail": detail})
+        launcher.memory_wait_expired = lambda *args: getattr(lx.Launcher, "memory_wait_expired", lambda *_: False)(launcher, *args)
+
+        @contextmanager
+        def tx(write: bool = True) -> Any:
+            yield state
+
+        launcher.tx = tx
+        launcher.capacity_cleared = lambda *args: lx.Launcher.capacity_cleared(launcher, *args)
+        return launcher
+
+    def tick(a: dict[str, Any], now: float, degraded: bool = True) -> dict[str, Any]:
+        with mock.patch.object(time, "time", return_value=now):
+            state = {"attempts": {a["id"]: a}, "allocations": {"al_1": {"workers": 1, "environment": {}}}}
+            lx.Launcher.advance_queued(stand_in(state, degraded), state, a, [])
+        return a
+
+    def reading(a: dict[str, Any], now: float, outcome: str, value: Any) -> dict[str, Any]:
+        launcher = stand_in({"attempts": {a["id"]: a}})
+        launcher.CAPACITY_RETRY = 2.0
+        with mock.patch.object(time, "time", return_value=now):
+            lx.Launcher.on_capacity(launcher, f"capacity:{a['id']}", outcome, value)
+        return a
+
+    short = {"ok": False, "error": None, "free": 2 * GIB, "own": 0, "running": 1, "share": 18 * GIB}
+    late = tick(queued(), 1601.0)
+    on_time = tick(queued(), 1599.0)
+    cutoff = tick(queued(deadline_utc=1601.0), 1601.0)
+    serving = tick(queued(), 1601.0, degraded=False)
+    failed = reading(queued(), 1601.0, "docker", RuntimeError("worker failed"))
+    late_ok = reading(queued(), 1601.0, "ok", {"ok": True, "error": None, "free": 20 * GIB, "own": 0, "running": 0, "share": 18 * GIB})
+    early_ok = reading(queued(), 1599.0, "ok", {"ok": True, "error": None, "free": 20 * GIB, "own": 0, "running": 0, "share": 18 * GIB})
+    first = reading(queued(memory_wait_since=None, memory_wait_free=None, memory_wait_need=None), 1500.0, "ok", short)
+    again = reading(queued(), 1599.0, "ok", short)
+    late_short = reading(queued(), 1601.0, "ok", short)
+    return {
+        "tick_ends_an_expired_wait_before_the_pending_and_degraded_guards": late["phase"] == "ended" and late["reason"] == "create_failed",
+        "tick_text_names_memory_the_deadline_and_the_stored_figures": "memory did not return within 600 s: 2.0 GiB free, 18.0 GiB needed"
+        in late.get("detail", ""),
+        "tick_ends_an_expired_wait_while_serving": serving["phase"] == "ended" and serving["reason"] == "create_failed",
+        "tick_keeps_a_wait_before_the_deadline": on_time["phase"] == "queued",
+        "start_cutoff_still_comes_first": cutoff["phase"] == "ended" and cutoff["reason"] == "timeout",
+        "worker_error_cannot_bypass_the_deadline": failed["phase"] == "ended" and failed["reason"] == "create_failed",
+        "late_success_ends_the_attempt_and_keeps_the_clock": late_ok["phase"] == "ended"
+        and late_ok["reason"] == "create_failed"
+        and "capacity_at" not in late_ok
+        and late_ok["memory_wait_since"] == 1000.0,
+        "success_before_the_deadline_clears_the_clock": early_ok["phase"] == "queued" and "memory_wait_since" not in early_ok and "capacity_at" in early_ok,
+        "first_short_reading_starts_the_clock_and_stores_figures": first["memory_wait_since"] == 1500.0
+        and first["memory_wait_free"] == 2 * GIB
+        and first["memory_wait_need"] == 18 * GIB,
+        "later_short_reading_keeps_the_first_start": again["memory_wait_since"] == 1000.0 and again["phase"] == "queued",
+        "short_reading_after_the_deadline_ends_the_attempt": late_short["phase"] == "ended" and late_short["reason"] == "create_failed",
+    }
+
+
 def launch_contracts(folder: Path) -> dict[str, bool]:
     """Exercise the launch scripts and attempts with synthetic metrics: the plan reaches the container, stale settings do not [534] [538]."""
     results: dict[str, bool] = {}
@@ -128,7 +255,7 @@ def launch_contracts(folder: Path) -> dict[str, bool]:
             "docker" not in text.replace("Docker", "").lower().replace("no docker command", "") and "orchestration.launcher" in text
         )
     observed, env, command_env = scenario(folder, "launches")
-    expected = {"cap": str(21 * GIB), "engine": "18GB", "threads": "16"}
+    expected = {"cap": str(21 * GIB * 75 // 100), "engine": "13GB", "threads": "16"}
     stale = {**command_env, "JOB_MEMORY_LIMIT": "1", "DUCKDB_MEMORY_LIMIT": "1GB", "JOB_THREADS": "999"}
     case_folder, _ = env.case_folders("rc")
     params = [

@@ -22,13 +22,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import TimeoutExpired, clear_git_environment, run_command
+from scripts.process import LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
 from scripts.quality.hook_stage import hook_stage
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1367,18 +1367,24 @@ def run_cases(cases: list[Case], checker: Path, hook_config: Path, workers: int,
         for case in cases:
             try:
                 results.append(run_case(case, checker, hook_config, case_seconds))
+            except ProcessGroupSurvived as error:
+                results.append(
+                    failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds and its stop is not confirmed: {error}")
+                )
             except TimeoutExpired as error:
                 results.append(failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds"))
         return results
     deadline = -(-len(cases) // workers) * 2 * case_seconds + 60
-    pool = ThreadPoolExecutor(max_workers=workers)
-    futures = [pool.submit(run_case, case, checker, hook_config, case_seconds) for case in cases]
-    done, unfinished = wait(futures, timeout=deadline)
-    pool.shutdown(wait=False, cancel_futures=True)
+    with LaunchPool(max_workers=workers) as pool:
+        futures = [pool.submit(run_case, case, checker, hook_config, case_seconds) for case in cases]
+        done, unfinished = wait(futures, timeout=deadline)
+        pool.shutdown(wait=False, cancel_futures=True)
     results = []
     for case, future in zip(cases, futures, strict=True):
         if future not in done:
             results.append(failed_case(case, f"deadline: not finished {deadline} seconds after the start of the pool ({len(unfinished)} cases unfinished)"))
+        elif isinstance(future.exception(), ProcessGroupSurvived):
+            results.append(failed_case(case, f"deadline: a program of this case ran longer than {case_seconds} seconds and its stop is not confirmed"))
         elif isinstance(future.exception(), TimeoutExpired):
             results.append(failed_case(case, f"deadline: a program of this case ran longer than {case_seconds} seconds"))
         else:

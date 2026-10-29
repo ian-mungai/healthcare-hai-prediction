@@ -192,6 +192,8 @@ class Timings:
     docker_call_timeout: float = 120.0
     health_wait: float = 180.0
     restart_wait: float = 300.0
+    # How long a queued launch waits for memory that another process holds before it fails with a named cause.
+    memory_wait: float = memory_budget.MEMORY_WAIT_DEADLINE
     # After a pool's cancellations persist, how long its workers keep polling an unreachable launcher before failing visibly.
     cancel_settle: float = 75.0
     # How long a client keeps retrying a submit or status exchange that times out (a launcher busy on a loaded machine) before failing.
@@ -4722,6 +4724,8 @@ class Launcher:
             a["timeout_intent"] = {"reason": "start_after_deadline", "at": utc_now()}
             self.finish_attempt(state, a, self.intent_reason(a), "the start cutoff passed while queued")
             return
+        if self.memory_wait_expired(state, a):
+            return
         owner = a["owner"]
         if not self.admissible(state, a) and owner != DIAGNOSTIC_OWNER:
             run = state["runs"].get(owner.partition(":")[2]) if owner.startswith("run:") else None
@@ -4922,6 +4926,23 @@ class Launcher:
         ok = free + own - running * share >= share or (running == 0 and free >= share)
         return {"ok": ok, "error": None, "free": free, "own": own, "running": running, "share": share}
 
+    def memory_wait_expired(self, state: dict[str, Any], a: dict[str, Any]) -> bool:
+        """End a queued attempt whose stored memory wait has lasted the deadline, from the figures of its last short reading; True when it ended.
+
+        Every queued tick and every reading calls this before anything else can clear or skip the clock, so a pending reading, a worker error, a
+        degraded launcher or a late good reading cannot extend the wait past ``Timings.memory_wait``.
+        """
+        since = a.get("memory_wait_since")
+        if since is None or a["phase"] != "queued":
+            return False
+        failure = memory_budget.wait_failure(
+            float(since), time.time(), self.timings.memory_wait, int(a.get("memory_wait_free", 0)), int(a.get("memory_wait_need", 0))
+        )
+        if failure is None:
+            return False
+        self.finish_attempt(state, a, "create_failed", failure)
+        return True
+
     def on_capacity(self, key: str, outcome: str, value: Any) -> None:
         """A capacity reading: the launch may go on, waits for the next reading, or (no worker runs and nothing could be read) fails."""
         attempt_id = key.split(":", 1)[1]
@@ -4930,15 +4951,24 @@ class Launcher:
             if a is None:
                 return
             a["capacity_pending"] = False
+            now = time.time()
+            if outcome == "ok" and not value["ok"] and not (value["error"] and not value["running"]):
+                a.setdefault("memory_wait_since", now)
+                a["memory_wait_free"] = int(value["free"])
+                a["memory_wait_need"] = int(value.get("share", 0))
+            if self.memory_wait_expired(state, a):
+                self.dirty.add(attempt_id)
+                return
             if outcome != "ok":
-                a["capacity_retry_at"] = time.time() + self.CAPACITY_RETRY
+                a["capacity_retry_at"] = now + self.CAPACITY_RETRY
                 return
             if value["ok"]:
-                a["capacity_at"] = time.time()
+                a["capacity_at"] = now
+                a.pop("memory_wait_since", None)
             elif value["error"] and not value["running"]:
                 self.finish_attempt(state, a, "create_failed", f"capacity: {value['error']}")
             else:
-                a["capacity_retry_at"] = time.time() + self.CAPACITY_RETRY
+                a["capacity_retry_at"] = now + self.CAPACITY_RETRY
                 a["waiting_on"] = f"memory (free {value['free']}, share {value.get('share', 0)})"
         self.dirty.add(attempt_id)
 
@@ -8844,7 +8874,7 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             raise LauncherError(f"history_retain ({timings.history_retain} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
         if timings.compact_floor <= timings.poll_patience:
             raise LauncherError(f"compact_floor ({timings.compact_floor} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
-        for name in ("compact_threshold", "stuck_after", "gone_after", "slow_exchange", "cleanup_budget"):
+        for name in ("compact_threshold", "stuck_after", "gone_after", "slow_exchange", "cleanup_budget", "memory_wait"):
             if getattr(timings, name) <= 0:
                 raise LauncherError(f"{name} ({getattr(timings, name)}) must be positive", "config")
         folder = registry.path / "test_state"
