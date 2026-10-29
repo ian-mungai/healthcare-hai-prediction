@@ -200,7 +200,7 @@ class WorkerLedger:
 
     def _public(self, entry: Mapping[str, Any]) -> dict[str, Any]:
         spawn = {key: value for key, value in entry["spawn"].items() if key != "witness"}
-        return {**spawn, "evidence": entry["evidence"], "warning": WARNING}
+        return {**spawn, "state": "read_only", "evidence": entry["evidence"], "warning": WARNING}
 
     def open_entries(self, *, deadline: float) -> list[dict[str, Any]]:
         """Return sanitized open records without writing or signalling anything."""

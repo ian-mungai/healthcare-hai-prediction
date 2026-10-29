@@ -86,35 +86,41 @@ def stop_owned(handle: Handle, deadline: float) -> dict[str, Any]:
             with handle.lock:
                 if handle.state == "read_only":
                     return {"status": "refused_reaped", "confirmed": handle.confirmed}
-                while time.monotonic() < deadline:
+                ready_to_reap = handle.state == "reap_only"
+                stopped = False
+                while not ready_to_reap and time.monotonic() < deadline:
                     members = _members(handle.pgid, deadline)
                     if members is None:
                         return {"status": "survivor", "confirmed": False}
                     if handle.pid not in members:
-                        handle.state = "read_only"
-                        return {"status": "worker_unproven", "confirmed": False}
+                        handle.state = "reap_only"
+                        ready_to_reap = True
+                        break
                     if all(state == "Z" for state in members.values()):
-                        for fd in (handle.stdin, handle.stdout, handle.stderr):
-                            with contextlib.suppress(OSError):
-                                os.close(fd)
-                        try:
-                            reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
-                        except ChildProcessError:
-                            reaped = handle.pid
-                        if reaped:
+                        ready_to_reap = True
+                        break
+                    if not stopped:
+                        if _portable.signal_group(handle.pgid, signal.SIGSTOP) == "gone":
                             handle.state = "read_only"
-                            handle.confirmed = _portable.wait_group_gone(handle.pgid, deadline, time.monotonic, time.sleep)
-                            return {"status": "confirmed" if handle.confirmed else "worker_unproven", "confirmed": handle.confirmed}
-                    if handle.state == "reap_only":
-                        return {"status": "refused_unproven", "confirmed": False}
-                    if _portable.signal_group(handle.pgid, signal.SIGSTOP) == "gone":
-                        handle.state = "read_only"
-                        return {"status": "worker_unproven", "confirmed": False}
+                            return {"status": "worker_unproven", "confirmed": False}
+                        stopped = True
                     if _portable.signal_group(handle.pgid, signal.SIGKILL) == "gone":
                         handle.state = "read_only"
                         return {"status": "worker_unproven", "confirmed": False}
                     time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-                return {"status": "survivor", "confirmed": False}
+                if ready_to_reap and time.monotonic() < deadline:
+                    try:
+                        reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
+                    except ChildProcessError:
+                        reaped = handle.pid
+                    if reaped:
+                        handle.state = "read_only"
+                        for fd in (handle.stdin, handle.stdout, handle.stderr):
+                            with contextlib.suppress(OSError):
+                                os.close(fd)
+                        handle.confirmed = _portable.wait_group_gone(handle.pgid, deadline, time.monotonic, time.sleep)
+                        return {"status": "confirmed" if handle.confirmed else "worker_unproven", "confirmed": handle.confirmed}
+                return {"status": "refused_unproven" if handle.state == "reap_only" else "survivor", "confirmed": False}
         finally:
             handle.lock.release()
     finally:
