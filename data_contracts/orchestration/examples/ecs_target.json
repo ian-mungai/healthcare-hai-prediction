@@ -128,5 +128,20 @@
   "max_record_bytes": 33554432,
   "project_tag": "example_project",
   "region": "eu-west-1",
-  "schema_version": 1
+  "schema_version": 1,
+  "class_capacity_providers": {
+    "offline": [
+      "FARGATE_SPOT",
+      "FARGATE"
+    ],
+    "seal": [
+      "FARGATE_SPOT",
+      "FARGATE"
+    ],
+    "lakehouse_read": [
+      "FARGATE_SPOT",
+      "FARGATE"
+    ]
+  },
+  "assign_public_ip": "DISABLED"
 }
