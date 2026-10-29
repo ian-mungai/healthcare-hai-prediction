@@ -258,6 +258,22 @@ aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <cluste
 
 Save the task ARN for the waiter and continue only with an empty `failures` list. The explicit tag and the propagated task definition tag use the same `Project` key. If RunTask rejects the request for a repeated tag key, run it again without `--propagate-tags`: the explicit tag still satisfies IAM and still tags the task.
 
+## Stopping job tasks before the host stops
+
+`host_session stop` ends only the host group. Fargate job tasks keep running and cost money, so run the task cleanup first and stop the host after it:
+
+```sh
+.venv/bin/python -m scripts.infrastructure.aws_tasks list
+.venv/bin/python -m scripts.infrastructure.aws_tasks stop
+.venv/bin/python -m scripts.infrastructure.host_session stop
+```
+
+- `list` shows the running job tasks and changes nothing. It follows the `ListTasks` pages to the end.
+- `stop` sends `StopTask` for each running job task and waits up to 90 seconds until ECS describes each as `STOPPED`. The whole command ends within 120 seconds. The command exits 1 for a task that is still running or that ECS no longer describes. It names that task by family and ID suffix. A second run finds nothing to stop and exits 0.
+- Only tasks whose ECS group is `family:<PROJECT_NAME>_<ENVIRONMENT>_job_*` are touched. Service tasks (Postgres, Polaris, Airflow), the one-shot host tasks and tasks of other projects are skipped.
+- A writer task (family `..._job_write_*`) may hold an open writer intent. The tool cannot read the launcher's journal. `stop` does not stop it unless the owner names its ID suffix: `aws_tasks stop --confirm-writer-stop <suffix>` (repeatable; the suffix is the 8 characters `list` shows). The other tasks are still stopped, the refused writers are listed and the exit code is 1, so a running writer blocks the host stop. The `StopTask` reason records the owner's confirmation. The writer's layer stays in recovery hold until `complete` runs from the terminal observation.
+- Output shows the family and the last 8 characters of the task ID only, never an ARN, an account ID or a provider reason. The project user's policy already allows `ListTasks`, `DescribeTasks` and `StopTask` on the project cluster.
+
 ## Teardown
 
 `terraform destroy` of `infra/services/` removes the services. The task definition revisions stay registered (`skip_destroy`, because the project user may not deregister them) and stay active until they are deregistered separately. The data volume, its snapshots, the secrets (parameters) and the ECR images belong to the foundation and stay until the foundation's own teardown names them. Stop the services before a destroy if the Postgres data must be consistent: scale each service to zero first.

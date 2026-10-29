@@ -177,6 +177,7 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.training.run_dvc_baseline_e2e
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 .venv/bin/python -m scripts.infrastructure.run_host_session_e2e
+.venv/bin/python -m scripts.infrastructure.run_aws_tasks_e2e
 .venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e
 .venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations
 ```
