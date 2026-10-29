@@ -1833,7 +1833,7 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
         body += "  printf 'OUTPUT last @ENTRY@_%s\\n' \"$key\"\n" + ("  return 3\n" if fail else "")
         group = "lakehouse_features" if part.startswith("feature") else f"lakehouse_{part}"
         entries = (
-            ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine"]
+            ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine", "lakehouse_features_store"]
             if group == "lakehouse_features"
             else ["lakehouse_gold_checks" if part == "gold" else group]
         )
@@ -1871,7 +1871,7 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
         saved = sorted((quality / "saved_item_logs").glob("*.log"))
         outputs = [line for line in run.stdout.splitlines() if line.startswith("OUTPUT ")]
         retained = [line for path in saved for line in path.read_text().splitlines() if line.startswith("OUTPUT ")]
-        expected_count = 14 if parallel else 1
+        expected_count = 15 if parallel else 1
         checks = {
             "expected_exit": (run.returncode != 0) == fail,
             "acknowledged_output": len(list(ack.iterdir())) == expected_count,
@@ -1935,10 +1935,14 @@ if suite == 'sources':
     source.sources.relation_problems = lambda *args: ready(relation_problems(*args))
     result = source.main()
 else:
-    docs = {column.MODEL: {column.COLUMN: {'data_type': 'varchar', 'description': 'Synthetic column.'}}}
-    column.columns.sql_models = lambda root: {column.MODEL}
-    column.columns.documented = lambda root: docs
-    column.columns.read_columns = lambda *args: {column.MODEL: [(column.COLUMN, 'varchar')]}
+    docs = {
+        column.MODEL: {column.COLUMN: {'data_type': 'varchar', 'description': 'Synthetic column.'}},
+        column.MATRIX_MODEL: {column.MATRIX_COLUMN: {'data_type': 'double', 'description': 'Synthetic matrix column.'}},
+    }
+    column.columns.sql_models = lambda root: {column.MODEL, column.MATRIX_MODEL}
+    documented_all = column.columns.documented_all
+    column.columns.documented_all = lambda root: (docs, []) if root == column.columns.REPO_ROOT else documented_all(root)
+    column.columns.read_columns = lambda *args: {column.MODEL: [(column.COLUMN, 'varchar')], column.MATRIX_MODEL: [(column.MATRIX_COLUMN, 'double')]}
     def build(*args, **kwargs):
         ready()
         if kwargs.get('contract'):
@@ -3000,7 +3004,7 @@ def isolation_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 STAND_IN_ENTRIES = {
     "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
     "launcher": ["launcher_e2e"],
-    "lakehouse_features": ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine"],
+    "lakehouse_features": ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine", "lakehouse_features_store"],
 }
 # A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
 STAND_IN_BODY = """#!/usr/bin/env bash

@@ -160,6 +160,7 @@
   ],
   "columns": [
     "committed_files",
+    "matrix_column_missing",
     "undocumented_column",
     "undocumented_model",
     "stale_column",
