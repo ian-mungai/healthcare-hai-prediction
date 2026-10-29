@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.iam.scripts.render_policy import load_documents, non_whitespace_length, render_template, terraform_names
-from scripts.infrastructure import job_writer_policy_cases, layer_writer_policy_cases
+from scripts.infrastructure import dvc_policy_cases, job_writer_policy_cases, layer_writer_policy_cases
 from scripts.infrastructure.policy_evaluator import Request, decide
 from scripts.infrastructure.secret_store import terraform_variables
 
@@ -29,7 +29,7 @@ S3 = "arn:aws:s3:::example-project-ci-bucket"
 EPOCH_KEY = "lakehouse/authority/catalog_epoch.json"
 IAM = "arn:aws:iam::111111111111:role/example_project_"
 PARAMETER = "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/"
-POLICIES = ("job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_try_trust")
+POLICIES = ("job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_try_trust", "job_dvc_baseline")
 Case = tuple[str, str, str, str, bool, dict[str, tuple[str, ...]]]
 
 
@@ -180,6 +180,7 @@ def main() -> int:
         REPO / "scripts/infrastructure/policy_evaluator.py",
         REPO / "scripts/infrastructure/secret_store.py",
         REPO / "scripts/infrastructure/job_writer_policy_cases.py",
+        REPO / "scripts/infrastructure/dvc_policy_cases.py",
         REPO / "infra/iam/job_writer.tf",
         REPO / "infra/iam/job_writer_variables.tf",
         REPO / "infra/iam/tests/job_writer.tftest.hcl",
@@ -265,6 +266,9 @@ def main() -> int:
         layer_checks, layer_defects = layer_writer_policy_cases.verify(REPO, documents, output)
         checks.extend(layer_checks)
         defects.extend(layer_defects)
+        dvc_checks, dvc_defects = dvc_policy_cases.verify(documents, output)
+        checks.extend(dvc_checks)
+        defects.extend(dvc_defects)
         for name, document in documents.items():
             (output / f"{name}.json").write_text(json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         after = {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}

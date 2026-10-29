@@ -104,6 +104,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
       expired_object_delete_marker = true
     }
   }
+
+  # DVC stores each training matrix once, as an object named by its content hash under dvc/ (project decision 20), and a push never replaces an
+  # object with different content. Only replaced or deleted versions are old, so they expire after 30 days. Current DVC objects never expire.
+  rule {
+    id     = "expire_replaced_dvc_versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "dvc/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "tls" {
