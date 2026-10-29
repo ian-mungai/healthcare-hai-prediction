@@ -6,6 +6,7 @@ import argparse
 import ast
 import contextlib
 import hashlib
+import http.client
 import json
 import os
 import sys
@@ -18,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from scripts.orchestration.sdk_standins import Scenario, WorkerStandin
 
@@ -321,6 +323,8 @@ def retry_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, Any
                                 "groups_absent": _check_absence(api),
                                 "shutdown_confirmed": shutdown["confirmed"],
                             },
+                            "reply_error": reply.get("error"),
+                            "events": [{"kind": event.kind, "connection": event.connection, "elapsed_s": event.elapsed_s} for event in standin.events],
                         }
                     )
     return results
@@ -469,6 +473,34 @@ def recovery_cases(folder: Path) -> list[dict[str, Any]]:
     return results
 
 
+def _probe_events(counted_header: str | None) -> tuple[int, list[str]]:
+    """Send one plain GET from a non-SDK client and return the reply status and the stand-in's event kinds."""
+    with WorkerStandin(Scenario("describe_tasks", "throttle", lifetime_s=15, counted_header=counted_header)) as standin:
+        connection = http.client.HTTPConnection("127.0.0.1", urlsplit(standin.endpoint).port, timeout=5)
+        try:
+            connection.request("GET", "/", headers={"User-Agent": "node"})
+            status = connection.getresponse().status
+        finally:
+            connection.close()
+        return status, [event.kind for event in standin.events]
+
+
+def stray_client_cases() -> list[dict[str, Any]]:
+    """Count only the SDK client's requests, not a probe from another local program."""
+    stray_status, stray_kinds = _probe_events("amz-sdk-invocation-id")
+    counted_status, counted_kinds = _probe_events(None)
+    return [
+        {
+            "case": "stray_client_not_counted",
+            "checks": {
+                "stray_recorded_apart": stray_kinds == ["stray_request"],
+                "stray_refused": stray_status == 404,
+                "unfiltered_stand_in_counts_it": counted_kinds[:1] == ["request"] and counted_status == 429,
+            },
+        }
+    ]
+
+
 def parameter_cases(folder: Path) -> list[dict[str, Any]]:
     """Read every selected version through one-shot workers and reject a mismatched reply."""
     from orchestration.ecs_api import WorkerConfig
@@ -565,6 +597,7 @@ def main() -> int:
             "pool",
             "concurrency",
             "recovery",
+            "stray_clients",
             "parameters",
             "stderr",
             "reader_failures",
@@ -612,6 +645,8 @@ def main() -> int:
             for name, function in (("deadlines", deadline_cases), ("retries", retry_cases)):
                 if args.cases in {"all", name}:
                     rows.extend(function(folder, operations))
+            if args.cases in {"all", "stray_clients"}:
+                rows.extend(stray_client_cases())
             for name, single_function in (
                 ("pool", pool_cases),
                 ("concurrency", concurrency_cases),

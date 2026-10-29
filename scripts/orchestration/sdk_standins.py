@@ -25,6 +25,7 @@ class Scenario:
     body: bytes = b"{}"
     lifetime_s: float = 60.0
     drip_interval_s: float = 2.0
+    counted_header: str | None = "amz-sdk-invocation-id"
 
     def __post_init__(self) -> None:
         if self.mode not in MODES or not 0 < self.lifetime_s <= 180 or not 0 < self.drip_interval_s <= 2:
@@ -119,35 +120,38 @@ class WorkerStandin:
                     self._connections.discard(peer)
                 peer.close()
 
-    def _read_request(self, peer: socket.socket) -> bool:
+    def _read_request(self, peer: socket.socket) -> bytes | None:
+        """Return the request head once the whole request arrived, or None when it did not."""
         until = min(self._deadline, time.monotonic() + 2)
         pending = bytearray()
         required: int | None = None
+        head = b""
         while not self._stop.is_set() and time.monotonic() < until:
             try:
                 chunk = peer.recv(65536)
             except TimeoutError:
                 continue
             if not chunk:
-                return False
+                return None
             pending.extend(chunk)
             if len(pending) > MAX_REQUEST:
-                return False
+                return None
             if required is None and b"\r\n\r\n" in pending:
                 headers, body = pending.split(b"\r\n\r\n", 1)
                 lengths = [line.split(b":", 1)[1].strip() for line in headers.split(b"\r\n")[1:] if line.lower().startswith(b"content-length:")]
                 if len(lengths) > 1 or any(not value.isdigit() for value in lengths):
-                    return False
+                    return None
                 size = int(lengths[0]) if lengths else 0
                 required = len(headers) + 4 + size
                 if required > MAX_REQUEST or len(body) > size:
-                    return False
+                    return None
+                head = bytes(headers)
                 expect = [line.split(b":", 1)[1].strip().lower() for line in headers.split(b"\r\n")[1:] if line.lower().startswith(b"expect:")]
                 if b"100-continue" in expect:
                     peer.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
             if required is not None and len(pending) >= required:
-                return True
-        return False
+                return head
+        return None
 
     def _wait(self, peer: socket.socket, connection: int, until: float) -> bool:
         while not self._stop.is_set() and time.monotonic() < min(until, self._deadline):
@@ -180,8 +184,14 @@ class WorkerStandin:
     def _serve(self, peer: socket.socket, connection: int) -> None:
         try:
             peer.settimeout(0.05)
-            if not self._read_request(peer):
+            head = self._read_request(peer)
+            if head is None:
                 self._record("request_incomplete", connection)
+                return
+            if self.scenario.counted_header and b"\r\n" + self.scenario.counted_header.lower().encode() + b":" not in head.lower():
+                # Another local program probed this loopback port. Only the client under test counts as a request.
+                self._record("stray_request", connection)
+                peer.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 return
             self._record("request", connection)
             mode = self.scenario.mode
