@@ -40,25 +40,31 @@ def task_settings(warehouse: Path | None = None) -> dict[str, str]:
     directory = Path(os.environ.get("HAI_SPARK_LOCAL_DIRECTORY", ""))
     if not directory.is_absolute() or ".." in directory.parts:
         raise RuntimeError("task_scratch_directory_missing")
-    settings = {"spark.local.dir": str(directory)}
+    settings = {
+        "spark.local.dir": str(directory),
+        "spark.redaction.regex": "(?i)secret|password|token|access[.]?key|credential",
+        "spark.sql.redaction.options.regex": "(?i)url|secret|password|token|credential",
+    }
     if warehouse is None:
         settings[f"spark.sql.catalog.{CATALOG}.client.credentials-provider"] = "software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider"
+        settings[f"spark.sql.catalog.{CATALOG}.oauth2-server-uri"] = os.environ["POLARIS_URI"] + "/v1/oauth/tokens"
     return settings
 
 
 def spark_session(app_name: str, warehouse: Path | None = None, memory: str | None = None) -> SparkSession:
     """Return a local Spark session whose default catalog is ``hai_lakehouse``.
 
-    Without ``warehouse`` the catalog is the local Polaris service. Polaris does not vend storage credentials
-    (``stsUnavailable``), so Iceberg's S3 client uses the project's AWS profile from the read-only mount, and the
-    client secret comes from the container environment and is never logged. With ``warehouse`` the catalog is a
-    throwaway file-based Iceberg catalog in that folder, used by the synthetic end-to-end tests. ``memory`` sets the
+    Without ``warehouse`` the catalog uses ``POLARIS_URI``. Fargate uses the native container credential provider.
+    Local jobs retain their existing AWS role-session or profile provider. Catalog credentials stay in engine
+    configuration. With ``warehouse`` the catalog is a throwaway file-based Iceberg catalog in that folder,
+    used by the synthetic end-to-end tests and refusing AWS role-session values. ``memory`` sets the
     local driver's memory, which also holds the executors in local mode. If omitted, use the computed launch heap.
     """
     settings = task_settings(warehouse)
     from pyspark.sql import SparkSession
 
     prefix = f"spark.sql.catalog.{CATALOG}"
+    task_catalog = f"{prefix}.client.credentials-provider" in settings
     builder = (
         SparkSession.builder.appName(app_name)
         .master(f"local[{job_threads()}]")
@@ -73,19 +79,20 @@ def spark_session(app_name: str, warehouse: Path | None = None, memory: str | No
     if warehouse is not None:
         builder = builder.config(f"{prefix}.type", "hadoop").config(f"{prefix}.warehouse", warehouse.as_uri())
     else:
-        credential = f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}"
+        builder = builder.config(f"{prefix}.type", "rest").config(f"{prefix}.uri", os.environ["POLARIS_URI"]).config(f"{prefix}.warehouse", CATALOG)
+        if not task_catalog:
+            builder = builder.config(f"{prefix}.credential", f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}")
         builder = (
-            builder.config(f"{prefix}.type", "rest")
-            .config(f"{prefix}.uri", os.environ["POLARIS_URI"])
-            .config(f"{prefix}.warehouse", CATALOG)
-            .config(f"{prefix}.credential", credential)
-            .config(f"{prefix}.scope", "PRINCIPAL_ROLE:ALL")
+            builder.config(f"{prefix}.scope", "PRINCIPAL_ROLE:ALL")
             .config(f"{prefix}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
             .config(f"{prefix}.client.region", os.environ["AWS_REGION"])
         )
     for name, value in settings.items():
         builder = builder.config(name, value)
-    return builder.getOrCreate()
+    configured = builder.getOrCreate()
+    if warehouse is None and task_catalog:
+        configured.conf.set(f"{prefix}.credential", f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}")
+    return configured
 
 
 def job_threads() -> int:

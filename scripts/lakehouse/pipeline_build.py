@@ -1,14 +1,21 @@
-"""Build one layer from frozen project sources and verified snapshot inputs."""
+"""Build one layer from frozen project sources and verified snapshot inputs.
+
+Stand-in setup checks: ``python -m scripts.orchestration.ecs_engine_cases --report data/e2e/task_engines/new/report.json``.
+"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,15 +28,21 @@ IMPORT_SQL = 'create or replace table main."{table}" as select * from read_parqu
 def build_target(layer: str, mode: str) -> str:
     """Select bounded profiles when configured and native task credentials for real silver."""
     bounded = bool(duckdb_temp_settings())
+    if (
+        os.environ.get("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE"
+        and mode == "publish_fixture"
+        and any(os.environ.get(name) for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"))
+    ):
+        raise PipelineError("fixture_role_session_refused")
+    try:
+        task = validate_task_credentials(require_catalog=layer == "silver" and mode == "real")
+    except RuntimeError as error:
+        raise PipelineError(str(error)) from None
     if layer == "gold":
         return "pinned_silver_bounded" if bounded else "pinned_silver"
     if mode == "publish_fixture":
         return "fixture_bounded" if bounded else "fixture"
-    if os.environ.get("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE":
-        try:
-            validate_task_credentials()
-        except RuntimeError as error:
-            raise PipelineError(str(error)) from None
+    if task:
         return "lakehouse_task"
     return "lakehouse_session_bounded" if bounded else "lakehouse_session"
 
@@ -45,10 +58,76 @@ def disk_observation(folder: Path, settings: dict[str, str]) -> dict[str, int]:
             if path.is_symlink():
                 raise PipelineError("temporary_storage_link_refused")
             if path.is_file():
-                info = path.stat()
+                try:
+                    info = path.stat()
+                except FileNotFoundError:
+                    continue
                 logical += info.st_size
                 allocated += info.st_blocks * 512
     return {"free_disk_bytes": information.f_bavail * information.f_frsize, "spill_logical_bytes": logical, "spill_allocated_bytes": allocated}
+
+
+@contextmanager
+def storage_measurements(folder: Path, settings: dict[str, str]) -> Iterator[dict[str, Any]]:
+    """Sample bounded builds until their fixed deadline and report observed disk and spill extrema."""
+    measurements: dict[str, Any] = {}
+    if not settings:
+        yield measurements
+        return
+    try:
+        remaining = float(os.environ.get("HAI_DEADLINE_UTC", str(time.time() + 3600))) - time.time()
+    except ValueError:
+        raise PipelineError("temporary_storage_sampling_deadline") from None
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise PipelineError("temporary_storage_sampling_deadline")
+    deadline = time.monotonic() + remaining
+    measurements.update(samples=0, sampling="periodic_and_boundaries", sampling_interval_seconds=0.1, complete_peak=False)
+    errors: list[str] = []
+    stopped = threading.Event()
+
+    def sample() -> None:
+        observed = disk_observation(folder, settings)
+        if measurements["samples"] == 0:
+            measurements["minimum_observed_free_disk_bytes"] = observed["free_disk_bytes"]
+            measurements["observed_spill_logical_bytes"] = 0
+            measurements["observed_spill_allocated_bytes"] = 0
+        measurements["minimum_observed_free_disk_bytes"] = min(measurements["minimum_observed_free_disk_bytes"], observed["free_disk_bytes"])
+        measurements["observed_spill_logical_bytes"] = max(measurements["observed_spill_logical_bytes"], observed["spill_logical_bytes"])
+        measurements["observed_spill_allocated_bytes"] = max(measurements["observed_spill_allocated_bytes"], observed["spill_allocated_bytes"])
+        measurements["samples"] += 1
+
+    def monitor() -> None:
+        while not stopped.wait(min(0.1, max(0.0, deadline - time.monotonic()))):
+            if time.monotonic() >= deadline:
+                errors.append("temporary_storage_sampling_deadline")
+                return
+            try:
+                sample()
+            except (OSError, PipelineError):
+                errors.append("temporary_storage_sampling_failed")
+                return
+
+    try:
+        sample()
+    except (OSError, PipelineError):
+        raise PipelineError("temporary_storage_sampling_failed") from None
+    worker = threading.Thread(target=monitor, name="hai_storage_sampler", daemon=True)
+    worker.start()
+    try:
+        yield measurements
+    finally:
+        stopped.set()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            raise PipelineError("temporary_storage_sampler_stop_timeout")
+        if errors:
+            raise PipelineError(errors[0])
+        if time.monotonic() >= deadline:
+            raise PipelineError("temporary_storage_sampling_deadline")
+        try:
+            sample()
+        except (OSError, PipelineError):
+            raise PipelineError("temporary_storage_sampling_failed") from None
 
 
 def import_silver(folder: Path, expected: str, pin_sha: str, run_id: str, connection: Any) -> dict[str, int | float]:
@@ -56,6 +135,7 @@ def import_silver(folder: Path, expected: str, pin_sha: str, run_id: str, connec
     started = time.monotonic()
     verified_bytes = 0
     copy_seconds = 0.0
+    hash_seconds = 0.0
     manifest, digest = read_record(folder / "silver_input", "manifest.json")
     if digest != expected or manifest.get("pins_sha256") != pin_sha or manifest.get("run_id") != run_id:
         raise PipelineError("the silver extract manifest differs from its accepted input")
@@ -83,7 +163,9 @@ def import_silver(folder: Path, expected: str, pin_sha: str, run_id: str, connec
                     while block := reader.read(1 << 20):
                         if time.monotonic() >= deadline:
                             raise PipelineError("silver snapshot import exceeded 600 seconds")
+                        hash_started = time.monotonic()
                         digest_bytes.update(block)
+                        hash_seconds += time.monotonic() - hash_started
                         writer.write(block)
                         verified_bytes += len(block)
             finally:
@@ -100,6 +182,7 @@ def import_silver(folder: Path, expected: str, pin_sha: str, run_id: str, connec
         "verified_input_bytes": verified_bytes,
         "input_copy_peak_bytes": verified_bytes,
         "verified_copy_seconds": copy_seconds,
+        "hash_seconds": hash_seconds,
         "import_seconds": time.monotonic() - started,
     }
 
@@ -122,45 +205,45 @@ def main() -> int:
             target = build_target(args.layer, args.mode)
         except TemporaryStorageError as error:
             raise PipelineError(str(error)) from None
-        observations = [disk_observation(args.folder, settings)] if settings else []
         imported: dict[str, int | float] = {}
         from dbt.cli.main import dbtRunner
 
-        if args.layer == "gold":
-            import duckdb
+        with storage_measurements(args.folder, settings) as measurements:
+            if args.layer == "gold":
+                import duckdb
 
-            if not args.extract_sha256:
-                raise PipelineError("gold has no accepted Iceberg extract")
-            temporary = args.folder / "staging.partial.duckdb"
-            if temporary.is_symlink() or (args.folder / "staging.duckdb").is_symlink():
-                raise PipelineError("the build destination is a symlink")
-            temporary.unlink(missing_ok=True)
-            connection = duckdb.connect(str(temporary), config={**settings})
-            try:
-                connection.execute("SET memory_limit = ?", [os.environ["DUCKDB_MEMORY_LIMIT"]])
-                connection.execute("SET threads = ?", [int(os.environ["JOB_THREADS"])])
-                imported = import_silver(args.folder, args.extract_sha256, args.input_sha256, args.run, connection)
-            finally:
-                connection.close()
-            os.replace(temporary, args.folder / "staging.duckdb")
-        arguments = [
-            "build",
-            "--target",
-            target,
-            "--project-dir",
-            str(args.project),
-            "--profiles-dir",
-            str(args.project),
-            "--select",
-            "resource_type:seed",
-            ("+path:models/silver" if args.layer == "silver" else "path:models/gold"),
-            "--indirect-selection",
-            "cautious",
-            *(["--exclude", "tag:features"] if args.layer == "gold" else []),
-        ]
-        result = dbtRunner().invoke(arguments)
-        if not result.success:
-            raise PipelineError("the layer build did not pass every selected dbt node")
+                if not args.extract_sha256:
+                    raise PipelineError("gold has no accepted Iceberg extract")
+                temporary = args.folder / "staging.partial.duckdb"
+                if temporary.is_symlink() or (args.folder / "staging.duckdb").is_symlink():
+                    raise PipelineError("the build destination is a symlink")
+                temporary.unlink(missing_ok=True)
+                connection = duckdb.connect(str(temporary), config={**settings})
+                try:
+                    connection.execute("SET memory_limit = ?", [os.environ["DUCKDB_MEMORY_LIMIT"]])
+                    connection.execute("SET threads = ?", [int(os.environ["JOB_THREADS"])])
+                    imported = import_silver(args.folder, args.extract_sha256, args.input_sha256, args.run, connection)
+                finally:
+                    connection.close()
+                os.replace(temporary, args.folder / "staging.duckdb")
+            arguments = [
+                "build",
+                "--target",
+                target,
+                "--project-dir",
+                str(args.project),
+                "--profiles-dir",
+                str(args.project),
+                "--select",
+                "resource_type:seed",
+                ("+path:models/silver" if args.layer == "silver" else "path:models/gold"),
+                "--indirect-selection",
+                "cautious",
+                *(["--exclude", "tag:features"] if args.layer == "gold" else []),
+            ]
+            result = dbtRunner().invoke(arguments)
+            if not result.success:
+                raise PipelineError("the layer build did not pass every selected dbt node")
         results, _ = read_record(args.folder, "target/run_results.json")
         statuses = results.get("results", [])
         if not statuses or any(item.get("status") not in ("success", "pass") for item in statuses):
@@ -177,15 +260,7 @@ def main() -> int:
             "nodes": len(statuses),
         }
         if settings:
-            observations.append(disk_observation(args.folder, settings))
-            receipt["runtime_measurements"] = {
-                "minimum_observed_free_disk_bytes": min(item["free_disk_bytes"] for item in observations),
-                "observed_spill_logical_bytes": max(item["spill_logical_bytes"] for item in observations),
-                "observed_spill_allocated_bytes": max(item["spill_allocated_bytes"] for item in observations),
-                "sampling": "build_boundaries",
-                "complete_peak": False,
-                "import": imported,
-            }
+            receipt["runtime_measurements"] = {**measurements, "import": imported}
         (args.folder / "build_receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
         _, receipt_sha = read_record(args.folder, "build_receipt.json")
         sys.stdout.write(json.dumps({"layer": args.layer, "nodes": len(statuses), "receipt_sha256": receipt_sha}) + "\n")
