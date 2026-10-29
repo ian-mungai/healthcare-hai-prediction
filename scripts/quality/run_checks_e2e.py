@@ -584,6 +584,15 @@ CASES = [
         message="fix(storage): keep the S3 upload\n\nThe bucket (S3) and step S3 stay. Refs CVE-2024-1234 and SHA3-256 are names; B1 is no code.\n",
     ),
     Case("registry source families in brackets", "commit-msg", True, message="fix(api): add the measures\n\nOne row per control (S13 to S16).\n"),
+    Case("a bracketed S code that is not a public family", "commit-msg", False, message="fix(api): add the measures\n\nThe pins follow the plan (S2).\n"),
+    Case("a public family beside a plan code in brackets", "commit-msg", False, message="fix(api): add the measures\n\nThe pins follow the plan (P7, S13).\n"),
+    Case("a mixed bracketed list with a plan code", "commit-msg", False, message="fix(api): add the measures\n\nThe pins follow the plan (P7, S2).\n"),
+    Case(
+        "round numbers in a review sentence",
+        "commit-msg",
+        True,
+        message="fix(api): keep the sums\n\nThe reviewer requested two round numbers and five round figures in the totals.\n",
+    ),
     Case(
         "rounding and round trips in a review sentence",
         "commit-msg",

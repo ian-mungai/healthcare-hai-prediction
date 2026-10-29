@@ -156,14 +156,14 @@ last_updated: 2026-10-28
   one capital letter and one or two digits (`G4`, `A54`, `U4`, `T9`). It counts
   after `unit`, `lane`, `failure mode`, `task`, `slice` or `step` (`lane A`,
   `unit U4`, `failure mode T9`) or alone in brackets (`(P7)`, `(P1, P3 to P5)`).
-  `S3` is never a code. An `S` code counts only after a keyword, because
-  `S13 to S16` are public registry source families. An issue ID (capital
+  `S3` and the public registry source families `S13` to `S16` are never codes;
+  a bracketed list counts when any of its codes is not one of them. An issue ID (capital
   letters, a digit, a dash and digits, such as `WV3-033`) counts after `Refs`,
   `Issue`, `Ticket`, `Closes`, `Fixes` or `Resolves` or in brackets; `SHA-256`
   and `CVE-2024-1234` do not. Review-round names are `recheck 2`, `fix round 2`,
   `review #3` and, on a line that also says review, recheck or reviewer, a
   number word beside the round (`over five rounds`, `round two`); `round trip`
-  and `round two decimals` pass. A patch or diff hash prefix (12 or more hex
+  `round two decimals` and `two round numbers` pass. A patch or diff hash prefix (12 or more hex
   characters after `hash`, `SHA-256` or `checksum`) counts only on a line that
   names a patch or diff and says accepted, reviewed or staged, so a downloaded
   patch's checksum passes. A snapshot ID in any hex form (7 to 40 characters)

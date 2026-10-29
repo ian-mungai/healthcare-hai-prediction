@@ -127,11 +127,12 @@ AI_SESSION = re.compile(rf"^\s*(?:{'|'.join(AI_AGENTS)})-session\s*:", re.IGNORE
 
 # Internal plan references: they point at plan and review records that live outside the repository. A finding names the
 # form and never echoes the matched text, so the check log holds no message text. Codes need a keyword or brackets, so a
-# bare "B1" (hex fragment, CSS class) passes and "S3" is never a code (the storage service). "S" codes are the registry's
-# public source families ("S13 to S16"), so they count after a keyword only, never in brackets. Hash and snapshot forms
+# bare "B1" (hex fragment, CSS class) passes and "S3" is never a code (the storage service). The registry's public source
+# families S13 to S16 are not codes either; a bracketed list counts when any of its codes is not public. Hash and snapshot forms
 # need their provenance words on the same line, so a downloaded file's hash and a data snapshot ID pass.
 PLAN_CODE = r"(?!S3\b)[A-Z]\d{1,2}"
-BRACKET_CODE = r"(?!S)[A-Z]\d{1,2}"
+PUBLIC_CODE = r"S(?:3|13|14|15|16)\b"
+BRACKET_LIST = rf"[(\[](?=[^)\]]*\b(?!{PUBLIC_CODE})[A-Z]\d{{1,2}}\b)[A-Z]\d{{1,2}}(?:(?:, | to | and )[A-Z]\d{{1,2}})*[)\]]"
 ISSUE_ID = r"(?!SHA|MD|RC)[A-Z]{1,4}\d+-\d+"
 NUMBER_WORD = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
 REVIEW_LINE = r"(?=.*\b(?:re-?check|review(?:s|ed|er|ers|ing)?)\b)"
@@ -141,7 +142,7 @@ PLAN_REFERENCES = (
         "unit or lane code",
         re.compile(rf"\b(?:[Ll]ane [A-Z]\b|(?i:units?|lanes?|failure modes?|tasks?|slices?|steps?) {PLAN_CODE}\b)"),
     ),
-    ("bracketed unit code", re.compile(rf"[(\[]{BRACKET_CODE}(?:(?:, | to | and ){BRACKET_CODE})*[)\]]")),
+    ("bracketed unit code", re.compile(BRACKET_LIST)),
     ("issue ID", re.compile(rf"\b(?i:refs?|issues?|tickets?|closes|fixes|resolves)\b[ :]+{ISSUE_ID}\b|[(\[]{ISSUE_ID}[)\]]")),
     (
         "review-round name",
@@ -153,7 +154,7 @@ PLAN_REFERENCES = (
     (
         "review-round name",
         re.compile(
-            rf"^{REVIEW_LINE}.*\b(?:{NUMBER_WORD}\s+(?:review\s+|fix\s+)?rounds?\b(?!\s+(?:trips?|robin))"
+            rf"^{REVIEW_LINE}.*\b(?:{NUMBER_WORD}\s+(?:review\s+|fix\s+)?rounds?\b(?!\s+(?:trips?|robin|numbers?|values?|figures?|digits?|decimals?|places?))"
             rf"|rounds?\s+{NUMBER_WORD}\b(?!\s+(?:decimals?|digits?|places?|numbers?|values?)))",
             re.IGNORECASE,
         ),
