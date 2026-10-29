@@ -42,6 +42,7 @@ def _monitor(deadline: float) -> None:
 
 def _relay(target_port: int, listen_port: int, deadline: float) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener, selectors.DefaultSelector() as selector:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             listener.bind(("127.0.0.1", listen_port))
         except OSError as error:

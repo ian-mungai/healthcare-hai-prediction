@@ -59,7 +59,7 @@ from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze_writer, catalog, cutover_route, polaris_writer, principal_credentials, run_lock
-from scripts.lakehouse.catalog_journal import durable_directory
+from scripts.lakehouse.catalog_journal import durable_directory, private_directory
 
 CATALOG = "hai_lakehouse"
 MAC_POLARIS_PORT = 8181
@@ -963,7 +963,7 @@ class LiveServices:
         spec = TransportSpec(instance, self.settings["aws_profile"], self.region, *self.ports)
         network_acceptance(spec, AwsCli(self.settings), self.project_tag, deadline=deadline)
         folder = self.state_root / "catalog_setup_transport"
-        durable_directory(folder)
+        private_directory(folder)
         transport = CatalogTransport(folder)
         try:
             endpoint = transport.start(spec, deadline=deadline, ready_deadline=min(deadline, time.monotonic() + READY_SECONDS))

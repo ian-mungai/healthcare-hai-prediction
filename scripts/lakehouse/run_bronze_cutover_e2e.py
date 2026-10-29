@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 import duckdb
 
@@ -38,6 +39,7 @@ from orchestration import catalog_authority, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from orchestration.pipeline_session import RoleSession
 from scripts.acquisition.s3_store import AwsCli
+from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze_cutover, bronze_inventory, bronze_scan, cutover_route, mac_route_probe
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse import run_catalog_registration_e2e as registration_e2e
@@ -1790,6 +1792,68 @@ def run_offline(name: str, report: Path) -> tuple[dict[str, bool], str]:
             return {}, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-1500:]}"
 
 
+@offline
+def transport_folder_private(folder: Path) -> dict[str, bool]:
+    """The cutover route and its route probe keep the worker registry in a private folder, new or left at 0755 by an earlier run."""
+    state = folder / "state"
+    transport_folder = state / "cutover_transport"
+    ports = (49152, 49153)
+
+    def services() -> bronze_cutover.LiveServices:
+        live = bronze_cutover.LiveServices.__new__(bronze_cutover.LiveServices)
+        live.state_root, live.ports, live.probe_image = state, ports, "synthetic:image"
+        live.__dict__.update(settings={"aws_profile": "p", "aws_region": "us-west-2"}, aws=object(), platform=("group", "tag"))
+        return live
+
+    def through_remote() -> None:
+        transport = mock.Mock(spec=CatalogTransport)
+        transport.start.return_value = "http://127.0.0.1:9"
+        transport.close.return_value = True
+        with (
+            mock.patch.object(bronze_cutover, "network_acceptance"),
+            mock.patch.object(
+                secret_store,
+                "variable_names",
+                return_value={"AWS_POLARIS_READER_CLIENT_ID_NAME": "n", "AWS_POLARIS_READER_CLIENT_SECRET_NAME": "n"},
+            ),
+            mock.patch.object(bronze_cutover.LiveServices, "secret", return_value="synthetic"),
+            mock.patch.object(bronze_cutover, "CatalogTransport", return_value=transport),
+            services().remote("i-0123456789abcdef0", deadline=time.monotonic() + 5),
+        ):
+            pass
+
+    def through_probe() -> None:
+        started = mock.Mock(spec=CatalogTransport)
+        started.start.side_effect = RuntimeError("synthetic")
+        probe = cutover_route.LiveRouteProbe(
+            mock.Mock(spec=AwsCli), TransportSpec("i-0123456789abcdef0", "p", "us-west-2", *ports), "tag", transport_folder, folder / "probe", "i", str
+        )
+        with mock.patch.object(cutover_route, "CatalogTransport", return_value=started):
+            probe.observe_port(time.monotonic() + 5)
+
+    checks: dict[str, bool] = {}
+    for name, enter in (("remote", through_remote), ("route probe", through_probe)):
+        if transport_folder.exists():
+            transport_folder.rmdir()
+        enter()
+        checks[f"{name}: a new folder is private"] = stat.S_IMODE(transport_folder.stat().st_mode) == 0o700
+        checks[f"{name}: the parent keeps its mode"] = stat.S_IMODE(state.stat().st_mode) != 0o700
+        transport_folder.chmod(0o755)
+        enter()
+        checks[f"{name}: a folder left at 0755 is tightened"] = stat.S_IMODE(transport_folder.stat().st_mode) == 0o700
+    transport_folder.rmdir()
+    elsewhere = folder / "elsewhere"
+    elsewhere.mkdir(mode=0o755)
+    transport_folder.symlink_to(elsewhere)
+    try:
+        through_remote()
+        refused = False
+    except PermissionError as error:
+        refused = str(error) == "transport_folder_must_be_a_private_directory"
+    checks["a symlink is refused and its target keeps its mode"] = refused and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
+    return checks
+
+
 ALL_CASES = (
     freeze_gate_and_fence,
     queued_write_fenced,
@@ -1804,6 +1868,7 @@ ALL_CASES = (
     role_storage_reads,
     route_binding_and_evidence,
     route_owner_exception,
+    transport_folder_private,
     mac_route_observations,
     owner_probe_deadline,
     owner_probe_cleanup,

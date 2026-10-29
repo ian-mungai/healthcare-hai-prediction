@@ -55,6 +55,7 @@ def main() -> int:
         return 0
     body = b'{"catalog":"synthetic"}'
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", port))
         listener.listen(8)
         listener.settimeout(0.05)

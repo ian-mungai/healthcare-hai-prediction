@@ -44,6 +44,8 @@ ROUTE_CASES = (
     "cleanup_retry",
     "failed_cleanup_retry",
     "late_callback_success",
+    "relay_rebind",
+    "relay_live_conflict",
 )
 CASES = ("normal", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
 BODY = b'{"catalog":"synthetic"}'
@@ -572,6 +574,43 @@ def _tunnel_body_exit(transport: CatalogTransport, endpoint: str, events: Path, 
     return checks
 
 
+def _relay_rebind(transport: CatalogTransport, endpoint: str, spec: TransportSpec, scratch: Path, lifetime: float) -> dict[str, bool]:
+    """Close a relay that still holds a served connection, then start the next route on the same port at once."""
+    held = http.client.HTTPConnection("127.0.0.1", urlsplit(endpoint).port, timeout=1)
+    held.request("GET", "/", headers={"X-Synthetic-Client": "catalog"})
+    checks = {"first_relay_carried_a_connection": held.getresponse().read() == BODY}
+    checks["first_relay_closed_with_the_connection_open"] = transport.close(deadline=time.monotonic() + 5) and _all_gone(transport)
+    held.close()
+    second = CatalogTransport(scratch / "registry_second")
+    reply = None
+    try:
+        reopened = second.start(spec, deadline=lifetime, ready_deadline=min(lifetime - 1, time.monotonic() + 5))
+        reply = _request(reopened)
+    except (OSError, EOFError, RuntimeError, TimeoutError):
+        pass
+    finally:
+        checks["second_route_close_confirmed"] = second.close(deadline=time.monotonic() + 5) and _all_gone(second)
+    checks["same_port_rebinds_right_after_close"] = reply == BODY
+    return checks
+
+
+def _relay_live_conflict(transport: CatalogTransport, endpoint: str, spec: TransportSpec, scratch: Path, lifetime: float) -> dict[str, bool]:
+    """A second relay on the port of a live relay is refused with the exact cause, and the live relay keeps serving."""
+    second = CatalogTransport(scratch / "registry_second")
+    second.deadline = lifetime
+    refusal = None
+    try:
+        second._spawn("relay", ["--target-port", str(spec.tunnel_port), "--listen-port", str(spec.relay_port)], min(lifetime - 1, time.monotonic() + 5))
+    except (OSError, EOFError, RuntimeError, TimeoutError) as error:
+        refusal = type(error).__name__
+    checks = {"second_live_listener_is_refused": refusal == "EOFError"}
+    checks["second_route_cleanup_confirmed"] = second.close(deadline=time.monotonic() + 5) and _all_gone(second)
+    reader = second.handles[0].stderr_reader if len(second.handles) == 1 else None
+    checks["refusal_has_exact_occupied_port_cause"] = reader is not None and reader.complete and reader.path.read_bytes() == b"catalog_relay_bind_in_use\n"
+    checks["first_relay_still_serves"] = _request(endpoint) == BODY
+    return checks
+
+
 def _route_case(name: str, folder: Path) -> dict[str, Any]:
     scratch = Path(tempfile.mkdtemp(prefix=f"route_{name}_", dir=folder))
     started = time.monotonic()
@@ -603,6 +642,10 @@ def _route_case(name: str, folder: Path) -> dict[str, Any]:
                         checks.update(_cleanup_retry(name, transport, endpoint, lifetime))
                     elif name == "late_callback_success":
                         checks.update(_late_callback(transport, endpoint, lifetime))
+                    elif name == "relay_rebind":
+                        checks.update(_relay_rebind(transport, endpoint, spec, scratch, lifetime))
+                    elif name == "relay_live_conflict":
+                        checks.update(_relay_live_conflict(transport, endpoint, spec, scratch, lifetime))
                     else:
                         checks.update(_request_failure(name, transport, endpoint, lifetime))
         except (OSError, ValueError, EOFError, RuntimeError, TimeoutError, http.client.HTTPException) as error:
@@ -614,7 +657,8 @@ def _route_case(name: str, folder: Path) -> dict[str, Any]:
             checks.update(cleanup_confirmed=confirmed, groups_absent=absent)
             checks["stderr_readers_complete"] = all(handle.stderr_reader is not None and handle.stderr_reader.complete for handle in transport.handles)
     observed = _events(events)
-    checks["plugin_version_read_once"] = sum(row["kind"] == "plugin" for row in observed) == 1
+    starts = 2 if name == "relay_rebind" else 1
+    checks["plugin_version_read_once"] = sum(row["kind"] == "plugin" for row in observed) == starts
     if name in {
         "full_normal",
         "unknown_writer",

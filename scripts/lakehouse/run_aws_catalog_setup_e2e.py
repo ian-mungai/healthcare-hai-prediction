@@ -16,6 +16,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import sys
 import tempfile
 import threading
@@ -469,6 +470,44 @@ def case_route_lost(_: Path) -> dict[str, bool]:
             "the route was tried once": transport.execute.call_count == 1,
             "no request reached the catalog": not polaris.calls,
         }
+
+
+def case_transport_folder_private(out: Path) -> dict[str, bool]:
+    """The live route keeps its worker registry in a private folder: new or left at 0755 by an earlier run, and never one it does not own."""
+    state = out / "state"
+    folder = state / "catalog_setup_transport"
+
+    def enter() -> int:
+        services = setup.LiveServices.__new__(setup.LiveServices)
+        services.state_root, services.ports = state, (49152, 49153)
+        services.__dict__.update(settings={"aws_profile": "p", "aws_region": REGION}, project_tag="hai")
+        transport = mock.Mock(spec=CatalogTransport)
+        transport.start.return_value = "http://127.0.0.1:9"
+        transport.close.return_value = True
+        with (
+            mock.patch.object(setup, "network_acceptance"),
+            mock.patch.object(setup, "CatalogTransport", return_value=transport) as constructed,
+            services.remote("i-0123456789abcdef0", deadline=time.monotonic() + 5),
+        ):
+            return int(constructed.call_args.args[0] == folder)
+
+    checks = {"the route used the transport folder": enter() == 1}
+    checks["a new folder is private"] = stat.S_IMODE(folder.stat().st_mode) == 0o700
+    checks["the parent keeps its mode"] = stat.S_IMODE(state.stat().st_mode) != 0o700
+    folder.chmod(0o755)
+    enter()
+    checks["a folder left at 0755 is tightened"] = stat.S_IMODE(folder.stat().st_mode) == 0o700
+    folder.rmdir()
+    elsewhere = out / "elsewhere"
+    elsewhere.mkdir(mode=0o755)
+    folder.symlink_to(elsewhere)
+    try:
+        enter()
+        refused = False
+    except PermissionError as error:
+        refused = str(error) == "transport_folder_must_be_a_private_directory"
+    checks["a symlink is refused and its target keeps its mode"] = refused and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
+    return checks
 
 
 def case_real_relay(out: Path) -> dict[str, bool]:
@@ -1237,6 +1276,7 @@ CASES: dict[str, Case] = {
     "stalled_catalog": case_stalled_catalog,
     "route_lost": case_route_lost,
     "real_relay": case_real_relay,
+    "transport_folder_private": case_transport_folder_private,
     "profile_refused": case_profile_refused,
     "check_metadata": case_check_metadata,
     "check_catalog": case_check_catalog,

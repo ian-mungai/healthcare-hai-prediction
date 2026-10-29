@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,20 @@ def durable_directory(path: Path) -> None:
         current.mkdir(exist_ok=True)
         sync_directory(current)
         sync_directory(current.parent)
+
+
+def private_directory(path: Path) -> None:
+    """Create a directory only this user can enter; tighten a wider one this user owns and refuse any other."""
+    durable_directory(path.parent)
+    if not path.exists() and not path.is_symlink():
+        path.mkdir(mode=0o700)
+        sync_directory(path.parent)
+    status = path.lstat()
+    if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid():
+        raise PermissionError("transport_folder_must_be_a_private_directory")
+    if status.st_mode & 0o077:
+        path.chmod(0o700)
+    sync_directory(path)
 
 
 def write_once(path: Path, value: Document) -> None:

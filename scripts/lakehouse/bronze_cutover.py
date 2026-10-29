@@ -53,7 +53,7 @@ from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze_inventory, bronze_scan, cutover_route, run_lock
 from scripts.lakehouse import register_aws_catalog as reg
-from scripts.lakehouse.catalog_journal import durable_directory
+from scripts.lakehouse.catalog_journal import durable_directory, private_directory
 
 CATALOG = "hai_lakehouse"
 MAC_POLARIS_PORT = 8181
@@ -516,7 +516,7 @@ class LiveServices:
         reader_id = self.secret(names["AWS_POLARIS_READER_CLIENT_ID_NAME"], deadline)
         reader_secret = self.secret(names["AWS_POLARIS_READER_CLIENT_SECRET_NAME"], deadline)
         folder = self.state_root / "cutover_transport"
-        durable_directory(folder)
+        private_directory(folder)
         transport = CatalogTransport(folder)
         try:
             endpoint = transport.start(spec, deadline=deadline, ready_deadline=min(deadline, time.monotonic() + 120))
