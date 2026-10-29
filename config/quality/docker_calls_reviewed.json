@@ -316,7 +316,7 @@
       "file_sha256": "d4bec8618b69c79fa2fc6f38f3513474b88a1ccfe0f875ce3693eab2b0f2baad",
       "dependencies": {
         "orchestration/catalog_authority.py": "sha256:d95f4d288a2e775fda4a1514ba91cf01db12950df93e3f601a6485dcfc066bf4",
-        "orchestration/catalog_transport.py": "sha256:d4a30bb918f3afd518971add1400a497c26dd8c6fe42e0fa856590dfa0d46208",
+        "orchestration/catalog_transport.py": "sha256:45b793964534140f07a3f5407c54853418c3c6f0e74526a4c391ee19c920b687",
         "orchestration/launcher.py": "sha256:bad4485161d6c08f6a50963092489083de8c403925372897d28371e6787014e0",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
@@ -1376,11 +1376,11 @@
     },
     {
       "path": "scripts/process_group.py",
-      "line": 202,
+      "line": 221,
       "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6d41457fbf3068a0b9d593c20833323f992021ec97fd105fe7be51d3b854d3c5",
+      "file_sha256": "c46084909b91c5e2a7c81405df102cac1c258c0ae499fe38b6d4208c77066f27",
       "dependencies": {
         "orchestration/worker_stderr.py": "sha256:b789fbb6d329adf6e571344079066028bb80b9a78be9e9f0700dbdac855898d1",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"

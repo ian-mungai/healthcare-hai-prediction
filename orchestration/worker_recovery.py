@@ -1,4 +1,4 @@
-"""Keep worker recovery read-only and require typed owner confirmation for every non-absence closure."""
+"""Keep worker recovery read-only, trust only this registry's own records and require typed owner confirmation for every non-absence closure."""
 
 from __future__ import annotations
 
@@ -15,13 +15,16 @@ from typing import Any
 from weakref import WeakKeyDictionary
 
 from orchestration.worker_protocol import decode
-from scripts.process_group import group_state, process_snapshot
+from scripts.process_group import group_state, normalize_start, process_snapshot, start_epoch
 
 _ACTIVE_SESSIONS: WeakKeyDictionary[WorkerLedger, str] = WeakKeyDictionary()
 
 MAX_LEDGER_BYTES = 32 * 1024 * 1024
 WARNING = "The launcher cannot prove this group is the worker's; token not seen does not mean the group is not yours, and token seen does not mean it is."
 EVIDENCE_KEYS = frozenset({"group", "token", "members", "scan_utc"})
+LEADER_STATES = frozenset({"match", "replaced", "absent", "unknown"})
+INTENT_KEYS = frozenset({"nonce", "spawn_utc", "session", "lane", "owner", "witness"})
+INTENT_GRACE_SECONDS = 10.0
 SPAWN_KEYS = frozenset({"nonce", "pid", "pgid", "leader_start", "spawn_utc", "lane", "session", "witness", "kind", "owner"})
 
 
@@ -31,7 +34,8 @@ def _utc() -> str:
 
 def _evidence(value: Mapping[str, Any]) -> dict[str, Any]:
     if (
-        set(value) != EVIDENCE_KEYS
+        set(value) - {"leader"} != EVIDENCE_KEYS
+        or value.get("leader", "unknown") not in LEADER_STATES
         or value["group"] not in {"present", "absent", "denied", "timed_out", "not_probed"}
         or value["token"] not in {"seen", "not_seen", "denied", "timed_out"}
     ):
@@ -118,19 +122,46 @@ class WorkerLedger:
             raise ValueError("worker_ledger_partial_record")
         rows = [decode(bytes(line)) for line in chunks.splitlines()]
         self._state(rows)
+        self._intent_state(rows)
         return rows
+
+    def _intent_state(self, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Fold intent rows. An intent is resolved by a later spawn row for its nonce or by an explicit closure."""
+        intents: dict[str, dict[str, Any]] = {}
+        spawned = {row["spawn"]["nonce"] for row in rows if row.get("event") == "spawn"}
+        for row in rows:
+            event = row.get("event")
+            if event == "intent":
+                intent = row.get("intent", {})
+                if set(row) != {"event", "utc", "intent"} or set(intent) != INTENT_KEYS or any(not isinstance(intent[key], str) for key in INTENT_KEYS):
+                    raise ValueError("worker_ledger_invalid_intent")
+                if not intent["nonce"] or intent["nonce"] in intents:
+                    raise ValueError("worker_ledger_invalid_intent")
+                try:
+                    datetime.fromisoformat(intent["spawn_utc"])
+                except ValueError as error:
+                    raise ValueError("worker_ledger_invalid_intent") from error
+                intents[intent["nonce"]] = {"intent": intent, "resolved": intent["nonce"] in spawned}
+            elif event == "intent_closed":
+                item = intents.get(row.get("nonce", ""))
+                if set(row) != {"event", "utc", "nonce", "reason"} or item is None or row["reason"] not in {"no_worker", "spawn_failed"}:
+                    raise ValueError("worker_ledger_invalid_intent_closure")
+                item["resolved"] = True
+        return intents
 
     def _state(self, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         entries: dict[str, dict[str, Any]] = {}
         for row in rows:
             event = row.get("event")
+            if event in {"intent", "intent_closed"}:
+                continue
             if event == "spawn":
                 spawn = row.get("spawn", {})
                 if set(row) != {"event", "utc", "spawn"} or set(spawn) - SPAWN_KEYS or not (SPAWN_KEYS - {"owner"}) <= set(spawn):
                     raise ValueError("worker_ledger_invalid_spawn")
                 if spawn["nonce"] in entries or type(spawn["pid"]) is not int or type(spawn["pgid"]) is not int or spawn["pid"] < 1 or spawn["pgid"] < 1:
                     raise ValueError("worker_ledger_invalid_identity")
-                if spawn["kind"] not in {"ledger", "marker"} or not isinstance(spawn["witness"], str):
+                if spawn["kind"] != "ledger" or not isinstance(spawn["witness"], str):
                     raise ValueError("worker_ledger_invalid_spawn")
                 entries[spawn["nonce"]] = {"spawn": spawn, "observed": False, "closed": False, "closed_by": None, "evidence": None}
                 continue
@@ -182,6 +213,57 @@ class WorkerLedger:
                 return
             self._append(fd, row, deadline)
 
+    def append_intent(self, intent: Mapping[str, Any], *, deadline: float) -> None:
+        """Persist the intent to spawn before any process exists. Repeating the exact intent has no extra effect."""
+        row = {"event": "intent", "utc": _utc(), "intent": dict(intent)}
+        self._intent_state([row])
+        with self._locked(deadline, create=True) as fd:
+            if fd is None:
+                raise RuntimeError("worker_ledger_not_open")
+            known = self._intent_state(self._read(fd, deadline))
+            if intent["nonce"] in known:
+                if known[intent["nonce"]]["intent"] != dict(intent):
+                    raise ValueError("worker_intent_identity_conflict")
+                return
+            self._append(fd, row, deadline)
+
+    def close_intent(self, nonce: str, reason: str, *, deadline: float) -> bool:
+        """Close one unresolved intent that never produced a recorded worker. Returns False when nothing was open."""
+        with self._locked(deadline) as fd:
+            item = self._intent_state(self._read(fd, deadline)).get(nonce)
+            if fd is None or item is None or item["resolved"]:
+                return False
+            self._append(fd, {"event": "intent_closed", "utc": _utc(), "nonce": nonce, "reason": reason}, deadline)
+            return True
+
+    def open_intents(self, *, deadline: float) -> list[dict[str, Any]]:
+        """Return private intent records that no spawn row or closure has resolved."""
+        with self._locked(deadline) as fd:
+            return [item["intent"] for item in self._intent_state(self._read(fd, deadline)).values() if not item["resolved"]]
+
+    def adopt_intent(self, nonce: str, pid: int, pgid: int, leader_start: str, *, deadline: float) -> bool:
+        """Turn an unresolved intent into the spawn row its crashed owner never wrote, from the OS-read pid, group and start time."""
+        with self._locked(deadline) as fd:
+            item = self._intent_state(self._read(fd, deadline)).get(nonce)
+            if fd is None or item is None or item["resolved"]:
+                return False
+            intent = item["intent"]
+            spawn = {
+                "nonce": nonce,
+                "pid": pid,
+                "pgid": pgid,
+                "leader_start": leader_start,
+                "spawn_utc": intent["spawn_utc"],
+                "lane": intent["lane"],
+                "session": intent["session"],
+                "witness": intent["witness"],
+                "kind": "ledger",
+                "owner": intent["owner"],
+            }
+            self._state([*self._read(fd, deadline), {"event": "spawn", "utc": _utc(), "spawn": spawn}])
+            self._append(fd, {"event": "spawn", "utc": _utc(), "spawn": spawn}, deadline)
+            return True
+
     def private_open(self, *, deadline: float) -> list[dict[str, Any]]:
         """Return private in-memory records for the read-only evidence collector."""
         with self._locked(deadline) as fd:
@@ -192,11 +274,10 @@ class WorkerLedger:
         with self._locked(deadline) as fd:
             return {nonce: entry["closed_by"] for nonce, entry in self._state(self._read(fd, deadline)).items() if entry["closed"]}
 
-    def known_markers(self, *, deadline: float) -> set[tuple[int, str]]:
-        """Remember recorded marker identities so an owner closure stays closed on later scans."""
+    def known_identities(self, *, deadline: float) -> set[tuple[int, str]]:
+        """Return the pid and start time of every worker this registry ever recorded, closed ones included."""
         with self._locked(deadline) as fd:
-            records = [entry["spawn"] for entry in self._state(self._read(fd, deadline)).values()]
-        return {(row["pid"], row["nonce"].removeprefix(f"marker_{row['pid']}_") if row["kind"] == "marker" else row["nonce"]) for row in records}
+            return {(entry["spawn"]["pid"], normalize_start(entry["spawn"]["leader_start"])) for entry in self._state(self._read(fd, deadline)).values()}
 
     def _public(self, entry: Mapping[str, Any]) -> dict[str, Any]:
         spawn = {key: value for key, value in entry["spawn"].items() if key != "witness"}
@@ -244,49 +325,72 @@ class WorkerLedger:
         """Return a saved-evidence copy with every private spawn witness removed."""
         with self._locked(deadline) as fd:
             rows = self._read(fd, deadline)
-        return [{**row, "spawn": {**row["spawn"], "witness": "[redacted]"}} if row["event"] == "spawn" else row for row in rows]
+        return [
+            {**row, key: {**row[key], "witness": "[redacted]"}} if (key := {"spawn": "spawn", "intent": "intent"}.get(row["event"])) else row for row in rows
+        ]
 
 
 class Recovery:
-    """Read prior-session entries and expose one sanitized alert while dispatch is paused."""
+    """Read prior-session entries and expose one sanitized alert while dispatch is paused. Only this registry's own records pause it."""
 
-    def __init__(self, ledger: WorkerLedger, session: str) -> None:
+    def __init__(self, ledger: WorkerLedger, session: str, *, intent_grace: float = INTENT_GRACE_SECONDS) -> None:
         self.ledger = ledger
         self.session = session
+        self.intent_grace = intent_grace
         self.alert: dict[str, Any] | None = None
         self.next_sweep = 0.0
         self.failed = False
+        self.unresolved: list[dict[str, Any]] = []
+        self.pending_intents: list[dict[str, Any]] = []
+        self.not_matching: list[dict[str, Any]] = []
 
     def _recovered(self, record: Mapping[str, Any]) -> bool:
         return record["session"] != self.session and not self.ledger.session_active(record["session"])
 
+    @staticmethod
+    def _pauses(entry: Mapping[str, Any]) -> bool:
+        """A record pauses unless its pid now has another start time and its group shows none of its witness."""
+        evidence = entry["evidence"]
+        return evidence is None or not (evidence.get("leader") == "replaced" and (evidence["group"], evidence["token"]) == ("present", "not_seen"))
+
+    def _resolve_intents(self, snapshot: Any, deadline: float) -> None:
+        """Adopt the group leader that carries a recovered intent's nonce and started no earlier than the intent. Close intents with no worker."""
+        self.pending_intents = []
+        for intent in (row for row in self.ledger.open_intents(deadline=deadline) if self._recovered(row)):
+            began = datetime.fromisoformat(intent["spawn_utc"]).timestamp()
+            matches = [
+                member
+                for member in snapshot.members
+                if member.pid == member.pgid and member.marker_nonce == intent["nonce"] and member.started and start_epoch(member.started) >= int(began)
+            ]
+            if len(matches) == 1:
+                self.ledger.adopt_intent(intent["nonce"], matches[0].pid, matches[0].pgid, normalize_start(matches[0].started), deadline=deadline)
+            elif not matches and time.time() - began >= self.intent_grace:
+                self.ledger.close_intent(intent["nonce"], "no_worker", deadline=deadline)
+            else:
+                self.pending_intents.append({key: value for key, value in intent.items() if key != "witness"})
+
+    def _list_unresolved(self, snapshot: Any, deadline: float) -> list[dict[str, Any]]:
+        """List marked group leaders that no record of this registry names by pid and start time. Nothing pauses on them."""
+        known = self.ledger.known_identities(deadline=deadline)
+        in_flight = {row["nonce"] for row in self.ledger.open_intents(deadline=deadline) if not self._recovered(row)}
+        return [
+            {"pid": member.pid, "pgid": member.pgid, "name": member.name, "state": member.state, "started": member.started, "reason": "no_registry_record"}
+            for member in snapshot.members
+            if member.marker_nonce is not None
+            and member.pid == member.pgid
+            and (member.pid, normalize_start(member.started)) not in known
+            and member.marker_nonce not in in_flight
+        ]
+
     def inspect(self, *, deadline: float, discover: bool = False) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-        """Read current evidence. Discovery records markers only during a recovery sweep."""
+        """Read current evidence. Discovery resolves intents and lists unrecorded workers only during a recovery sweep."""
         records = [row for row in self.ledger.private_open(deadline=deadline) if self._recovered(row)]
         snapshot = process_snapshot(min(deadline, time.monotonic() + 2), witnesses={row["nonce"]: (row["pgid"], row["witness"]) for row in records})
         if discover and snapshot.status == "seen":
-            known = self.ledger.known_markers(deadline=deadline)
-            for member in snapshot.members:
-                if member.pid != member.pgid or member.marker_parent in {None, os.getpid()} or (member.pid, member.marker_nonce) in known:
-                    continue
-                nonce = f"marker_{member.pid}_{member.marker_nonce}"
-                self.ledger.append_spawn(
-                    {
-                        "nonce": nonce,
-                        "pid": member.pid,
-                        "pgid": member.pgid,
-                        "leader_start": "unverified",
-                        "spawn_utc": _utc(),
-                        "lane": "unknown",
-                        "session": "recovered_marker",
-                        "witness": "",
-                        "kind": "marker",
-                        "owner": "unknown",
-                    },
-                    deadline=deadline,
-                )
-                records = [row for row in self.ledger.private_open(deadline=deadline) if self._recovered(row)]
-                known.add((member.pid, member.marker_nonce or ""))
+            self._resolve_intents(snapshot, deadline)
+            records = [row for row in self.ledger.private_open(deadline=deadline) if self._recovered(row)]
+            self.unresolved = self._list_unresolved(snapshot, deadline)
         observations = {}
         probe_deadline = min(deadline, time.monotonic() + 1)
         for record in records:
@@ -294,9 +398,17 @@ class Recovery:
             state = group_state(pgid) if time.monotonic() < probe_deadline else "timed_out"
             group = {"gone": "absent", "alive": "present"}.get(state, state)
             token = ("seen" if record["nonce"] in snapshot.seen_nonces else "not_seen") if snapshot.status == "seen" else snapshot.status
+            leader = next((member for member in snapshot.members if member.pid == record["pid"]), None)
+            if snapshot.status != "seen":
+                identity = "unknown"
+            elif leader is None:
+                identity = "absent"
+            else:
+                identity = "match" if normalize_start(leader.started) == normalize_start(record["leader_start"]) else "replaced"
             observations[record["nonce"]] = {
                 "group": group,
                 "token": token,
+                "leader": identity,
                 "members": [{"pid": member.pid, "name": member.name, "state": member.state} for member in snapshot.group(pgid)],
                 "scan_utc": _utc(),
             }
@@ -306,12 +418,13 @@ class Recovery:
         """Refresh recovery evidence without any signal or reap of a recovered process."""
         try:
             _, observations = self.inspect(deadline=deadline, discover=True)
-            entries = self.ledger.observe(observations, deadline=deadline)
-            recovered = [entry for entry in entries if self._recovered(entry)]
-            self.alert = {"kind": "worker_unproven", "entries": recovered, "command": "python -m orchestration.launcher workers"} if recovered else None
+            recovered = [entry for entry in self.ledger.observe(observations, deadline=deadline) if self._recovered(entry)]
+            self.not_matching = [entry for entry in recovered if not self._pauses(entry)]
+            paused = [entry for entry in recovered if self._pauses(entry)]
+            self.alert = {"kind": "worker_unproven", "entries": paused, "command": "python -m orchestration.launcher workers"} if paused else None
             self.failed = False
             self.next_sweep = time.monotonic() + 30
-            return recovered
+            return paused
         except (OSError, ValueError, TimeoutError):
             self.failed = True
             self.alert = {"kind": "worker_recovery_unavailable", "entries": [], "command": "python -m orchestration.launcher workers"}
@@ -320,7 +433,7 @@ class Recovery:
     def refresh_closures(self, *, deadline: float) -> bool:
         """Observe owner closures on each tick and request an immediate first evidence scan."""
         try:
-            entries = [entry for entry in self.ledger.open_entries(deadline=deadline) if self._recovered(entry)]
+            entries = [entry for entry in self.ledger.open_entries(deadline=deadline) if self._recovered(entry) and self._pauses(entry)]
             self.alert = {"kind": "worker_unproven", "entries": entries, "command": "python -m orchestration.launcher workers"} if entries else None
             return any(entry["evidence"] is None for entry in entries)
         except (OSError, ValueError, TimeoutError):
@@ -332,3 +445,13 @@ class Recovery:
     def dispatch_paused(self) -> bool:
         """Keep dispatch paused whenever recovery is incomplete or has an open alert."""
         return self.failed or self.alert is not None
+
+    def report(self) -> dict[str, Any]:
+        """Return the read-only recovery result: paused entries, unresolved marked workers, records that match nothing and pending intents."""
+        return {
+            "paused": self.dispatch_paused,
+            "entries": list(self.alert["entries"]) if self.alert else [],
+            "unresolved": list(self.unresolved),
+            "records_not_matching": list(self.not_matching),
+            "pending_intents": list(self.pending_intents),
+        }
