@@ -132,6 +132,10 @@ def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, de
 # The Mac-side route observations the cutover needs before its route is used (owner decision, Oct 28 2026, for this one attended cutover
 # only; scripts/lakehouse/cutover_route.py). Each must pass. They do not replace the ECS class-network matrix of docs/ecs_real_runs.md.
 ROUTE_OBSERVATIONS = ("host_without_open_ingress", "catalog_port_only", "mac_containers_refused")
+# An owner exception may accept only this observation when it ran and failed: Docker Desktop forwards host.docker.internal to the Mac's
+# loopback, so containers reach the tunnel and relay ports while Docker runs (owner decision 2026-10-29, temporary migration phase).
+EXCEPTION_OBSERVATION = "mac_containers_refused"
+OWNER_EXCEPTION = re.compile(r"owner-[0-9]{8}-[a-z0-9-]{1,40}")
 ROUTE_SCOPE = (
     "Mac-side route acceptance for this one attended bronze cutover (owner decision 2026-10-28); "
     "the ECS class-network matrix stays required before any ECS job uses the catalog"
@@ -146,12 +150,22 @@ class RouteProbe(Protocol):
 
 
 def route_check(
-    probe: RouteProbe, cutover_id: str, instance: str, folder: Path, *, deadline: float, stamp: str, clock: reg.Clock = time.monotonic
+    probe: RouteProbe,
+    cutover_id: str,
+    instance: str,
+    folder: Path,
+    *,
+    deadline: float,
+    stamp: str,
+    clock: reg.Clock = time.monotonic,
+    owner_exception: str | None = None,
 ) -> dict[str, Any]:
     """Make every route observation once for the bound host and record the results and evidence hashes write-once, passing or not.
 
     The attempt is persisted before the first observation, so an attempt that ends early (its deadline, an interruption) stays the newest
     attempt and refuses register and verify instead of leaving an older passing record in force."""
+    if owner_exception is not None and not OWNER_EXCEPTION.fullmatch(owner_exception):
+        raise CutoverError("the owner exception must be named owner-<YYYYMMDD>-<words>")
     observations = []
     durable_directory(folder / ROUTE_CHECKS)
     attempt = {"schema": 2, "cutover_id": cutover_id, "instance": instance, "time": stamp}
@@ -160,7 +174,10 @@ def route_check(
         reg.check_deadline(deadline, clock)
         passed, evidence = probe.observe(name, deadline=deadline)
         bronze_inventory.write_new(folder / ROUTE_CHECKS / f"{stamp}.{name}.evidence", evidence)
-        observations.append({"name": name, "passed": passed, "evidence_sha256": hashlib.sha256(evidence).hexdigest()})
+        item: dict[str, Any] = {"name": name, "passed": passed, "evidence_sha256": hashlib.sha256(evidence).hexdigest()}
+        if owner_exception is not None and name == EXCEPTION_OBSERVATION and passed is False:
+            item["accepted_by"] = owner_exception
+        observations.append(item)
     document = {
         "schema": 2,
         "cutover_id": cutover_id,
@@ -175,11 +192,13 @@ def route_check(
 
 
 def route_problem(observations: object) -> str | None:
-    """The first observation that did not pass, or None when every observation passed with an evidence hash."""
+    """The first observation that did not pass, or None when every observation passed with an evidence hash; a failed container observation
+    counts as passed only when it names a well-formed owner exception."""
     found = {item.get("name"): item for item in observations if isinstance(item, dict)} if isinstance(observations, list) else {}
     for name in ROUTE_OBSERVATIONS:
         item = found.get(name) or {}
-        if item.get("passed") is not True or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("evidence_sha256"))):
+        excepted = name == EXCEPTION_OBSERVATION and item.get("passed") is False and bool(OWNER_EXCEPTION.fullmatch(str(item.get("accepted_by"))))
+        if (item.get("passed") is not True and not excepted) or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("evidence_sha256"))):
             state = "not observed" if item.get("passed") is None else "failed" if item.get("passed") is False else "unproved"
             return f"{name} was {state}"
     return None
@@ -654,7 +673,7 @@ def step_dry_run(services: Services, terminal: Terminal, seconds: float, per_tab
     return inventory.sha256
 
 
-def step_route_check(services: Services, terminal: Terminal, seconds: float) -> dict[str, Any]:
+def step_route_check(services: Services, terminal: Terminal, seconds: float, owner_exception: str | None = None) -> dict[str, Any]:
     """Bind the catalog host and record the Mac-side route observations before the route is used; a failed check refuses register and verify."""
     record = require_state("refreshing")
     folder = folder_of(services, record["cutover_id"])
@@ -662,8 +681,10 @@ def step_route_check(services: Services, terminal: Terminal, seconds: float) -> 
     instance = services.target(deadline=deadline)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     with services.route_probe(instance, folder, stamp, terminal, deadline=deadline) as probe:
-        document = route_check(probe, record["cutover_id"], instance, folder, deadline=deadline, stamp=stamp)
-    terminal.write(f"route check: {'passed' if document['passed'] else 'failed'}; record: {folder / ROUTE_CHECKS / (stamp + '.json')}\n")
+        document = route_check(probe, record["cutover_id"], instance, folder, deadline=deadline, stamp=stamp, owner_exception=owner_exception)
+    accepted = [item["name"] for item in document["observations"] if item.get("accepted_by")]
+    under = f" (failed and accepted by owner exception {owner_exception}: {', '.join(accepted)})" if accepted else ""
+    terminal.write(f"route check: {'passed' if document['passed'] else 'failed'}{under}; record: {folder / ROUTE_CHECKS / (stamp + '.json')}\n")
     if not document["passed"]:
         raise CutoverError(f"the route check failed: {route_problem(document['observations'])}")
     return {"passed": True, "observations": len(document["observations"])}
@@ -771,7 +792,9 @@ def parser() -> argparse.ArgumentParser:
     steps = cli.add_subparsers(dest="step", required=True)
     for name in ("status", "dry-run", "fence", "capture", "refresh", "verify", "switch", "rollback"):
         steps.add_parser(name)
-    steps.add_parser("route-check").add_argument("--probe-image", required=True, help="a local image that has python3; it is never pulled")
+    route = steps.add_parser("route-check")
+    route.add_argument("--probe-image", required=True, help="a local image that has python3; it is never pulled")
+    route.add_argument("--owner-exception", help="owner-<YYYYMMDD>-<words>: accept a failed Mac container observation (recorded as failed)")
     steps.add_parser("freeze").add_argument("--cutover", required=True)
     register = steps.add_parser("register")
     register.add_argument("--inventory", type=Path, required=True)
@@ -799,7 +822,7 @@ def run(args: argparse.Namespace, services: Services, terminal: Terminal) -> Any
             raise CutoverError("refresh needs the frozen inventory; run capture first")
         return authority_step(services, terminal, "refresh", "refreshing", "bronze inventory frozen; AWS registration may start")
     if args.step == "route-check":
-        return step_route_check(services, terminal, seconds)
+        return step_route_check(services, terminal, seconds, args.owner_exception)
     if args.step == "register":
         return step_register(services, terminal, args.inventory, args.sha256, seconds, per_table)
     if args.step == "verify":

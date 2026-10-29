@@ -334,6 +334,10 @@ SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, 
    unreadable result counts as not observed. So does a result that tried no target or names another network than its
    own.
 
+Docker Desktop forwards `host.docker.internal` to the Mac's loopback, so `mac_containers_refused` fails while Docker runs. For this temporary
+migration phase, `route-check --owner-exception owner-<YYYYMMDD>-<words>` accepts that one observation when it ran and failed. The record keeps it as
+failed and names the exception. An exception never covers another observation or a container probe that did not run.
+
 `route-check` writes `route_checks/<STAMP>.attempt` before the first observation. `register` and `verify` refuse to
 open the route unless the newest attempt completed and passed for the same cutover and host. Every evidence file must
 still match its recorded SHA-256. An attempt that expired or was interrupted refuses them even when an older check

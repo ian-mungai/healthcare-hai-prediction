@@ -1205,6 +1205,46 @@ def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
     return checks
 
 
+@offline
+def route_owner_exception(folder: Path) -> dict[str, bool]:
+    """A named owner exception accepts only a failed Mac container observation, keeps it recorded as failed and never stands in for one that did not run."""
+    checks: dict[str, bool] = {}
+    bound, cutover, clock = "i-0123456789abcdef0", folder / "cutover" / "cut1", registration_e2e.Clock()
+
+    def checked(number: int, name: str, answer: bool | None, exception: str | None) -> tuple[dict[str, Any], str]:
+        probe = RouteProbe()
+        probe.answers[name] = answer
+        stamp = f"20261029T00000{number}000000Z"
+        document = bronze_cutover.route_check(probe, "cut1", bound, cutover, deadline=clock() + 100, clock=clock, stamp=stamp, owner_exception=exception)
+        return document, code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound))
+
+    accepted, refusal = checked(1, "mac_containers_refused", False, "owner-20261029-route")
+    item = next(entry for entry in accepted["observations"] if entry["name"] == "mac_containers_refused")
+    checks["a failed container observation under a named exception lets register proceed"] = accepted["passed"] is True and refusal == ""
+    checks["the observation stays recorded as failed and names the exception"] = item["passed"] is False and item["accepted_by"] == "owner-20261029-route"
+    _, refusal = checked(2, "mac_containers_refused", None, "owner-20261029-route")
+    checks["an exception never stands in for a container probe that did not run"] = "mac_containers_refused" in refusal
+    _, refusal = checked(3, "catalog_port_only", False, "owner-20261029-route")
+    checks["an exception never covers another observation"] = "catalog_port_only" in refusal
+    _, refusal = checked(4, "mac_containers_refused", False, None)
+    checks["without an exception the failed observation still refuses register"] = "mac_containers_refused" in refusal
+    checks["a malformed exception name is refused"] = "exception" in code_of_cutover(lambda: checked(5, "mac_containers_refused", False, "yes"))
+    newest = cutover / bronze_cutover.ROUTE_CHECKS / "20261029T000009000000Z.json"
+    document = json.loads((cutover / bronze_cutover.ROUTE_CHECKS / "20261029T000003000000Z.json").read_text())
+    for entry in document["observations"]:
+        if entry["name"] == "catalog_port_only":
+            entry["accepted_by"] = "owner-20261029-route"
+    (cutover / bronze_cutover.ROUTE_CHECKS / "20261029T000009000000Z.attempt").write_bytes(b"{}")
+    newest.write_bytes(reg.canonical({**document, "time": "20261029T000009000000Z"}))
+    for entry in document["observations"]:
+        source = cutover / bronze_cutover.ROUTE_CHECKS / f"20261029T000003000000Z.{entry['name']}.evidence"
+        (cutover / bronze_cutover.ROUTE_CHECKS / f"20261029T000009000000Z.{entry['name']}.evidence").write_bytes(source.read_bytes())
+    checks["an exception written onto another observation is refused"] = "catalog_port_only" in code_of_cutover(
+        lambda: bronze_cutover.require_route(cutover, "cut1", bound)
+    )
+    return checks
+
+
 class InterruptedProbe(RouteProbe):
     """Observations whose step deadline passes between the second and third observation, after checking the attempt was persisted first."""
 
@@ -1763,6 +1803,7 @@ ALL_CASES = (
     http_absolute_deadline,
     role_storage_reads,
     route_binding_and_evidence,
+    route_owner_exception,
     mac_route_observations,
     owner_probe_deadline,
     owner_probe_cleanup,
