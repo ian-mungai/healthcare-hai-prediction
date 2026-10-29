@@ -2,7 +2,9 @@
 
 ``route-check`` makes three observations of the bound host, in order, and records each result with the SHA-256 of its sanitized evidence:
 
-1. ``host_without_public_address``: the host is one running instance with the project tag and no public address on it or any interface.
+1. ``host_without_open_ingress``: the host is one running instance with the project tag, and every security group on it or on any of its
+   interfaces admits inbound traffic only from security groups of the same account, never from an IPv4 or IPv6 range or a prefix list. The
+   host keeps its public address (the network has no NAT gateway), so the security groups keep the catalog port private.
 2. ``catalog_port_only``: the owned tunnel forwards only the catalog port 8181 of the bound host, the owned relay forwards only to the
    tunnel, the transport owns exactly these two processes and the catalog answers through the relay.
 3. ``mac_containers_refused``: while the route is open, no Mac Docker network reaches the tunnel or relay port. Docker runs only in the owner's
@@ -46,39 +48,74 @@ def evidence(document: Mapping[str, Any]) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
 
 
-def host_facts(described: Mapping[str, Any], instance: str, project_tag: str) -> dict[str, Any]:
-    """The sanitized facts of a `describe-instances` reply: the state, the project tag and whether any public address exists, never the address."""
-    found = [item for reservation in described.get("Reservations") or [] for item in reservation.get("Instances") or []]
+def security_group_ids(host: Mapping[str, Any]) -> list[str]:
+    """The IDs of every security group on the instance and on each of its interfaces, in first-seen order."""
+    found = [item.get("GroupId") for item in host.get("SecurityGroups") or []]
+    for interface in host.get("NetworkInterfaces") or []:
+        found += [item.get("GroupId") for item in interface.get("Groups") or []]
+    return list(dict.fromkeys(str(group) for group in found if isinstance(group, str) and group))
+
+
+def host_facts(described: Mapping[str, Any], instance: str, project_tag: str, groups: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+    """The sanitized facts of the host and its security groups: counts and flags only, never an address or a group ID."""
+    reservations = described.get("Reservations") or []
+    found = [item for reservation in reservations for item in reservation.get("Instances") or []]
     host = found[0] if len(found) == 1 else {}
+    owners = {reservation.get("OwnerId") for reservation in reservations if reservation.get("Instances")}
+    owner = owners.pop() if len(owners) == 1 else None
+    wanted = security_group_ids(host)
+    described_groups = [group for group in groups or [] if group.get("GroupId") in wanted]
+    rules = [rule for group in described_groups for rule in group.get("IpPermissions") or []]
+    pairs = [pair for rule in rules for pair in rule.get("UserIdGroupPairs") or []]
     return {
         "instance": instance,
         "instances": len(found),
         "state": (host.get("State") or {}).get("Name"),
         "project_tag": {"Key": "Project", "Value": project_tag} in (host.get("Tags") or []),
-        "public_on_instance": bool(host.get("PublicIpAddress")),
-        "public_on_interfaces": any((interface.get("Association") or {}).get("PublicIp") for interface in host.get("NetworkInterfaces") or []),
+        "public_address": bool(host.get("PublicIpAddress"))
+        or any((interface.get("Association") or {}).get("PublicIp") for interface in host.get("NetworkInterfaces") or []),
+        "security_groups": len(wanted),
+        "security_groups_described": len({group.get("GroupId") for group in described_groups}),
+        "range_sources": sum(len(rule.get(key) or []) for rule in rules for key in ("IpRanges", "Ipv6Ranges", "PrefixListIds")),
+        "foreign_group_sources": sum(1 for pair in pairs if owner is None or pair.get("UserId") != owner or not pair.get("GroupId")),
     }
 
 
-def host_accepted(facts: Mapping[str, Any]) -> bool:
+def host_accepted(facts: Mapping[str, Any], *, require_tag: bool = True) -> bool:
+    """One running host whose every security group was read and admits inbound traffic only from same-account security groups."""
     return (
         facts["instances"] == 1
         and facts["state"] == "running"
-        and facts["project_tag"] is True
-        and not facts["public_on_instance"]
-        and not facts["public_on_interfaces"]
+        and (facts["project_tag"] is True or not require_tag)
+        and facts["security_groups"] >= 1
+        and facts["security_groups_described"] == facts["security_groups"]
+        and facts["range_sources"] == 0
+        and facts["foreign_group_sources"] == 0
     )
 
 
+def describe_host(aws: AwsCli, instance: str, project_tag: str, *, deadline: float, clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
+    """Read the instance, then its security groups, each call within what is left of the deadline; a failed call raises StorageError."""
+    described = aws.call_bounded("ec2", "describe-instances", ["--instance-ids", instance], timeout=max(0.0, deadline - clock()))
+    hosts = [item for reservation in described.get("Reservations") or [] for item in reservation.get("Instances") or []]
+    wanted = security_group_ids(hosts[0]) if len(hosts) == 1 else []
+    groups: list[Mapping[str, Any]] = []
+    if wanted:
+        if clock() >= deadline:
+            raise StorageError("describe-security-groups", "deadline")
+        reply = aws.call_bounded("ec2", "describe-security-groups", ["--group-ids", *wanted], timeout=deadline - clock())
+        groups = list(reply.get("SecurityGroups") or [])
+    return host_facts(described, instance, project_tag, groups)
+
+
 def observe_host(aws: AwsCli, instance: str, project_tag: str, *, deadline: float, clock: Callable[[], float] = time.monotonic) -> Observation:
-    """Observation 1: one running project host without a public address; a failed describe call is not observed."""
+    """Observation 1: one running project host with no open ingress; a failed describe call is not observed."""
     if clock() >= deadline:
         return None, evidence({"instance": instance, "not_observed": "deadline"})
     try:
-        described = aws.call_bounded("ec2", "describe-instances", ["--instance-ids", instance], timeout=deadline - clock())
+        facts = describe_host(aws, instance, project_tag, deadline=deadline, clock=clock)
     except StorageError as error:
-        return None, evidence({"instance": instance, "not_observed": f"describe-instances failed ({error.code})"})
-    facts = host_facts(described, instance, project_tag)
+        return None, evidence({"instance": instance, "not_observed": f"describe call failed ({error.code})"})
     return host_accepted(facts), evidence(facts)
 
 
@@ -255,12 +292,12 @@ class LiveRouteProbe:
         self.passed: dict[str, bool | None] = {}
 
     def observe(self, name: str, *, deadline: float) -> Observation:
-        if name == "host_without_public_address":
+        if name == "host_without_open_ingress":
             result = observe_host(self.aws, self.spec.instance, self.project_tag, deadline=deadline)
         elif name == "catalog_port_only":
             result = (
                 self.observe_port(deadline)
-                if self.passed.get("host_without_public_address")
+                if self.passed.get("host_without_open_ingress")
                 else (None, evidence({"not_observed": "the host check did not pass"}))
             )
         elif name == "mac_containers_refused":

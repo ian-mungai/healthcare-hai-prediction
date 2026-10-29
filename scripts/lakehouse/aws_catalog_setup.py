@@ -58,7 +58,7 @@ from orchestration import ecs_target, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import bronze_writer, catalog, polaris_writer, principal_credentials, run_lock
+from scripts.lakehouse import bronze_writer, catalog, cutover_route, polaris_writer, principal_credentials, run_lock
 from scripts.lakehouse.catalog_journal import durable_directory
 
 CATALOG = "hai_lakehouse"
@@ -373,21 +373,15 @@ def check_ports(spec: TransportSpec) -> None:
 
 
 def network_acceptance(spec: TransportSpec, aws: AwsCli, *, deadline: float, clock: Clock = time.monotonic) -> None:
-    """Accept the route only to one running host with no public address on the instance or any interface; the catalog stays private."""
+    """Accept the route only to one running host whose security groups admit only same-account security groups; the catalog stays private."""
     check_ports(spec)
     left = check_deadline(deadline, clock)
     try:
-        described = aws.call_bounded("ec2", "describe-instances", ["--instance-ids", spec.instance], timeout=left)
+        facts = cutover_route.describe_host(aws, spec.instance, "", deadline=clock() + left, clock=clock)
     except StorageError as error:
         raise SetupError("network", f"describing the catalog host failed ({error.code})") from None
-    instances = [item for reservation in described.get("Reservations") or [] for item in reservation.get("Instances") or []]
-    if (
-        len(instances) != 1
-        or (instances[0].get("State") or {}).get("Name") != "running"
-        or instances[0].get("PublicIpAddress")
-        or any((interface.get("Association") or {}).get("PublicIp") for interface in instances[0].get("NetworkInterfaces") or [])
-    ):
-        raise SetupError("network", "the catalog host is not one running instance without a public address")
+    if not cutover_route.host_accepted(facts, require_tag=False):
+        raise SetupError("network", "the catalog host is not one running instance whose security groups admit only project security groups")
 
 
 def root_token(request: Request, secret: str) -> str:

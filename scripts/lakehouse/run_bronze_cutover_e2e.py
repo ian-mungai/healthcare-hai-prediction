@@ -1102,32 +1102,13 @@ def tunnel_route(folder: Path) -> dict[str, bool]:
     settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
     spec = TransportSpec("i-0123456789abcdef0", "synthetic", "us-east-1", 18181, 18182)
     tags = [{"Key": "Project", "Value": "synthetic_project"}]
-    for label, instance, expected in (
-        ("a running private host of the project passes", {"State": {"Name": "running"}, "NetworkInterfaces": [{}], "Tags": tags}, ""),
-        (
-            "a public address is refused",
-            {"State": {"Name": "running"}, "PublicIpAddress": "192.0.2.1", "NetworkInterfaces": [{}], "Tags": tags},
-            "network",
-        ),
-        ("a stopped host is refused", {"State": {"Name": "stopped"}, "NetworkInterfaces": [{}], "Tags": tags}, "network"),
-        (
-            "a public interface association is refused",
-            {"State": {"Name": "running"}, "NetworkInterfaces": [{"Association": {"PublicIp": "192.0.2.1"}}], "Tags": tags},
-            "network",
-        ),
-        (
-            "a host without the project tag is refused",
-            {"State": {"Name": "running"}, "NetworkInterfaces": [{}], "Tags": [{"Key": "Project", "Value": "other"}]},
-            "network",
-        ),
-    ):
-        reply = json.dumps({"Reservations": [{"Instances": [instance]}]})
-
-        def runner(command: list[str], reply: str = reply, **_: Any) -> SimpleNamespace:
-            return SimpleNamespace(returncode=0, stdout=reply, stderr="")
-
-        code, _ = code_of(lambda: bronze_cutover.network_acceptance(spec, AwsCli(settings, runner=runner), "synthetic_project", deadline=time.monotonic() + 10))
-        checks[f"network acceptance: {label}"] = code == expected
+    untagged = ingress_host([{"Key": "Project", "Value": "other"}])
+    closed = [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}]
+    variants = [*ingress_variants(tags), ("a host without the project tag is refused", untagged, closed, False)]
+    for label, instance, groups, accepted in variants:
+        aws = AwsCli(settings, runner=describe_runner(instance, groups))
+        code, _ = code_of(functools.partial(bronze_cutover.network_acceptance, spec, aws, "synthetic_project", deadline=time.monotonic() + 10))
+        checks[f"network acceptance: {label}"] = code == ("" if accepted else "network")
     return checks
 
 
@@ -1180,9 +1161,9 @@ def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
     clock = registration_e2e.Clock()
     passed = bronze_cutover.route_check(probe, "cut1", bound, cutover, deadline=clock() + 100, clock=clock, stamp="20261028T000000000000Z")
     checks["the route check makes each Mac-side observation once"] = sorted(probe.calls) == sorted(bronze_cutover.ROUTE_OBSERVATIONS)
-    checks["the observations are the catalog port only, no public address and Mac containers refused"] = set(bronze_cutover.ROUTE_OBSERVATIONS) == {
+    checks["the observations are the catalog port only, no open ingress on the host and Mac containers refused"] = set(bronze_cutover.ROUTE_OBSERVATIONS) == {
         "catalog_port_only",
-        "host_without_public_address",
+        "host_without_open_ingress",
         "mac_containers_refused",
     }
     evidence = cutover / bronze_cutover.ROUTE_CHECKS / "20261028T000000000000Z.json"
@@ -1205,7 +1186,7 @@ def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
     for number, (label, name, answer) in enumerate(
         (
             ("a tunnel that reaches another port", "catalog_port_only", False),
-            ("a host with a public address", "host_without_public_address", False),
+            ("a host whose security group admits an IP range", "host_without_open_ingress", False),
             ("a Mac container that reaches the tunnel or relay", "mac_containers_refused", False),
             ("a container probe that did not run", "mac_containers_refused", None),
         ),
@@ -1269,15 +1250,75 @@ def route_attempts(folder: Path, bound: str) -> dict[str, bool]:
     return checks
 
 
-def describe_runner(instance: dict[str, Any] | None) -> Callable[..., SimpleNamespace]:
-    """A stand-in `describe-instances` reply, or a failed call when the instance is None."""
+def describe_runner(instance: dict[str, Any] | None, groups: list[dict[str, Any]] | None = None) -> Callable[..., SimpleNamespace]:
+    """Stand-in `describe-instances` and `describe-security-groups` replies; a None instance or None groups make that call fail."""
 
     def runner(command: list[str], **_: Any) -> SimpleNamespace:
+        if "describe-security-groups" in command:
+            if groups is None:
+                return SimpleNamespace(returncode=255, stdout="", stderr="An error occurred (UnauthorizedOperation)")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"SecurityGroups": groups}), stderr="")
         if instance is None:
             return SimpleNamespace(returncode=255, stdout="", stderr="An error occurred (UnauthorizedOperation)")
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"Reservations": [{"Instances": [instance]}]}), stderr="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"Reservations": [{"OwnerId": INGRESS_OWNER, "Instances": [instance]}]}), stderr="")
 
     return runner
+
+
+INGRESS_OWNER = "111122223333"
+
+
+def ingress_rule(**sources: Any) -> dict[str, Any]:
+    """One inbound rule on the catalog port; by default its only source is a task security group of the same account."""
+    rule = {"IpProtocol": "tcp", "FromPort": 8181, "ToPort": 8181, "IpRanges": [], "Ipv6Ranges": [], "PrefixListIds": []}
+    rule["UserIdGroupPairs"] = [{"GroupId": "sg-0task", "UserId": INGRESS_OWNER}]
+    return {**rule, **sources}
+
+
+def ingress_host(tags: list[dict[str, str]], extra_interface_group: bool = False) -> dict[str, Any]:
+    """A running host with a public address (the host takes one by design: no NAT gateway) and the host security group."""
+    interface_groups = [{"GroupId": "sg-0host"}] + ([{"GroupId": "sg-0extra"}] if extra_interface_group else [])
+    return {
+        "State": {"Name": "running"},
+        "PublicIpAddress": "192.0.2.1",
+        "SecurityGroups": [{"GroupId": "sg-0host"}],
+        "NetworkInterfaces": [{"Association": {"PublicIp": "192.0.2.1"}, "Groups": interface_groups}],
+        "Tags": tags,
+    }
+
+
+def ingress_variants(tags: list[dict[str, str]]) -> list[tuple[str, dict[str, Any] | None, list[dict[str, Any]] | None, bool]]:
+    """(label, instance, security groups, accepted): the host is accepted only when every inbound source is a same-account security group."""
+    host = ingress_host(tags)
+    closed = [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}]
+    return [
+        ("a public address with only project security group sources passes", host, closed, True),
+        ("an IPv4 world range is refused", host, [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "0.0.0.0/0"}])]}], False),
+        ("a narrow IPv4 range is refused", host, [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "198.51.100.7/32"}])]}], False),
+        ("an IPv6 range is refused", host, [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(Ipv6Ranges=[{"CidrIpv6": "::/0"}])]}], False),
+        (
+            "a prefix list source is refused",
+            host,
+            [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(PrefixListIds=[{"PrefixListId": "pl-0abc"}])]}],
+            False,
+        ),
+        (
+            "a security group of another account is refused",
+            host,
+            [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule(UserIdGroupPairs=[{"GroupId": "sg-0other", "UserId": "444455556666"}])]}],
+            False,
+        ),
+        (
+            "an open group on an interface only is refused",
+            ingress_host(tags, extra_interface_group=True),
+            closed + [{"GroupId": "sg-0extra", "IpPermissions": [ingress_rule(IpRanges=[{"CidrIp": "0.0.0.0/0"}])]}],
+            False,
+        ),
+        ("a security group missing from the reply is refused", ingress_host(tags, extra_interface_group=True), closed, False),
+        ("a host with no security group is refused", {**host, "SecurityGroups": [], "NetworkInterfaces": [{}]}, [], False),
+        ("a failed security group call is refused", host, None, False),
+        ("a stopped host is refused", {**host, "State": {"Name": "stopped"}}, closed, False),
+    ]
 
 
 class Answer(BaseHTTPRequestHandler):
@@ -1308,30 +1349,21 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
     """Route acceptance, Mac side (owner decision Oct 28 2026): the host check, the catalog answer through the relay and the container probe."""
     checks: dict[str, bool] = {}
     settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
-    host = {
-        "InstanceId": "i-0123456789abcdef0",
-        "State": {"Name": "running"},
-        "PrivateIpAddress": "10.23.0.11",
-        "NetworkInterfaces": [{"PrivateIpAddress": "10.23.0.11"}],
-        "Tags": [{"Key": "Project", "Value": "hai"}],
-    }
+    tags = [{"Key": "Project", "Value": "hai"}]
 
-    def host_result(instance: dict[str, Any] | None) -> tuple[bool | None, bytes]:
-        aws = AwsCli(settings, runner=describe_runner(instance))
+    def host_result(instance: dict[str, Any] | None, groups: list[dict[str, Any]] | None) -> tuple[bool | None, bytes]:
+        aws = AwsCli(settings, runner=describe_runner(instance, groups))
         return cutover_route.observe_host(aws, "i-0123456789abcdef0", "hai", deadline=time.monotonic() + 10)
 
-    passed, evidence = host_result(host)
-    checks["a running project host without a public address passes"] = passed is True
-    checks["the host evidence holds no address"] = b"10.23" not in evidence and b"i-0123456789abcdef0" in evidence
-    for label, changed in (
-        ("a public address on the instance", {**host, "PublicIpAddress": "203.0.113.9"}),
-        ("a public address on an interface", {**host, "NetworkInterfaces": [{"Association": {"PublicIp": "203.0.113.9"}}]}),
-        ("a host without the project tag", {**host, "Tags": []}),
-        ("a stopped host", {**host, "State": {"Name": "stopped"}}),
-    ):
-        result, evidence = host_result(changed)
-        checks[f"{label} fails and is recorded without the address"] = result is False and b"203.0.113" not in evidence
-    checks["a failed describe call is recorded as not observed"] = host_result(None)[0] is None
+    for label, instance, groups, accepted in ingress_variants(tags):
+        result, evidence = host_result(instance, groups)
+        expected = None if groups is None else accepted
+        checks[f"host observation: {label}"] = result is expected
+        checks[f"host observation evidence holds no address or group ID: {label}"] = (
+            b"192.0.2" not in evidence and b"sg-0" not in evidence and b"198.51" not in evidence
+        )
+    checks["a host without the project tag fails"] = host_result(ingress_host([]), [{"GroupId": "sg-0host", "IpPermissions": [ingress_rule()]}])[0] is False
+    checks["a failed describe call is recorded as not observed"] = host_result(None, [])[0] is None
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
     threading.Thread(target=server.serve_forever, daemon=True).start()

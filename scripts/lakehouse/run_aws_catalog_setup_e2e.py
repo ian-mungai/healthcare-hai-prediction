@@ -30,6 +30,7 @@ from unittest import mock
 
 from orchestration import ecs_target
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
+from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn, StandInHandler
 from scripts.lakehouse import aws_catalog_setup as setup
@@ -387,6 +388,24 @@ def case_mac_port(_: Path) -> dict[str, bool]:
             checks[f"the {label} on the Mac port is refused"] = False
         except setup.SetupError as error:
             checks[f"the {label} on the Mac port is refused"] = error.code == "network"
+    return checks
+
+
+def case_host_ingress(_: Path) -> dict[str, bool]:
+    """The route goes only to one running host whose security groups admit only same-account security groups; its public address is allowed."""
+    from scripts.lakehouse.run_bronze_cutover_e2e import describe_runner, ingress_variants
+
+    checks: dict[str, bool] = {}
+    settings = {"aws_profile": "synthetic", "aws_region": REGION, "data_bucket_name": "synthetic-bucket", "expected_account_id": "synthetic_account"}
+    spec = TransportSpec("i-0123456789abcdef0", "project", REGION, 18181, 18182)
+    for label, instance, groups, accepted in ingress_variants([]):
+        aws = AwsCli(settings, runner=describe_runner(instance, groups))
+        try:
+            setup.network_acceptance(spec, aws, deadline=time.monotonic() + 10)
+            code = ""
+        except setup.SetupError as error:
+            code = error.code
+        checks[f"host ingress: {label}"] = code == ("" if accepted else "network")
     return checks
 
 
@@ -1195,6 +1214,7 @@ CASES: dict[str, Case] = {
     "lost_create_reply": case_lost_create_reply,
     "create_conflict": case_create_conflict,
     "mac_port": case_mac_port,
+    "host_ingress": case_host_ingress,
     "root_refused": case_root_refused,
     "stalled_catalog": case_stalled_catalog,
     "route_lost": case_route_lost,
