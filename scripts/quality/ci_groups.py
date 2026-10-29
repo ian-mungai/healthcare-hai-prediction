@@ -9,7 +9,8 @@ GitHub CI and local commits use the same lists. Scopes:
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
 The ``launcher`` group lists, besides the few patterns of the configuration, the path pattern of each ``inventory_reads`` entry (files a suite module
-lists by inventory, such as every Python file the Docker-call guard parses), one exact path for each file and one prefix for each folder of
+lists by inventory, such as every Python file the Docker-call guard parses; the pattern ``.`` of a module whose reads are not reviewed selects the group for
+every path), one exact path for each file and one prefix for each folder of
 config/quality/launcher_inputs.json: the files that the launcher E2E suite imports or reads and the folders it reads whole (generated and checked by
 scripts/quality/launcher_inputs.py).
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both

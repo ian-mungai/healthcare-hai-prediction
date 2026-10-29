@@ -779,9 +779,13 @@ LAUNCHER_IMPORTED = (
     "tests/orchestration/fixtures/combined_dag.py",
     "scripts/quality/future_probe.py",
 )
-LAUNCHER_UNRELATED = (
+# Paths no import or read of the suite reaches. Followed modules that list files carry an ``inventory_reads`` entry with the pattern ``.``, so the group is
+# selected by every path (owner decision 1): the cases expect it until a module's entry is narrowed by a reviewed change, one module at a time.
+LAUNCHER_ALWAYS_SELECTED = (
     "infra/main.tf",
     "config/quality/mypy_runtimes.json",
+    "docs/data_collection.md",
+    ".github/pull_request_template.md",
 )
 # The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
 LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
@@ -826,7 +830,14 @@ def sample_cases(scratch: Path) -> list[dict[str, Any]]:
         (root / name).write_text(text, encoding="utf-8")
     tracked = set(SAMPLE_REPOSITORY)
     computed = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], SAMPLE_ENTRY["extra_inputs"])
-    committed = {**SAMPLE_ENTRY, "files": computed["files"], "dynamic_sites": computed["dynamic_sites"], "folders": computed["folders"]}
+    committed = {
+        **SAMPLE_ENTRY,
+        "files": computed["files"],
+        "dynamic_sites": computed["dynamic_sites"],
+        "folders": computed["folders"],
+        "inventory_sites": computed["inventory_sites"],
+        "inventory_reads": [{"module": "entry.py", "pattern": ".", "why": "sample: the glob of the folder it reads whole is not reviewed"}],
+    }
     wanted = {"entry.py", "pkg/__init__.py", "pkg/used.py", "late.py", "config/a.json", "compose.yaml", "svc/worker.py", "folder/x.txt", "folder/y.txt"}
     cases = [
         {
@@ -953,15 +964,17 @@ def overlay_problems(tracked: set[str], committed: dict[str, Any], line: str) ->
 
 
 def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
-    """The launcher group is selected by what its suite imports or reads and by nothing else. A change to a module the suite imports selects it, a change to
-    an unrelated module does not, the committed list equals the computed one, and every computed file is selected by the group's patterns."""
+    """The launcher group is selected by what its suite imports or reads, and by every path while a followed module that lists files carries the ``.`` pattern
+    of its ``inventory_reads`` entry (owner decision 1: every such module always selects the suite until a reviewed entry narrows it). A change to a module
+    the suite imports selects it, so does a path the suite never reaches, the committed list equals the computed one, and every computed file is selected by
+    the group's patterns."""
     cases: list[dict[str, Any]] = [
         selection_case(work, f"launcher_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
         for path in LAUNCHER_IMPORTED
     ]
     cases += [
-        selection_case(work, f"launcher_not_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], [])
-        for path in LAUNCHER_UNRELATED
+        selection_case(work, f"launcher_always_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_ALWAYS_SELECTED
     ]
     try:
         from scripts.quality import launcher_inputs
@@ -1213,7 +1226,6 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             ["--scope", "paths", "--path", "config/quality/mypy_runtimes.json", "--part", "core+layers"],
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "configuration_checks"],
         ),
-        selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], PART_GROUPS["all"], "full scope"),
         selection_case(
             work,
@@ -2631,7 +2643,8 @@ def staged_edit_case(work: Path, name: str, path: str, want_run: list[str], part
 
 def body_file_cases(work: Path) -> list[dict[str, Any]]:
     """An edit to a body file selects its own group (and the layers downstream of a lakehouse layer) and the repository group, which runs the guard, and no
-    other group. The pull request template is a document; the dispatcher, the workflow and the setup action select every group."""
+    other group in the core and layer parts (the launcher part selects every path, see ``launcher_selection_cases``). The dispatcher, the workflow and the
+    setup action select every group."""
     cases = [
         {
             "case": "every_body_file_has_an_expected_selection",
@@ -2643,7 +2656,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         part = "all" if group == "launcher" else "core+layers"
         cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
-    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group_in_part_all", ".github/pull_request_template.md", [], "all"))
+    cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
     cases.append(
         staged_edit_case(work, "dispatcher_edit_selects_every_group_in_part_all", "scripts/run_ci.sh", [*WITH_LAYERS, "launcher"], "all", "selects every group")
@@ -2667,11 +2680,6 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         )
         for path in (".github/workflows/ci.yml", ".github/actions/setup/action.yml")
     ]
-    cases.append(
-        selection_case(
-            work, "pull_request_template_path_selects_no_group", ["--scope", "paths", "--path", ".github/pull_request_template.md", "--part", "all"], []
-        )
-    )
     return cases
 
 

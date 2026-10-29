@@ -79,19 +79,217 @@
   ],
   "inventory_reads": [
     {
-      "module": "scripts/quality/docker_calls.py",
-      "pattern": "\\.py$",
-      "why": "docker_calls.check lists every tracked and untracked Python file with git ls-files and parses each one to discover wrappers; the suite's docker_calls_check case runs it, so any Python file, also a future one, can change the result"
+      "module": "orchestration/launcher.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "orchestration/lineage.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/acquisition/batch.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/acquisition/bls_api_contract.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/acquisition/history_routes.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/acquisition/redownload_controls.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/acquisition/reuse_capture.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/acquisition/s3_store.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/infrastructure/sts_stand_in.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/catalog_journal.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/dbt_package_archive.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/geography_file_periods.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/gold_checks.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/gold_publish.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/ownership_release_periods.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/package_fixture.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/pipeline_build.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/pos_file_periods.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/provenance.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_bronze_e2e.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_gold_e2e.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_gold_publish_cases.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
     },
     {
       "module": "scripts/lakehouse/run_launcher_e2e.py",
-      "pattern": null,
-      "why": "source_snapshot lists every file with git ls-files only to hash it before and after the run and fail when the run changed a source; the result does not depend on any file's content"
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_launcher_real_fixture.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_lock_e2e.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_pins_e2e.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_silver_e2e.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/run_staging_e2e.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/silver.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/silver_input.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/lakehouse/silver_quality.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/orchestration/in_image_checks.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/orchestration/ledger.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/orchestration/run_control.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/quality/docker_calls.py",
+      "pattern": "\\.py$",
+      "why": "docker_calls.check lists every tracked and untracked Python file with git ls-files and parses each one to discover wrappers; the suite's docker_calls_check case runs it, so any Python file, also a future one, can change the result"
     }
   ],
   "dynamic_sites": {},
   "inventory_sites": {
-    "scripts/lakehouse/run_launcher_e2e.py": 1,
+    "orchestration/launcher.py": 9,
+    "orchestration/lineage.py": 1,
+    "scripts/acquisition/batch.py": 2,
+    "scripts/acquisition/bls_api_contract.py": 1,
+    "scripts/acquisition/history_routes.py": 1,
+    "scripts/acquisition/redownload_controls.py": 5,
+    "scripts/acquisition/reuse_capture.py": 1,
+    "scripts/acquisition/s3_store.py": 1,
+    "scripts/infrastructure/sts_stand_in.py": 1,
+    "scripts/lakehouse/catalog_journal.py": 2,
+    "scripts/lakehouse/dbt_package_archive.py": 3,
+    "scripts/lakehouse/geography_file_periods.py": 5,
+    "scripts/lakehouse/gold_checks.py": 1,
+    "scripts/lakehouse/gold_publish.py": 1,
+    "scripts/lakehouse/ownership_release_periods.py": 1,
+    "scripts/lakehouse/package_fixture.py": 2,
+    "scripts/lakehouse/pipeline_build.py": 1,
+    "scripts/lakehouse/pos_file_periods.py": 2,
+    "scripts/lakehouse/provenance.py": 3,
+    "scripts/lakehouse/run_bronze_e2e.py": 1,
+    "scripts/lakehouse/run_gold_e2e.py": 2,
+    "scripts/lakehouse/run_gold_publish_cases.py": 3,
+    "scripts/lakehouse/run_launcher_e2e.py": 21,
+    "scripts/lakehouse/run_launcher_real_fixture.py": 1,
+    "scripts/lakehouse/run_lock_e2e.py": 2,
+    "scripts/lakehouse/run_pins_e2e.py": 1,
+    "scripts/lakehouse/run_silver_e2e.py": 4,
+    "scripts/lakehouse/run_staging_e2e.py": 1,
+    "scripts/lakehouse/silver.py": 1,
+    "scripts/lakehouse/silver_input.py": 2,
+    "scripts/lakehouse/silver_quality.py": 1,
+    "scripts/orchestration/in_image_checks.py": 2,
+    "scripts/orchestration/ledger.py": 1,
+    "scripts/orchestration/run_control.py": 1,
     "scripts/quality/docker_calls.py": 1
   },
   "folders": [
@@ -870,8 +1068,11 @@
     "scripts/lakehouse/aws_bronze.py",
     "scripts/lakehouse/bridge_references.py",
     "scripts/lakehouse/bronze.py",
+    "scripts/lakehouse/bronze_cutover.py",
+    "scripts/lakehouse/bronze_inventory.py",
     "scripts/lakehouse/bronze_metadata.py",
     "scripts/lakehouse/bronze_namespace_cases.py",
+    "scripts/lakehouse/bronze_scan.py",
     "scripts/lakehouse/bronze_writer.py",
     "scripts/lakehouse/bronze_writer_cases.py",
     "scripts/lakehouse/care_compare_tables.py",
@@ -881,6 +1082,7 @@
     "scripts/lakehouse/catalog_migration_cases.py",
     "scripts/lakehouse/checksums.py",
     "scripts/lakehouse/county_change_seed.py",
+    "scripts/lakehouse/cutover_route.py",
     "scripts/lakehouse/dbt.sh",
     "scripts/lakehouse/dbt_package_archive.py",
     "scripts/lakehouse/deadline_trace.go",
@@ -905,6 +1107,7 @@
     "scripts/lakehouse/identity_splits.py",
     "scripts/lakehouse/ipps_file_labels.py",
     "scripts/lakehouse/launcher_cleanup.py",
+    "scripts/lakehouse/mac_route_probe.py",
     "scripts/lakehouse/measure_domains.py",
     "scripts/lakehouse/memory_budget.py",
     "scripts/lakehouse/mmd_conditions.py",
@@ -923,6 +1126,7 @@
     "scripts/lakehouse/retired_objects.py",
     "scripts/lakehouse/run_aws_bronze_writer_e2e.py",
     "scripts/lakehouse/run_bridge_references_e2e.py",
+    "scripts/lakehouse/run_bronze_cutover_e2e.py",
     "scripts/lakehouse/run_bronze_diagnostics_e2e.py",
     "scripts/lakehouse/run_bronze_e2e.py",
     "scripts/lakehouse/run_catalog_authority_defects.py",
