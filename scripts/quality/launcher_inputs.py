@@ -317,7 +317,7 @@ def problems(root: Path, tracked: set[str], committed: dict[str, Any]) -> list[s
 
 def selection_gaps(config: dict[str, Any], files: list[str], tracked: set[str]) -> list[str]:
     """Listed files that the ``launcher`` patterns (after ci_groups.load) and ``global`` do not select, and patterns that match no tracked file."""
-    selecting = [*config["groups"]["launcher"], *config["global"]]
+    selecting = [*config["groups"]["launcher"], *config.get("launcher_always", []), *config["global"]]
     gaps = [
         f"{path}: listed, but neither the launcher patterns nor global select it"
         for path in files

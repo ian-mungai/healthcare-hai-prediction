@@ -297,6 +297,9 @@ def run_entry(work: Path, out: Path, label: str, extra: dict[str, str]) -> tuple
 def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     name = "docs_only_runs_gates" if part == "core" else f"docs_only_runs_gates_{part}_part"
     stage_readme(work)
+    # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
+    launcher_part = "launcher" in PART_GROUPS[part]
+    marker = install_launcher_stub(work) if launcher_part else None
     try:
         code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part})
     finally:
@@ -304,7 +307,10 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "conditional_groups_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part] if group != "repository_code_checks"),
+        "conditional_groups_skipped_with_reason": all(
+            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "launcher"}
+        ),
+        "launcher_selected_and_started": (marker is not None and "run launcher" in log and marker.exists()) if launcher_part else "run launcher" not in log,
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
         # sql_style is selected by path in the staged scope (always_except_commits), so a README-only change skips it with a reason.
@@ -790,7 +796,7 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
     ]
-    return [*cases, *reader_coverage_cases(work), *entry_point_cases(), *launcher_selection_cases(work)]
+    return [*cases, *reader_coverage_cases(work), *entry_point_cases(), *launcher_selection_cases(work), *launcher_always_cases(work)]
 
 
 LAUNCHER_IMPORTED = (
@@ -987,6 +993,37 @@ def overlay_problems(tracked: set[str], committed: dict[str, Any], line: str) ->
 
     with mock.patch.object(Path, "read_text", overlay):
         return launcher_inputs.problems(ROOT, tracked, committed)
+
+
+def launcher_always_cases(work: Path) -> list[dict[str, Any]]:
+    """The always-select pattern (``.``) selects the launcher for every changed path and takes no part in classifying paths: it is not in a group list, so a
+    path no list names still selects every group (LS27), an empty change list selects no launcher (LS28) and the configuration note states the
+    exception (LS30)."""
+    config = ci_groups.load()
+    listed = [pattern for patterns in config["groups"].values() for pattern in patterns] + config["passive"]
+    always = config.get("launcher_always", [])
+    code, plan, error = select(work, "--scope", "paths", "--part", "all")
+    note = json.loads((ROOT / ci_groups.CONFIG).read_text(encoding="utf-8"))["note"]
+    stale = ("no longer selects it", "never another group")
+    return [
+        {
+            "case": "launcher_always_pattern_is_not_a_classifier",
+            "passed": bool(always) and not any(re.search(pattern, "newtop/tool.bin") for pattern in listed),
+            "launcher_always": always,
+            "matching": [pattern for pattern in listed if re.search(pattern, "newtop/tool.bin")][:4],
+        },
+        {
+            "case": "empty_change_list_selects_no_launcher",
+            "passed": code == 0 and plan is not None and "launcher" not in plan["run"],
+            "run": plan["run"] if plan else None,
+            "error": error[-400:],
+        },
+        {
+            "case": "ci_groups_note_states_the_launcher_exception",
+            "passed": "launcher_always" in note and "inventory_reads" in note and not any(phrase in note for phrase in stale),
+            "stale_phrases": [phrase for phrase in stale if phrase in note],
+        },
+    ]
 
 
 def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
@@ -1236,6 +1273,13 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(work, "empty_range_runs_all", ["--scope", "range", "--part", "core+layers"], WITH_LAYERS, "no usable range"),
         selection_case(
             work, "unclassified_path_runs_all", ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "core+layers"], WITH_LAYERS, "unclassified"
+        ),
+        selection_case(
+            work,
+            "unclassified_path_runs_all_in_part_all",
+            ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "all"],
+            [*WITH_LAYERS, "launcher"],
+            "unclassified",
         ),
         selection_case(
             work,
@@ -3114,6 +3158,8 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["repository_code_checks", "sql_style"],
+        # Every path selects the launcher while a followed module carries the inventory_reads pattern ".", so the dry run starts it too.
+        "launcher_selected_by_every_path": "TIMED launcher E2E" in log and local["groups"] == {"launcher", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }
     cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
