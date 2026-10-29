@@ -106,4 +106,4 @@ The fixed probe command uses a 60-second timeout. It compares task metadata with
 .venv/bin/python -m scripts.infrastructure.run_jobs_preparation_e2e --output <NEW_DIRECTORY>
 ```
 
-The artifact under `data/e2e/ecs_target/` records source hashes and every command case. The suite runs the native renderer commands. Its wrapper and plan-reader executables are inert captures. It contacts no cloud service. AWS authorization, Terraform plans, images, catalog readiness and integrated launcher behavior require their separate lead-run checks.
+The `lakehouse_bronze` check group runs both suites. The `terraform_checks` group validates and tests the `infra/jobs` and `infra/jobs/identity_probe` roots. The artifact under `data/e2e/ecs_target/` records source hashes and every command case. The suite runs the native renderer commands. Its wrapper and plan-reader executables are inert captures. It contacts no cloud service. AWS authorization, Terraform plans, images, catalog readiness and integrated launcher behavior require their separate lead-run checks.
