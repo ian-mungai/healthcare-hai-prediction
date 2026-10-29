@@ -668,25 +668,22 @@ without a trailing shard number, in minutes). `run_ci_groups_e2e` keeps each val
 without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. Bash counts whole
 seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. A bash subshell
 cannot call `setsid`, so a short Python step starts each worker: it calls `setsid`, resets SIGINT and SIGQUIT, sets `PROCESS_LAUNCH_SESSION=1` and starts a new bash. The step stays as
-the session's leader and watchdog. It ends with the bash's status. When the dispatcher has died, even by KILL, it stops every other member of its session within 0.2 seconds plus the grace
-period plus the 5 second confirmation. That bash reads the
+the session's leader and watchdog. When the bash ends, the step first stops every other member of its session (TERM, KILL after the grace period) and confirms that none is left, then it
+ends with the bash's status (1, with a message, when a member survives or the session cannot be listed). So a descendant that the worker left has no unwatched moment. When the dispatcher has died, even by KILL,
+it does the same within 0.2 seconds plus the grace period plus the 5 second confirmation. That bash reads the
 dispatcher's functions and the variables that workers use from a private state file (mode 600 in the scratch folder). A program that the worker starts through `scripts/process.py` stays in
 the worker's session (see Process launcher deadline). At a deadline the dispatcher stops every member of the worker's session with `stop_sessions` of `scripts/process.py`: TERM, KILL after
 `CI_WORKER_GRACE_SECONDS` (5 by default), then a confirmation that no member is left. If the session cannot be listed, the worker's group still stops and the stop is reported as failed. It
-prints the worker, its check group and the limit, fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. The other workers keep their
+prints the worker, its check group and the limit, fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. When the stop is not confirmed the entry reads `(deadline <seconds> s, stop not confirmed)`, the dispatcher does not wait for that worker (the wait has no bound) and keeps it in the live list, so the exit trap tries again. The other workers keep their
 result. When a worker ends, the dispatcher stops what is left of its session (a background process) and confirms that no member is left before it forgets the
 worker. A member that survives KILL fails the run with the worker's name. An exit, Ctrl-C, TERM or HUP of the dispatcher stops every live worker session the same way (2 seconds after TERM). The exit trap ignores TERM, INT and HUP while it does so, because
-its stop step is a new process in the dispatcher's session that an outer stop would also signal. An alarm ends that step after its grace period plus 25 seconds. Worker sessions
+its stop step is a new process in the dispatcher's session that an outer stop would also signal. An alarm ends that step after its grace period plus 25 seconds: it raises an error in the step, which unwinds through the listing (the stalled `ps` lister and the process that holds its pipes are killed), prints the failure and exits 1. A stop that is not confirmed fails the run even when everything else passed. Worker sessions
 are not members of the dispatcher's session: the deadline of `scripts/quality/pre_push.py` reaches the workers through that exit trap. When the dispatcher is killed before its trap
 runs, each worker's watchdog stops its session. A process that starts its own session without the
-launcher is outside the worker's session. Accepted limits, not built: (1) A worker that has just ended and is not yet seen by the
-dispatcher's half-second poll has no watchdog, because the session leader ends with its program. If the dispatcher is killed (KILL) inside that window while a descendant of the
-worker is left, that descendant survives. Likelihood low; the fix keeps the leader alive until it has stopped and confirmed the worker's remaining session, then returns the status. (2) When the
-alarm of the exit trap's stop step ends, it kills the step but not a stalled `ps` lister and its pipe holder. `run_worker_deadline_e2e` also has no alarm-expiry case. Likelihood very low
-(`ps` must stall for 27 seconds); the fix unwinds the alarm through the bounded lister cleanup and adds that case. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
+launcher is outside the worker's session. The two limits that earlier rounds accepted are closed (fix round 6): the leader outlives its program until the rest of its session is stopped and confirmed. The alarm unwinds through the lister cleanup. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
 worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher (once after removing the old registry, the review reproduction)
-and workers that start late in a wall-clock second (one ends 0.25 seconds before its limit and must pass; one never ends and must get TERM only after its limit). It plants a dispatcher
-without a deadline, one that stops the direct process only, one with the old whole-second comparison and one that stops the worker's process group only. A plant counts as caught only when
+and workers that start late in a wall-clock second (one ends 0.25 seconds before its limit and must pass; one never ends and must get TERM only after its limit). It also checks that a worker's leader stops a descendant while the dispatcher is paused, that an alarm of the stop step leaves no stalled lister or pipe holder (the sandbox copy shortens the alarm to 2 seconds) and that a deadline stop that cannot be confirmed is named. It plants a dispatcher
+without a deadline, one that stops the direct process only, one with the old whole-second comparison, one that stops the worker's process group only, one whose leader exits at once, one whose alarm has no handler and one that writes an unconfirmed stop like a confirmed one. A plant counts as caught only when
 the intended check of its case fails.
 
 ## Measured durations
@@ -804,12 +801,19 @@ program that ends in time gives the same result as before. A deadline raises `Ti
 raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the session, so no timeout ends silently with a live process. SIGINT is held while the program starts
 and while it is stopped. It is raised once the stop is confirmed, so a second Ctrl-C cannot cut the stop short.
 
+Every stop returns a `StopOutcome` (truthy when the stop is not confirmed; `survivors` and `reason` name what is left). The outcome is recorded on every path of `run_command`. A deadline raises
+`ProcessGroupSurvived`. A cancellation, an interrupt, an alarm or any other exception raises `LaunchesNotStopped` chained from it, instead of the plain exception. A stop that itself raises counts as unconfirmed. Each
+unconfirmed stop is also kept in memory in the process and printed to standard error when it happens, so a caller that catches `TimeoutExpired` and carries on (for example the key reader, the
+storage client and the download child) cannot lose it: the interpreter then exits with status 70 (`UNCONFIRMED_EXIT_STATUS`), unless the caller took the record with `take_unconfirmed()` to report it itself.
+The lister of the session listing is killed and reaped on every way out of the listing, also on an alarm or an interrupt.
+
 Python delivers SIGINT to the main thread only. A program in its own session never receives the terminal's Ctrl-C. A caller that runs jobs in threads (the push gate's steps in
 `scripts/quality/pre_push.py`, the historical acquisition scripts `continue_history.py` and `history_routes.py`, the parallel cases of `run_model_metadata_e2e.py`) uses
 `LaunchPool` from `scripts/process.py` instead of `ThreadPoolExecutor`. Inside its `with` block the first SIGINT sets the pool's cancellation and raises `KeyboardInterrupt`; more are held
 until the pool is left. A job's `run_command` waits in 0.1 s slices, so it sees the cancellation, stops its own session as above and raises `LaunchCancelled`. A queued job starts nothing.
 Leaving the block drops the queued jobs and waits for every running job (up to `CANCEL_WAIT_SECONDS`, 37 s with the defaults), then forwards the interrupt. If a stop is not confirmed or a
-job does not end in that time, the block raises `LaunchesNotStopped` chained from the interrupt. The pool keeps its cancellation and its futures in memory only (no registry). Limits: a
+job does not end in that time, the block raises `LaunchesNotStopped` chained from the interrupt. A job's end is no cleanup: the block also raises it, with or without an interrupt, when any job's stop
+(a deadline included) was not confirmed. Queued jobs that the interrupt cancelled are not waited for. The push gate turns that failure into a failing `stop_confirmation` row and names an unconfirmed deadline stop in the step's own row. The pool keeps its cancellation and its futures in memory only (no registry). Limits: a
 thread outside a `LaunchPool` is unchanged; a pool created outside the main thread installs no handler; SIGTERM is not handled (the default action ends the caller; a caller inside a launch
 session is covered by the outer stop); a job that does no `run_command` call and runs long delays the interrupt up to that bound.
 
@@ -830,8 +834,8 @@ terminal, so an open of `/dev/tty` fails at once. The API key reader starts its 
 launchers one and two levels deep. It checks by process ID that none is left, that a nested launch stays in the outer session and keeps its own deadline, that a descendant in a new group
 stops, that a descendant cannot hide by changing the old registry (the review reproductions), that an unrelated command is never signalled and that a failed listing fails visibly. It also
 runs the review's threaded reproduction through the real `pre_push.run_steps` in a child interpreter: two steps and a serial pair run programs (one ignores TERM), SIGINT is sent twice.
-Every program must be gone before the interrupt reaches the caller and the queued step must never start; an unconfirmed stop must raise `LaunchesNotStopped`. It plants four defects (stop the direct child only, send TERM without KILL, skip the confirmation, stop the leader's group only). Each plant takes the real arguments of `stop_launch` and
-counts as caught only when the intended check of its case fails. Three more plants break the pool (no cancellation flag, no session stop, no wait for the jobs).
+Every program must be gone before the interrupt reaches the caller and the queued step must never start; an unconfirmed stop must raise `LaunchesNotStopped`. Fix round 6 cases: an unconfirmed deadline stop that overlaps an interrupt in the real `pre_push.run_steps` ends as `LaunchesNotStopped`; two futures on one worker leave no false wait; an unconfirmed stop after an interrupt without a pool is named; a stop that raises, a caller that swallows the timeout (exit status 70) and a pool step with an unconfirmed deadline stop are reported; an alarm during the listing leaves no lister. It plants four defects (stop the direct child only, send TERM without KILL, skip the confirmation, stop the leader's group only). Each plant takes the real arguments of `stop_launch` and
+counts as caught only when the intended check of its case fails. Three more plants break the pool (no cancellation flag, no session stop, no wait for the jobs) and six break the outcome mechanism (the pool ignores unconfirmed stops, no record, cancelled futures counted, the lister not unwound, the interrupt path drops the outcome).
 
 ## Practice
 

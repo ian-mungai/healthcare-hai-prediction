@@ -14,6 +14,14 @@ program starts and while it is stopped, and is raised once the stop is confirmed
 runs jobs in threads uses ``LaunchPool`` instead of ``ThreadPoolExecutor``: the first SIGINT sets the pool's cancellation, each job's ``run_command``
 (it waits in short slices) stops its own session and raises ``LaunchCancelled``, the pool waits for every job within ``CANCEL_WAIT_SECONDS``, and only
 then forwards the interrupt (``LaunchesNotStopped`` when a stop is not confirmed or a job does not end). A thread outside a ``LaunchPool`` is unchanged.
+Every stop returns a ``StopOutcome`` (truthy when the stop is NOT confirmed; it names the survivors). The outcome is recorded on every path of
+``run_command``: a normal end needs no stop; a deadline raises ``ProcessGroupSurvived``; a cancellation or any other exception (an interrupt, an alarm, a
+handler that raises) raises ``LaunchesNotStopped`` chained from it; and a stop that raises counts as unconfirmed. An unconfirmed stop is also kept in
+memory in the process (``record_unconfirmed``) and printed to standard error when it happens, so a caller that catches the exception and carries on
+(``except TimeoutExpired``) cannot lose it: the interpreter then exits with status ``UNCONFIRMED_EXIT_STATUS`` (70), unless the caller took the record
+with ``take_unconfirmed`` to report it itself. A ``LaunchPool`` counts a job's end as no cleanup: it raises ``LaunchesNotStopped`` when it is left with
+any unconfirmed stop of its jobs, with or without an interrupt. The lister of the session listing is killed and reaped on every way out of the listing
+(its own deadline, an alarm, an interrupt).
 Other scripts import
 ``run_command`` from here instead of ``subprocess``, so the lint exception for starting a process exists on one line. Run scripts that import it as
 modules from the repository root, for example ``.venv/bin/python -m scripts.quality.scan_secrets``.
@@ -21,15 +29,18 @@ modules from the repository root, for example ``.venv/bin/python -m scripts.qual
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess, SubprocessError, TimeoutExpired
 from types import FrameType, TracebackType
@@ -42,14 +53,18 @@ __all__ = [
     "LaunchesNotStopped",
     "ProcessGroupSurvived",
     "SessionListingFailed",
+    "StopOutcome",
     "SubprocessError",
     "TimeoutExpired",
+    "UNCONFIRMED_EXIT_STATUS",
     "clear_git_environment",
     "find_program",
+    "record_unconfirmed",
     "run_command",
     "stop_launch",
     "stop_process_group",
     "stop_sessions",
+    "take_unconfirmed",
 ]
 
 DEFAULT_TIMEOUT_SECONDS = 300
@@ -70,6 +85,9 @@ SLICE_SECONDS = 0.1
 # listing and one reap, plus a confirmation.
 CANCEL_WAIT_SECONDS = 2 * (STOP_GRACE_SECONDS + CONFIRM_SECONDS + LISTING_SECONDS + REAP_SECONDS) + CONFIRM_SECONDS
 
+# The exit status of a process that ends with an unconfirmed stop on record (EX_SOFTWARE); the record is printed to standard error as well.
+UNCONFIRMED_EXIT_STATUS = 70
+
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -80,14 +98,17 @@ class ProcessGroupSurvived(TimeoutExpired):
     It is a ``TimeoutExpired``, so callers that catch the timeout see it too. ``process_group`` is the leader's pid: the id of its group and session.
     """
 
-    def __init__(self, cmd: Any, timeout: float, process_group: int, output: str | bytes | None = None, stderr: str | bytes | None = None) -> None:
+    def __init__(
+        self, cmd: Any, timeout: float, process_group: int, output: str | bytes | None = None, stderr: str | bytes | None = None, detail: str = ""
+    ) -> None:
         super().__init__(cmd, timeout, output, stderr)
         self.process_group = process_group
+        self.detail = detail
 
     def __str__(self) -> str:
         return (
             f"{super().__str__()}; the session or process group {self.process_group} still had members after KILL or could not be listed, "
-            "so the stop is not confirmed"
+            f"so the stop is not confirmed{f' ({self.detail})' if self.detail else ''}"
         )
 
 
@@ -96,11 +117,105 @@ class LaunchCancelled(RuntimeError):
 
 
 class LaunchesNotStopped(RuntimeError):
-    """A pool was interrupted and a job's stop was not confirmed, or a job did not end within ``CANCEL_WAIT_SECONDS``."""
+    """A stop was not confirmed after an interrupt or an error, or a pool was left with an unconfirmed stop or a job that did not end in time.
+
+    ``survivors`` holds the pids that were still alive when they are known (the ids of the sessions or groups otherwise).
+    """
+
+    def __init__(self, message: str, survivors: Collection[int] = ()) -> None:
+        super().__init__(message)
+        self.survivors = frozenset(survivors)
 
 
 class SessionListingFailed(OSError):
     """The live processes could not be listed or their sessions could not be read, so a session stop cannot be confirmed."""
+
+
+@dataclass(frozen=True)
+class StopOutcome:
+    """What a stop found: confirmed (no member left), or the survivors. Truthy when the stop is NOT confirmed, as the former bool result was.
+
+    ``survivors`` are the pids still alive after KILL when known (the id of the session or group otherwise); ``reason`` says why the stop is unconfirmed.
+    """
+
+    unconfirmed: bool = False
+    survivors: frozenset[int] = frozenset()
+    reason: str = ""
+
+    @property
+    def confirmed(self) -> bool:
+        return not self.unconfirmed
+
+    def __bool__(self) -> bool:
+        return self.unconfirmed
+
+    def describe(self) -> str:
+        found = f"alive: {', '.join(str(pid) for pid in sorted(self.survivors))}" if self.survivors else ""
+        return "; ".join(part for part in (self.reason, found) if part)
+
+
+def as_outcome(result: object, session: int) -> StopOutcome:
+    """Read a stop's result: a ``StopOutcome``, or a bool of the former kind (True: not confirmed)."""
+    if isinstance(result, StopOutcome):
+        return result
+    return StopOutcome(True, frozenset({session}), "the stop reported that a member survived") if result else StopOutcome()
+
+
+# The unconfirmed stops of this process as (pid of the process, text); kept in memory only. A forked child inherits the list but reports only its own.
+UNCONFIRMED: list[tuple[int, str]] = []
+UNCONFIRMED_LOCK = threading.Lock()
+
+
+def note_unconfirmed(text: str) -> None:
+    """Keep an unconfirmed stop for the process (see ``take_unconfirmed``) and print it to standard error at once."""
+    with UNCONFIRMED_LOCK:
+        UNCONFIRMED.append((os.getpid(), text))
+    with contextlib.suppress(OSError):
+        os.write(2, f"process launcher: {text}\n".encode(errors="replace"))
+
+
+def record_unconfirmed(command: Any, session: int, outcome: StopOutcome, cancellation: Cancellation | None = None) -> str:
+    """Record an unconfirmed stop of a launch: for the process, and for the pool whose job made it. Returns the text."""
+    program = os.path.basename(str(command[0])) if isinstance(command, Sequence) and command and not isinstance(command, str) else str(command)
+    text = f"the stop of {program} (session or process group {session}) is not confirmed ({outcome.describe()})"
+    if cancellation is not None:
+        cancellation.unconfirmed.append((session, text))
+    note_unconfirmed(text)
+    return text
+
+
+def take_unconfirmed() -> list[str]:
+    """Return this process's unconfirmed stops and clear the record: the caller reports them itself, so the exit status is not changed."""
+    with UNCONFIRMED_LOCK:
+        mine = [text for pid, text in UNCONFIRMED if pid == os.getpid()]
+        UNCONFIRMED.clear()
+    return mine
+
+
+def exit_with_unconfirmed() -> None:
+    """At interpreter exit: a process that still has an unconfirmed stop on record ends with ``UNCONFIRMED_EXIT_STATUS``, whatever the caller did."""
+    with UNCONFIRMED_LOCK:
+        mine = [text for pid, text in UNCONFIRMED if pid == os.getpid()]
+    if not mine:
+        return
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(OSError, ValueError):
+            stream.flush()
+    with contextlib.suppress(OSError):
+        os.write(2, f"process launcher: exiting with status {UNCONFIRMED_EXIT_STATUS}: {len(mine)} stop(s) were not confirmed\n".encode())
+    os._exit(UNCONFIRMED_EXIT_STATUS)
+
+
+atexit.register(exit_with_unconfirmed)
+
+
+def named_failure(outcome: StopOutcome, command: Any, cause: BaseException) -> BaseException:
+    """The exception for an unconfirmed stop after ``cause`` (an interrupt or an error): it names the stop and keeps the survivors."""
+    program = os.path.basename(str(command[0])) if isinstance(command, Sequence) and command and not isinstance(command, str) else str(command)
+    return LaunchesNotStopped(
+        f"the stop of {program} is not confirmed after {type(cause).__name__} ({outcome.describe()})",
+        outcome.survivors,
+    )
 
 
 def group_alive(process_group: int) -> bool:
@@ -136,6 +251,15 @@ def start(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, 
     )
 
 
+def end_lister(lister: subprocess.Popen[str]) -> None:
+    """Stop a lister that is not wanted any more. It leads its own group: KILL reaches a process it started that holds its pipes, and the reap is bounded."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(lister.pid, signal.SIGKILL)
+    close_pipes(lister)
+    with contextlib.suppress(TimeoutExpired):
+        lister.wait(timeout=REAP_SECONDS)
+
+
 def list_processes() -> list[tuple[int, int, str]]:
     """Every live process as (pid, parent pid, state), from ``SESSION_LISTING``. Raises ``SessionListingFailed`` on any failure."""
     executable = find_program(SESSION_LISTING[0])
@@ -148,13 +272,12 @@ def list_processes() -> list[tuple[int, int, str]]:
     try:
         output, error = lister.communicate(timeout=LISTING_SECONDS)
     except TimeoutExpired:
-        # The lister leads its own group: KILL reaches a process it started that holds its pipes, and the reap is bounded too.
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(lister.pid, signal.SIGKILL)
-        close_pipes(lister)
-        with contextlib.suppress(TimeoutExpired):
-            lister.wait(timeout=REAP_SECONDS)
+        end_lister(lister)
         raise SessionListingFailed(f"{executable} did not finish within {LISTING_SECONDS} s") from None
+    except BaseException:
+        # An alarm or an interrupt ends the listing: the lister and the process that holds its pipes must not outlive it.
+        end_lister(lister)
+        raise
     if lister.returncode:
         raise SessionListingFailed(f"{executable} exited {lister.returncode}: {error.strip()}")
     rows: list[tuple[int, int, str]] = []
@@ -212,11 +335,12 @@ def session_left(members: set[int]) -> bool:
     return bool(members)
 
 
-def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None = None, grace_seconds: float | None = None) -> bool:
+def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None = None, grace_seconds: float | None = None) -> StopOutcome:
     """Stop every member of a process group: TERM, then KILL after the grace period, and confirm none is left.
 
     ``leader`` is the child that started the group. It is reaped here, because an unreaped zombie keeps the group alive.
-    ``grace_seconds`` is the time between TERM and KILL; None means ``STOP_GRACE_SECONDS``. Returns True when a member survived KILL for ``CONFIRM_SECONDS``.
+    ``grace_seconds`` is the time between TERM and KILL; None means ``STOP_GRACE_SECONDS``. Returns the outcome: unconfirmed when a member survived KILL
+    for ``CONFIRM_SECONDS`` (``survivors`` then holds the group id).
     """
     grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
     for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
@@ -227,11 +351,11 @@ def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None 
             if leader is not None:
                 leader.poll()
             if not group_alive(process_group):
-                return False
+                return StopOutcome()
             if time.monotonic() >= end:
                 break
             time.sleep(POLL_SECONDS)
-    return True
+    return StopOutcome(True, frozenset({process_group}), f"the process group {process_group} still had members after KILL")
 
 
 def stop_sessions(
@@ -240,13 +364,14 @@ def stop_sessions(
     parent: int | None = None,
     leader: subprocess.Popen[str] | None = None,
     allow_own: bool = False,
-) -> bool:
+) -> StopOutcome:
     """Stop every member of the sessions: TERM, then KILL after the grace period, and confirm none is left.
 
     ``sessions`` are session ids (each its leader's pid); ``parent`` is the leaders' parent, the caller when None. The sessions are listed again on
-    every poll, so a member started during the stop is signalled too. Returns True when a member survived KILL for ``CONFIRM_SECONDS`` or when the
-    sessions could not be listed; then each leader's process group (its id is the session id) still gets TERM and KILL and the stop waits up to
-    ``CONFIRM_SECONDS`` for those groups to end (``leader`` is reaped there only, because a zombie keeps its group alive).
+    every poll, so a member started during the stop is signalled too. Returns the outcome, unconfirmed (and truthy) when a member survived KILL for
+    ``CONFIRM_SECONDS`` (``survivors`` holds those pids) or when the sessions could not be listed (``reason`` says why); then each leader's process group
+    (its id is the session id) still gets TERM and KILL and the stop waits up to ``CONFIRM_SECONDS`` for those groups to end (``leader`` is reaped there
+    only, because a zombie keeps its group alive).
     Refuses (``ValueError``) the caller's own session unless ``allow_own`` is set (a CI worker's leader that stops its own session when the dispatcher
     has died; the caller is never signalled by the listing stop, but the fallback group stop reaches it).
     """
@@ -255,6 +380,7 @@ def stop_sessions(
         raise ValueError(f"refusing to stop session {os.getsid(0)}: it is the caller's own session")
     grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
     owner = os.getpid() if parent is None else parent
+    members: set[int] = set()
     try:
         for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
             signalled: set[int] = set()
@@ -268,11 +394,11 @@ def stop_sessions(
                         os.kill(pid, signal_number)
                 signalled |= members
                 if not session_left(members):
-                    return False
+                    return StopOutcome()
                 if time.monotonic() >= end:
                     break
                 time.sleep(POLL_SECONDS)
-    except SessionListingFailed:
+    except SessionListingFailed as listing_failure:
         for signal_number in (signal.SIGTERM, signal.SIGKILL):
             for session in targets:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -282,21 +408,22 @@ def stop_sessions(
             if leader is not None:
                 leader.poll()
             time.sleep(POLL_SECONDS)
-        return True
-    return True
+        left = frozenset(session for session in targets if group_alive(session))
+        return StopOutcome(True, left or frozenset(targets), f"the sessions could not be listed: {listing_failure}")
+    return StopOutcome(True, frozenset(members), "members of the sessions were still alive after KILL")
 
 
-def stop_launch(leader_pid: int, leader: subprocess.Popen[str] | None = None, grace_seconds: float | None = None, session: bool = False) -> bool:
-    """Stop what a launch started: its session (a top-level launch) or its process group (a nested launch). True when the stop is not confirmed.
+def stop_launch(leader_pid: int, leader: subprocess.Popen[str] | None = None, grace_seconds: float | None = None, session: bool = False) -> StopOutcome:
+    """Stop what a launch started: its session (a top-level launch) or its process group (a nested launch). Truthy when not confirmed.
 
     The leader of a session is reaped only after the stop, so its pid (the session id) stays reserved while the stop runs.
     """
     if not session:
         return stop_process_group(leader_pid, leader, grace_seconds)
-    survived = stop_sessions({leader_pid}, grace_seconds, leader=leader)
+    outcome = stop_sessions({leader_pid}, grace_seconds, leader=leader)
     if leader is not None:
         leader.poll()
-    return survived
+    return outcome
 
 
 @contextlib.contextmanager
@@ -319,11 +446,12 @@ def interrupts_deferred() -> Iterator[None]:
 
 
 class Cancellation:
-    """The cancellation of one ``LaunchPool``: set once by the pool's first interrupt; ``unconfirmed`` lists the launches whose stop was not confirmed."""
+    """The cancellation of one ``LaunchPool``: set once by the pool's first interrupt; ``unconfirmed`` lists the launches of its jobs whose stop was not
+    confirmed, on every path (a deadline, a cancellation, an error), as (session or group, text)."""
 
     def __init__(self) -> None:
         self.event = threading.Event()
-        self.unconfirmed: list[int] = []
+        self.unconfirmed: list[tuple[int, str]] = []
 
     def cancelled(self) -> bool:
         return self.event.is_set()
@@ -331,6 +459,30 @@ class Cancellation:
 
 # The cancellation of the pool whose job runs in this thread; absent in every other thread.
 JOB = threading.local()
+
+
+def stop_recorded(
+    process: subprocess.Popen[str], grace_seconds: float | None, nested: bool, cancellation: Cancellation | None
+) -> tuple[StopOutcome, KeyboardInterrupt | None]:
+    """Stop what a launch started, close its pipes and record an unconfirmed outcome (for the process and for the pool of the job), on every path.
+
+    SIGINT is held meanwhile; one that arrived is returned (not raised), so the caller can name the failure and chain it. A stop that raises counts as
+    unconfirmed, with the error as its reason: the call must never end with only the exception of the stop, or with none.
+    """
+    late: KeyboardInterrupt | None = None
+    outcome = StopOutcome()
+    try:
+        with interrupts_deferred():
+            try:
+                outcome = as_outcome(stop_launch(process.pid, process, grace_seconds, session=not nested), process.pid)
+            except Exception as failure:
+                outcome = StopOutcome(True, frozenset({process.pid}), f"the stop failed with {type(failure).__name__}: {failure}")
+            close_pipes(process)
+            if outcome.unconfirmed:
+                record_unconfirmed(process.args, process.pid, outcome, cancellation)
+    except KeyboardInterrupt as interrupt:
+        late = interrupt
+    return outcome, late
 
 
 def communicate(process: subprocess.Popen[str], timeout: float, cancellation: Cancellation | None) -> tuple[str, str]:
@@ -385,12 +537,14 @@ class LaunchPool(ThreadPoolExecutor):
                         self.shutdown(wait=True)
                 except KeyboardInterrupt as error:
                     interrupt = error
+            # A job that ended is no proof that its program was stopped: the stops that were not confirmed count, with or without an interrupt.
+            problems = self.unconfirmed_problems()
             if interrupt is not None or self.cancellation.cancelled():
                 problems = self.stop_jobs()
         finally:
             self.release_interrupts()
         if problems:
-            raise LaunchesNotStopped("; ".join(problems)) from interrupt
+            raise LaunchesNotStopped("; ".join(problems), [pid for pid, _text in self.cancellation.unconfirmed]) from (interrupt or exc_value)
         if interrupt is not None and interrupt is not exc_value:
             raise interrupt
 
@@ -432,13 +586,25 @@ class LaunchPool(ThreadPoolExecutor):
         self.cancellation.event.set()
         self.shutdown(wait=False, cancel_futures=True)
         problems = self.wait_for_jobs()
-        problems.extend(f"the stop of the launch with pid {pid} was not confirmed" for pid in self.cancellation.unconfirmed)
+        problems.extend(self.unconfirmed_problems())
         return problems
 
+    def unconfirmed_problems(self) -> list[str]:
+        """The stops of this pool's jobs that were not confirmed, as text (empty when every stop was confirmed)."""
+        return [text for _pid, text in self.cancellation.unconfirmed]
+
+    def live_jobs(self) -> list[Future[Any]]:
+        """The jobs that can still run. A queued job that ``shutdown(cancel_futures=True)`` cancelled never runs, and ``wait`` does not count it as done."""
+        return [job for job in self.jobs if not job.cancelled()]
+
     def wait_for_jobs(self) -> list[str]:
-        """Wait up to ``CANCEL_WAIT_SECONDS`` for every job; return a description of the jobs still running."""
-        _done, running = wait(list(self.jobs), timeout=CANCEL_WAIT_SECONDS)
-        return [f"{len(running)} job(s) were still running {CANCEL_WAIT_SECONDS:g} s after the interrupt"] if running else []
+        """Wait up to ``CANCEL_WAIT_SECONDS`` for every job that can run; return a description of the jobs still running (also kept for the process)."""
+        _done, running = wait(self.live_jobs(), timeout=CANCEL_WAIT_SECONDS)
+        if not running:
+            return []
+        text = f"{len(running)} job(s) were still running {CANCEL_WAIT_SECONDS:g} s after the interrupt, so their stops are not confirmed"
+        note_unconfirmed(text)
+        return [text]
 
 
 def clear_git_environment() -> None:
@@ -521,27 +687,28 @@ def run_command(
     except LaunchCancelled:
         if process is None or cancellation is None:
             raise
-        with interrupts_deferred():
-            survived = stop_launch(process.pid, process, grace_seconds, session=not nested)
-            close_pipes(process)
-        if survived:
-            cancellation.unconfirmed.append(process.pid)
-            raise ProcessGroupSurvived(process.args, timeout, process.pid) from None
+        outcome, late = stop_recorded(process, grace_seconds, nested, cancellation)
+        if outcome.unconfirmed:
+            raise ProcessGroupSurvived(process.args, timeout, process.pid, detail=outcome.describe()) from late
+        if late is not None:
+            raise late from None
         raise
     except TimeoutExpired as expired:
         if process is None:
             raise
-        with interrupts_deferred():
-            survived = stop_launch(process.pid, process, grace_seconds, session=not nested)
-            close_pipes(process)
-        if survived:
-            raise ProcessGroupSurvived(process.args, timeout, process.pid, expired.stdout, expired.stderr) from None
+        outcome, late = stop_recorded(process, grace_seconds, nested, cancellation)
+        if outcome.unconfirmed:
+            raise ProcessGroupSurvived(process.args, timeout, process.pid, expired.stdout, expired.stderr, detail=outcome.describe()) from late
+        if late is not None:
+            raise late from expired
         raise
-    except BaseException:
+    except BaseException as failure:
         if process is not None:
-            with interrupts_deferred():
-                stop_launch(process.pid, process, grace_seconds, session=not nested)
-                close_pipes(process)
+            outcome, late = stop_recorded(process, grace_seconds, nested, cancellation)
+            if outcome.unconfirmed:
+                raise named_failure(outcome, process.args, failure) from failure
+            if late is not None:
+                raise late from failure
         raise
     if check and process.returncode:
         raise CalledProcessError(process.returncode, process.args, output=stdout, stderr=stderr)

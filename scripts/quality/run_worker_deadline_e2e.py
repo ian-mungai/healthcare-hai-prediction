@@ -15,6 +15,8 @@ wall-clock second, where whole-second timestamps fire up to a second early: a wo
 ends gets TERM only after its limit). The review reproductions of fix round 4: a KILL of the dispatcher leaves no worker (the worker's leader stops its
 session), a worker that ends with a background process left in its session leaves no process, and the exit trap ends within its bound when every
 listing stalls.
+Fix round 6: a worker's leader stops a left descendant while the dispatcher is paused, an alarm of the exit trap's stop step leaves no stalled
+lister or pipe holder, and a deadline stop that cannot be confirmed is named.
 Planted defects run the cases against a changed copy of the dispatcher (no deadline, which is the plain wait; a stop of the direct process only; the
 old whole-second comparison; a stop of the worker's process group without the rest of its session). Each counts as caught only when the named
 check of its case is false and the case raised nothing.
@@ -121,6 +123,20 @@ BACKGROUND = """#!/bin/bash
 sleep 60 </dev/null >/dev/null 2>&1 &
 echo $! >"$STUB_DIR/orphan.pid"
 """
+# A worker that leaves a descendant in its session, then waits for the file "release" and ends with success (fix round 6: the worker's leader must stop the
+# rest of its session before it exits, also while the dispatcher cannot act).
+LINGERING = """#!/bin/bash
+sleep 60 </dev/null >/dev/null 2>&1 &
+echo $! >"$STUB_DIR/orphan.pid"
+while [ ! -e "$STUB_DIR/release" ]; do sleep 0.1; done
+"""
+# A stand-in ps that never ends and keeps a record of every stalled listing (lister, then its holder, one pid per line in listers.txt).
+LOGGING_STALLED_PS = """#!/bin/bash
+echo $$ >>"$STUB_DIR/listers.txt"
+sleep 60 &
+echo $! >>"$STUB_DIR/listers.txt"
+wait
+"""
 # A stand-in ps that never ends: it records itself and a child that holds its pipes (the review reproduction of a stalled listing).
 STALLED_PS = """#!/bin/bash
 echo $$ >"$STUB_DIR/lister.pid"
@@ -198,6 +214,7 @@ class Sandbox:
             ("stub/hiding_launcher.sh", HIDING_LAUNCHER),
             ("stub/term_time.sh", TERM_TIME),
             ("stub/background.sh", BACKGROUND),
+            ("stub/lingering.sh", LINGERING),
             ("bin/ps", STALLED_PS),
         ):
             (self.root / path).write_text(text, encoding="utf-8")
@@ -522,6 +539,103 @@ def trap_with_stalled_listing(base: Path) -> dict[str, Any]:
     return case("exit_trap_with_a_stalled_listing_is_bounded", base, body)
 
 
+def ended_worker_leader(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # Residual 1 (accepted limit A1): the worker ends with a descendant in its session while the dispatcher cannot act (it is paused). The worker's leader
+        # must stop and confirm the rest of its session before it exits, so the descendant is gone with the dispatcher still paused.
+        environment = sandbox.environment("python_lint", {"STUB_PYTHON_LINT": "lingering", "CI_WORKER_LIMIT_SECONDS": "600"})
+        dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
+        paused = False
+        try:
+            started = wait_for_pids(sandbox, ("orphan",))
+            os.kill(dispatcher.pid, signal.SIGSTOP)
+            paused = True
+            (sandbox.stub / "release").write_text("go")
+            seconds = all_gone_within(sandbox, ("orphan",), 8)
+            gone_while_paused = seconds is not None
+            os.kill(dispatcher.pid, signal.SIGCONT)
+            paused = False
+            with contextlib.suppress(TimeoutExpired):
+                dispatcher.wait(timeout=15)
+        finally:
+            if paused:
+                os.kill(dispatcher.pid, signal.SIGCONT)
+            stop_dispatcher(dispatcher)
+        return {
+            "descendant_started": started,
+            "descendant_gone_while_the_dispatcher_is_paused": gone_while_paused,
+            "run_passed_after_the_dispatcher_resumed": dispatcher.returncode == 0,
+            "seconds_until_the_descendant_was_gone": -1.0 if seconds is None else seconds,
+        }
+
+    return case("ended_worker_session_is_stopped_before_the_leader_exits", base, body)
+
+
+def alarm_expiry(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # Residual 2 (accepted limit A2): the exit trap's stop helper is ended by its alarm while its lister is stalled. The sandbox copy of the dispatcher
+        # gets an alarm of the grace period alone (2 s) instead of 27 s, so the case takes seconds; the code under test is otherwise the real file.
+        script = sandbox.root / "scripts/run_ci.sh"
+        text = script.read_text(encoding="utf-8")
+        if "+ 25)" not in text:
+            return {"alarm_text_found": False}
+        script.write_text(text.replace("+ 25)", "+ 0)"), encoding="utf-8")
+        (sandbox.root / "bin/ps").write_text(LOGGING_STALLED_PS, encoding="utf-8")
+        path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
+        environment = sandbox.environment("python_lint", {"CI_WORKER_LIMIT_SECONDS": "600", "PATH": path})
+        dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
+        listers = sandbox.stub / "listers.txt"
+        try:
+            started = wait_for_pids(sandbox, ("worker", "child"))
+            os.kill(dispatcher.pid, signal.SIGTERM)
+            end = time.monotonic() + 10
+            while time.monotonic() < end and (not listers.exists() or len(listers.read_text().split()) < 2):
+                time.sleep(0.05)
+            first = [int(field) for field in listers.read_text().split()[:2]] if listers.exists() else []
+            # The helper's alarm fires 2 s after its start; the lister and the process that holds its pipes must be gone a few seconds later.
+            end = time.monotonic() + 8
+            while time.monotonic() < end and any(alive(pid) for pid in first):
+                time.sleep(0.1)
+            lister_gone = bool(first) and not alive(first[0])
+            holder_gone = len(first) == 2 and not alive(first[1])
+            with contextlib.suppress(TimeoutExpired):
+                dispatcher.wait(timeout=TRAP_BOUND_SECONDS)
+        finally:
+            stop_dispatcher(dispatcher)
+            if listers.exists():
+                for field in listers.read_text().split():
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(int(field), signal.SIGKILL)
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.kill(int(field), signal.SIGKILL)
+        return {
+            "workers_had_started": started,
+            "stop_helper_listing_stalled": len(first) == 2,
+            "stalled_lister_gone_after_the_alarm": lister_gone,
+            "process_holding_its_pipes_gone_after_the_alarm": holder_gone,
+        }
+
+    return case("alarm_expiry_leaves_no_lister_or_holder", base, body)
+
+
+def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The deadline stop cannot list the session (every listing stalls). The failure entry must say that the stop is not confirmed, and the dispatcher
+        # must not wait for the worker without a bound.
+        path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
+        run = sandbox.run(groups="python_lint", timeout=45, CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS), PATH=path)
+        return {
+            "run_did_not_hang": not run["timed_out"],
+            "exit_nonzero": run["exit"] not in (None, 0),
+            "failure_names_the_group_and_the_unconfirmed_stop": f"Local CI failed in: python_lint (deadline {LIMIT_SECONDS} s, stop not confirmed)"
+            in run["text"],
+            "no_pass_line": "All local CI checks passed" not in run["text"],
+            "seconds": run["seconds"],
+        }
+
+    return case("deadline_stop_that_cannot_be_confirmed_is_named", base, body)
+
+
 def not_before_the_limit(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         run = sandbox.run(STUB_PYTHON_LINT="term_time", STUB_ORCHESTRATION="near", STUB_ALIGN_FRACTION="0.75", CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS))
@@ -561,25 +675,49 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "killed_dispatcher_leaves_no_worker": killed_dispatcher,
     "completed_worker_leaves_no_descendant": completed_worker,
     "exit_trap_with_a_stalled_listing_is_bounded": trap_with_stalled_listing,
+    "ended_worker_session_is_stopped_before_the_leader_exits": ended_worker_leader,
+    "alarm_expiry_leaves_no_lister_or_holder": alarm_expiry,
+    "deadline_stop_that_cannot_be_confirmed_is_named": unconfirmed_deadline_stop,
 }
 
 # plant name -> (pairs of text replaced in the dispatcher, {case that must fail: the check that must be false in it}). The first plant is the plain wait
 # of WV3-032: no worker is ever overdue.
+# The stop plants end in "|| true": a stop that reports success, so the dispatcher forgets the worker (an unconfirmed stop keeps it for the exit trap).
 PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
     "no_deadline": (
         (("worker_overdue() { ((SECONDS - $1 > $2)); }", "worker_overdue() { return 1; }"),),
         {"worker_that_never_ends_fails_with_the_group_name": "run_did_not_hang"},
     ),
     "direct_process_only": (
-        (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM "$pid"; sleep 1; kill -KILL "$pid"; } 2>/dev/null'),),
+        (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM "$pid"; sleep 1; kill -KILL "$pid"; } 2>/dev/null || true'),),
         {"worker_that_ignores_term_is_killed_after_the_grace_period": "child_that_ignores_term_gone"},
     ),
     "deadline_one_second_early": (
         (("worker_overdue() { ((SECONDS - $1 > $2)); }", "worker_overdue() { ((SECONDS - $1 >= $2)); }"),),
         {"worker_is_not_stopped_before_its_limit": "term_not_before_the_limit"},
     ),
+    # Fix round 6: the worker's leader exits with the worker without stopping the rest of its session (accepted limit A1 before).
+    "leader_exits_at_once": (
+        (
+            (
+                "outcome = stop_sessions({os.getpid()}, float(sys.argv[2]), allow_own=True)",
+                "outcome = None if status is not None else stop_sessions({os.getpid()}, float(sys.argv[2]), allow_own=True)",
+            ),
+        ),
+        {"ended_worker_session_is_stopped_before_the_leader_exits": "descendant_gone_while_the_dispatcher_is_paused"},
+    ),
+    # Fix round 6: the stop helper's alarm has no handler, so it ends the helper without the unwinding (accepted limit A2 before).
+    "alarm_without_unwinding": (
+        (("signal.signal(signal.SIGALRM, expired)\n", ""),),
+        {"alarm_expiry_leaves_no_lister_or_holder": "stalled_lister_gone_after_the_alarm"},
+    ),
+    # Fix round 6: a deadline stop that is not confirmed is written like a confirmed one.
+    "unconfirmed_stop_not_named": (
+        (('s, stop not confirmed)")', 's)")'),),
+        {"deadline_stop_that_cannot_be_confirmed_is_named": "failure_names_the_group_and_the_unconfirmed_stop"},
+    ),
     "worker_group_only": (
-        (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM -- "-$pid"; sleep 1; kill -KILL -- "-$pid"; } 2>/dev/null'),),
+        (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM -- "-$pid"; sleep 1; kill -KILL -- "-$pid"; } 2>/dev/null || true'),),
         {"worker_using_the_launcher_leaves_no_nested_group": "child_that_ignores_term_gone"},
     ),
 }

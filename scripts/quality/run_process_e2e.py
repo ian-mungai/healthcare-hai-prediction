@@ -14,7 +14,9 @@ holds its pipes; a second interrupt during the stop is held until the stop is co
 signalled (the review reproductions of fix round 4).
 Planted defects run the same cases with a broken stop (the direct child only, TERM only, no confirmation, the leader's group only). Each plant has the
 real parameters of ``stop_launch`` and counts as caught only when the named check of each named case is false and the case raised nothing.
-A member that starts its own session is outside the launch's session; that limit is documented in scripts/process.py and not tested here.
+Fix round 6 (unreported cleanup failures): an unconfirmed deadline stop that overlaps an interrupt, two futures on one worker, an unconfirmed stop after an
+interrupt without a pool, a stop that raises, a caller that swallows the timeout, a pool step with an unconfirmed deadline stop and an alarm during the listing,
+with six plants. A member that starts its own session is outside the launch's session; that limit is documented in scripts/process.py and not tested here.
 The report goes to data/e2e/process/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 
@@ -38,7 +40,7 @@ from typing import Any
 from unittest import mock
 
 from scripts import process
-from scripts.process import CompletedProcess, ProcessGroupSurvived, SubprocessError, TimeoutExpired, run_command
+from scripts.process import CompletedProcess, ProcessGroupSurvived, StopOutcome, SubprocessError, TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 WATCHED = ("scripts/process.py", "scripts/quality/run_process_e2e.py")
@@ -252,6 +254,8 @@ def case(name: str, base: Path, body: Callable[[Scratch], dict[str, Any]]) -> di
         checks = {"raised": f"{type(error).__name__}: {error}"}
     finally:
         scratch.cleanup()
+        # A case that forces a survivor has checked the launcher's record itself; clearing it keeps this runner's own exit status clean.
+        acknowledge_unconfirmed()
     flags = {key: value for key, value in checks.items() if isinstance(value, bool)}
     return {
         "case": name,
@@ -690,7 +694,7 @@ def second_interrupt(base: Path) -> dict[str, Any]:
         sent: list[str] = []
         real_stop = process.stop_launch
 
-        def observed_stop(leader_pid: int, leader: Any = None, grace_seconds: float | None = None, session: bool = False) -> bool:
+        def observed_stop(leader_pid: int, leader: Any = None, grace_seconds: float | None = None, session: bool = False) -> StopOutcome:
             cleaning.set()
             survived = real_stop(leader_pid, leader, grace_seconds, session)
             finished.set()
@@ -942,6 +946,364 @@ def threaded_normal_run(base: Path) -> dict[str, Any]:
     return case("threaded_normal_run_unchanged", base, body)
 
 
+def plant_patches(plant: str) -> list[Any]:
+    """The patches of a fix round 6 planted defect (an empty list for no plant); a runner process embeds this function's source."""
+    table: dict[str, list[Any]] = {
+        # The pool takes a job's end for cleanup and ignores the stops that were not confirmed.
+        "pool_ignores_unconfirmed": [mock.patch.object(process.LaunchPool, "unconfirmed_problems", lambda self: [])],
+        # The record of an unconfirmed stop is not kept (a caller that drops the exception drops the outcome).
+        "no_record": [mock.patch("scripts.process.record_unconfirmed", lambda *_arguments, **_keywords: None)],
+        # Cancelled queued futures are waited for as if they ran.
+        "cancelled_futures_counted": [mock.patch.object(process.LaunchPool, "live_jobs", lambda self: list(self.jobs))],
+        # The lister is left running when the listing is interrupted.
+        "listing_not_unwound": [mock.patch("scripts.process.end_lister", lambda *_arguments, **_keywords: None)],
+        # The interrupt path raises the interrupt and drops the outcome of the stop.
+        "interrupt_drops_the_outcome": [mock.patch("scripts.process.named_failure", lambda _outcome, _command, cause: cause)],
+    }
+    return table.get(plant, [])
+
+
+# The runners of fix round 6 start with the same lines: the repository on the path, Python's SIGINT handler, the planted patches.
+ROUND6_PREFIX = (
+    "import json, os, signal, sys, threading\n"
+    "from pathlib import Path\n"
+    "from unittest import mock\n"
+    "root, folder, plant = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\n"
+    "sys.path.insert(0, str(root))\n"
+    "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+    "from scripts import process\n"
+    "from scripts.quality import pre_push\n"
+    "from typing import Any\n" + inspect.getsource(plant_patches) + "def living(pid):\n"
+    "    try:\n"
+    "        os.kill(pid, 0)\n"
+    "    except ProcessLookupError:\n"
+    "        return False\n"
+    "    return True\n"
+)
+# A program with a member in a group of its own that ignores TERM (argv: case folder): it survives a stop that only reaches the leader's group.
+MEMBER_IN_OTHER_GROUP = (
+    "import os, signal, sys, time\\n"
+    "from pathlib import Path\\n"
+    "folder = Path(sys.argv[1])\\n"
+    "(folder / 'leader.pid').write_text(str(os.getpid()))\\n"
+    "if os.fork() == 0:\\n"
+    "    os.setpgid(0, 0)\\n"
+    "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\\n"
+    "    (folder / 'member.pid').write_text(str(os.getpid()))\\n"
+    "while True:\\n"
+    "    time.sleep(1)\\n"
+)
+# Gap 1 of the fix round 5 recheck: the real ``pre_push.run_steps`` with a command that reaches its deadline; its stop cannot list the session (the lister
+# is missing) and SIGINT arrives while that stop runs. The pool must end with LaunchesNotStopped chained from the interrupt, not a plain KeyboardInterrupt.
+TIMEOUT_OVERLAP_RUNNER = (
+    ROUND6_PREFIX
+    + 'SUBJECT = "'
+    + MEMBER_IN_OTHER_GROUP
+    + """"
+began = threading.Event()
+main_thread = threading.get_ident()
+real_stop = process.stop_launch
+def stop(*arguments, **keywords):
+    began.set()
+    process.JOB.cancellation.event.wait(8)
+    with mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)):
+        return real_stop(*arguments, **keywords)
+def launch(_root, _step, _environment):
+    return process.run_command(sys.executable, ["-B", "-c", SUBJECT, str(folder)], timeout=0.6, grace_seconds=0.1)
+def send():
+    if began.wait(8):
+        signal.pthread_kill(main_thread, signal.SIGINT)
+threading.Thread(target=send).start()
+output = folder / "output"
+output.mkdir()
+step = {"name": "deadline", "kind": "repo_checks", "arguments": [], "env": {}, "timeout_seconds": 60}
+patches = [mock.patch.object(pre_push, "launch", launch), mock.patch("scripts.process.stop_launch", stop), *plant_patches(plant)]
+result = {}
+for patch in patches:
+    patch.start()
+try:
+    pre_push.run_steps(root, output, [step])
+    result["raised"] = "nothing"
+except BaseException as error:
+    result["raised"] = type(error).__name__
+    result["cause"] = type(error.__cause__).__name__
+    result["message"] = str(error)[:300]
+member = folder / "member.pid"
+result["member_alive_at_return"] = member.exists() and living(int(member.read_text()))
+result["stop_began"] = began.is_set()
+(folder / "result.json").write_text(json.dumps(result))
+"""
+)
+# A caller that treats ``ProcessGroupSurvived`` as a plain timeout and carries on (the shape of api_keys.py, s3_store.py and fetch_support.py).
+SWALLOWING_RUNNER = (
+    ROUND6_PREFIX
+    + """
+patches = [
+    mock.patch("scripts.process.session_left", lambda _members: True),
+    mock.patch("scripts.process.CONFIRM_SECONDS", 0.5),
+    *plant_patches(plant),
+]
+for patch in patches:
+    patch.start()
+try:
+    process.run_command(sys.executable, ["-B", "-c", "import time; time.sleep(30)"], timeout=0.5, grace_seconds=0.2)
+except process.TimeoutExpired:
+    pass
+print("the caller carried on")
+"""
+)
+# The real ``pre_push.run_steps`` with a step whose deadline stop is never confirmed and no interrupt: the step row and the pool must both say so.
+POOL_TIMEOUT_RUNNER = (
+    ROUND6_PREFIX
+    + """
+def launch(_root, _step, _environment):
+    return process.run_command(sys.executable, ["-B", "-c", "import time; time.sleep(30)"], timeout=0.5, grace_seconds=0.2)
+output = folder / "output"
+output.mkdir()
+step = {"name": "survivor", "kind": "repo_checks", "arguments": [], "env": {}, "timeout_seconds": 60}
+patches = [
+    mock.patch.object(pre_push, "launch", launch),
+    mock.patch("scripts.process.session_left", lambda _members: True),
+    mock.patch("scripts.process.CONFIRM_SECONDS", 0.5),
+    *plant_patches(plant),
+]
+for patch in patches:
+    patch.start()
+result = {}
+try:
+    rows = pre_push.run_steps(root, output, [step])
+    result["raised"] = "nothing"
+    result["rows"] = [{"name": row["name"], "exit": row["exit"], "error": row["error"]} for row in rows]
+except BaseException as error:
+    result["raised"] = type(error).__name__
+    result["message"] = str(error)[:300]
+(folder / "result.json").write_text(json.dumps(result))
+"""
+)
+
+
+def run_round6_runner(scratch: Scratch, code: str, plant: str = "", seconds: float = 40.0) -> tuple[dict[str, Any], int | None, str]:
+    """Run a fix round 6 runner in a session of its own; return what it recorded, its exit status and its standard error."""
+    script = scratch.folder / "runner.py"
+    script.write_text(code, encoding="utf-8")
+    environment = {key: value for key, value in os.environ.items() if key != process.SESSION_VARIABLE}
+    runner = process.start([sys.executable, "-B", str(script), str(ROOT), str(scratch.folder), plant], ROOT, environment, new_session=True)
+    status: int | None = None
+    error_text = ""
+    try:
+        try:
+            _output, error_text = runner.communicate(timeout=seconds)
+            status = runner.returncode
+        except TimeoutExpired:
+            status = None
+        result_file = scratch.folder / "result.json"
+        return (json.loads(result_file.read_text()) if result_file.exists() else {}), status, error_text
+    finally:
+        # A runner that never ended (the defect) and every program it started are killed.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(runner.pid, signal.SIGKILL)
+        scratch.cleanup()
+        process.close_pipes(runner)
+        runner.wait(timeout=CASE_GRACE_SECONDS + 5)
+
+
+def acknowledge_unconfirmed() -> list[str]:
+    """Hand back what the launcher recorded as unconfirmed in this process (a case that forces a survivor checks it, then the record is cleared)."""
+    take = getattr(process, "take_unconfirmed", None)
+    return list(take()) if take is not None else []
+
+
+def exit_status_marks_unconfirmed(status: int | None) -> bool:
+    return status is not None and status == getattr(process, "UNCONFIRMED_EXIT_STATUS", -1)
+
+
+def timeout_overlap(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, status, _error = run_round6_runner(scratch, TIMEOUT_OVERLAP_RUNNER, plant)
+        return {
+            "natural_timeout_cleanup_began": result.get("stop_began", False),
+            "member_survived_the_stop": result.get("member_alive_at_return", False),
+            "interrupt_became_a_named_failure": result.get("raised") == "LaunchesNotStopped",
+            "interrupt_is_the_cause": result.get("cause") == "KeyboardInterrupt",
+            "message_says_the_stop_is_not_confirmed": "not confirmed" in result.get("message", ""),
+            "exit_status_marks_the_unconfirmed_stop": exit_status_marks_unconfirmed(status),
+            "exception_seen": result.get("raised", "no result"),
+        }
+
+    return case("timeout_cleanup_failure_during_interrupt_is_named", base, body)
+
+
+def cancelled_queued_future(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # Gap 2 of the fix round 5 recheck: one worker, one cooperative job, one queued job, SIGINT. The queued job is cancelled and never ran.
+        ran: list[bool] = []
+        raised = "nothing"
+        started = time.monotonic()
+        pool = process.LaunchPool(max_workers=1)
+        with contextlib.ExitStack() as stack:
+            for patch in [mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 4.0), *plant_patches(plant)]:
+                stack.enter_context(patch)
+            try:
+                with pool:
+                    pool.submit(lambda: pool.cancellation.event.wait(10))
+                    queued = pool.submit(lambda: ran.append(True))
+                    signal.raise_signal(signal.SIGINT)
+            except BaseException as error:
+                raised = type(error).__name__
+        seconds = time.monotonic() - started
+        acknowledge_unconfirmed()
+        return {
+            "interrupt_reached_the_caller_unchanged": raised == "KeyboardInterrupt",
+            "pool_did_not_wait_for_the_cancelled_future": seconds < 3.0,
+            "queued_job_was_cancelled": queued.cancelled(),
+            "queued_job_never_ran": not ran,
+            "exception_seen": raised,
+            "seconds": round(seconds, 2),
+        }
+
+    return case("cancelled_queued_future_is_not_waited_for", base, body)
+
+
+def unconfirmed_on_interrupt(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # A caller without a pool, interrupted while its program runs; the stop of the session is never confirmed.
+        main = threading.get_ident()
+        subject = scratch.folder / "subject.pid"
+
+        def sender() -> None:
+            if wait_for_file(subject):
+                signal.pthread_kill(main, signal.SIGINT)
+
+        earlier = signal.signal(signal.SIGINT, signal.default_int_handler)
+        sending = threading.Thread(target=sender, daemon=True)
+        caught: BaseException | None = None
+        try:
+            with short_grace(survivor_probe=lambda _group: True), contextlib.ExitStack() as stack:
+                for patch in plant_patches(plant):
+                    stack.enter_context(patch)
+                sending.start()
+                try:
+                    run_command(sys.executable, ["-B", "-c", TERM_IGNORING, str(subject)], cwd=ROOT, timeout=60)
+                except BaseException as error:
+                    caught = error
+            sending.join(5)
+        finally:
+            signal.signal(signal.SIGINT, earlier)
+        recorded = acknowledge_unconfirmed()
+        pids = scratch.pids()
+        return {
+            "subject_started": "subject" in pids,
+            "failure_is_named": type(caught).__name__ == "LaunchesNotStopped",
+            "interrupt_is_the_cause": isinstance(getattr(caught, "__cause__", None), KeyboardInterrupt),
+            "message_says_the_stop_is_not_confirmed": caught is not None and "not confirmed" in str(caught),
+            "outcome_is_recorded": bool(recorded),
+            "exception_seen": type(caught).__name__,
+        }
+
+    return case("unconfirmed_stop_on_interrupt_is_named", base, body)
+
+
+def stop_that_raises(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The stop itself fails with an error; the call must still say that the program may be alive, with the error text.
+        def broken(*_arguments: Any, **_keywords: Any) -> bool:
+            raise OSError("stop failure for the case")
+
+        subject = scratch.folder / "subject.pid"
+        with mock.patch("scripts.process.stop_launch", broken):
+            caught, _elapsed = timed_out_with(
+                lambda: run_command(sys.executable, ["-B", "-c", TERM_IGNORING, str(subject)], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS)
+            )
+        recorded = acknowledge_unconfirmed()
+        return {
+            "subject_started": subject.exists(),
+            "raised_survivor_error": isinstance(caught, ProcessGroupSurvived),
+            "message_carries_the_stop_error": caught is not None and "stop failure for the case" in str(caught),
+            "outcome_is_recorded": bool(recorded),
+        }
+
+    return case("stop_that_raises_is_unconfirmed", base, body)
+
+
+def swallowing_caller(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        _result, status, error_text = run_round6_runner(scratch, SWALLOWING_RUNNER, plant, seconds=30)
+        return {
+            "caller_carried_on": status is not None,
+            "stderr_names_the_unconfirmed_stop": "not confirmed" in error_text,
+            "exit_status_marks_the_unconfirmed_stop": exit_status_marks_unconfirmed(status),
+            "exit_status_seen": -1 if status is None else status,
+        }
+
+    return case("unconfirmed_stop_survives_a_swallowing_caller", base, body)
+
+
+def pool_timeout_report(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, POOL_TIMEOUT_RUNNER, plant, seconds=30)
+        rows = {row["name"]: row for row in result.get("rows", [])}
+        return {
+            "step_row_fails": rows.get("survivor", {}).get("exit") == 1,
+            "step_row_says_the_stop_is_not_confirmed": "not confirmed" in rows.get("survivor", {}).get("error", ""),
+            "step_row_does_not_claim_it_was_stopped": "and was stopped" not in rows.get("survivor", {}).get("error", "and was stopped"),
+            "pool_report_row_fails": rows.get("stop_confirmation", {}).get("exit") == 1,
+            "exception_seen": result.get("raised", "no result"),
+        }
+
+    return case("pool_reports_an_unconfirmed_timeout_stop", base, body)
+
+
+# A stand-in lister (argv: case folder): it records itself, starts a child that holds its pipes and waits.
+STALLED_LISTER = """
+import os, subprocess, sys, time
+folder = sys.argv[1]
+open(os.path.join(folder, "lister.pid"), "w").write(str(os.getpid()))
+holder = subprocess.Popen(["sleep", "60"])
+open(os.path.join(folder, "holder.pid"), "w").write(str(holder.pid))
+time.sleep(60)
+"""
+
+
+def interrupted_listing(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # An alarm (the exit trap's stop helper) ends the listing while the lister is stalled: the lister and the process that holds its pipes must go.
+        def alarm(_number: int, _frame: Any) -> None:
+            raise TimeoutError("alarm during the listing")
+
+        earlier = signal.signal(signal.SIGALRM, alarm)
+        caught: BaseException | None = None
+        patches = [
+            mock.patch("scripts.process.SESSION_LISTING", (sys.executable, "-B", "-c", STALLED_LISTER, str(scratch.folder))),
+            mock.patch("scripts.process.LISTING_SECONDS", 30.0),
+            *plant_patches(plant),
+        ]
+        try:
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                signal.setitimer(signal.ITIMER_REAL, 0.8)
+                try:
+                    process.list_processes()
+                except TimeoutError as error:
+                    caught = error
+                finally:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, earlier)
+        end = time.monotonic() + 3
+        pids = scratch.pids()
+        while time.monotonic() < end and any(alive(pid) for pid in pids.values()):
+            time.sleep(0.05)
+        return {
+            "alarm_unwound_the_listing": isinstance(caught, TimeoutError),
+            "lister_and_holder_started": "lister" in pids and "holder" in pids,
+            "lister_gone": "lister" in pids and not alive(pids["lister"]),
+            "holder_gone": "holder" in pids and not alive(pids["holder"]),
+        }
+
+    return case("interrupted_listing_leaves_no_lister", base, body)
+
+
 def default_periods(base: Path) -> dict[str, Any]:
     return {
         "case": "default_grace_periods_are_set",
@@ -975,6 +1337,13 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "threaded_interrupt_stops_the_launch": threaded_interrupt,
     "threaded_interrupt_survivor_fails_visibly": threaded_survivor,
     "threaded_normal_run_unchanged": threaded_normal_run,
+    "timeout_cleanup_failure_during_interrupt_is_named": timeout_overlap,
+    "cancelled_queued_future_is_not_waited_for": cancelled_queued_future,
+    "unconfirmed_stop_on_interrupt_is_named": unconfirmed_on_interrupt,
+    "stop_that_raises_is_unconfirmed": stop_that_raises,
+    "unconfirmed_stop_survives_a_swallowing_caller": swallowing_caller,
+    "pool_reports_an_unconfirmed_timeout_stop": pool_timeout_report,
+    "interrupted_listing_leaves_no_lister": interrupted_listing,
     "default_grace_periods_are_set": default_periods,
 }
 REAL_STOP = process.stop_launch
@@ -1008,13 +1377,13 @@ def plant_no_confirmation(leader_pid: int, leader: Any = None, grace_seconds: fl
     return False
 
 
-def plant_leader_group_only(leader_pid: int, leader: Any = None, grace_seconds: float | None = None, session: bool = False) -> bool:
+def plant_leader_group_only(leader_pid: int, leader: Any = None, grace_seconds: float | None = None, session: bool = False) -> StopOutcome:
     """The real stop of the leader's process group, without the other members of the session (nested groups, a moved descendant)."""
     return process.stop_process_group(leader_pid, leader, grace_seconds)
 
 
 # plant name -> (replacement for stop_launch, {case that must fail: the check that must be false in it})
-PLANTS: dict[str, tuple[Callable[..., bool], dict[str, str]]] = {
+PLANTS: dict[str, tuple[Callable[..., StopOutcome | bool], dict[str, str]]] = {
     "direct_child_only": (
         plant_direct_child_only,
         {"grandchild_stopped_at_deadline": "grandchild_gone", "grandchild_holding_pipe_stopped": "grandchild_gone"},
@@ -1045,12 +1414,8 @@ def planted_cases(base: Path) -> list[dict[str, Any]]:
         if list(inspect.signature(replacement).parameters) != real:
             results.append({"case": f"planted_{name}_is_caught", "passed": False, "checks": {"plant_takes_the_real_arguments": False, "real": real}})
             continue
-        saved = process.stop_launch
-        process.stop_launch = replacement
-        try:
+        with mock.patch("scripts.process.stop_launch", replacement):
             ran = {case_name: CASES[case_name](base / f"plant_{name}") for case_name in wanted}
-        finally:
-            process.stop_launch = saved
         caught = {case_name: caught_on(ran[case_name], check) for case_name, check in wanted.items()}
         raised = {case_name: result["checks"]["raised"] for case_name, result in ran.items() if "raised" in result["checks"]}
         results.append({"case": f"planted_{name}_is_caught", "passed": all(caught.values()), "checks": {**caught, **({"raised": raised} if raised else {})}})
@@ -1080,6 +1445,37 @@ def planted_threaded_cases(base: Path) -> list[dict[str, Any]]:
     return results
 
 
+# fix round 6 plant name -> (case function, {case name: the check that must be false in it})
+ROUND6_PLANTS: dict[str, tuple[Callable[..., dict[str, Any]], dict[str, str]]] = {
+    "pool_ignores_unconfirmed": (
+        timeout_overlap,
+        {"timeout_cleanup_failure_during_interrupt_is_named": "interrupt_became_a_named_failure"},
+    ),
+    "pool_ignores_unconfirmed_report": (pool_timeout_report, {"pool_reports_an_unconfirmed_timeout_stop": "pool_report_row_fails"}),
+    "no_record": (swallowing_caller, {"unconfirmed_stop_survives_a_swallowing_caller": "exit_status_marks_the_unconfirmed_stop"}),
+    "cancelled_futures_counted": (cancelled_queued_future, {"cancelled_queued_future_is_not_waited_for": "interrupt_reached_the_caller_unchanged"}),
+    "listing_not_unwound": (interrupted_listing, {"interrupted_listing_leaves_no_lister": "lister_gone"}),
+    "interrupt_drops_the_outcome": (unconfirmed_on_interrupt, {"unconfirmed_stop_on_interrupt_is_named": "failure_is_named"}),
+}
+
+
+def planted_round6_cases(base: Path) -> list[dict[str, Any]]:
+    """Each plant breaks one part of the shared outcome mechanism; its case must fail on the named check and raise nothing."""
+    results: list[dict[str, Any]] = []
+    for name, (function, wanted) in ROUND6_PLANTS.items():
+        plant = "pool_ignores_unconfirmed" if name.startswith("pool_ignores_unconfirmed") else name
+        result = function(base / f"plant_{name}", plant)
+        ((case_name, check),) = wanted.items()
+        results.append(
+            {
+                "case": f"planted_{name}_is_caught",
+                "passed": result["case"] == case_name and caught_on(result, check),
+                "checks": {check: result["checks"].get(check), "exception_seen": result["checks"].get("exception_seen")},
+            }
+        )
+    return results
+
+
 def main() -> int:
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
@@ -1091,6 +1487,7 @@ def main() -> int:
         if not selected:
             results.extend(planted_cases(base))
             results.extend(planted_threaded_cases(base))
+            results.extend(planted_round6_cases(base))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     after = {name: sha256_of(ROOT / name) for name in WATCHED}
