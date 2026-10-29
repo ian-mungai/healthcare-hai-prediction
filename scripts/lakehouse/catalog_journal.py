@@ -59,15 +59,31 @@ def durable_directory(path: Path) -> None:
 def private_directory(path: Path) -> None:
     """Create a directory only this user can enter; tighten a wider one this user owns and refuse any other."""
     durable_directory(path.parent)
-    if not path.exists() and not path.is_symlink():
-        path.mkdir(mode=0o700)
-        sync_directory(path.parent)
-    status = path.lstat()
-    if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid():
-        raise PermissionError("transport_folder_must_be_a_private_directory")
-    if status.st_mode & 0o077:
-        path.chmod(0o700)
-    sync_directory(path)
+    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            os.mkdir(path.name, 0o700, dir_fd=parent)
+            os.fsync(parent)
+        except FileExistsError:
+            pass
+        try:
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        except OSError as error:
+            raise PermissionError("transport_folder_must_be_a_private_directory") from error
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid():
+                raise PermissionError("transport_folder_must_be_a_private_directory")
+            if status.st_mode & 0o077:
+                os.fchmod(descriptor, 0o700)
+            os.fsync(descriptor)
+            named = os.lstat(path.name, dir_fd=parent)
+            if (named.st_dev, named.st_ino) != (status.st_dev, status.st_ino):
+                raise PermissionError("transport_folder_must_be_a_private_directory")
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent)
 
 
 def write_once(path: Path, value: Document) -> None:

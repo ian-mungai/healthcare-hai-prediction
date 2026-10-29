@@ -12,6 +12,7 @@ import contextlib
 import fcntl
 import io
 import json
+import os
 import re
 import secrets
 import shutil
@@ -35,7 +36,7 @@ from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn, StandInHandler
 from scripts.lakehouse import aws_catalog_setup as setup
-from scripts.lakehouse import catalog, polaris_writer, principal_credentials, run_lock
+from scripts.lakehouse import catalog, catalog_journal, polaris_writer, principal_credentials, run_lock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -507,7 +508,48 @@ def case_transport_folder_private(out: Path) -> dict[str, bool]:
     except PermissionError as error:
         refused = str(error) == "transport_folder_must_be_a_private_directory"
     checks["a symlink is refused and its target keeps its mode"] = refused and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
+    folder.unlink()
+    folder.mkdir(mode=0o755)
+    checks.update(swapped_after_check(folder, out / "swap_target", out / "swap_moved"))
     return checks
+
+
+def swapped_after_check(folder: Path, target: Path, moved: Path) -> dict[str, bool]:
+    """A writer of the parent swaps the checked 0755 folder for a symlink right after the check: the target keeps its mode and the call refuses."""
+    target.mkdir(mode=0o755)
+    inode = folder.stat().st_ino
+    real_stat, real_lstat, real_fstat = os.stat, os.lstat, os.fstat
+    swapped: list[bool] = []
+
+    def swap_after(real: Callable[..., os.stat_result], *, check_only: bool = False) -> Callable[..., os.stat_result]:
+        """Swap once after the call that inspects the folder without following it (lstat, stat without following, fstat)."""
+
+        def checked(*args: Any, **kwargs: Any) -> os.stat_result:
+            result = real(*args, **kwargs)
+            inspects = not check_only or kwargs.get("follow_symlinks") is False
+            if inspects and not swapped and stat.S_ISDIR(result.st_mode) and result.st_ino == inode:
+                swapped.append(True)
+                folder.rename(moved)
+                folder.symlink_to(target)
+            return result
+
+        return checked
+
+    with (
+        mock.patch.object(os, "stat", swap_after(real_stat, check_only=True)),
+        mock.patch.object(os, "lstat", swap_after(real_lstat)),
+        mock.patch.object(os, "fstat", swap_after(real_fstat)),
+    ):
+        try:
+            catalog_journal.private_directory(folder)
+            refused = False
+        except PermissionError as error:
+            refused = str(error) == "transport_folder_must_be_a_private_directory"
+    return {
+        "the swap happened after the check": swapped == [True],
+        "a folder swapped after the check is refused": refused,
+        "the swapped-in target keeps its mode": stat.S_IMODE(target.stat().st_mode) == 0o755,
+    }
 
 
 def case_real_relay(out: Path) -> dict[str, bool]:
