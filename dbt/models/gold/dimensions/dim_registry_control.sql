@@ -56,7 +56,7 @@ final as (
         md5('<unknown>') as registry_control_sk,
         '<unknown>' as measure_control,
         cast(null as varchar) as parent,
-        cast(null as varchar) as family,
+        cast(null as varchar) as unknown_family,
         cast(null as varchar) as closeout_decision,
         cast(null as varchar) as review_decision
 )
