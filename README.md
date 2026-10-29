@@ -162,3 +162,7 @@ commands are in `docs/lakehouse_usage.md`. The AWS catalog setup (`scripts.lakeh
 in `docs/install_details.md`. The environments, the AWS stacks and project policies, bucket lifecycle rules and deferred controls are in
 `docs/infrastructure_controls.md`. Rendering the architecture diagram is in `docs/architecture_rendering.md`. The proposed
 ECS read target contract is in `docs/ecs_target_contract.md` and the proposed real AWS read checks are in `docs/ecs_real_runs.md`.
+
+## License
+
+MIT. See [LICENSE](LICENSE). It covers the code and configuration in this repository, not the third-party source data.
