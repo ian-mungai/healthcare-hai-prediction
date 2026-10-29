@@ -9,7 +9,7 @@
       "occurrences": 1,
       "file_sha256": "07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
       "dependencies": {
-        "scripts/acquisition/bls_api_contract.py": "sha256:ad31e2f19b9d8184f0ed9bcbbc8980d3a7c5f9050577a851daf274790ed521df",
+        "scripts/acquisition/bls_api_contract.py": "sha256:45ad41826004329a1a85112b757c315038cd8a5be62fb58b18bdd0562bd4b88f",
         "scripts/acquisition/bls_api_transport.py": "sha256:dfcadc91607e2e3f55322da38c02e951c990d8a8224e9a856067e3599f4a8620",
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
         "scripts/acquisition/collect_mmd_api.py": "sha256:b8fae8aa20489404f4614f011e79e56525c61c4f3b38db26d36f1fa18dd1ec20",
@@ -35,7 +35,7 @@
       "file_sha256": "c81862d8eed2b2b443db45085a520c2b6a5f69c787a697500d8e296ff9381fb4",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/census_acs_api_contract.py": "sha256:a900213321cce6d98ea7fdf1dc2a1b28d59e28d9752339e3fee1cfcb3d0420b9",
+        "scripts/acquisition/census_acs_api_contract.py": "sha256:909ad5114f5eed432bc3cb5281a8cc392bad05b997950a203834b1e0cf31a556",
         "scripts/acquisition/census_acs_api_transport.py": "sha256:aeaba5379d6f6c4d19f44fadae28848092896046b74a4201b20e3f9cec3aaa51",
         "scripts/acquisition/collect_mmd_api.py": "sha256:b8fae8aa20489404f4614f011e79e56525c61c4f3b38db26d36f1fa18dd1ec20",
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
@@ -65,7 +65,7 @@
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
         "scripts/acquisition/data_paths.py": "sha256:2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42",
         "scripts/acquisition/dataset_layout.py": "sha256:f4f2ab6d2a81e9ee387633bf37a4b5b566332e5302df9363a3094f9f8d96d4a8",
-        "scripts/acquisition/hud_api_contract.py": "sha256:26bbdf02dc34b0cc983a2c20fd590ae757adf8ef99c4359e6aaecc64a0708760",
+        "scripts/acquisition/hud_api_contract.py": "sha256:a71873027da11e196c7042fef9d786e6294ac68960235b337fb4b53e265c1fbd",
         "scripts/acquisition/hud_api_transport.py": "sha256:c0d7ebb64aed1c78a4cb7bc800a7481a994af85a251c2b5ba7223aafe3561c63",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
         "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",

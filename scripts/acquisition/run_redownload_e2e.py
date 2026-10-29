@@ -490,7 +490,7 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
     plan_path, versions = base / "plan.json", base / "versions.json"
     write_once(plan_path, encoded_json(plan))
     write_once(plan_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
-    write_once(versions, encoded_json({"versions": [{"version": "synthetic", "code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"version": "synthetic", "code_sha256": bls_contract.collector_code_hashes()}]}))
     payload = bls_fixture(batch)
     calls: list[int] = []
 
