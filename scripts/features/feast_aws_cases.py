@@ -137,18 +137,23 @@ def session_for(
     folder: str = "/workspace/out",
     limits: feast_aws.Limits | None = None,
     deadline: Callable[[str], None] | None = None,
+    open_store: Callable[[], Any] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    total: float = feast_aws.PREPARE_SECONDS,
 ) -> contextlib.AbstractContextManager[Any]:
     environ.setdefault("FEAST_RUN_FOLDER", folder)
     job = feast_aws.job_settings(environ, "materialize", RUN, mode)
     return feast_aws.catalog_session(
         job,
         environ,
-        store=store,
+        open_store=open_store or (lambda: store),
         exchange=exchange or exchange_stand_in(),
         loader=lambda name, **properties: catalog,
         redis_factory=redis_factory(server),
         limits=limits or feast_aws.Limits(),
         deadline=deadline,
+        clock=clock,
+        total=total,
     )
 
 
@@ -157,6 +162,43 @@ def runs_catalog(namespace: str) -> feast_cases.StubCatalog:
     catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 1, {}, [feast_cases.runs_row(RUN, online_cases.T0, {"t": 5})])
     catalog.tables["t"] = feast_cases.StubTable("t", 5)
     return catalog
+
+
+class PathBackend(feast_cases.RecordingBackend):
+    """The Feast stand-in that keeps the registry path the job environment holds when ``apply`` runs, the path the real backend consumes."""
+
+    def __init__(self, schema: dict[str, Any], log: list[str], environ: Mapping[str, str]) -> None:
+        super().__init__(schema, log)
+        self.environ = environ
+        self.consumed = ""
+
+    def apply(self) -> None:
+        self.consumed = self.environ.get("FEAST_REGISTRY_PATH", "")
+        super().apply()
+
+
+def consumed_registry(mode: str) -> str:
+    """Run a full AWS apply in ``mode`` and return the registry path the backend consumed."""
+    schema = feast_cases.synthetic_schema()
+    with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
+        catalog, _ = feast_cases.stub_features(schema)
+        catalog.namespace = reads.NAMESPACES[mode]
+        environ, store, server = prepared(FEAST_RUN_FOLDER=raw)
+        backend = PathBackend(schema, [], environ)
+        feast_aws.run_job(
+            "apply",
+            RUN,
+            mode,
+            environ,
+            store=store,
+            exchange=exchange_stand_in(),
+            loader=loader_for(GuardedCatalog(catalog)),
+            redis_factory=redis_factory(server),
+            backend=backend,
+            lease=lambda: online.writer_lease(environ, control=server.client(online.CONTROL_DB, password=STORE_VALUE)),
+            schema=(schema, "c" * 64),
+        )
+    return backend.consumed
 
 
 def case_fa1(c: Checker) -> None:
@@ -284,7 +326,7 @@ def case_fa5(c: Checker) -> None:
 
     job = feast_aws.job_settings(dict(environ, FEAST_RUN_FOLDER="/workspace/out"), "materialize", RUN, "real")
     with feast_aws.catalog_session(
-        job, environ, store=store, exchange=exchange_stand_in(seen), loader=loader, redis_factory=redis_factory(server), limits=feast_aws.Limits()
+        job, environ, open_store=lambda: store, exchange=exchange_stand_in(seen), loader=loader, redis_factory=redis_factory(server), limits=feast_aws.Limits()
     ):
         c.check("the exchange got the endpoint and the reader pair", seen == [(endpoint, "reader-id-1", SENTINEL)])
         c.check("the catalog opened with the token and the endpoint", properties.get("token") == ISSUED and properties.get("uri") == endpoint)
@@ -388,7 +430,13 @@ def case_fa9(c: Checker) -> None:
     c.refused(
         "an unreachable Redis is refused",
         lambda: feast_aws.catalog_session(
-            job, environ, store=store, exchange=exchange_stand_in(), loader=lambda n, **p: guarded, redis_factory=unreachable, limits=feast_aws.Limits()
+            job,
+            environ,
+            open_store=lambda: store,
+            exchange=exchange_stand_in(),
+            loader=lambda n, **p: guarded,
+            redis_factory=unreachable,
+            limits=feast_aws.Limits(),
         ).__enter__(),
         "ConnectionError",
     )
@@ -412,7 +460,7 @@ def case_fa10(c: Checker) -> None:
             lambda: feast_aws.catalog_session(
                 job,
                 environ,
-                store=store,
+                open_store=lambda: store,
                 exchange=slow_exchange,
                 loader=lambda n, **p: GuardedCatalog(runs_catalog("features")),
                 redis_factory=redis_factory(server),
@@ -450,7 +498,10 @@ def case_fa11(c: Checker) -> None:
     phases: list[str] = []
     with session_for("real", environ, store, server, GuardedCatalog(runs_catalog("features")), deadline=phases.append):
         pass
-    c.check("the four phases run in order", phases == ["the secret fetch", "the Redis check", "the token exchange", "the catalog check"])
+    c.check(
+        "the four phases run in order, then the hand-over",
+        phases == ["the secret fetch", "the Redis check", "the token exchange", "the catalog check", feast_aws.HANDOVER],
+    )
 
     def stop_before_redis(phase: str) -> None:
         if phase == "the Redis check":
@@ -471,6 +522,68 @@ def case_fa11(c: Checker) -> None:
         "deadline",
     )
     c.check("the default total deadline is bounded", 0 < feast_aws.PREPARE_SECONDS <= 600)
+    release = threading.Event()
+
+    def blocked_store() -> Any:
+        release.wait(5)
+        raise RuntimeError("the secret-store client never opened")
+
+    environ, store, server = prepared()
+    started = time.monotonic()
+    c.refused(
+        "a blocked secret-store constructor is refused at the phase limit",
+        lambda: session_for(
+            "real", environ, store, server, runs_catalog("features"), open_store=blocked_store, limits=feast_aws.Limits(secret=0.2)
+        ).__enter__(),
+        "did not finish within",
+    )
+    c.check("the blocked constructor wait was bounded", time.monotonic() - started < 2.0)
+    environ, store, server = prepared()
+    store.stall = True
+    started = time.monotonic()
+    message = c.refused(
+        "a phase limit above the time left is cut to the time left",
+        lambda: session_for("real", environ, store, server, runs_catalog("features"), total=0.3, limits=feast_aws.Limits(secret=30.0)).__enter__(),
+        "did not finish within 0.",
+    )
+    c.check("the secret wait ended with the total deadline", time.monotonic() - started < 2.0 and "30" not in message)
+    release.set()
+    store.release.set()
+
+    def blocked_loader(name: str, **properties: Any) -> Any:
+        threading.Event().wait(5)
+        raise RuntimeError("the catalog never opened")
+
+    environ, store, server = prepared()
+    started = time.monotonic()
+    c.refused(
+        "a blocked catalog constructor is refused at the catalog limit",
+        lambda: feast_aws.catalog_session(
+            feast_aws.job_settings(dict(environ, FEAST_RUN_FOLDER="/workspace/out"), "materialize", RUN, "real"),
+            environ,
+            open_store=lambda: store,
+            exchange=exchange_stand_in(),
+            loader=blocked_loader,
+            redis_factory=redis_factory(server),
+            limits=feast_aws.Limits(catalog=0.2),
+        ).__enter__(),
+        "did not finish within 0.2",
+    )
+    c.check("the blocked catalog constructor wait was bounded", time.monotonic() - started < 2.0)
+    now = [0.0]
+
+    class SlowFinalLoad(GuardedCatalog):
+        def load_table(self, identifier: str) -> Any:
+            now[0] = feast_aws.PREPARE_SECONDS + 1
+            return super().load_table(identifier)
+
+    environ, store, server = prepared()
+    c.refused(
+        "a final load that passes the deadline is not handed over",
+        lambda: session_for("real", environ, store, server, SlowFinalLoad(runs_catalog("features")), clock=lambda: now[0]).__enter__(),
+        "deadline before the hand-over",
+    )
+    c.check("the password and the token left the environment", "REDIS_PASSWORD" not in environ and "FEAST_POLARIS_TOKEN" not in environ)
 
 
 def case_fa12(c: Checker) -> None:
@@ -484,6 +597,14 @@ def case_fa12(c: Checker) -> None:
                 f"{step}: the job is a real-mode job in the run folder",
                 job.mode == "real" and job.folder == Path("/workspace/out") and job.region == "us-east-2",
             )
+    real_key, fixture_key = "lakehouse/feast/registry.pb", "lakehouse/feast_e2e/registry.pb"
+    for step in ("apply", "materialize"):
+        fixture = feast_aws.job_settings(environ, step, RUN, "publish_fixture")
+        c.check(f"{step}: a fixture run uses the literal fixture key", fixture.registry_path == f"s3://example-feature-bucket/{fixture_key}")
+        c.check(f"{step}: a real run uses the literal real key", feast_aws.job_settings(environ, step, RUN, "real").registry_path.endswith(f"/{real_key}"))
+    c.check("the fixture registry step is the probe key", feast_aws.FIXTURE_REGISTRY_STEP == "probe" and reads.REGISTRY_KEYS["probe"] == fixture_key)
+    c.check("a real apply hands the backend the real registry", consumed_registry("real") == f"s3://example-feature-bucket/{real_key}")
+    c.check("a fixture apply hands the backend the fixture registry", consumed_registry("publish_fixture") == f"s3://example-feature-bucket/{fixture_key}")
     c.refused(
         "FEAST_REGISTRY_PATH is refused",
         feast_aws.job_settings,

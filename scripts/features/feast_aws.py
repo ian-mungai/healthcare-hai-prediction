@@ -17,6 +17,7 @@ Everything the job needs comes from its environment or the secret store, never f
 
 The preparation runs in four bounded phases under one deadline: the secret fetch, a Redis check, the token exchange
 and a catalog check (load of ``publish_runs``).
+Every call of a phase, the client constructors included, waits at most the time left of the deadline.
 A phase that does not answer ends the job with a message that names the phase and the error type, never a value. Nothing here has run against AWS.
 """
 
@@ -26,6 +27,7 @@ import contextlib
 import functools
 import re
 import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
@@ -37,7 +39,6 @@ from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
 
-PROFILE_VARIABLE = "FEAST_PROFILE"
 PROFILES = ("local", "aws")
 STEPS = ("apply", "materialize")
 AWS_SETTINGS_FILE = feast_job.REPO / "feature_store_aws.yaml"
@@ -49,6 +50,7 @@ PASSWORD_FORM = re.compile(r"[A-Za-z0-9_-]{8,128}")
 FIXTURE_REGISTRY_STEP = "probe"
 PREPARE_SECONDS = 180.0
 PHASES = ("the secret fetch", "the Redis check", "the token exchange", "the catalog check")
+HANDOVER = "the hand-over of the catalog"
 SSM_CONNECT_SECONDS = 5
 SSM_READ_SECONDS = 10
 
@@ -81,11 +83,11 @@ class SecretReader(Protocol):
 
 def selected_profile(environ: MutableMapping[str, str] | Any) -> str:
     """``local`` when ``FEAST_PROFILE`` is unset, otherwise exactly ``local`` or ``aws``."""
-    value = environ.get(PROFILE_VARIABLE)
+    value = environ.get("FEAST_PROFILE")
     if value is None:
         return "local"
     if value not in PROFILES:
-        raise ReadError(f"{PROFILE_VARIABLE} is not a known profile ({' or '.join(PROFILES)})")
+        raise ReadError(f"FEAST_PROFILE is not a known profile ({' or '.join(PROFILES)})")
     return str(value)
 
 
@@ -178,11 +180,11 @@ def bounded[T](seconds: float, call: Callable[[], T], what: str) -> T:
     return outcome[0]
 
 
-def fetch_password(store: SecretReader, seconds: float) -> str:
-    """The Redis password: one ``get`` of its secret name, bounded; the error text of the store is never repeated."""
+def fetch_password(open_store: Callable[[], SecretReader], seconds: float) -> str:
+    """The Redis password: the store is opened and asked once for its secret name inside one bounded call; the error text of the store is never repeated."""
     name = redis_secret_name()
     try:
-        value = bounded(seconds, lambda: store.get(name), f"the read of secret {name}")
+        value = bounded(seconds, lambda: open_store().get(name), f"the read of secret {name}")
     except ReadError:
         raise
     except Exception as error:
@@ -212,7 +214,7 @@ def open_ssm(region: str) -> SecretReader:
     import boto3
     from botocore.config import Config
 
-    config = Config(connect_timeout=SSM_CONNECT_SECONDS, read_timeout=SSM_READ_SECONDS, retries={"max_attempts": 1})
+    config = Config(connect_timeout=SSM_CONNECT_SECONDS, read_timeout=SSM_READ_SECONDS, retries={"total_max_attempts": 1})
     return SsmSecretReader(boto3.client("ssm", region_name=region, config=config))
 
 
@@ -221,30 +223,44 @@ def catalog_session(
     job: feast_job.JobSettings,
     environ: MutableMapping[str, str],
     *,
-    store: SecretReader,
+    open_store: Callable[[], SecretReader],
     exchange: Callable[[str, str, str], str] | None = None,
     loader: Callable[..., Any] | None = None,
     redis_factory: Callable[[Any, int], Any] = online.connect,
     limits: Limits = DEFAULT_LIMITS,
     deadline: Callable[[str], None] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    total: float = PREPARE_SECONDS,
 ) -> Iterator[reads.IcebergCatalog]:
-    """Prepare the environment and open the catalog of the AWS profile in the four bounded phases; the password and the token leave the environment on exit."""
+    """Prepare the environment and open the catalog of the AWS profile in the four bounded phases; the password and the token leave the environment on exit.
+
+    Every call, the construction of the secret-store client, the Redis client and the catalog included, waits at most its phase limit or the time left
+    of ``total``, whichever is shorter, and the session is not handed over after ``total`` has passed.
+    """
     settings = aws_settings(environ, job.mode)
     if environ.get("REDIS_PASSWORD") is not None:
         raise ReadError("REDIS_PASSWORD is set; the AWS profile reads the password from the secret store only")
     missing = sorted(name for name in ("POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET") if not environ.get(name))
     if missing:
         raise ReadError(f"an AWS run needs {', '.join(missing)}")
-    check = deadline if deadline is not None else reads.monotonic_deadline(PREPARE_SECONDS)
+    started = clock()
+    check = deadline if deadline is not None else reads.monotonic_deadline(total, clock)
     exchanged = exchange if exchange is not None else reads.polaris_token
+
+    def wait(limit: float, phase: str) -> float:
+        left = total - (clock() - started)
+        if left <= 0:
+            raise ReadError(f"the job passed its {total:g} s deadline before {phase}")
+        return min(limit, left)
+
     try:
         check(PHASES[0])
-        environ["REDIS_PASSWORD"] = fetch_password(store, limits.secret)
+        environ["REDIS_PASSWORD"] = fetch_password(open_store, wait(limits.secret, PHASES[0]))
         check(PHASES[1])
-        client = redis_factory(environ, online.CONTROL_DB)
-        bounded(limits.redis, lambda: online.call("Redis check", client.dbsize), PHASES[1])
+        bounded(wait(limits.redis, PHASES[1]), lambda: online.call("Redis check", redis_factory(environ, online.CONTROL_DB).dbsize), PHASES[1])
         check(PHASES[2])
-        token = exchanged(settings.endpoint, environ["POLARIS_CLIENT_ID"], environ["POLARIS_CLIENT_SECRET"])
+        client_id, client_secret = environ["POLARIS_CLIENT_ID"], environ["POLARIS_CLIENT_SECRET"]
+        token = bounded(wait(total, PHASES[2]), lambda: exchanged(settings.endpoint, client_id, client_secret), PHASES[2])
         environ.pop("POLARIS_CLIENT_SECRET", None)
         environ.pop("POLARIS_CLIENT_ID", None)
         environ.update(
@@ -259,8 +275,15 @@ def catalog_session(
             }
         )
         check(PHASES[3])
-        catalog = reads.open_catalog(reads.CatalogSettings(job.mode, settings.namespace, "rest", endpoint=settings.endpoint, token=token), loader)
-        bounded(limits.catalog, lambda: reads.load_table(catalog, settings.namespace, reads.RUNS_TABLE), PHASES[3])
+        catalog_settings = reads.CatalogSettings(job.mode, settings.namespace, "rest", endpoint=settings.endpoint, token=token)
+
+        def open_and_probe() -> reads.IcebergCatalog:
+            opened = reads.open_catalog(catalog_settings, loader)
+            reads.load_table(opened, settings.namespace, reads.RUNS_TABLE)
+            return opened
+
+        catalog = bounded(wait(limits.catalog, PHASES[3]), open_and_probe, PHASES[3])
+        check(HANDOVER)
         yield catalog
     finally:
         for name in ("REDIS_PASSWORD", "FEAST_POLARIS_TOKEN"):
@@ -287,8 +310,10 @@ def run_job(
 ) -> dict[str, Any]:
     """Run one AWS step (apply or materialize) through the existing job code with this profile's catalog session and settings file."""
     job = job_settings(environ, step, run, mode)
-    reader = store if store is not None else open_ssm(job.region)
-    session = functools.partial(catalog_session, job, environ, store=reader, exchange=exchange, loader=loader, redis_factory=redis_factory, limits=limits)
+    open_store = (lambda: store) if store is not None else functools.partial(open_ssm, job.region)
+    session = functools.partial(
+        catalog_session, job, environ, open_store=open_store, exchange=exchange, loader=loader, redis_factory=redis_factory, limits=limits
+    )
     if step == "materialize":
         return feast_materialize.run_materialize(
             job, environ, control=control, features=features, hooks_for=hooks_for, schema=schema, session=session, settings_file=AWS_SETTINGS_FILE
