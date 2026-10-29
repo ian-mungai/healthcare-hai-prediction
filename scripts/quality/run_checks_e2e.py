@@ -27,6 +27,7 @@ PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
 COPIED = [
     ".github/workflows/ci.yml",
     "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
     ".pre-commit-config.yaml",
     "pyproject.toml",
     ".env.example",
