@@ -10,7 +10,7 @@ GitHub CI and local commits use the same lists. Scopes:
 
 The ``launcher`` group lists, besides the few patterns of the configuration, the path pattern of each ``inventory_reads`` entry (files a suite module
 lists by inventory, such as every Python file the Docker-call guard parses; the pattern ``.`` of a module whose reads are not reviewed selects the group for
-every path), one exact path for each file and one prefix for each folder of
+every path, as ``launcher_always``, apart from the group lists, so it never classifies a path), one exact path for each file and one prefix for each folder of
 config/quality/launcher_inputs.json: the files that the launcher E2E suite imports or reads and the folders it reads whole (generated and checked by
 scripts/quality/launcher_inputs.py).
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
@@ -55,6 +55,9 @@ LAYER_PARTS = {
     "feature_columns": "lakehouse_features",
 }
 PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
+# The inventory_reads pattern of a module whose reads are not reviewed. It selects the launcher group for every changed path, but never classifies a path:
+# it stays out of the group lists, so a path that no list names still selects every group.
+ALWAYS_PATTERN = "."
 
 
 def order(config: dict[str, Any]) -> list[str]:
@@ -70,9 +73,11 @@ def load() -> dict[str, Any]:
     if set(config.setdefault("upstream_inputs", {})) - set(config["layers"]):
         raise ValueError(f"upstream_inputs in {CONFIG} may name only layers: {', '.join(sorted(set(config['upstream_inputs']) - set(config['layers'])))}")
     inputs = json.loads(LAUNCHER_INPUTS.read_text(encoding="utf-8"))
+    patterns = [item["pattern"] for item in inputs.get("inventory_reads", []) if item["pattern"]]
+    config["launcher_always"] = [pattern for pattern in patterns if pattern == ALWAYS_PATTERN]
     config["groups"]["launcher"] = [
         *config["groups"]["launcher"],
-        *(item["pattern"] for item in inputs.get("inventory_reads", []) if item["pattern"]),
+        *(pattern for pattern in patterns if pattern != ALWAYS_PATTERN),
         *(f"^{re.escape(folder)}/" for folder in inputs["folders"]),
         *(f"^{re.escape(path)}$" for path in inputs["files"]),
     ]
@@ -162,6 +167,7 @@ def plan(scope: str, part: str, start: str = "", end: str = "", paths: list[str]
             or (group in config.get("always_except_commits", []) and scope in {"full", "range"})
             or changed is None
             or any(re.search(pattern, path) for path in changed for pattern in config["groups"][group])
+            or (group == "launcher" and any(re.search(pattern, path) for path in changed for pattern in config["launcher_always"]))
         ):
             run.append(group)
         else:

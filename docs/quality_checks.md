@@ -646,7 +646,7 @@ checked. Until the always-select modules below are reviewed one at a time, every
   computed name cannot be followed; the number of such calls per file is in `dynamic_sites`. Run `--check` (default), `--write`, `--explain PATH` or
   `--trace FILE`.
 - `scripts/quality/ci_groups.py` adds each `inventory_reads` pattern, one exact-path pattern per listed file and one prefix per folder to the group. The hand-written patterns are the group
-  body, the tool and the list. `global` paths and the unclassified-path rule still select every group.
+  body, the tool and the list. `global` paths and the unclassified-path rule still select every group: the pattern `.` is kept out of the group lists (`launcher_always` in the loaded configuration), so it selects the launcher for every changed path and never makes an unlisted path look classified.
 - A change to a module the suite imports or a file it reads selects the group. So does a change to any Python file. While the always-select modules below
   carry the pattern `.`, a change to any path also selects it, also an unrelated one (`infra/main.tf`, `config/quality/mypy_runtimes.json`, a document or the pull request template:
   the `launcher_always_selected_by_*` cases). A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
@@ -667,6 +667,7 @@ checked. Until the always-select modules below are reviewed one at a time, every
   `run_launcher_real_fixture`, `run_lock_e2e`, `run_pins_e2e`, `run_silver_e2e`, `run_staging_e2e`, `silver`, `silver_input` and `silver_quality`). With
   `docker_calls` (`\.py$`, 1 site) the list holds 35 modules and 88 sites. Narrow one module at a time: review its sites, replace `.` with a hand-written
   pattern (or `null` with the reason that the result does not depend on file contents) in a reviewed change and run `--write`. Do not narrow several at once.
+- **Accepted limit (waiting for the owner's agreement; not built).** The inventory scan counts enumeration calls by name and shape. It misses an aliased import (`from os import listdir as entries; entries(".")`), a saved function (`lister = os.listdir`) and a shell inventory started through `os.popen("git ls-files")`. A followed module that lists files in one of these ways has no `inventory_reads` entry. Likelihood: low (no module uses these forms; the `.` entries select the group for every path today). Cost to close: 1 to 2 hours. Scores: `fix3/triage.md` of the launcher selection work. If the owner declines the limit, count aliased and saved references and literal shell inventories and add the three forms as cases.
 - Not provable by a static scan: a path built at run time from a variable, an environment variable or a glob over `ROOT`. Control: run the suite once under
   file-open tracing and check the trace with `--trace` (commands in the report of the change). Until that run is recorded, `extra_inputs` and every folder
   read whole stay in the list.
