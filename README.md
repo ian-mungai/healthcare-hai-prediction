@@ -19,10 +19,16 @@ python3.12 -m venv .venv
 .venv/bin/python scripts/quality/install_tools.py
 .venv/bin/python -m scripts.quality.install_markdownlint
 .venv/bin/python -m scripts.quality.install_sqlfluff
+.venv/bin/python -m scripts.quality.install_dvc
 .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
 PRE_COMMIT_HOME="$PWD/.tools/pre_commit_cache" .venv/bin/python -m pre_commit install
 cp .env.example .env
 ```
+
+`install_dvc` puts the pinned Data Version Control (DVC 3.67.1 with its S3 remote, dvc-s3 3.3.0) into its own environment, `.tools/dvc`,
+from `scripts/quality/dvc/requirements.txt`. It records a hash for every package on Apple silicon and Linux AMD64 and verifies each one at install. Only
+`antlr4-python3-runtime`, a dependency of DVC, is published as a source archive. Its build tool is pinned in `build_requirements.txt` and installed first,
+so the build downloads nothing unpinned. A rerun changes nothing and a failed install leaves nothing that looks current.
 
 Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM

@@ -223,7 +223,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff))\.py|scripts/quality/(markdownlint|sqlfluff)/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff|install_dvc))\.py|scripts/quality/(markdownlint|sqlfluff|dvc)/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
         stages: [manual]
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence
