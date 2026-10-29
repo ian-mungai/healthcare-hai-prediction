@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import importlib.util
 import json
 import os
@@ -41,7 +42,12 @@ def _monitor(deadline: float) -> None:
 
 def _relay(target_port: int, listen_port: int, deadline: float) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener, selectors.DefaultSelector() as selector:
-        listener.bind(("127.0.0.1", listen_port))
+        try:
+            listener.bind(("127.0.0.1", listen_port))
+        except OSError as error:
+            if error.errno == errno.EADDRINUSE:
+                os.write(2, b"catalog_relay_bind_in_use\n")
+            raise
         listener.listen(16)
         listener.setblocking(False)
         selector.register(listener, selectors.EVENT_READ)
@@ -160,7 +166,7 @@ def _tunnel(args: argparse.Namespace, deadline: float) -> None:
 
 
 def main() -> int:
-    """Wait for a durable start authorization, then enforce the parent's original lifetime."""
+    """Refuse invalid startup with status 70. Stop the group when an authorized body ends."""
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("relay", "tunnel"), required=True)
@@ -178,19 +184,21 @@ def main() -> int:
         or start["action"] != "start"
         or not isinstance(start["deadline"], (int, float))
         or start["deadline"] <= time.monotonic()
+        or (args.role == "tunnel" and not (args.aws_executable and args.instance and args.profile and args.region))
     ):
         return 70
     deadline = float(start["deadline"])
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     monitor = threading.Thread(target=_monitor, args=(deadline,), name="catalog_parent_monitor", daemon=True)
     monitor.start()
-    if args.role == "relay":
-        _relay(args.target_port, args.listen_port, deadline)
-    elif args.aws_executable and args.instance and args.profile and args.region:
-        _tunnel(args, deadline)
-    else:
-        return 70
-    return 0
+    try:
+        if args.role == "relay":
+            _relay(args.target_port, args.listen_port, deadline)
+        else:
+            _tunnel(args, deadline)
+        return 0
+    finally:
+        os.killpg(os.getpgrp(), signal.SIGKILL)
 
 
 if __name__ == "__main__":

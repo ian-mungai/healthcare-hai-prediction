@@ -316,7 +316,7 @@
       "file_sha256": "be74095ee6786f7744d535071a5d8c1b112902a866fc3f0bebc848b15478687a",
       "dependencies": {
         "orchestration/catalog_authority.py": "sha256:d95f4d288a2e775fda4a1514ba91cf01db12950df93e3f601a6485dcfc066bf4",
-        "orchestration/catalog_transport.py": "sha256:b8e63d2e51d5022d03f7fe3b653f3f35fbdf479b03d2a5459483ec16e5e621a0",
+        "orchestration/catalog_transport.py": "sha256:d4a30bb918f3afd518971add1400a497c26dd8c6fe42e0fa856590dfa0d46208",
         "orchestration/launcher.py": "sha256:bad4485161d6c08f6a50963092489083de8c403925372897d28371e6787014e0",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
@@ -1365,11 +1365,11 @@
     },
     {
       "path": "orchestration/catalog_transport_child.py",
-      "line": 152,
+      "line": 158,
       "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "5f5f43336646f9a6d53c358f672250408a613ee72a3c3e6358dec71b4829748c",
+      "file_sha256": "b914005ac264d9d46d44e7422155535e99fa85fb194415179b1ce796aabc6fa6",
       "dependencies": {},
       "reason": "the catalog tunnel child starts only the AWS CLI: it refuses any executable that is not absolute or does not resolve to the aws on PATH, then runs fixed ssm start-session AWS-StartPortForwardingSession arguments; reviewed by the lead on Oct 24 2026; never Docker"
     },

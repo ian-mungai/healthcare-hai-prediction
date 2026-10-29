@@ -30,6 +30,13 @@ class Mutation:
 
 
 MUTATIONS = (
+    Mutation(
+        "catalog_relay_sends_self_group_stop",
+        "orchestration/catalog_transport_child.py",
+        "def _relay(target_port: int, listen_port: int, deadline: float) -> None:\n",
+        "def _relay(target_port: int, listen_port: int, deadline: float) -> None:\n    os.killpg(os.getpgrp(), signal.SIGKILL)\n",
+        "orchestration/catalog_transport_child.py:signals_only_in_owned_stop_or_self_monitor",
+    ),
     Mutation("sdk_import_in_facade", "orchestration/ecs_api.py", "import secrets", "import boto3\nimport secrets", "facade_has_no_sdk_or_async_call_path"),
     Mutation(
         "thread_import_in_facade", "orchestration/ecs_api.py", "import secrets", "import threading\nimport secrets", "facade_has_no_sdk_or_async_call_path"
