@@ -3,13 +3,14 @@
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_ci_reuse_e2e``. The dynamic cases copy the real decision script and
 config/quality/ci_jobs.json into a scratch Git repository and run ``python -m scripts.quality.ci_reuse`` as the plan job does, with the event
 variables of GitHub Actions and a stand-in ``gh`` first on PATH that answers the API paths from a table. Only the stand-in answers differ between
-cases: a world in which every condition holds gives ``reuse=true``, and each negative case breaks exactly one condition (a different tree, no pull
-request, two pull requests, no run, a failed, running, other-workflow or older-than-latest run, a skipped, missing or failing job, an API error, a
-malformed answer, another event or branch, a tree that the checkout and the API disagree on) and passes only when the answer is ``reuse=false`` and
+cases: a world in which every condition holds gives ``reuse=true`` (also when GitHub has emptied the ``pull_requests`` list of the run of a merged
+pull request), and each negative case breaks exactly one condition (a different tree, no pull request, two pull requests, no run, a failed, running,
+other-workflow, other-branch, other-event or older-than-latest run, a skipped, missing or failing job, an API error, a malformed answer, another event
+or branch, a tree that the checkout and the API disagree on) and passes only when the answer is ``reuse=false`` and
 the summary names that cause. The stand-in records every call, and a case checks that each one is a read (``gh api --method GET``).
 The static cases read .github/workflows/ci.yml: the job list equals config/quality/ci_jobs.json, every checkout uses the pull request head, every
 heavy job waits for the plan job and runs unless it answers ``true`` (also for an empty answer), the reuse job runs the commit checks and the quick
-gates, and the plan job's token is read-only. Failure modes R1 to R18 (plans, local). The report goes to
+gates, and the plan job's token is read-only. Failure modes R1 to R18 and F1 to F9 (plans, local). The report goes to
 data/e2e/ci_reuse/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 
@@ -38,6 +39,7 @@ REPOSITORY = "owner/project"
 HEAD = "b" * 40
 RUN = 555
 PULL = 7
+BRANCH = "fix/topic"
 HEAD_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
 FAKE_GH = f"""#!{PYTHON}
 import json
@@ -92,6 +94,7 @@ def good_world(sha: str, tree: str, required: list[str], skipped: list[str]) -> 
         "path": ".github/workflows/ci.yml",
         "event": "pull_request",
         "head_sha": HEAD,
+        "head_branch": BRANCH,
         "pull_requests": [{"number": PULL}],
         "created_at": "2026-10-22T10:00:00Z",
         "run_number": 12,
@@ -101,7 +104,9 @@ def good_world(sha: str, tree: str, required: list[str], skipped: list[str]) -> 
     }
     jobs = [job(name) for name in required] + [job(name, "skipped") for name in skipped]
     return {
-        "pulls": [{"number": PULL, "merged_at": "2026-10-22T10:30:00Z", "merge_commit_sha": sha, "base": {"ref": "main"}, "head": {"sha": HEAD}}],
+        "pulls": [
+            {"number": PULL, "merged_at": "2026-10-22T10:30:00Z", "merge_commit_sha": sha, "base": {"ref": "main"}, "head": {"sha": HEAD, "ref": BRANCH}}
+        ],
         "main_tree": tree,
         "head_tree": tree,
         "runs": [run],
@@ -205,6 +210,31 @@ def negative_case(scratch: Scratch, name: str, change: Callable[[dict[str, Any],
     }
 
 
+def positive_case(scratch: Scratch, name: str, change: Callable[[dict[str, Any], Scratch], None]) -> dict[str, Any]:
+    """A case in which the world is changed in a way that must still reuse: the answer is reuse=true for the run of the pull request."""
+    world = good_world(scratch.sha, scratch.tree, scratch.required, scratch.skipped)
+    change(world, scratch)
+    outcome = scratch.run(name, world)
+    passed = outcome["exit"] == 0 and "reuse=true" in outcome["output"] and f"run_id={RUN}" in outcome["output"]
+    return {
+        "case": name,
+        "passed": passed,
+        "exit": outcome["exit"],
+        "output": outcome["output"],
+        "summary": outcome["summary"][-300:],
+        "stderr": outcome["stderr"],
+    }
+
+
+def empty_head(world: dict[str, Any], scratch: Scratch) -> None:
+    world["pulls"][0]["head"]["ref"] = ""
+    set_run(world, head_branch=None)
+
+
+def missing_head_ref(world: dict[str, Any], scratch: Scratch) -> None:
+    del world["pulls"][0]["head"]["ref"]
+
+
 def set_run(world: dict[str, Any], **values: Any) -> None:
     world["runs"][0].update(values)
 
@@ -245,6 +275,21 @@ def dynamic_cases(scratch: Scratch) -> list[dict[str, Any]]:
     other_tree = "c" * 40
     return [
         reuse_case(scratch),
+        positive_case(scratch, "merged_run_with_emptied_pull_requests_is_reused", lambda w, s: set_run(w, pull_requests=[])),
+        negative_case(
+            scratch,
+            "run_of_another_head_branch_does_not_count",
+            lambda w, s: set_run(w, head_branch="fix/other"),
+            "no pull request run of .github/workflows/ci.yml exists",
+        ),
+        negative_case(
+            scratch,
+            "run_of_another_event_does_not_count",
+            lambda w, s: set_run(w, event="push", pull_requests=[]),
+            "no pull request run of .github/workflows/ci.yml exists",
+        ),
+        negative_case(scratch, "empty_head_branch_never_matches", empty_head, "has no head branch name"),
+        negative_case(scratch, "missing_head_ref_runs_everything", missing_head_ref, "KeyError"),
         negative_case(scratch, "tree_differs_runs_everything", lambda w, s: w.update(head_tree=other_tree), "differs from the tree"),
         negative_case(
             scratch,

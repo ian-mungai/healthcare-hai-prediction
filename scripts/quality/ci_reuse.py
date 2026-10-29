@@ -7,9 +7,12 @@ every other case, including any error, so a doubt runs every job:
 1. the event is a push to ``refs/heads/main``;
 2. exactly one pull request was merged into ``main`` with this commit as its merge commit;
 3. the tree of the pushed commit (from the API and from the local checkout) is byte-identical to the tree of that pull request's head commit;
-4. the latest completed ``pull_request`` run of .github/workflows/ci.yml for that head commit succeeded, and its jobs are the ones listed in
-   config/quality/ci_jobs.json, each exactly once and successful, with no other job failed, cancelled or skipped except the ones listed as
+4. the latest completed ``pull_request`` run of .github/workflows/ci.yml for that head commit and head branch succeeded, and its jobs are the
+   ones listed in config/quality/ci_jobs.json, each exactly once and successful, with no other job failed, cancelled or skipped except the ones listed as
    skipped in pull request runs.
+
+GitHub empties the ``pull_requests`` list of a run once its pull request is merged, so the run is identified by workflow path, event, exact head
+commit and the head branch of the pull request (``head_branch`` of the run equals ``head.ref``), not by the pull request number.
 
 A pull request run checks out the head commit itself (every checkout of the workflow uses ``github.event.pull_request.head.sha``), so the tree
 that its jobs checked is the tree compared in item 3. A push to ``main`` without a pull request has no merged pull request and runs in full.
@@ -71,15 +74,12 @@ def merged_pull_request(repository: str, sha: str) -> dict[str, Any]:
     return merged[0]
 
 
-def latest_run(repository: str, head: str, number: int) -> dict[str, Any]:
+def latest_run(repository: str, head: str, branch: str) -> dict[str, Any]:
     runs = api(f"repos/{repository}/actions/runs?head_sha={head}&event=pull_request&per_page=100")["workflow_runs"]
     own = [
         run
         for run in listed(runs, "the runs of the head commit")
-        if run.get("path") == WORKFLOW
-        and run.get("event") == "pull_request"
-        and run.get("head_sha") == head
-        and number in [pull.get("number") for pull in run.get("pull_requests", [])]
+        if run.get("path") == WORKFLOW and run.get("event") == "pull_request" and run.get("head_sha") == head and run.get("head_branch") == branch
     ]
     if not own:
         raise NoReuse(f"no pull request run of {WORKFLOW} exists for the head commit {head}")
@@ -122,14 +122,16 @@ def decide(environment: dict[str, str], config: dict[str, Any]) -> dict[str, Any
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise NoReuse("the repository or the commit of the run is not valid")
     pull = merged_pull_request(repository, sha)
-    head, number = str(pull["head"]["sha"]), int(pull["number"])
+    head, number, branch = str(pull["head"]["sha"]), int(pull["number"]), pull["head"]["ref"]
+    if not isinstance(branch, str) or not branch:
+        raise NoReuse(f"pull request {number} has no head branch name")
     main_tree = tree_of(repository, sha)
     if local_tree() != main_tree:
         raise NoReuse("the tree of the checkout and the tree the API reports for the pushed commit differ")
     head_tree = tree_of(repository, head)
     if head_tree != main_tree:
         raise NoReuse(f"the merged tree {main_tree} differs from the tree {head_tree} of the head of pull request {number}")
-    run = latest_run(repository, head, number)
+    run = latest_run(repository, head, branch)
     return {
         "pull_request": number,
         "head": head,
