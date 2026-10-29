@@ -16,6 +16,8 @@ FORBIDDEN_MODULES = {"importlib", "runpy", "imp", "pkgutil", "builtins"}
 FORBIDDEN_NAMES = {"__import__", "exec", "eval", "compile", "__builtins__"}
 FORBIDDEN_ATTRIBUTES = {"__import__", "__builtins__"}
 COMPILED_SUFFIXES = (".so", ".pyd", ".pyc")
+COMPILED_TARGETS = (*COMPILED_SUFFIXES, ".pyo")
+LINK_LIMIT = 40
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".ksh", ".csh", ".fish", ".ps1", ".bat", ".cmd", ".pl", ".rb", ".js", ".php"}
 PATH_FUNCTIONS = {"Path", "PurePath", "PosixPath", "PurePosixPath", "join", "joinpath", "normpath", "abspath", "realpath", "relpath"}
 LONGEST_PATH = 1024
@@ -31,36 +33,60 @@ def compiled_file(base: Path, root: Path) -> Path | None:
     return None
 
 
-def module_file(parts: list[str], root: Path) -> str | None:
-    """The repository file Python loads for exactly this dotted module, a package before a module of the same name, else None.
+def module_file(parts: list[str], root: Path, folder: str = "") -> str | None:
+    """The repository file Python loads for exactly this dotted module, looked up in a folder of the import path, else None.
 
+    The folder is repository-relative, and empty for the repository root. A package comes before a module of the same name.
     A compiled or extension file for the module cannot be read, so it is refused."""
     if not parts:
         return None
-    base = Path(*parts)
+    base = Path(folder, *parts)
     opaque = compiled_file(base, root)
     require(opaque is None, f"Cannot bind code: {opaque.as_posix() if opaque else ''} is compiled code that cannot be read")
     return next((c.as_posix() for c in (base / "__init__.py", base.with_suffix(".py")) if (root / c).is_file()), None)
 
 
-def longest_module_file(parts: list[str], root: Path) -> str | None:
+def longest_module_file(parts: list[str], root: Path, folder: str = "") -> str | None:
     """The file of the longest existing prefix of a dotted name, because the tail may be an attribute."""
-    return next((found for size in range(len(parts), 0, -1) if (found := module_file(parts[:size], root))), None)
+    return next((found for size in range(len(parts), 0, -1) if (found := module_file(parts[:size], root, folder))), None)
 
 
-def descendants(parts: list[str], root: Path) -> list[list[str]]:
-    """Every module name below a repository package at any depth, because a wildcard import loads what __all__ names, dotted names too."""
-    if not (module_file(parts, root) or "").endswith("__init__.py"):
+def folder_identity(path: Path) -> tuple[int, int]:
+    """The device and inode of a folder, links followed, so two names of one folder compare equal."""
+    status = os.stat(path)
+    return status.st_dev, status.st_ino
+
+
+def descendants(parts: list[str], root: Path, folder: str = "") -> list[list[str]]:
+    """Every module name below a repository package at any depth, because a wildcard import loads what __all__ names, dotted names too.
+
+    A folder is entered once, whatever its names. Real folders claim an identity before a link to a folder does, so a link
+    that loops back (a -> .) adds nothing and never hides a real name."""
+    if not (module_file(parts, root, folder) or "").endswith("__init__.py"):
         return []
     found: list[list[str]] = []
-    pending = [parts]
-    while pending:
-        current = pending.pop()
-        for child in sorted((root / Path(*current)).iterdir()):
+    visited = {folder_identity(root / folder / Path(*parts))}
+    pending: list[list[str]] = [parts]
+    linked: list[list[str]] = []
+    while pending or linked:
+        from_link = not pending
+        current = linked.pop() if from_link else pending.pop()
+        if from_link:
+            key = folder_identity(root / folder / Path(*current))
+            if key in visited:
+                continue
+            visited.add(key)
+            found.append(current)
+        for child in sorted((root / folder / Path(*current)).iterdir()):
             stem = child.name.split(".")[0]
             if child.is_dir() and stem not in {"", "__pycache__"}:
-                found.append([*current, child.name])
-                pending.append([*current, child.name])
+                name = [*current, child.name]
+                if child.is_symlink():
+                    linked.append(name)
+                elif (key := folder_identity(child)) not in visited:
+                    visited.add(key)
+                    found.append(name)
+                    pending.append(name)
             elif stem not in {"", "__init__", "__pycache__"} and child.name.endswith((".py", *COMPILED_SUFFIXES)):
                 found.append([*current, stem])
     return found
@@ -188,16 +214,16 @@ def status_of(path: str) -> os.stat_result | None:
 
 
 def code_index(root: Path, code_directories: tuple[str, ...]) -> dict[tuple[int, int], list[str]]:
-    """The stored repository-relative names of each regular file under the code directories, keyed by device and inode.
+    """The stored repository-relative names of each regular file and each folder under the code directories, keyed by device and inode.
 
-    A hard link gives one file several names. The index is built for each closure, so a file added or linked later is seen."""
+    A hard link gives one file several names. A folder reached through a link has the name of the real folder.
+    The index is built for each closure, so a file added or linked later is seen."""
     index: dict[tuple[int, int], list[str]] = {}
     for directory in code_directories:
         for folder, _, names in os.walk(root / directory):
-            for name in names:
-                full = Path(folder, name)
+            for full in [Path(folder), *(Path(folder, name) for name in names)]:
                 status = full.lstat()
-                if stat.S_ISREG(status.st_mode):
+                if stat.S_ISREG(status.st_mode) or stat.S_ISDIR(status.st_mode):
                     index.setdefault((status.st_dev, status.st_ino), []).append(full.relative_to(root).as_posix())
     return {key: sorted(names) for key, names in index.items()}
 
@@ -228,10 +254,12 @@ def spellings(text: str, root: Path, relative: str) -> dict[str, bool]:
 
 
 def refuse_executable(full: str, status: os.stat_result, names: list[str], text: str, relative: str) -> None:
-    """Refuse a reached file that runs code the closure cannot read: a script by suffix, an executable bit or, in code, a #! line.
+    """Refuse a reached file that runs code the closure cannot read: compiled code, a script by suffix, an executable bit or, in code, a #! line.
 
     A file stored under a .py name is Python, which the closure reads instead. Every spelling of the file counts, in any letter case."""
     real = os.path.realpath(full)
+    compiled = Path(full).suffix.lower() in COMPILED_TARGETS or Path(real).suffix.lower() in COMPILED_TARGETS
+    require(not compiled, f"Cannot bind code: {relative} names {text}, compiled code that cannot be read")
     if any(name.casefold().endswith(".py") for name in names or [real]):
         return
     executable = any(Path(name).suffix.lower() in SCRIPT_SUFFIXES for name in [full, real, *names]) or bool(status.st_mode & 0o111)
@@ -240,15 +268,41 @@ def refuse_executable(full: str, status: os.stat_result, names: list[str], text:
     require(not executable, f"Cannot bind code: {relative} names {text}, an executable file whose own dependencies are not bound")
 
 
-def reached_files(text: str, root: Path, relative: str, index: dict[tuple[int, int], list[str]]) -> set[str]:
-    """The code files a path text reaches on disk, matched by device and inode, so any spelling of a repository file binds it.
+def script_folders(path: str) -> list[str]:
+    """The folders Python may put first on the import path when it runs a script path: the folder of the path as written,
+    of each link level it passes and of the real file."""
+    found, current = [], path
+    for _ in range(LINK_LIMIT):
+        found.append(os.path.dirname(current))
+        if not os.path.islink(current):
+            break
+        current = os.path.join(os.path.dirname(current), os.readlink(current))
+    return [*found, os.path.dirname(os.path.realpath(path))]
 
-    A folder stands for the __main__.py Python runs in it. A relative spelling that reaches a file outside the repository is refused.
-    An absolute spelling outside the repository is not followed."""
+
+def stored_folders(folders: list[str], names: list[str], index: dict[tuple[int, int], list[str]]) -> set[str]:
+    """The stored names of code folders: each given folder matched by device and inode, and the folder of each stored file name."""
+    found = {posixpath.dirname(name) for name in names}
+    for folder in folders:
+        status = status_of(folder)
+        if status is not None and stat.S_ISDIR(status.st_mode):
+            found.update(index.get((status.st_dev, status.st_ino), []))
+    return found
+
+
+def reached_files(text: str, root: Path, relative: str, index: dict[tuple[int, int], list[str]]) -> tuple[set[str], set[str]]:
+    """The code files a path text reaches on disk, matched by device and inode, so any spelling of a repository file binds it.
+    Also the code folders Python puts first on the import path when it runs those files.
+
+    A folder stands for the __main__.py Python runs in it, and is itself the first import folder. For a script it is the script's folder.
+    A relative spelling that reaches a file outside the repository is refused. An absolute spelling outside the repository is not followed."""
     found: set[str] = set()
+    launched: set[str] = set()
     for full, absolute in spellings(text, root, relative).items():
         status = status_of(full)
+        folders = script_folders(full)
         if status is not None and stat.S_ISDIR(status.st_mode):
+            folders = [full, os.path.realpath(full)]
             full = posixpath.join(full, "__main__.py")
             status = status_of(full)
         if status is None or not stat.S_ISREG(status.st_mode):
@@ -259,30 +313,39 @@ def reached_files(text: str, root: Path, relative: str, index: dict[tuple[int, i
             continue
         refuse_executable(full, status, names, text, relative)
         found.update(names)
-    return found
+        launched |= stored_folders(folders, names, index)
+    return found, launched
 
 
-def references(relative: str, root: Path, index: dict[tuple[int, int], list[str]]) -> set[str]:
-    """Every repository file this file names: imports, literal dynamic imports, module names and code paths held in string literals."""
+def references(
+    relative: str, root: Path, index: dict[tuple[int, int], list[str]], folders: set[str] | frozenset[str] = frozenset()
+) -> tuple[set[str], set[str]]:
+    """Every repository file this file names: imports, literal dynamic imports, module names and code paths held in string literals.
+    Also the code folders that a script or folder path in this file puts first on the import path.
+
+    A module is looked up in the repository root and in each of the given launch folders."""
     try:
         tree = ast.parse((root / relative).read_text(encoding="utf-8"), filename=relative)
     except (SyntaxError, UnicodeDecodeError, ValueError) as error:
         raise RegistryError(f"Cannot bind code: {relative} is not readable Python ({error})") from error
     found: set[str] = set()
+    launched: set[str] = set()
+    lookups = ["", *sorted(folders)]
 
     def add_module(name: str | list[str], exact: bool) -> None:
         parts = name.split(".") if isinstance(name, str) else name
-        target = module_file(parts, root) if exact else longest_module_file(parts, root)
-        if target:
-            found.add(target)
+        for folder in lookups:
+            if target := module_file(parts, root, folder) if exact else longest_module_file(parts, root, folder):
+                found.add(target)
 
     def add_children(base: list[str], names: list[str]) -> None:
         for name in names:
             current = list(base)
             for part in filter(None, name.split(".")):
                 if part == "*":
-                    for child in descendants(current, root):
-                        add_module(child, exact=True)
+                    for folder in lookups:
+                        for child in descendants(current, root, folder):
+                            add_module(child, exact=True)
                     break
                 current.append(part)
                 add_module(current, exact=True)
@@ -296,7 +359,7 @@ def references(relative: str, root: Path, index: dict[tuple[int, int], list[str]
             base = absolute_base(node, relative)
             names = [alias.name for alias in node.names]
             require(
-                "*" not in names or bool(base and module_file(base, root)),
+                "*" not in names or bool(base and any(module_file(base, root, folder) for folder in lookups)),
                 f"Cannot bind code: {relative}:{node.lineno} imports * from a module outside the repository",
             )
             if base:
@@ -309,8 +372,10 @@ def references(relative: str, root: Path, index: dict[tuple[int, int], list[str]
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and MODULE_LITERAL.fullmatch(node.value):
             add_module(node.value, exact=True)
     for text in sorted(path_texts(tree)):
-        found |= reached_files(text, root, relative, index)
-    return found
+        files, folders_found = reached_files(text, root, relative, index)
+        found |= files
+        launched |= folders_found
+    return found, launched
 
 
 def parent_packages(relative: str, root: Path) -> set[str]:
@@ -319,21 +384,39 @@ def parent_packages(relative: str, root: Path) -> set[str]:
     return {init for size in range(1, len(parts)) if (root / (init := Path(*parts[:size], "__init__.py").as_posix())).is_file()}
 
 
-def closure(entry: str, root: Path | None = None, code_directories: tuple[str, ...] = CODE_DIRECTORIES) -> list[str]:
-    """The sorted repository-relative files of the entry module and everything it can run, found through its imports and literal references."""
-    base = REPO_ROOT if root is None else root
-    start = module_file(entry.split("."), base)
-    require(start is not None, f"Cannot bind code: entry module {entry} is not in the repository")
-    index = code_index(base, code_directories)
+def walk(start: str, root: Path, index: dict[tuple[int, int], list[str]], folders: set[str]) -> tuple[set[str], set[str]]:
+    """The files reached from a start file when modules are also looked up in the launch folders, and the launch folders found on the way."""
     seen: set[str] = set()
-    pending = [str(start)]
+    launched: set[str] = set()
+    pending = [start]
     while pending:
         current = pending.pop()
         if current in seen:
             continue
         seen.add(current)
-        pending.extend(parent_packages(current, base) | (references(current, base, index) if current.casefold().endswith(".py") else set()))
-    return sorted(seen)
+        pending.extend(parent_packages(current, root))
+        if current.casefold().endswith(".py"):
+            files, found = references(current, root, index, folders)
+            pending.extend(files)
+            launched |= found
+    return seen, launched
+
+
+def closure(entry: str, root: Path | None = None, code_directories: tuple[str, ...] = CODE_DIRECTORIES) -> list[str]:
+    """The sorted repository-relative files of the entry module and everything it can run, found through its imports and literal references.
+
+    A script or folder run by path puts its folder first on the import path of the whole process, so that folder is searched for every
+    file. A new folder can change what an earlier file reaches, so the walk repeats until the set of launch folders stops growing."""
+    base = REPO_ROOT if root is None else root
+    start = module_file(entry.split("."), base)
+    require(start is not None, f"Cannot bind code: entry module {entry} is not in the repository")
+    index = code_index(base, code_directories)
+    folders: set[str] = set()
+    while True:
+        seen, launched = walk(str(start), base, index, folders)
+        if launched <= folders:
+            return sorted(seen)
+        folders |= launched
 
 
 def closure_hashes(entry: str, root: Path | None = None, code_directories: tuple[str, ...] = CODE_DIRECTORIES) -> dict[str, str]:
