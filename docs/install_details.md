@@ -35,9 +35,10 @@ in the private Compose env file lets catalog-only commands render inactive profi
 every job launcher overrides it with its fresh plan. Use the launch scripts to run jobs.
 Close containers and apps you no longer use before a heavy run.
 Docker's VM keeps a heavy build's memory, much of it compressed by macOS, so
-`.venv/bin/python -m scripts.lakehouse.catalog release` stops this project's containers and
-restarts Docker Desktop; it restarts nothing while another project's container runs.
-The staging E2E calls it after each real build. `run_staging_e2e --real-only` runs the
+`.venv/bin/python -m scripts.lakehouse.catalog release` stops this project's catalog and
+quits Docker Desktop; it quits nothing while another project's container runs. The gold and staging E2Es call it
+after a real build and it skips unless the run created a container. The next real run starts Docker Desktop
+again (`catalog up`). `run_staging_e2e --real-only` runs the
 real builds and their checks without the fixture cases, for changes that touch no fixture.
 
 Run the non-Docker resource contracts with

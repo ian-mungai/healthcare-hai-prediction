@@ -113,7 +113,7 @@ Then start the catalog from the main checkout (a launcher running in another che
 .venv/bin/python -m scripts.lakehouse.catalog up
 ```
 
-`up` is idempotent. On first use it generates the catalog credentials straight into AWS Parameter Store (no file on the
+`up` is idempotent. It first starts Docker Desktop when Docker does not answer (240 s deadline). On first use it generates the catalog credentials straight into AWS Parameter Store (no file on the
 host holds them) and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
 project bucket. `down` stops the containers and keeps the catalog database.
 
