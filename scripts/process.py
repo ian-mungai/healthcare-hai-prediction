@@ -15,7 +15,8 @@ runs jobs in threads uses ``LaunchPool`` instead of ``ThreadPoolExecutor``: the 
 (it waits in short slices) stops its own session and raises ``LaunchCancelled``, the pool waits for every job within ``CANCEL_WAIT_SECONDS``, and only
 then forwards the interrupt (``LaunchesNotStopped`` when a stop is not confirmed or a job does not end). A thread outside a ``LaunchPool`` is unchanged.
 Every stop returns a ``StopOutcome`` (truthy when the stop is NOT confirmed; it names the survivors). The outcome is recorded on every path of
-``run_command``: a normal end needs no stop; a deadline raises ``ProcessGroupSurvived``; a cancellation or any other exception (an interrupt, an alarm, a
+``run_command``: a normal end finalizes the launch's session and raises ``LaunchesNotStopped`` when a member survives; a deadline raises
+``ProcessGroupSurvived``; a cancellation or any other exception (an interrupt, an alarm, a
 handler that raises) raises ``LaunchesNotStopped`` chained from it; and a stop that raises counts as unconfirmed. An unconfirmed stop is also kept in
 memory in the process (``record_unconfirmed``) and printed to standard error when it happens, so a caller that catches the exception and carries on
 (``except TimeoutExpired``) cannot lose it: the interpreter then exits with status ``UNCONFIRMED_EXIT_STATUS`` (70), unless the caller took the record
@@ -390,7 +391,7 @@ def stop_sessions(
     (its id is the session id) still gets TERM and KILL and the stop waits up to ``CONFIRM_SECONDS`` for those groups to end (``leader`` is reaped there
     only, because a zombie keeps its group alive).
     Refuses (``ValueError``) the caller's own session unless ``allow_own`` is set (a CI worker's leader that stops its own session when the dispatcher
-    has died; the caller is never signalled by the listing stop, but the fallback group stop reaches it).
+    has died; the caller is never signalled, by the listing stop or by the fallback group stop, which skips the caller's own group and reports instead).
     """
     targets = set(sessions)
     if os.getsid(0) in targets and not allow_own:

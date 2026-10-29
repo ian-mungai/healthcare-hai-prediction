@@ -669,7 +669,7 @@ without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS
 seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. A bash subshell
 cannot call `setsid`, so a short Python step starts each worker: it calls `setsid`, resets SIGINT and SIGQUIT, sets `PROCESS_LAUNCH_SESSION=1` and starts a new bash. The step stays as
 the session's leader and watchdog. When the bash ends, the step first stops every other member of its session (TERM, KILL after the grace period) and confirms that none is left, then it
-ends with the bash's status (1, with a message, when a member survives or the session cannot be listed). So a descendant that the worker left has no unwatched moment. When the dispatcher has died, even by KILL,
+ends with the bash's status (70, with a message, when a member survives or the session cannot be listed). So a descendant that the worker left has no unwatched moment. When the dispatcher has died, even by KILL,
 it does the same within 0.2 seconds plus the grace period plus the 5 second confirmation. That bash reads the
 dispatcher's functions and the variables that workers use from a private state file (mode 600 in the scratch folder). A program that the worker starts through `scripts/process.py` stays in
 the worker's session (see Process launcher deadline). At a deadline the dispatcher stops every member of the worker's session with `stop_sessions` of `scripts/process.py`: TERM, KILL after
