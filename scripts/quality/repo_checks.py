@@ -127,21 +127,45 @@ AI_SESSION = re.compile(rf"^\s*(?:{'|'.join(AI_AGENTS)})-session\s*:", re.IGNORE
 
 # Internal plan references: they point at plan and review records that live outside the repository. A finding names the
 # form and never echoes the matched text, so the check log holds no message text. Codes need a keyword or brackets, so a
-# bare "B1" (hex fragment, CSS class) passes; snapshot IDs need a digit and a letter, so Iceberg's decimal IDs pass.
-PLAN_CODE = r"[UBPT]\d{1,2}"
+# bare "B1" (hex fragment, CSS class) passes and "S3" is never a code (the storage service). "S" codes are the registry's
+# public source families ("S13 to S16"), so they count after a keyword only, never in brackets. Hash and snapshot forms
+# need their provenance words on the same line, so a downloaded file's hash and a data snapshot ID pass.
+PLAN_CODE = r"(?!S3\b)[A-Z]\d{1,2}"
+BRACKET_CODE = r"(?!S)[A-Z]\d{1,2}"
+ISSUE_ID = r"(?!SHA|MD|RC)[A-Z]{1,4}\d+-\d+"
+NUMBER_WORD = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
+REVIEW_LINE = r"(?=.*\b(?:re-?check|review(?:s|ed|er|ers|ing)?)\b)"
 PATCH_HASH = r"(?:hash|sha-?256|checksum)\W+[0-9a-f]{12,64}\b"
 PLAN_REFERENCES = (
-    ("unit or lane code", re.compile(rf"\b(?:[Ll]ane [A-Z]\b|(?i:unit|lane|failure mode|task|slice|step) {PLAN_CODE}\b)")),
-    ("bracketed unit code", re.compile(rf"[(\[]{PLAN_CODE}(?:(?:, | to | and ){PLAN_CODE})*[)\]]")),
+    (
+        "unit or lane code",
+        re.compile(rf"\b(?:[Ll]ane [A-Z]\b|(?i:units?|lanes?|failure modes?|tasks?|slices?|steps?) {PLAN_CODE}\b)"),
+    ),
+    ("bracketed unit code", re.compile(rf"[(\[]{BRACKET_CODE}(?:(?:, | to | and ){BRACKET_CODE})*[)\]]")),
+    ("issue ID", re.compile(rf"\b(?i:refs?|issues?|tickets?|closes|fixes|resolves)\b[ :]+{ISSUE_ID}\b|[(\[]{ISSUE_ID}[)\]]")),
     (
         "review-round name",
-        re.compile(r"\b(?:re-?check\s+#?\d+|fix\s+round\s+#?\d+|review\s+(?:round\s+\d+|#\d+)|round\s+\d+\s+of\s+(?:the|its|their)\s+review)\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:re-?check\s+#?\d+|fix\s+round\s+#?\d+|review\s+(?:round\s+\d+|#\d+)|round\s+\d+\s+of\s+(?:the|its|their)\s+review)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "review-round name",
+        re.compile(
+            rf"^{REVIEW_LINE}.*\b(?:{NUMBER_WORD}\s+(?:review\s+|fix\s+)?rounds?\b(?!\s+(?:trips?|robin))"
+            rf"|rounds?\s+{NUMBER_WORD}\b(?!\s+(?:decimals?|digits?|places?|numbers?|values?)))",
+            re.IGNORECASE,
+        ),
     ),
     (
         "accepted-patch hash",
-        re.compile(rf"\b(?:patch|diff)\b.*\b{PATCH_HASH}|\b{PATCH_HASH}.*\b(?:patch|diff)\b", re.IGNORECASE),
+        re.compile(rf"^(?=.*\b(?:patch|diff)\b)(?=.*\b(?:accepted|reviewed|staged)\b)(?=.*\b{PATCH_HASH}).*$", re.IGNORECASE),
     ),
-    ("worktree snapshot ID", re.compile(r"\bsnapshot\s+(?:id\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b", re.IGNORECASE)),
+    (
+        "worktree snapshot ID",
+        re.compile(r"^(?=.*\bworktrees?\b).*\bsnapshot\s+(?:id\s+)?[0-9a-f]{7,40}\b", re.IGNORECASE),
+    ),
     ("review status note", re.compile(r"\bnot\s+independently\s+reviewed\b", re.IGNORECASE)),
 )
 

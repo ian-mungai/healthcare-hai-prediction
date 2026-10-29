@@ -152,12 +152,24 @@ last_updated: 2026-10-28
   pushed commit. AI credit and agent-session lines are rejected; human
   co-authors and factual tool mentions are allowed. Detection uses an explicit
   agent and vendor list, so new forms need a failing sample before the check is
-  extended. It also rejects internal plan references: unit and lane codes
-  (`lane A`, `unit U4`, `failure mode T9`, a bracketed `(P7)`), review-round
-  names (`recheck 2`, `fix round 2`, `review #3`), a patch or diff hash prefix
-  (12 or more hex characters after `hash` or `SHA-256` on a line that names a
-  patch or diff), a snapshot ID in hex and "Not independently reviewed". A bare
-  `B1` (hex, CSS class) and a short commit hash pass. A finding names the form,
+  extended. It also rejects internal plan references. A plan or task code is
+  one capital letter and one or two digits (`G4`, `A54`, `U4`, `T9`). It counts
+  after `unit`, `lane`, `failure mode`, `task`, `slice` or `step` (`lane A`,
+  `unit U4`, `failure mode T9`) or alone in brackets (`(P7)`, `(P1, P3 to P5)`).
+  `S3` is never a code. An `S` code counts only after a keyword, because
+  `S13 to S16` are public registry source families. An issue ID (capital
+  letters, a digit, a dash and digits, such as `WV3-033`) counts after `Refs`,
+  `Issue`, `Ticket`, `Closes`, `Fixes` or `Resolves` or in brackets; `SHA-256`
+  and `CVE-2024-1234` do not. Review-round names are `recheck 2`, `fix round 2`,
+  `review #3` and, on a line that also says review, recheck or reviewer, a
+  number word beside the round (`over five rounds`, `round two`); `round trip`
+  and `round two decimals` pass. A patch or diff hash prefix (12 or more hex
+  characters after `hash`, `SHA-256` or `checksum`) counts only on a line that
+  names a patch or diff and says accepted, reviewed or staged, so a downloaded
+  patch's checksum passes. A snapshot ID in any hex form (7 to 40 characters)
+  counts only on a line that says worktree, so a data snapshot ID passes. "Not
+  independently reviewed" is also rejected. A bare `B1` (hex, CSS class) and a
+  short commit hash pass. A finding names the form,
   never the text. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example` and every variable listed there is read by code, a script,
