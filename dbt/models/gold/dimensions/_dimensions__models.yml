@@ -1013,8 +1013,8 @@ models:
               - code_system
               - code
   - name: dim_registry_control
-    description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The family and
-      the closeout decision are deferred.
+    description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The closeout
+      decision is deferred.
     meta:
       classification: Public
     columns:
@@ -1047,6 +1047,25 @@ models:
                 space: 'true'
       - name: parent
         description: The parent control; null for a top-level control.
+      - name: family
+        description: The analytic domain of the control. The domain of the dimension of its sources' original source families, or for a control with no
+          source family the reviewed registry_family_supplement seed. The source family stays reachable through the source bridge. Null on the unknown member.
+        data_tests:
+          - not_null:
+              name: not_null_dim_registry_control_family_known_controls
+              config:
+                where: measure_control <> '<unknown>'
+          - accepted_values:
+              name: accepted_values_dim_registry_control_family_known_controls
+              arguments:
+                values:
+                  - Structure
+                  - Process
+                  - Outcome
+                  - Context
+                  - Linkage
+              config:
+                where: measure_control <> '<unknown>'
       - name: review_decision
         description: The review decision carried on the control's bridge seed rows; null for a control with no bridge row.
   - name: dim_release
