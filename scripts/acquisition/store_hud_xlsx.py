@@ -23,6 +23,7 @@ from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, uplo
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.infrastructure.render_project_config import load_configuration
 
+CODE_ENTRY = "scripts.acquisition.store_hud_xlsx"
 LOGGER = logging.getLogger(__name__)
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -182,7 +183,7 @@ def make_receipt(plan: dict, batch: dict, cached: Path, branch: Path) -> Path:
             "schema_sha256": canonical_hash(validator.schema),
             "terms_sha256": plan["terms"]["sha256"],
             "expected_sha256": batch["sha256"],
-            "code_sha256": api.require_code(),
+            "code_sha256": api.require_code(entry=CODE_ENTRY),
             "model_eligible": False,
             **({"exact_repeat_decision_sha256": canonical_hash(read_json(contract.DECISION_PATH))} if "exact_repeat_rows_dropped" in statistics else {}),
             "fallback_reason": "API serves nationwide requests only from 2021 Q1; the files site has no fixed links, so the user downloaded by hand",
@@ -212,7 +213,7 @@ def execute(plan: dict, batch: dict, root: Path, downloads: Path, upload: bool, 
     branch = root / "batches" / batch["id"]
     receipt_path = branch / "capture/receipt.json"
     if not receipt_path.exists():
-        api.require_code()
+        api.require_code(entry=CODE_ENTRY)
         receipt_path = make_receipt(plan, batch, stage(batch, downloads, branch), branch)
     receipt = verify_local(receipt_path)
     require(json.loads(receipt["lineage"]["extraction_or_query"])["batch_id"] == batch["id"], "HUD selected batch differs from receipt")
@@ -238,7 +239,7 @@ def execute(plan: dict, batch: dict, root: Path, downloads: Path, upload: bool, 
         "plan_sha256": canonical_hash(plan),
     }
     if upload:
-        api.require_code()
+        api.require_code(entry=CODE_ENTRY)
         if client is None:
             raise ValueError("HUD storage client missing")
         stored = upload_snapshot(receipt_path, [], client, outputs, load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator())

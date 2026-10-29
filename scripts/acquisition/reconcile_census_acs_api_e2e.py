@@ -61,7 +61,7 @@ def reconcile() -> dict:
         "total_table_county_rows": sum(t["statistics"]["rows"] for t in tables),
         "version_verified_s3_objects": len(objects),
         "plan_sha256": [canonical_hash(p) for p in plans],
-        "code_sha256": contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "tables": tables,
         "collection_files_checked": len(before),
         "no_effects_replay": True,

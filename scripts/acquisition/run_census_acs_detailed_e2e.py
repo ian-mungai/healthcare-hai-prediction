@@ -139,7 +139,7 @@ class Requests:
 def exercise(root: Path) -> list[dict]:
     """Production orchestration with synthetic inputs and versioned fake storage."""
     versions = root / "versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -202,7 +202,7 @@ def exercise(root: Path) -> list[dict]:
         corrupt_scenarios(scenario, run, plan)
 
         def unreviewed_current() -> None:
-            with patch.object(contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, first, root / "unreviewed", True, True, client, OUTPUTS, requests)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed Census detailed")
@@ -339,7 +339,7 @@ def main() -> None:
         "feature": "ACS detailed tables (B17001, B16001) capture, exact overlap checks and derived history through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": bls_contract.digest(Path("requirements.txt").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_census_acs_detailed_e2e --output {args.output}",
         "boundary": "Synthetic dictionaries, 3,100-county responses and comparison exports; fake keyed request and fake versioned S3; no live Census or AWS.",

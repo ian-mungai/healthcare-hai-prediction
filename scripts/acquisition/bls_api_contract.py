@@ -7,6 +7,7 @@ import json
 import re
 from pathlib import Path
 
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.legacy_versions import plan_matches
@@ -14,6 +15,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/bls_api_plan.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/bls_api_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.collect_bls_api"
 FIELDS = ["seriesID", "county_fips", "measure_code", "year", "period", "periodName", "value", "footnotes"]
 
 
@@ -23,15 +25,20 @@ def digest(body: bytes) -> str:
 
 
 def code_hashes() -> dict[str, str]:
-    """Bind acquisition dependencies and configuration loader, excluding test-only runners."""
+    """Bind every acquisition module and the configuration loader, excluding test-only runners; the collectors not yet pinned to their own code use it."""
     paths = sorted((REPO_ROOT / "scripts/acquisition").glob("*.py"))
     paths += [REPO_ROOT / "scripts/infrastructure/render_project_config.py"]
     return {str(p.relative_to(REPO_ROOT)): digest(p.read_bytes()) for p in paths if "e2e" not in p.name}
 
 
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
 def require_code(hashes: dict | None = None) -> dict:
     """Accept only an explicitly reviewed implementation version."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes() if hashes is None else hashes
     versions = read_code_versions(VERSIONS_PATH)["versions"]
     require(bool(actual) and actual in [v["code_sha256"] for v in versions], "Unreviewed BLS code version")
     return actual

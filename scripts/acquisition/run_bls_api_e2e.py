@@ -100,7 +100,7 @@ def exercise(root: Path) -> list[dict]:
     plan_path, versions_path = root / "plan.json", root / "versions.json"
     write_once(plan_path, encoded_json(plan))
     write_once(plan_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
-    write_once(versions_path, encoded_json({"versions": [{"version": "synthetic_pending_review", "code_sha256": contract.code_hashes()}]}))
+    write_once(versions_path, encoded_json({"versions": [{"version": "synthetic_pending_review", "code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -403,7 +403,7 @@ def main() -> None:
         "feature": "separate_bls_api_collector",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": platform.python_version(),
-        "code_sha256": contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": contract.digest(Path("requirements.txt").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_bls_api_e2e --output {args.output}",
         "scenarios": scenarios,
