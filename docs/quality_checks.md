@@ -688,6 +688,7 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Lakehouse Bronze Checks | 8.9 | 20 | hosted |
 | Lakehouse Silver Checks | 2.4 | 5 | hosted |
 | Lakehouse Gold Checks | 11 | 25 | hosted, supplied 10 to 11 minute range |
+| Lakehouse Features Checks | 8 | 15 | estimate, offline feature store gates |
 | Feature Sources (Shard 1 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
 | Feature Sources (Shard 2 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
 | Feature Sources (Shard 3 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
