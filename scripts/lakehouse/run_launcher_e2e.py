@@ -6284,9 +6284,9 @@ def growth_reserve(env: Env) -> dict[str, bool]:
     del after
     alloc = env.allocate()
     held = env.state()["allocations"][alloc]["environment"]["JOB_MEMORY_LIMIT"]
-    expected = 32 * GIB - used - 8 * GIB - reserve
+    expected = (32 * GIB - used - 8 * GIB - reserve) * 75 // 100
     return {
-        "the plan before the catalog is Docker's free memory": int(before["environment"]["JOB_MEMORY_LIMIT"]) == 24 * GIB,
+        "the plan before the catalog is the capped share of Docker's free memory": int(before["environment"]["JOB_MEMORY_LIMIT"]) == 18 * GIB,
         "both services registered a limit": set(services) == {"polaris-db", "polaris"},
         "an allocation holds back the services' unused limits": int(held) == expected,
         "the reserve is not zero": reserve > 0,
@@ -6307,7 +6307,7 @@ def run_allocation_growth_reserve(env: Env) -> dict[str, bool]:
     attempt_id = env.submit(run, "fixture_dbt", "g1", params=env.fixture_params("g1"))["attempt_id"]
     env.wait_phase(attempt_id, ("started",), 30)
     allocation = env.state()["allocations"][env.attempt(attempt_id)["attempt_alloc"]]
-    expected = 32 * GIB - used - 8 * GIB - reserve
+    expected = (32 * GIB - used - 8 * GIB - reserve) * 75 // 100
     return {
         "the reserve is not zero": reserve > 0,
         "the run's attempt allocation holds back the services' unused limits": int(allocation["environment"]["JOB_MEMORY_LIMIT"]) == expected,
@@ -6328,7 +6328,7 @@ def pooled_launch_capacity(env: Env) -> dict[str, bool]:
     env.client().call("cancel", {"attempt_id": first}, principal)
     env.wait_ended(first)
     rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
-    env.daemon.usage["external-heavy"] = 20 * GIB
+    env.daemon.usage["external-heavy"] = 16 * GIB
     second = env.submit(principal, launch="p2", params=env.fixture_params("p2"))["attempt_id"]
     time.sleep(3.0)
     waited = env.phase(second) == "queued" and not creates(env, "-p2-")
@@ -6356,7 +6356,7 @@ def queued_memory_deadline(env: Env) -> dict[str, bool]:
     env.client().call("cancel", {"attempt_id": first}, principal)
     env.wait_ended(first)
     rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
-    env.daemon.usage["external-heavy"] = 20 * GIB
+    env.daemon.usage["external-heavy"] = 16 * GIB
     try:
         queued = env.submit(principal, launch="m2", params=env.fixture_params("m2"), timeout_seconds=600)["attempt_id"]
         time.sleep(1.0)
@@ -6381,7 +6381,7 @@ def queued_cutoff_timeout(env: Env) -> dict[str, bool]:
     alloc = env.allocate(workers=1)
     principal = env.alloc_principal(alloc)
     rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
-    env.daemon.usage["external-heavy"] = 20 * GIB
+    env.daemon.usage["external-heavy"] = 16 * GIB
     try:
         queued = env.submit(principal, launch="q1", params=env.fixture_params("q1"), timeout_seconds=6)["attempt_id"]
         time.sleep(1.0)
