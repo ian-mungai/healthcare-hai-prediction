@@ -73,11 +73,6 @@ def source_namespace(source: str, mode: str) -> str:
     return namespace
 
 
-def silver_namespace(mode: str) -> str:
-    """The silver namespace of a publish mode; any other mode has none."""
-    return source_namespace("silver", mode)
-
-
 def read_bytes(root: Path, relative: str, limit: int = MAX_RECORD) -> bytes:
     """Read a bounded regular file through directory descriptors without following symlinks."""
     require_materialized(root)
