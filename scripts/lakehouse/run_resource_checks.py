@@ -108,6 +108,7 @@ def main() -> int:
     results["spark_parallelism_computed"] = "local[4]" not in (ROOT / "scripts/lakehouse/session.py").read_text()
     results.update(launch_contracts(out))
     results.update(cap_and_deadline_contracts())
+    results.update(queued_wait_contracts())
     result = {
         "scope": "Real planner CLI and launcher, synthetic host readings, a fake Docker daemon and source configuration checks; no live container enforcement",
         "command": ".venv/bin/python -m scripts.lakehouse.run_resource_checks",
@@ -152,6 +153,96 @@ def cap_and_deadline_contracts() -> dict[str, bool]:
         and "2.0 GiB free" in failure
         and "6.0 GiB needed" in failure,
         "wait_with_a_clock_set_back_does_not_expire": mb.wait_failure(100.0, 50.0, deadline, 2 * GIB, 6 * GIB) is None,
+    }
+
+
+def queued_wait_contracts() -> dict[str, bool]:
+    """The persisted memory wait deadline on queued ticks and readings, called on the launcher's methods with a stand-in launcher and clock."""
+    import time
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from orchestration import launcher as lx
+
+    def queued(**extra: Any) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "id": "at_1",
+            "phase": "queued",
+            "owner": "alloc:al_1",
+            "template": "fixture_init",
+            "params": {},
+            "args": [],
+            "cancel_intent": None,
+            "timeout_intent": None,
+            "capacity_pending": True,
+            "deadline_utc": 9000.0,
+            "memory_wait_since": 1000.0,
+            "memory_wait_free": 2 * GIB,
+            "memory_wait_need": 18 * GIB,
+        }
+        return {key: value for key, value in (record | extra).items() if value is not None or key in ("cancel_intent", "timeout_intent")}
+
+    def stand_in(state: dict[str, Any], degraded: bool = True) -> Any:
+        launcher: Any = SimpleNamespace(
+            timings=SimpleNamespace(memory_wait=600.0), docker_ok=not degraded, status="degraded" if degraded else "serving", dirty=set(), CAPACITY_RETRY=2.0
+        )
+        launcher.admissible = lambda *_: True
+        launcher.mac_write_problem = lambda *_: None
+        launcher.intent_reason = lambda a, default="exited": lx.Launcher.intent_reason(launcher, a, default)
+        launcher.finish_attempt = lambda _state, a, reason, detail="": a.update({"phase": "ended", "reason": reason, "detail": detail})
+        launcher.memory_wait_expired = lambda *args: getattr(lx.Launcher, "memory_wait_expired", lambda *_: False)(launcher, *args)
+
+        @contextmanager
+        def tx(write: bool = True) -> Any:
+            yield state
+
+        launcher.tx = tx
+        launcher.capacity_cleared = lambda *args: lx.Launcher.capacity_cleared(launcher, *args)
+        return launcher
+
+    def tick(a: dict[str, Any], now: float, degraded: bool = True) -> dict[str, Any]:
+        with mock.patch.object(time, "time", return_value=now):
+            state = {"attempts": {a["id"]: a}, "allocations": {"al_1": {"workers": 1, "environment": {}}}}
+            lx.Launcher.advance_queued(stand_in(state, degraded), state, a, [])
+        return a
+
+    def reading(a: dict[str, Any], now: float, outcome: str, value: Any) -> dict[str, Any]:
+        launcher = stand_in({"attempts": {a["id"]: a}})
+        launcher.CAPACITY_RETRY = 2.0
+        with mock.patch.object(time, "time", return_value=now):
+            lx.Launcher.on_capacity(launcher, f"capacity:{a['id']}", outcome, value)
+        return a
+
+    short = {"ok": False, "error": None, "free": 2 * GIB, "own": 0, "running": 1, "share": 18 * GIB}
+    late = tick(queued(), 1601.0)
+    on_time = tick(queued(), 1599.0)
+    cutoff = tick(queued(deadline_utc=1601.0), 1601.0)
+    serving = tick(queued(), 1601.0, degraded=False)
+    failed = reading(queued(), 1601.0, "docker", RuntimeError("worker failed"))
+    late_ok = reading(queued(), 1601.0, "ok", {"ok": True, "error": None, "free": 20 * GIB, "own": 0, "running": 0, "share": 18 * GIB})
+    early_ok = reading(queued(), 1599.0, "ok", {"ok": True, "error": None, "free": 20 * GIB, "own": 0, "running": 0, "share": 18 * GIB})
+    first = reading(queued(memory_wait_since=None, memory_wait_free=None, memory_wait_need=None), 1500.0, "ok", short)
+    again = reading(queued(), 1599.0, "ok", short)
+    late_short = reading(queued(), 1601.0, "ok", short)
+    return {
+        "tick_ends_an_expired_wait_before_the_pending_and_degraded_guards": late["phase"] == "ended" and late["reason"] == "create_failed",
+        "tick_text_names_memory_the_deadline_and_the_stored_figures": "memory did not return within 600 s: 2.0 GiB free, 18.0 GiB needed"
+        in late.get("detail", ""),
+        "tick_ends_an_expired_wait_while_serving": serving["phase"] == "ended" and serving["reason"] == "create_failed",
+        "tick_keeps_a_wait_before_the_deadline": on_time["phase"] == "queued",
+        "start_cutoff_still_comes_first": cutoff["phase"] == "ended" and cutoff["reason"] == "timeout",
+        "worker_error_cannot_bypass_the_deadline": failed["phase"] == "ended" and failed["reason"] == "create_failed",
+        "late_success_ends_the_attempt_and_keeps_the_clock": late_ok["phase"] == "ended"
+        and late_ok["reason"] == "create_failed"
+        and "capacity_at" not in late_ok
+        and late_ok["memory_wait_since"] == 1000.0,
+        "success_before_the_deadline_clears_the_clock": early_ok["phase"] == "queued" and "memory_wait_since" not in early_ok and "capacity_at" in early_ok,
+        "first_short_reading_starts_the_clock_and_stores_figures": first["memory_wait_since"] == 1500.0
+        and first["memory_wait_free"] == 2 * GIB
+        and first["memory_wait_need"] == 18 * GIB,
+        "later_short_reading_keeps_the_first_start": again["memory_wait_since"] == 1000.0 and again["phase"] == "queued",
+        "short_reading_after_the_deadline_ends_the_attempt": late_short["phase"] == "ended" and late_short["reason"] == "create_failed",
     }
 
 
