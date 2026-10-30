@@ -49,3 +49,4 @@ aws-account infra/jobs/tests/openmetadata.tftest.hcl -- synthetic all-ones accou
 aws-account scripts/infrastructure/run_openmetadata_e2e.py -- synthetic all-ones account ID in the catalog policy and image cases; not the project's account
 email scripts/infrastructure/openmetadata_bootstrap.py -- the default administrator login of OpenMetadata, a public product constant; not a person
 email scripts/infrastructure/run_openmetadata_e2e.py -- the same OpenMetadata default administrator login in the stand-in server
+email docs/aws_openmetadata.md -- the default administrator login of OpenMetadata, a public product constant; not a person
