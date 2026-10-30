@@ -207,7 +207,8 @@ resource "aws_iam_role_policy" "job_writer_layer_upload" {
   name = "layer_run_upload"
   role = each.value.name
   policy = templatefile("${path.module}/owner_policies/job_writer_layer_upload.json", {
-    UPLOAD_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/lakehouse/layer_runs/${each.key}/*"])
+    # Gold also copies its dbt files to metadata/dbt/ for the catalog task, which reads them and cannot write them.
+    UPLOAD_OBJECT_ARNS = jsonencode(concat(["${local.bronze_bucket_arn}/lakehouse/layer_runs/${each.key}/*"], each.key == "gold" ? ["${local.bronze_bucket_arn}/metadata/dbt/*"] : []))
   })
 }
 

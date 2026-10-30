@@ -75,6 +75,8 @@ INPUT_LAYER = {"silver": "bronze", "gold": "silver", "features": "gold"}  # the 
 LIST_PAGES = 2000  # pages of the input version listing, 1000 versions each: a larger prefix is refused instead of listed in part
 STAGE_PREFIX = "lakehouse/run_stage"
 STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
+DBT_ARTIFACTS = ("manifest.json", "catalog.json", "run_results.json")
+DBT_ARTIFACT_PREFIX = "metadata/dbt/"
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb")  # the code copy, the bulk input extracts and the build file the sealed copy repeats
 DRY_ENV = "LAYER_DRY_RUN"
 DRY_MARKER = "dry_run"  # in the run folder: once a task has a dry phase, every later phase of it is dry
@@ -661,6 +663,28 @@ def upload(job: Job, bucket: str, client: Any) -> int:
     return len(files)
 
 
+def upload_dbt_artifacts(job: Job, bucket: str, client: Any) -> list[str]:
+    """Copy the gold run's dbt manifest, catalog and run results to ``metadata/dbt/`` for the catalog.
+
+    This is best effort: a refused or failed copy is reported on standard error and never fails the upload, because the publish is already committed.
+    Only the gold layer uploads them, and a file the run did not write is skipped.
+    """
+    if job.layer != "gold":
+        return []
+    sent = []
+    for name in DBT_ARTIFACTS:
+        path = job.folder / "target" / name
+        if not path.is_file():
+            continue
+        try:
+            client.upload_file(str(path), bucket, DBT_ARTIFACT_PREFIX + name)
+        except Exception as error:
+            sys.stderr.write(f"layer_run: the dbt file {name} was not uploaded for the catalog: {type(error).__name__}\n")
+        else:
+            sent.append(name)
+    return sent
+
+
 def feast(job: Job) -> None:
     accepted_publish(job)
     for step in ("apply", "materialize"):
@@ -823,7 +847,9 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
             error = plan["catalog_error"] or "none"
             raise StepError(f"the dry run has unknown catalog state ({len(plan['unknown'])} tables, catalog error: {error}): the plan above is incomplete")
     elif phase == "upload":
-        sys.stdout.write(json.dumps({"uploaded": upload(job, args.bucket, s3_client())}) + "\n")
+        client = s3_client()
+        uploaded = upload(job, args.bucket, client)
+        sys.stdout.write(json.dumps({"uploaded": uploaded, "dbt_files": upload_dbt_artifacts(job, args.bucket, client)}) + "\n")
     elif phase == "publish":
         publish(job, args.bucket, s3_client() if job.mode == "real" and job.local is None else None)
     else:

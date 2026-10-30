@@ -250,6 +250,10 @@ def build(job: Job, module: str, arguments: Sequence[str | Path], environment: d
     connection.close()
     receipt = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "source_sha256": source, "input_sha256": expected_input}
     (folder / "build_receipt.json").write_text(json.dumps(receipt) + "\n")
+    target = folder / "target"
+    target.mkdir(exist_ok=True)
+    (target / "manifest.json").write_text('{"metadata": {"project_name": "stand_in"}}\n')
+    (target / "run_results.json").write_text('{"results": []}\n')
 
 
 def export(job: Job, module: str, arguments: Sequence[str | Path]) -> None:
@@ -638,6 +642,27 @@ def case_gold_and_features_chain(case: Case) -> None:
     for layer in ("silver", "gold"):
         require(any(key.startswith(f"lakehouse/layer_runs/{layer}/") for _, key in UPLOADS), layer)
     require(not any("/features/" in key for _, key in UPLOADS), "features uploads nothing")
+    dbt_keys = sorted(key for _, key in UPLOADS if key.startswith("metadata/dbt/"))
+    require(dbt_keys == ["metadata/dbt/manifest.json", "metadata/dbt/run_results.json"], f"the gold run publishes its dbt files for the catalog: {dbt_keys}")
+
+
+class FailingDbtS3(FakeS3):
+    """A bucket that refuses the catalog's dbt files and takes every other object."""
+
+    def upload_file(self, filename: str, bucket: str, key: str) -> None:
+        if key.startswith("metadata/dbt/"):
+            raise OSError("access denied")
+        super().upload_file(filename, bucket, key)
+
+
+def case_dbt_upload_failure_does_not_fail_the_gold_upload(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7, case.err)
+    with mock.patch.object(layer_run, "s3_client", lambda: FailingDbtS3()):
+        codes = case.chain("gold")
+    require(codes == [0] * 6, (codes, case.err))
+    require(any(key.startswith("lakehouse/layer_runs/gold/") for _, key in UPLOADS), "the run folder still uploads")
+    require(not any(key.startswith("metadata/dbt/") for _, key in UPLOADS), "the refused dbt files are not recorded as uploaded")
+    require("dbt" in case.err and "not uploaded" in case.err, f"the failure must be reported: {case.err}")
 
 
 def case_retry_of_a_run_is_refused_at_the_pin(case: Case) -> None:
@@ -983,6 +1008,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
     "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,
     "a dry run leaves no state that blocks the real run": case_dry_run_leaves_no_state_that_blocks_the_real_run,
+    "a refused dbt upload does not fail the gold upload": case_dbt_upload_failure_does_not_fail_the_gold_upload,
     "a wrong code digest stops the first phase": case_wrong_code_digest,
     "gold and features refuse a missing input run": case_missing_input_run,
     "gold refuses a silver run that was never committed": case_input_run_not_published,

@@ -128,7 +128,7 @@ aws ssm start-session --profile <PROJECT_PROFILE> --region <REGION> --target <IN
 {"run_id": "<BRONZE_RUN_ID>", "mode": "real"}
 ```
 
-Every wait in the chain has a limit. A layer's trigger gives up after eight hours (drift after three). The whole chain run ends after 28 hours. The chain starts the DAG `drift_monitoring_dag` and then starts the catalog task as its last step. The catalog start waits for nothing, so a failed or slow catalog task never fails or delays a chain run.
+Every wait in the chain has a limit. A layer's trigger gives up after eight hours (drift after three). The whole chain run ends after 28 hours. The chain starts the DAG `drift_monitoring_dag` and then starts the catalog task as its last step. The catalog start waits for nothing and handles its own trigger errors, so a failed or slow catalog task never fails or delays a chain run.
 
 Every run ID and every triggered DAG run ID derives from the bronze run ID. A second trigger for the same bronze run names the DAG runs that exist and starts nothing. Gold needs a silver run that passed. Features needs a gold run that passed. A failed acceptance check therefore stops the chain before the later layers. A failed layer is not retried under the same IDs. Its pin phase writes `state/pinned.json` once, so a layer that failed after the pin cannot run again under its run ID. The chain derives the same child IDs from the same bronze run ID. After a failure, the owner checks the abandoned catalog branch. Then stage the code under a new run ID (step 6 of the setup) and trigger `bronze_chain_dag` with that new run ID. Do not clear the failed DAG run to retry it: the next attempt stops at the pin by name.
 
