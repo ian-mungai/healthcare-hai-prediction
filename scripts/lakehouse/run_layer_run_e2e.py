@@ -118,7 +118,8 @@ def parser_options(module: str) -> dict[str, tuple[bool, str | None]]:
         if isinstance(default, ast.Call) and default.args:
             default = default.args[0]
         value = default.value if isinstance(default, ast.Constant) else None
-        required = isinstance(keywords.get("required"), ast.Constant) and keywords["required"].value is True
+        flag = keywords.get("required")
+        required = isinstance(flag, ast.Constant) and flag.value is True
         for name in names:
             options[name] = (required, value if isinstance(value, str) else None)
     return options
@@ -128,7 +129,7 @@ def argument_contract(module: str, arguments: Sequence[str | Path]) -> None:
     """Check the driver's arguments against the module's own parser: every option must exist, every required one must be given, and no option that has a
     default under /workspace may be left to it, because the task's code folder is elsewhere and a default would read or write the wrong run."""
     options = parser_options(module)
-    require(options, f"{module} declares no parser options")
+    require(bool(options), f"{module} declares no parser options")
     given = [str(item) for item in arguments if str(item).startswith("--")]
     step = str(arguments[0]) if arguments else ""
     unused = UNUSED_DEFAULTS.get((module.rsplit(".", 1)[1], step), set())
@@ -322,12 +323,15 @@ def publish_step(job: Job, module: str, step: str, arguments: Sequence[str | Pat
         (publish / "reconcile.json").write_text(json.dumps(record, sort_keys=True) + "\n")
     elif step == "backup":
         shared_write("backup", layer=job.layer, run=job.run)
+        data = json.dumps({"run_id": job.run, "tables": sorted(manifest["tables"])}).encode()
+        name = f"backup_{job.run}"
+        STORED[f"{plan.backup_prefix}{name}"] = data + (b" altered" if "backup_object" in DEFECTS else b"")
         record = {
             "run_id": job.run,
             "read_back": True,
             "reconcile_sha256": sha_of(publish / "reconcile.json"),
-            "name": f"backup_{job.run}",
-            "backup_sha256": "b" * 64,
+            "name": name,
+            "backup_sha256": hashlib.sha256(data).hexdigest(),
         }
         (publish / "backup.json").write_text(json.dumps(record, sort_keys=True) + "\n")
     elif step == "commit":
@@ -384,11 +388,23 @@ def plan_state(job: Job, arguments: Sequence[str | Path]) -> None:
     Path(option(arguments, "--output")).write_text(json.dumps(state, sort_keys=True) + "\n")
 
 
+STORED: dict[str, bytes] = {}  # the bucket objects the stand-in publish steps write: the catalog backups
+STAGED_VERSION = ["1"]  # the object version of the staged code files; a case changes it to model an input replaced during the run
+
+
 class FakeS3:
     def upload_file(self, filename: str, bucket: str, key: str) -> None:
         require(bucket == BUCKET, bucket)
         UPLOADS.append((bucket, key))
         shared_write("upload", key=key)
+
+    def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        require(Bucket == BUCKET and Key.startswith("lakehouse/run_stage/"), (Bucket, Key))
+        return {"VersionId": STAGED_VERSION[0], "ETag": f'"{Key.rsplit("/", 1)[1]}"', "ContentLength": 64}
+
+    def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        require(Bucket == BUCKET and Key in STORED, (Bucket, Key))
+        return {"Body": io.BytesIO(STORED[Key])}
 
 
 def archive(folder: Path) -> tuple[Path, str]:
@@ -417,6 +433,8 @@ class Case:
         CATALOG[0].mkdir()
         UPLOADS.clear()
         DEFECTS.clear()
+        STORED.clear()
+        STAGED_VERSION[0] = "1"
         self.archive, self.digest = archive(root)
         self.out = ""
         self.err = ""
@@ -576,6 +594,22 @@ def case_commit_names_wrong_snapshots(case: Case) -> None:
     require(not UPLOADS, UPLOADS)
 
 
+def case_staged_input_changes_after_the_pin(case: Case) -> None:
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    STAGED_VERSION[0] = "2"
+    require(case.phase("silver", "publish") != 0 and "staged input" in case.err, case.err)
+    require(writes() == [], "a changed input object stops publish before any catalog write")
+
+
+def case_stored_backup_differs_from_its_record(case: Case) -> None:
+    DEFECTS.add("backup_object")
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    require(case.phase("silver", "publish") != 0 and "stored backup" in case.err, case.err)
+    require("publish_runs" not in kinds() and "table" not in kinds(), "a backup that differs from its record stops the publish before the commit")
+
+
 def case_export_names_foreign_table(case: Case) -> None:
     DEFECTS.add("foreign_table")
     for phase in ("pin", "build", "validate", "verify"):
@@ -642,6 +676,8 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a fingerprint mismatch stops before any table or run row is written": case_reconcile_mismatch_stops_before_commit,
     "a row count mismatch stops before the run row": case_reconcile_rows_mismatch,
     "a commit naming other snapshots fails and uploads nothing": case_commit_names_wrong_snapshots,
+    "an input object replaced after the pin stops publish before any write": case_staged_input_changes_after_the_pin,
+    "a stored backup that differs from its record stops before the commit": case_stored_backup_differs_from_its_record,
     "an export with a table outside the contract is refused": case_export_names_foreign_table,
     "dry run writes nothing and prints one plan": case_dry_run_writes_nothing,
     "dry run of features skips Feast": case_dry_run_features_skips_feast,
