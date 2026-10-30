@@ -326,7 +326,17 @@
       "why": "docker_calls.check lists every tracked and untracked Python file with git ls-files and parses each one to discover wrappers; the suite's docker_calls_check case runs it, so any Python file, also a future one, can change the result"
     },
     {
+      "module": "scripts/training/bundle.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
       "module": "scripts/training/guards.py",
+      "pattern": ".",
+      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+    },
+    {
+      "module": "scripts/training/job_actions.py",
       "pattern": ".",
       "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
     },
