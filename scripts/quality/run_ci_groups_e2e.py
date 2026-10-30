@@ -4291,7 +4291,7 @@ def osv_scanner_case(
     """The OSV-Scanner hook runs over the pushed range in its own step, also for a small change, and skips a range without a requirements file."""
     root = pre_push_repo(scratch, f"gate_osv_{name}", changed, small=small, mutate=mutate)
     plan = pre_push_plan(root)
-    step = next((step for step in plan["steps"] if step["name"] == "osv_scanner"), {})
+    step: dict[str, Any] = next((item for item in plan["steps"] if item["name"] == "osv_scanner"), {})
     base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
     code, out, error = pre_push(root, "run", timeout=300)
     calls = [call for call in pre_push_calls(root) if call["stub"] == "osv_scanner"]
