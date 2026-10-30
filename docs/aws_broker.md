@@ -15,7 +15,7 @@ The job broker is the only path from an Airflow DAG to work on AWS. It keeps the
 | --- | --- | --- |
 | Broker service | The container host, loopback port 18790 | Takes a DAG step, writes the ledger line, starts or joins the job task and reports its state |
 | Job task | Fargate, on demand | One task per job, run and attempt. A job is `train`, `silver`, `gold`, `features` or `drift` |
-| Chain DAG `bronze_chain_dag` | Airflow | Asks the broker whether the chain is open, then triggers silver, gold, features and drift in order |
+| Chain DAG `bronze_chain_dag` | Airflow | The owner starts it by hand. It asks the broker whether the chain is open, then triggers silver, gold, features and drift in order |
 
 The table `config/orchestration/ecs_broker_jobs.json` names the job of each DAG step. A step with no job (acquire, seal, release and the gates) answers at once. The first step of a job starts its task and the later steps join it, because the containers of one job share a workspace. A job passes only when every container exits 0 and every acceptance container appears in the task report. A job that runs past its deadline is stopped.
 
@@ -37,7 +37,7 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 
 4. `infra/services`: set `broker_enabled = true` and set `broker_task_role_arn` to the ARN in the `broker_roles` output. Set `broker_jobs` to the job subnet, the job security group, the jobs log group, the data bucket, the private address of the host and the families. Then run the host preparation task again. It creates the broker state folder on the data volume.
 5. Check that the broker service reached a `COMPLETED` deployment, as for the other services.
-6. For each run, stage the code as for a training run and add the digest beside it:
+6. For each run, stage the code as for a training run and add the digest beside it. A chain needs this under the run ID of each layer, which the trigger tasks of the chain run show:
 
    ```sh
    git archive --format=tar.gz --output=/tmp/code.tar.gz HEAD
@@ -45,6 +45,8 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
    aws s3 cp /tmp/code.tar.gz s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/code.tar.gz --profile <PROJECT_PROFILE>
    aws s3 cp /tmp/code.sha256 s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/code.sha256 --profile <PROJECT_PROFILE>
    ```
+
+7. After new bronze data is registered and the first publishes are signed, start `bronze_chain_dag` by hand as described below.
 
 The training DAG sends `mlflow=local` because the DAG runtime accepts nothing else. The broker passes `mlflow=aws` to the task.
 
@@ -60,11 +62,18 @@ Until the parameter exists and holds exactly those two run IDs, the broker refus
 
 ## Start the chain
 
-The owner starts `ingestion_dag` by hand and it triggers `bronze_chain_dag` with the run ID of the bronze run. To start the chain without it:
+The owner starts `bronze_chain_dag` by hand after new bronze data is registered. A sensor that starts it comes later. Airflow listens on the host's loopback port 8080. Reach it through a port forward and trigger the DAG with a configuration:
 
 ```sh
-airflow dags trigger bronze_chain_dag --conf '{"run_id": "<BRONZE_RUN_ID>", "mode": "real"}'
+aws ssm start-session --profile <PROJECT_PROFILE> --region <REGION> --target <INSTANCE_ID> \
+  --document-name AWS-StartPortForwardingSession --parameters portNumber=8080,localPortNumber=8080
 ```
+
+```json
+{"run_id": "<BRONZE_RUN_ID>", "mode": "real"}
+```
+
+Every wait in the chain has a limit. A layer's trigger gives up after eight hours (drift after three). The whole chain run ends after 28 hours. The DAG `drift_monitoring_dag` lives on the drift branch, so the drift step has no child to start until that branch is combined. A check in the offline suite fails at that point until the branch's DAG is listed as present.
 
 Every run ID and every triggered DAG run ID derives from the bronze run ID. A second trigger for the same bronze run names the DAG runs that exist and starts nothing. Gold needs a silver run that passed. Features needs a gold run that passed. A failed acceptance check therefore stops the chain before the later layers. After a failure, clear the failed layer's own DAG run to retry it.
 

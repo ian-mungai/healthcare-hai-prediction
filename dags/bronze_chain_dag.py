@@ -1,8 +1,9 @@
 """Run silver, gold, features and drift in order after one bronze run, with no calendar schedule.
 
-``ingestion_dag`` starts this DAG by hand with ``run_id`` set to the run of the bronze snapshot. The first task asks the broker whether the first silver and
-gold publishes are signed. Without that record the broker refuses and the chain stops. Each layer then runs as a triggered DAG run and the chain waits for its
-success before the next layer, so a failed layer or a failed acceptance check stops the chain before the later layers.
+The owner starts this DAG by hand after a new bronze snapshot, with ``run_id`` set to the run of that snapshot. A sensor that starts it comes later.
+The first task asks the broker whether the first silver and gold publishes are signed. Without that record the broker refuses and the chain stops.
+Each layer then runs as a triggered DAG run and the chain waits for its success before the next layer, so a failed layer or a failed acceptance check stops
+the chain before the later layers. Every wait has a limit.
 
 Every run ID and every DAG run ID derives from the bronze run ID. A second trigger for the same bronze run names the same DAG runs, and a DAG run that already
 exists is skipped, so a retry of one bronze snapshot starts nothing new. A failed layer is retried by clearing that layer's own DAG run.
@@ -11,6 +12,7 @@ exists is skipped, so a retry of one bronze snapshot starts nothing new. A faile
 from __future__ import annotations
 
 import hashlib
+from datetime import timedelta
 
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import DAG, Param, task
@@ -25,6 +27,9 @@ CHAIN = (
     ("drift", "drift_monitoring_dag", None),
 )
 POLL_SECONDS = 60
+# Each layer's wait ends after its own limit (a job's deadline is six hours, drift two) and the whole chain ends after the sum plus an hour for the gate.
+LAYER_LIMITS = {"silver": timedelta(hours=8), "gold": timedelta(hours=8), "features": timedelta(hours=8), "drift": timedelta(hours=3)}
+CHAIN_LIMIT = sum(LAYER_LIMITS.values(), timedelta(hours=1))
 
 
 def derived_run_id(parent_run: str, layer: str) -> str:
@@ -66,6 +71,7 @@ def trigger_for(index: int) -> TriggerDagRunOperator:
         failed_states=["failed"],
         skip_when_already_exists=True,
         reset_dag_run=False,
+        execution_timeout=LAYER_LIMITS[layer],
         retries=0,
     )
 
@@ -75,6 +81,7 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
+    dagrun_timeout=CHAIN_LIMIT,
     tags=["orchestration", "chain"],
     params={
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),

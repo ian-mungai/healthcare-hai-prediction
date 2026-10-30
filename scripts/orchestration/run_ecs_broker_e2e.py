@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import ecs_adapter_cases
+from scripts.orchestration import ecs_adapter_cases, ecs_broker_cases, ecs_chain_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,16 +34,8 @@ SOURCES = (
 
 
 def suites() -> dict[str, dict[str, Callable[[], None]]]:
-    found: dict[str, dict[str, Callable[[], None]]] = {"adapter": ecs_adapter_cases.CASES}
-    try:
-        from scripts.orchestration import ecs_broker_cases
-    except ImportError:
-        return found
-    found["broker"] = ecs_broker_cases.CASES
-    from scripts.orchestration import ecs_chain_cases
-
-    found["chain"] = ecs_chain_cases.CASES
-    return found
+    """Every suite, imported without a guard: a suite that cannot be imported stops the run with its error."""
+    return {"adapter": ecs_adapter_cases.CASES, "broker": ecs_broker_cases.CASES, "chain": ecs_chain_cases.CASES}
 
 
 def revision() -> str:
