@@ -99,6 +99,11 @@ hai:
         max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
     lakehouse_task:
       <<: *lakehouse_session_bounded
+      # The task has an empty home and no egress. The image keeps the extensions read-only in this one directory and nothing is downloaded.
+      config_options:
+        extension_directory: /opt/duckdb/extensions
+        autoinstall_known_extensions: false
+        autoload_known_extensions: false
       secrets:
         - type: s3
           provider: credential_chain

@@ -26,6 +26,17 @@ RUN duckdb -c "INSTALL iceberg; INSTALL httpfs; INSTALL avro; INSTALL aws; INSTA
     && duckdb -c "COPY (SELECT extension_name, extension_version, install_mode FROM duckdb_extensions() WHERE installed AND extension_name IN ('iceberg', 'httpfs', 'avro', 'aws', 'ui') ORDER BY 1) TO '/home/analytics/extensions.csv'" \
     && cat /home/analytics/extensions.csv
 
+# The AWS jobs run as another user with an empty home. They load the same extensions from one shared read-only directory that the profile names.
+USER 0
+RUN cp -R /home/analytics/.duckdb/extensions /opt/duckdb-extensions \
+    && mkdir -p /opt/duckdb \
+    && mv /opt/duckdb-extensions /opt/duckdb/extensions \
+    && chown -R root:root /opt/duckdb \
+    && chmod -R a-w,a+rX /opt/duckdb
+USER 10001
+RUN HOME=/tmp duckdb -c "SET extension_directory='/opt/duckdb/extensions'; SET autoinstall_known_extensions=false; SET autoload_known_extensions=false; LOAD iceberg; LOAD httpfs; LOAD aws; LOAD avro;"
+USER 10002
+
 COPY --chown=root:root bronze.sql ui.sh ui_relay.py /opt/analytics/
 WORKDIR /workspace
 

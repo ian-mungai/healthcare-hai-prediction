@@ -136,6 +136,7 @@ aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUS
 - Whether the Airflow trigger operator renders the run ID templates as the offline Jinja check does.
 - The `promote` task and phase against a real MLflow server: the offline cases use a file based registry stand-in.
 - Any layer job on AWS. The driver ran only against stand-ins of the Spark, analytics, quality and Feast modules. The read-only plan module `publish_plan.py` never ran.
+- Whether the rebuilt analytics image loads its DuckDB extensions as the layer user. After the owner rebuilds the image, run `docker run --rm --user 10001:10001 -e HOME=/tmp --read-only --tmpfs /tmp <ANALYTICS_IMAGE> duckdb -c "SET extension_directory='/opt/duckdb/extensions'; SET autoinstall_known_extensions=false; LOAD iceberg; LOAD httpfs; LOAD aws; LOAD avro; SELECT extension_name, loaded FROM duckdb_extensions() WHERE loaded"`. All four must show as loaded.
 - Whether the Spark image carries boto3 for the fetch phase. Whether the quality and analytics images can run the driver's imports.
 - Whether the task role reads of the input layer and the Feast registry are enough. Whether the Feast phase reaches the host Redis from the lakehouse network.
 - The `drift` task definition and role.
