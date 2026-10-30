@@ -42,6 +42,13 @@ PHASES = ("baseline", "current", "check", "publish")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 PHASE_SECONDS = {"baseline": 3600, "current": 1800, "publish": 300}
 MARKER = "_complete.json"
+ENVIRONMENT_DEFAULTS = {
+    "MLFLOW_DISABLE_TELEMETRY": "true",
+    "DO_NOT_TRACK": "true",
+    "DVC_NO_ANALYTICS": "1",
+    "MLFLOW_HTTP_REQUEST_TIMEOUT": "20",
+    "MLFLOW_HTTP_REQUEST_MAX_RETRIES": "0",
+}
 
 
 def run_folder(work: Path, run: str) -> Path:
@@ -179,6 +186,14 @@ def publish_phase(client: Any, bucket: str, work: Path, run: str) -> dict[str, A
     return {"phase": "publish", "run_id": run, "files": sorted(bodies)}
 
 
+def prepare_environment(bucket: str) -> None:
+    """Switch telemetry off, fail fast on MLflow, and point DVC at the bucket's dvc/ prefix. A value the caller set stays."""
+    for name, value in ENVIRONMENT_DEFAULTS.items():
+        os.environ.setdefault(name, value)
+    if BUCKET.fullmatch(bucket):
+        os.environ.setdefault("DVC_REMOTE_URL", f"s3://{bucket}/dvc/")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("phase", choices=PHASES)
@@ -189,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--features-run", default="latest")
     parser.add_argument("--config", type=Path, default=drift_config.CONFIG)
     arguments = parser.parse_args(argv)
+    prepare_environment(arguments.bucket)
     try:
         config, _ = drift_config.load(arguments.config)
         if not re.fullmatch(RUN_ID, arguments.run):
