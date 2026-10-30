@@ -23,6 +23,7 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = str(ROOT / ".venv/bin/python")
+EVIDENTLY_PROGRAM = str(ROOT / ".tools/evidently/bin/python")
 RUN = drift_cases.RUN_ID
 Problems = list[str]
 
@@ -115,8 +116,14 @@ def current_phase_reads_each_monitored_type(folder: Path) -> Problems:
     return problems
 
 
-def run_check(work: Path, extra: list[str] | None = None) -> tuple[int, str]:
-    done = run_command(PYTHON, ["-m", "monitoring.aws_run", "check", f"--run={RUN}", f"--work={work}", *(extra or [])], cwd=ROOT, timeout=300)
+def run_check(work: Path, extra: list[str] | None = None, *, evidently: bool = False) -> tuple[int, str]:
+    """Start the check phase as the real command, under the Evidently environment when the case needs the comparison to run."""
+    done = run_command(
+        EVIDENTLY_PROGRAM if evidently else PYTHON,
+        ["-m", "monitoring.aws_run", "check", f"--run={RUN}", f"--work={work}", *(extra or [])],
+        cwd=ROOT,
+        timeout=300,
+    )
     return done.returncode, done.stdout + done.stderr
 
 
@@ -165,8 +172,7 @@ def check_phase_names_a_missing_phase(folder: Path) -> Problems:
 
 def check_phase_checks_with_evidently(folder: Path) -> Problems:
     work = prepared_workspace(folder)
-    drift_cases.need_evidently()
-    code, text = run_check(work)
+    code, text = run_check(work, evidently=drift_cases.need_evidently())
     path = work / "drift" / RUN / "records" / "drift_HAI_1.json"
     return [] if code == 0 and json.loads(path.read_text())["status"] == "checked" else [f"exit {code}: {text[:300]}"]
 
