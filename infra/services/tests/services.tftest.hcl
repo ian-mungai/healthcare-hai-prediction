@@ -16,6 +16,9 @@ variables {
   control_plane_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
   data_mount_path             = "/mnt/example-data"
   marquez_enabled             = true
+  mlflow_task_role_arn        = "arn:aws:iam::111111111111:role/example-mlflow"
+  mlflow_host_ip              = "10.0.1.20"
+  mlflow_artifact_bucket      = "example-project-data-dev"
 
   log_group_names = {
     postgres = "/example/postgres"
@@ -23,6 +26,7 @@ variables {
     polaris  = "/example/polaris"
     airflow  = "/example/airflow"
     marquez  = "/example/marquez"
+    mlflow   = "/example/mlflow"
   }
 
   ecr_repository_urls = {
@@ -33,6 +37,7 @@ variables {
     airflow       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
     marquez       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
     marquez_web   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
+    mlflow        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/mlflow"
   }
 
   image_digests = {
@@ -43,6 +48,7 @@ variables {
     airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    mlflow        = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
   }
 }
 
@@ -1487,4 +1493,195 @@ run "indirect_eval_of_a_secret_is_caught" {
     condition     = length([for line in output.violations : line if startswith(line, "redis/redis: eval ")]) == 1
     error_message = "An eval that expands a secret through a variable holding its name must fail."
   }
+}
+
+run "mlflow_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      !contains(keys(aws_ecs_service.service), "mlflow")
+      && length(aws_ecs_service.service) == 8
+      && !contains(keys(output.host_ports_reachable_from_jobs), "mlflow")
+      && !contains(output.parameter_names_used, var.mlflow_db_password_name)
+      && !strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "mlflow")
+    )
+    error_message = "MLflow adds no service, no open port, no secret and no database until mlflow_enabled is true."
+  }
+}
+
+run "mlflow_off_needs_no_inputs" {
+  command = plan
+
+  variables {
+    mlflow_task_role_arn   = null
+    mlflow_host_ip         = null
+    mlflow_artifact_bucket = null
+    log_group_names = {
+      postgres = "/example/postgres"
+      redis    = "/example/redis"
+      polaris  = "/example/polaris"
+      airflow  = "/example/airflow"
+      marquez  = "/example/marquez"
+    }
+    image_digests = {
+      postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      redis         = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  }
+
+  assert {
+    condition     = length(aws_ecs_service.service) == 8
+    error_message = "With MLflow off the stack needs no MLflow role, address, bucket, log group or image."
+  }
+}
+
+run "mlflow_service_shape" {
+  command = plan
+
+  variables {
+    mlflow_enabled = true
+  }
+
+  assert {
+    condition = (
+      contains(keys(aws_ecs_service.service), "mlflow")
+      && length(aws_ecs_service.service) == 9
+      && aws_ecs_task_definition.service["mlflow"].task_role_arn == var.mlflow_task_role_arn
+      && aws_ecs_task_definition.service["mlflow"].network_mode == "host"
+      && length(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)) == 1
+    )
+    error_message = "MLflow is one more host service with its own task role."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/mlflow@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].user == "10005:10005"
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].readonlyRootFilesystem
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].linuxParameters.capabilities.drop == ["ALL"]
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].entryPoint == ["mlflow", "server"]
+    )
+    error_message = "MLflow runs by digest as a non-root user on a read-only file system with every capability dropped."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command == [
+        "--host", "0.0.0.0", "--port", "5100", "--workers", "1", "--serve-artifacts",
+        "--artifacts-destination", "s3://example-project-data-dev/mlflow/",
+        "--allowed-hosts", "127.0.0.1:5100,localhost:5100,10.0.1.20:5100",
+      ]
+    )
+    error_message = "MLflow proxies artifacts into the mlflow/ prefix of the data bucket and accepts only its own addresses as Host headers."
+  }
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_BACKEND_STORE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow" })
+      && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_DISABLE_TELEMETRY", value = "true" })
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].secrets == [{ name = "PGPASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/mlflow_db_password" }]
+      && !strcontains(aws_ecs_task_definition.service["mlflow"].container_definitions, "postgresql+psycopg2://mlflow:")
+    )
+    error_message = "The database password reaches MLflow only as a task secret, never in the URI or the command."
+  }
+
+  assert {
+    condition = (
+      strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "CREATE DATABASE mlflow OWNER mlflow")
+      && contains([for secret in jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].secrets : secret.name], "MLFLOW_DB_PASSWORD")
+      && contains(output.parameter_names_used, var.mlflow_db_password_name)
+    )
+    error_message = "The databases container creates the mlflow role and database from the managed password."
+  }
+
+  assert {
+    condition     = output.host_ports_reachable_from_jobs.mlflow == 5100 && output.reserved_memory_mib <= var.host_memory_mib - var.other_services_reserve_mib
+    error_message = "MLflow names its one port for the job security group and still fits the host memory budget."
+  }
+}
+
+run "mlflow_without_role_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_enabled       = true
+    mlflow_task_role_arn = null
+  }
+
+  expect_failures = [var.mlflow_task_role_arn]
+}
+
+run "mlflow_with_shared_role_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_enabled       = true
+    mlflow_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
+  }
+
+  expect_failures = [var.mlflow_task_role_arn]
+}
+
+run "mlflow_without_address_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_enabled = true
+    mlflow_host_ip = "mlflow.example.com"
+  }
+
+  expect_failures = [var.mlflow_host_ip]
+}
+
+run "mlflow_without_bucket_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_enabled         = true
+    mlflow_artifact_bucket = null
+  }
+
+  expect_failures = [var.mlflow_artifact_bucket]
+}
+
+run "mlflow_without_image_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_enabled = true
+    image_digests = {
+      postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      redis         = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  }
+
+  expect_failures = [var.image_digests]
+}
+
+run "mlflow_without_log_group_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_enabled = true
+    log_group_names = {
+      postgres = "/example/postgres"
+      redis    = "/example/redis"
+      polaris  = "/example/polaris"
+      airflow  = "/example/airflow"
+      marquez  = "/example/marquez"
+    }
+  }
+
+  expect_failures = [var.log_group_names]
 }

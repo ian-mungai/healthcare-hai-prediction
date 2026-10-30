@@ -22,12 +22,12 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
 
-  container_component = {
+  container_component = merge({
     "postgres"              = "postgres"
     "postgres_databases"    = "postgres"
     "redis"                 = "redis"
@@ -41,7 +41,7 @@ locals {
     "marquez_web"           = "marquez"
     "host_prepare"          = "airflow"
     "polaris_bootstrap"     = "polaris"
-  }
+  }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {})
 
   log_configuration = {
     for container, component in local.container_component : container => {
@@ -78,6 +78,7 @@ locals {
     airflow_api_secret_key = var.airflow_api_secret_key_name
     redis_password         = var.redis_password_name
     polaris_root_secret    = var.polaris_root_secret_name
+    mlflow_db_password     = var.mlflow_db_password_name
   }
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value
@@ -130,6 +131,15 @@ locals {
           volumes       = {}
         }
       } : key => service if var.marquez_enabled
+    },
+    {
+      for key, service in {
+        mlflow = {
+          task_role_arn = var.mlflow_task_role_arn
+          containers    = local.mlflow_containers
+          volumes       = {}
+        }
+      } : key => service if var.mlflow_enabled
     }
   )
 

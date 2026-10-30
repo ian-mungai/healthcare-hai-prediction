@@ -116,22 +116,27 @@ variable "control_plane_task_role_arn" {
 }
 
 variable "log_group_names" {
-  description = "Foundation output: log group name for each component. The keys postgres, redis, polaris, airflow and marquez are required; components may share a group."
+  description = "Foundation output: log group name for each component. The keys postgres, redis, polaris, airflow and marquez are required, and mlflow when mlflow_enabled is true; components may share a group."
   type        = map(string)
 
   validation {
     condition     = alltrue([for component in ["postgres", "redis", "polaris", "airflow", "marquez"] : contains(keys(var.log_group_names), component)])
     error_message = "Name a log group for postgres, redis, polaris, airflow and marquez."
   }
+
+  validation {
+    condition     = !var.mlflow_enabled || contains(keys(var.log_group_names), "mlflow")
+    error_message = "Name a log group for mlflow, or set mlflow_enabled to false."
+  }
 }
 
 variable "ecr_repository_urls" {
-  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, and marquez and marquez_web when marquez_enabled is true."
+  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, and marquez and marquez_web when marquez_enabled is true, and mlflow when mlflow_enabled is true."
   type        = map(string)
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
     error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs."
@@ -156,12 +161,72 @@ variable "image_digests" {
     condition     = !var.marquez_enabled || alltrue([for image in ["marquez", "marquez_web"] : contains(keys(var.image_digests), image)])
     error_message = "Supply a digest for marquez and marquez_web, or set marquez_enabled to false."
   }
+
+  validation {
+    condition     = !var.mlflow_enabled || contains(keys(var.image_digests), "mlflow")
+    error_message = "Supply a digest for mlflow, or set mlflow_enabled to false."
+  }
 }
 
 variable "marquez_enabled" {
   description = "Run the Marquez services. Their arm64 images are built from source (push_images.py plan) and pushed first; this stays false until their digests are recorded."
   type        = bool
   default     = false
+}
+
+variable "mlflow_enabled" {
+  description = "Run the MLflow tracking service on the host. Training jobs on AWS log runs to it. Its image is built from services/mlflow and pushed first. Set this to false to stop the service: the database and the artifacts stay."
+  type        = bool
+  default     = false
+}
+
+variable "mlflow_task_role_arn" {
+  description = "Foundation output: the task role of MLflow. It may read and write only the mlflow/ prefix of the data bucket. Required when mlflow_enabled is true."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.mlflow_enabled || (var.mlflow_task_role_arn != null && can(regex("^arn:aws:iam::[0-9]{12}:role/", coalesce(var.mlflow_task_role_arn, "none"))))
+    error_message = "Supply an IAM role ARN for MLflow, or set mlflow_enabled to false."
+  }
+
+  validation {
+    condition     = !var.mlflow_enabled || (var.mlflow_task_role_arn != var.control_plane_task_role_arn && var.mlflow_task_role_arn != var.polaris_task_role_arn)
+    error_message = "MLflow must have its own task role, so the control plane and Polaris hold no artifact permission and MLflow holds no lakehouse permission."
+  }
+}
+
+variable "mlflow_host_ip" {
+  description = "Private IPv4 address of the container host. The training jobs call MLflow at this address on port 5100, so MLflow accepts it as a Host header. Required when mlflow_enabled is true."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.mlflow_enabled || can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", coalesce(var.mlflow_host_ip, "none")))
+    error_message = "Supply the private IPv4 address of the host, or set mlflow_enabled to false."
+  }
+}
+
+variable "mlflow_artifact_bucket" {
+  description = "Name of the data bucket. MLflow stores its artifacts under the mlflow/ prefix. Required when mlflow_enabled is true."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.mlflow_enabled || (var.mlflow_artifact_bucket != null && can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", coalesce(var.mlflow_artifact_bucket, "!"))))
+    error_message = "Name the data bucket for MLflow artifacts, or set mlflow_enabled to false."
+  }
+}
+
+variable "mlflow_db_password_name" {
+  description = "Parameter Store SecureString name of the password of the mlflow database role."
+  type        = string
+  default     = "/healthcare_hai_prediction/mlflow_db_password"
+
+  validation {
+    condition     = length(var.mlflow_db_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.mlflow_db_password_name)) && !can(regex("^/(?i:aws|ssm)", var.mlflow_db_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
 }
 
 variable "data_mount_path" {

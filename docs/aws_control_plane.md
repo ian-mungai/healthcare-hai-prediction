@@ -23,12 +23,13 @@ Every service uses host networking, so no task has its own network interface. Th
 | `airflow_dag_processor` | DAG processor | 768 / 1280 | none | `<data>/airflow/logs` |
 | `airflow_triggerer` | triggerer, started with `--skip-serve-logs` | 512 / 768 | none | `<data>/airflow/logs` |
 | `marquez` (off by default) | API, web UI | 896 / 1536 | 127.0.0.1:5000, 5001, 3000 | none |
+| `mlflow` (off by default) | MLflow tracking server, one worker, artifacts proxied into `s3://<data bucket>/mlflow/` | 384 / 640 | 5100 | database `mlflow` in the host Postgres |
 
 Two one-shot task definitions run from the same cluster by hand, with no service (launch them as shown under "Launching a one-shot task"): `host_prepare` (creates the data directories) and `polaris_bootstrap` (bootstraps the Polaris realm). Their hard limits (128 and 1024 MiB) count in the 2 GiB headroom check but not in the reservation budget.
 
 The reservations of the always-on containers add up to 7232 MiB (8128 with Marquez) of the 10752 MiB budget. The budget is the host's 16384 MiB minus 5632 MiB kept for the operating system, the ECS agent and the later services (MLflow, prediction API, Streamlit, Prometheus, Grafana). The limits are first estimates, not measurements. Terraform refuses a plan whose reservations exceed the budget or whose limits leave under 2 GiB for the system.
 
-Only Polaris (8181) and Redis (6379) listen on a non-loopback interface. The foundation security group opens both to the job tasks only. Every other listener is on 127.0.0.1: reach the Airflow and Marquez interfaces with an SSM port-forwarding session, with no inbound rule.
+Only Polaris (8181) and Redis (6379) listen on a non-loopback interface. MLflow (5100) does too while `mlflow_enabled` is true. The foundation security group opens them to the job tasks only. MLflow has no sign-in, so that rule is its only gate. Stop MLflow with `mlflow_enabled = false` and an apply: the service goes, the database and the artifacts stay. MLflow gets a 640 MiB limit and one worker. The limits of all services must leave 2 GiB free on the host. With Marquez on, only 640 MiB of limit remains. Every other listener is on 127.0.0.1: reach the Airflow and Marquez interfaces with an SSM port-forwarding session, with no inbound rule.
 
 Services that bind every interface by default and how each is held to loopback (checked against the 3.3.2 and Quarkus sources):
 
@@ -49,8 +50,9 @@ Services that bind every interface by default and how each is held to loopback (
 | `execution_role_arn` | Pulls ECR images, writes logs, reads the parameters in the secrets table |
 | `polaris_task_role_arn` | Read and write on the `lakehouse/` prefix of the data bucket. Used by Polaris only |
 | `control_plane_task_role_arn` | No data permission. Used by the other services |
-| `log_group_names` | Map with `postgres`, `redis`, `polaris`, `airflow`, `marquez` (groups may repeat) |
-| `ecr_repository_urls` | Map with `postgres`, `redis`, `polaris`, `polaris_admin` and `airflow`, plus `marquez` and `marquez_web` when Marquez is on |
+| `log_group_names` | Map with `postgres`, `redis`, `polaris`, `airflow` and `marquez`, plus `mlflow` when MLflow is on (groups may repeat) |
+| `ecr_repository_urls` | Map with `postgres`, `redis`, `polaris`, `polaris_admin` and `airflow`, plus `marquez` and `marquez_web` when Marquez is on. Add `mlflow` when MLflow is on |
+| `mlflow_task_role_arn`, `mlflow_host_ip`, `mlflow_artifact_bucket` | Needed only while `mlflow_enabled` is true: the MLflow task role (read and write on `mlflow/` only, not shared with another service), the private IPv4 address of the host that jobs call and the data bucket name |
 | `project_tag` | The foundation `project_tag` output: the project name, the same `Project` tag value as the data bucket. Every task definition and service carries it. The budget counts the tagged costs of the services the AWS-first design adds |
 | `data_mount_path` | Absolute mount path of the data volume on the host |
 | `image_digests` | Written by `scripts/infrastructure/push_images.py record` |
@@ -82,6 +84,7 @@ Every secret is a Parameter Store SecureString parameter, read by the execution 
 | `airflow_db_password_name` | `/healthcare_hai_prediction/airflow_db_password` | Postgres role `airflow`, Airflow |
 | `marquez_db_password_name` | `/healthcare_hai_prediction/marquez_db_password` | Postgres role `marquez`, Marquez |
 | `airflow_fernet_key_name`, `airflow_jwt_secret_name`, `airflow_api_secret_key_name` | `/healthcare_hai_prediction/airflow_fernet_key`, `_jwt_secret`, `_api_secret_key` | Airflow |
+| `mlflow_db_password_name` | `/healthcare_hai_prediction/mlflow_db_password` | Postgres role `mlflow` (created while MLflow is on), MLflow |
 | `redis_password_name` | `/healthcare_hai_prediction/redis_password` | Redis and the Feast clients |
 | `polaris_root_secret_name` | `/healthcare_hai_prediction/polaris_root_secret` | The Polaris bootstrap task |
 
