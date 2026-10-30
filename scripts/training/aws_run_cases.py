@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -265,8 +266,108 @@ def extract_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_run_extract_needs_the_catalog_address", needs_catalog)
 
 
+FETCH = Path(__file__).resolve().parents[2] / "services/training/fetch_code.py"
+
+
+class FakeObjects:
+    """A stand-in for the S3 client call the fetch script makes: it serves one local file under one key and counts the downloads."""
+
+    def __init__(self, key: str, source: Path | None) -> None:
+        self.key, self.source, self.downloads = key, source, 0
+
+    def download_file(self, Bucket: str, Key: str, Filename: str) -> None:
+        if Bucket != BUCKET or Key != self.key or self.source is None:
+            raise OSError(f"no such object: {Bucket}/{Key}")
+        self.downloads += 1
+        Path(Filename).write_bytes(self.source.read_bytes())
+
+
+def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN) -> tuple[int, str]:
+    """Run the fetch script in this process against the stand-in client and return its exit code and standard error."""
+    spec = importlib.util.spec_from_file_location("fetch_code", FETCH)
+    if spec is None or spec.loader is None:
+        raise ValueError("the fetch script is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    err = io.StringIO()
+    with environment(CODE_SHA256=sha, RUN_ID=run), contextlib.redirect_stderr(err):
+        return int(module.main(objects, work)), err.getvalue()
+
+
+def fetch_cases(cases: Any, folder: Path) -> None:
+    """The fetch step downloads the run's code archive, checks its hash and unpacks it once."""
+    key = f"lakehouse/run_stage/{RUN}/inputs/code.tar.gz"
+
+    def source(name: str) -> tuple[Path, str]:
+        folder.joinpath(name).mkdir(parents=True)
+        archive, sha = code_archive(folder / name)
+        return archive, sha
+
+    def fetched() -> None:
+        archive, sha = source("fetched")
+        work = folder / "fetched_work"
+        work.mkdir()
+        objects = FakeObjects(key, archive)
+        code, error = fetch(work, sha, objects)
+        require(code == 0 and objects.downloads == 1, f"fetch failed: {code} {error}")
+        require(hashlib.sha256((work / "code.tar.gz").read_bytes()).hexdigest() == sha, "the archive on the workspace differs")
+        require(code_digest.file_entries(work / "code") == code_digest.file_entries(folder / "fetched/code"), "the unpacked code differs from the archive")
+
+    def rerun() -> None:
+        archive, sha = source("rerun")
+        work = folder / "rerun_work"
+        work.mkdir()
+        objects = FakeObjects(key, archive)
+        require(fetch(work, sha, objects)[0] == 0, "the first fetch failed")
+        code, error = fetch(work, sha, objects)
+        require(code == 0 and objects.downloads == 1, f"the second fetch downloaded again or failed: {code} {error}")
+
+    def changed_archive() -> None:
+        archive, _ = source("changed")
+        work = folder / "changed_work"
+        work.mkdir()
+        code, error = fetch(work, "0" * 64, FakeObjects(key, archive))
+        require(code != 0 and "CODE_SHA256" in error, f"{code} {error}")
+        require(not (work / "code").exists() and not (work / "code.tar.gz").exists(), "a refused fetch left code on the workspace")
+
+    def absent_object() -> None:
+        work = folder / "absent_work"
+        work.mkdir(parents=True)
+        code, error = fetch(work, "a" * 64, FakeObjects(key, None))
+        require(code != 0 and "code.tar.gz" in error and not (work / "code").exists(), f"{code} {error}")
+
+    def unsafe_run() -> None:
+        archive, sha = source("unsafe")
+        work = folder / "unsafe_work"
+        work.mkdir()
+        objects = FakeObjects(key, archive)
+        code, error = fetch(work, sha, objects, run="../../other")
+        require(code != 0 and "RUN_ID" in error and objects.downloads == 0, f"{code} {error}")
+
+    def traversal() -> None:
+        work = folder / "traversal_work"
+        work.mkdir(parents=True)
+        hostile = folder / "hostile.tar.gz"
+        with tarfile.open(hostile, "w:gz") as tar:
+            data = io.BytesIO(b"x")
+            info = tarfile.TarInfo("../escaped.txt")
+            info.size = 1
+            tar.addfile(info, data)
+        sha = hashlib.sha256(hostile.read_bytes()).hexdigest()
+        code, error = fetch(work, sha, FakeObjects(key, hostile))
+        require(code != 0 and "unpack" in error and not (folder / "escaped.txt").exists() and not (work.parent / "escaped.txt").exists(), f"{code} {error}")
+
+    cases.check("aws_fetch_downloads_verifies_and_unpacks", fetched)
+    cases.check("aws_fetch_rerun_downloads_nothing", rerun)
+    cases.check("aws_fetch_refuses_changed_archive", changed_archive)
+    cases.check("aws_fetch_names_an_absent_object", absent_object)
+    cases.check("aws_fetch_refuses_a_run_id_with_a_path", unsafe_run)
+    cases.check("aws_fetch_refuses_a_path_leaving_the_workspace", traversal)
+
+
 def scenarios(cases: Any, folder: Path) -> None:
     """Register every AWS runner case."""
     prepare_cases(cases, folder / "prepare")
     train_cases(cases, folder / "train")
     extract_cases(cases, folder / "extract")
+    fetch_cases(cases, folder / "fetch")
