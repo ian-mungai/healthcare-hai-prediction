@@ -35,6 +35,7 @@
     "config/lakehouse/bronze_tables.json",
     "config/lakehouse/removed_tables.json",
     "config/lakehouse/retired_objects.json",
+    "scripts/acquisition/raw_root.py",
     "scripts/acquisition/redownload_controls.py",
     "scripts/acquisition/single_copy.py",
     "scripts/acquisition/source_registry.py",

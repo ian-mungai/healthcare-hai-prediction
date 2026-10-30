@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateRawObjectsOnce",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": "${BUCKET_ARN}/raw/*",
+      "Condition": {"Null": {"s3:if-none-match": "false"}}
+    },
+    {
+      "Sid": "ReadRawObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": "${BUCKET_ARN}/raw/*"
+    },
+    {
+      "Sid": "ListRawVersions",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ["raw/*"]}}
+    }
+  ]
+}

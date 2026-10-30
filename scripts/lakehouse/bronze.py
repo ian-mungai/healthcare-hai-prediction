@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.acquisition.collection_layout import READ_ROOTS, strip_root
+from scripts.acquisition.raw_root import READ_ROOTS, strip_root
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
 

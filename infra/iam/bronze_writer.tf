@@ -7,6 +7,7 @@ locals {
   bronze_job_twins       = ["bronze_e2e", "bronze_dictionary_e2e"]
   bronze_table_map       = jsondecode(file("${path.module}/../../config/lakehouse/bronze_tables.json"))
   bronze_collections     = sort(distinct([for table in local.bronze_table_map.tables : table.collection]))
+  bronze_source_roots    = var.source_raw_root_enabled ? ["", "raw/"] : [""]
   bronze_parameter_names = [var.aws_polaris_bronze_client_id_name, var.aws_polaris_bronze_client_secret_name]
   bronze_parameter_arns  = [for name in local.bronze_parameter_names : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"]
   bronze_storage_inputs = {
@@ -14,8 +15,8 @@ locals {
     TABLE_OBJECT_ARNS   = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
     TABLE_LIST_PREFIXES = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "lakehouse/${name}/*"])
     # The single-copy collector stores payloads at bronze_objects/sha256/<digest>. Manifests name them, so the loader reads them by exact version.
-    SOURCE_OBJECT_ARNS   = jsonencode(concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${collection}/*"], ["${local.bronze_bucket_arn}/bronze_objects/sha256/*"]))
-    SOURCE_LIST_PREFIXES = jsonencode([for collection in local.bronze_collections : "${collection}/*"])
+    SOURCE_OBJECT_ARNS   = jsonencode(flatten([for root in local.bronze_source_roots : concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${root}${collection}/*"], ["${local.bronze_bucket_arn}/${root}bronze_objects/sha256/*"])]))
+    SOURCE_LIST_PREFIXES = jsonencode(flatten([for root in local.bronze_source_roots : [for collection in local.bronze_collections : "${root}${collection}/*"]]))
   }
   bronze_storage_policy = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_storage_inputs)
 }

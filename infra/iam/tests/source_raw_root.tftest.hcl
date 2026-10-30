@@ -1,0 +1,161 @@
+mock_provider "aws" {
+  override_during = plan
+
+  mock_data "aws_ssm_parameter" {
+    defaults = {
+      insecure_value = "ami-0123456789abcdef0"
+    }
+  }
+
+  mock_data "aws_ec2_instance_type_offerings" {
+    defaults = {
+      locations = ["us-west-2a", "us-west-2b", "us-west-2c"]
+    }
+  }
+
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-west-2:111111111111:example_project_budget_alerts_dev"
+    }
+  }
+
+  mock_resource "aws_autoscaling_group" {
+    defaults = {
+      arn = "arn:aws:autoscaling:us-west-2:111111111111:autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/example_project_host_dev"
+    }
+  }
+}
+
+override_resource {
+  target          = aws_launch_template.host
+  override_during = plan
+  values = {
+    id             = "lt-0123456789abcdef0"
+    latest_version = 1
+  }
+}
+
+override_resource {
+  target          = aws_iam_instance_profile.ecs_host
+  override_during = plan
+  values = {
+    arn = "arn:aws:iam::111111111111:instance-profile/example_project_ecs_host_dev"
+  }
+}
+
+variables {
+  aws_region          = "us-west-2"
+  admin_profile       = "example_admin"
+  aws_profile         = "example_project_dev"
+  expected_account_id = "111111111111"
+  project_name        = "example_project"
+  environment         = "dev"
+  data_bucket_name    = "example-data-bucket"
+}
+
+
+run "source_roots_default_to_the_bucket_root_only" {
+  command = plan
+
+  variables {
+    job_writer_e2e_prepared         = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition = (
+      alltrue([for arn in jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource : !strcontains(arn, "/raw/")]) &&
+      jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[2].Resource == ["arn:aws:s3:::example-data-bucket/cms/hospitals/*"]
+    )
+    error_message = "Without the raw root switch, source reads stay at the bucket root."
+  }
+}
+
+run "source_roots_add_raw_for_the_bronze_writer_and_qualification_roles" {
+  command = plan
+
+  variables {
+    source_raw_root_enabled         = true
+    job_writer_e2e_prepared         = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition = (
+      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset(flatten([
+        for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
+        ["arn:aws:s3:::example-data-bucket/${collection}/*", "arn:aws:s3:::example-data-bucket/raw/${collection}/*"]
+      ])) &&
+      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset(flatten([
+        for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
+        ["${collection}/*", "raw/${collection}/*"]
+      ])) &&
+      jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Action == ["s3:GetObjectVersion"]
+    )
+    error_message = "The bronze writer must read each mapped collection at the root and under raw, with version reads only."
+  }
+
+  assert {
+    condition = (
+      toset(jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[2].Resource) == toset([
+        "arn:aws:s3:::example-data-bucket/cms/hospitals/*", "arn:aws:s3:::example-data-bucket/raw/cms/hospitals/*"
+      ]) &&
+      toset(jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset([
+        "cms/hospitals/*", "raw/cms/hospitals/*"
+      ])
+    )
+    error_message = "The qualification role must read its one collection at the root and under raw."
+  }
+}
+
+run "publisher_job_class_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role.job_publisher) == 0 && length(aws_security_group.job_publisher) == 0 && output.publisher_job_contract.prepared == false
+    error_message = "The run 3 publisher class must create nothing by default."
+  }
+}
+
+run "publisher_job_class_writes_raw_once_and_never_deletes" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+  }
+
+  assert {
+    condition     = aws_iam_role.job_publisher[0].name == "example_project_job_publisher_task_dev"
+    error_message = "The publisher class must have its own task role."
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_iam_role_policy.job_publisher[0].policy, "Delete") &&
+      !strcontains(aws_iam_role_policy.job_publisher[0].policy, "lakehouse") &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))]) &&
+      strcontains(aws_iam_role_policy.job_publisher[0].policy, "s3:if-none-match")
+    )
+    error_message = "The publisher role must reach only raw, create objects once and hold no delete action."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.job_publisher_https[0].from_port == 443 &&
+      aws_vpc_security_group_egress_rule.job_publisher_https[0].to_port == 443 &&
+      aws_vpc_security_group_egress_rule.job_publisher_https[0].ip_protocol == "tcp" &&
+      output.publisher_job_contract.host_limit == "application_queue_hosts"
+    )
+    error_message = "Publisher egress is HTTPS only, and the contract states that the host limit is enforced by the queue gate."
+  }
+}

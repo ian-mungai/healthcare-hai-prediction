@@ -7,8 +7,8 @@ locals {
     TEST_LIST_PREFIXES        = jsonencode([for name in local.job_writer_e2e_namespaces : "lakehouse/${name}/*"])
     BRONZE_TEST_OBJECT_ARNS   = jsonencode([for name in local.bronze_test_namespaces : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
     BRONZE_TEST_LIST_PREFIXES = jsonencode([for name in local.bronze_test_namespaces : "lakehouse/${name}/*"])
-    SOURCE_OBJECT_ARNS        = jsonencode(["${local.bronze_bucket_arn}/${var.bronze_qualification_collection}/*"])
-    SOURCE_LIST_PREFIXES      = jsonencode(["${var.bronze_qualification_collection}/*"])
+    SOURCE_OBJECT_ARNS        = jsonencode([for root in local.bronze_source_roots : "${local.bronze_bucket_arn}/${root}${var.bronze_qualification_collection}/*"])
+    SOURCE_LIST_PREFIXES      = jsonencode([for root in local.bronze_source_roots : "${root}${var.bronze_qualification_collection}/*"])
     E2E_PARAMETER_ARNS        = jsonencode([for name in local.job_writer_e2e_parameters : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"])
   }
 }

@@ -23,3 +23,10 @@ variable "bronze_qualification_collection" {
     error_message = "Use a mapped publisher/collection name or leave the unprepared candidate empty."
   }
 }
+
+variable "source_raw_root_enabled" {
+  description = "Let the bronze writer and qualification roles read each mapped source collection under raw/ as well as at the bucket root. Existing root objects stay readable. Off until the owner approves the raw root route."
+  type        = bool
+  default     = false
+  nullable    = false
+}

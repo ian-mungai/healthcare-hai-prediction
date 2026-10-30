@@ -6,13 +6,12 @@ import os
 from pathlib import Path
 
 from scripts.acquisition.dataset_layout import dataset_id
+from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_json
 from scripts.acquisition.transport import CaptureError
 
 LAYOUT_PATH = REPO_ROOT / "config/acquisition/collection_layout.json"
-RAW_ROOT = "raw/"
 CAPTURE_ROOT_VARIABLE = "HAI_CAPTURE_ROOT"
-READ_ROOTS = ("", RAW_ROOT)
 
 
 def collection_routes(registry: dict, layout: dict) -> dict[str, dict]:
@@ -44,11 +43,6 @@ def capture_root() -> str:
     if root not in {"", RAW_ROOT}:
         raise CaptureError(f"{CAPTURE_ROOT_VARIABLE} must be empty or {RAW_ROOT}.")
     return root
-
-
-def strip_root(key: str) -> str:
-    """Return the key without a leading read root, for code that reads the publisher and collection by position."""
-    return key.removeprefix(RAW_ROOT)
 
 
 def object_prefix(route: dict, folder: str, role: str, release: str, run: str, evidence_only: bool) -> str:

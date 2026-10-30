@@ -8,6 +8,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol
 
+from scripts.acquisition.raw_root import READ_ROOTS
+
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ROOT / "config/lakehouse/aws_bronze_templates.json"
 GRANTS = ROOT / "config/lakehouse/aws_bronze_grants.json"
@@ -188,11 +190,11 @@ def plan(binding: Binding, job: str, *, tables: list[str], table_map: dict[str, 
     if fixture_action is not None and (job != "checksum_fixture" or fixture_action not in {"create", "drop"}):
         raise BindingError("fixture action is valid only for the checksum fixture")
     collection_set = {entry["collection"] for entry in mapped.values()}
-    source_prefixes = tuple(sorted(f"{collection}/" for collection in collection_set))
+    source_prefixes = tuple(f"{root}{collection}/" for collection in sorted(collection_set) for root in READ_ROOTS)
     if binding.mode == "aws_qualify":
         if binding.source_collection not in collection_set or any(mapped[name]["collection"] != binding.source_collection for name in tables):
             raise BindingError("qualification source collection differs from the one approved collection")
-        source_prefixes = (f"{binding.source_collection}/",)
+        source_prefixes = tuple(f"{root}{binding.source_collection}/" for root in READ_ROOTS)
     bronze, dictionary, smoke, fixture = binding.namespaces
     targets = dict(zip(("bronze", "dictionary", "smoke", "fixture"), binding.namespaces, strict=True))
     argv: list[str]

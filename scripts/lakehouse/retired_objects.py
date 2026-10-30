@@ -22,7 +22,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.collection_layout import READ_ROOTS, strip_root
+from scripts.acquisition.raw_root import READ_ROOTS, strip_root
 from scripts.lakehouse.bronze import RETIRED, BronzeError
 from scripts.lakehouse.catalog import deployment
 
