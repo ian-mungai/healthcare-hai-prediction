@@ -1,7 +1,8 @@
 """Run the synthetic E2E cases of the Streamlit page and save a repeatable local report.
 
-The client cases always run. The page cases run when Streamlit's own test harness is installed. Without it they are reported as blocked, and ``--require-app``
-turns that into a failure, which is how the lead's heavy run in the page image must call it.
+The client cases always run. The page cases run when Streamlit's own test harness is installed. Without it the page is unchecked: the report's verdict is
+``incomplete`` instead of ``pass`` and the runner says so on both output streams. It still exits zero so that a host without Streamlit can run the client
+cases, and ``--require-app`` turns the missing harness into a failure, which is how the heavy run in the page image must call it.
 """
 
 from __future__ import annotations
@@ -48,29 +49,35 @@ def main() -> int:
 
         cases |= app_cases.CASES
         app_state = "ran"
-    selected = args.case
-    report = run_cases(cases, selected)
-    blocked = app_state != "ran" and not selected
+    report = run_cases(cases, args.case)
+    page_run = app_state == "ran"
     report |= {
         "schema": 1,
         "started": started,
         "classification": "Synthetic",
         "mode": "standins",
-        "page_cases": app_state,
+        "page_cases": "ran" if page_run else "NOT RUN",
+        "page_cases_reason": "" if page_run else app_state,
         "limits": (
             "The stand-in API speaks real HTTP on the loopback address but is not the model API. "
             "The page cases need Streamlit's test harness, which runs a script in the process and opens no browser. No real API, key or AWS call is used."
         ),
     }
-    if blocked and args.require_app:
-        report["verdict"] = "fail"
+    if not page_run:
+        report["verdict"] = "fail" if args.require_app else ("incomplete" if report["verdict"] == "pass" else report["verdict"])
     (args.output / "report.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
     for result in report["cases"]:
         for name in result["failed"]:
             sys.stderr.write(f"FAIL {result['case']}: {name}\n")
     passed = sum(item["verdict"] == "pass" for item in report["cases"])
-    sys.stdout.write(json.dumps({"passed": passed, "failed": len(report["cases"]) - passed, "page_cases": app_state}) + "\n")
-    return int(report["verdict"] != "pass")
+    if not page_run:
+        sys.stderr.write(
+            "PAGE CASES NOT RUN: Streamlit is not installed here, so the page itself is unchecked. Run this with --require-app in the page image.\n"
+        )
+    sys.stdout.write(
+        json.dumps({"passed": passed, "failed": len(report["cases"]) - passed, "page_cases": report["page_cases"], "verdict": report["verdict"]}) + "\n"
+    )
+    return int(report["verdict"] not in ("pass", "incomplete"))
 
 
 if __name__ == "__main__":

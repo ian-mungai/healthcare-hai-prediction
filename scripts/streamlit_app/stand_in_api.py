@@ -17,6 +17,7 @@ from typing import Any
 
 KEY = "sk-test-streamlit-0123456789abcdef-do-not-log"
 MODEL_VERSION = "7"
+SENT = "<sent>"
 
 
 @dataclass
@@ -119,15 +120,17 @@ class StandInApi:
                 behavior = Behavior(body=good_answer(payload, headers.get("x-request-id", "none")))
             except (ValueError, KeyError, TypeError):
                 behavior = Behavior(status=422, body={"error": "invalid"})
-        self.send(handler, behavior)
+        self.send(handler, behavior, headers.get("x-request-id", ""))
 
-    def send(self, handler: BaseHTTPRequestHandler, behavior: Behavior) -> None:
+    def send(self, handler: BaseHTTPRequestHandler, behavior: Behavior, sent_id: str = "") -> None:
         if behavior.hang:
             self._release.wait(60)
             return
         if behavior.delay:
             time.sleep(behavior.delay)
         body = behavior.body
+        if isinstance(body, dict) and body.get("request_id") == SENT:
+            body = body | {"request_id": sent_id}
         raw = body if isinstance(body, bytes) else json.dumps(body if body is not None else {}).encode()
         head = f"HTTP/1.1 {behavior.status} Stand-in\r\nContent-Type: application/json\r\nContent-Length: {len(raw)}\r\nConnection: close\r\n"
         head += "".join(f"{name}: {value}\r\n" for name, value in behavior.headers.items()) + "\r\n"
