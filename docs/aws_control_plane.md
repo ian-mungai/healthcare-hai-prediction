@@ -88,6 +88,7 @@ Every secret is a Parameter Store SecureString parameter, read by the execution 
 | `mlflow_admin_password_name` | `/healthcare_hai_prediction/mlflow_admin_password` | The MLflow administrator account. Only the MLflow service, the training task and the owner hold it |
 | `redis_password_name` | `/healthcare_hai_prediction/redis_password` | Redis and the Feast clients |
 | `polaris_root_secret_name` | `/healthcare_hai_prediction/polaris_root_secret` | The Polaris bootstrap task |
+| `grafana_admin_password_name` | `/healthcare_hai_prediction/grafana_admin_password` | Grafana, only while `monitoring_enabled` is true ([monitoring](monitoring.md)) |
 
 A plan test (`infra/services/tests/flow`) reads every command line of a container that receives a secret and follows each variable that receives it through assignments, `printf`, `echo`, redirections and here-documents. Any write to a file, any use as a program argument and any print to the log fails the test. Every container also sets hard and soft `core` limits of 0 and every health check stays inside the ECS limits (1 to 10 retries), so a long start-up is covered by the interval and start period.
 
@@ -131,14 +132,14 @@ The stand-in E2E is `.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup
 
 | Need | Who | Why |
 | --- | --- | --- |
-| `ssm:GetParameters` for the execution role on the eight parameter ARNs in the secrets table (`output.parameter_arns_used`) and no other action. It grants no `kms:Decrypt` (the AWS managed key `aws/ssm` needs none, but a customer managed key would) and no Secrets Manager action | Foundation IAM | The task definitions inject the parameters. See [task execution role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html#task-execution-secrets) |
+| `ssm:GetParameters` for the execution role on the nine parameter ARNs in the secrets table (`output.parameter_arns_used`) and no other action. It grants no `kms:Decrypt` (the AWS managed key `aws/ssm` needs none, but a customer managed key would) and no Secrets Manager action | Foundation IAM | The task definitions inject the parameters. See [task execution role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html#task-execution-secrets) |
 | Parameters `/healthcare_hai_prediction/redis_password` and `/healthcare_hai_prediction/polaris_root_secret` | Secret store (the project profile, through `secret_store.MANAGED`) | Both are new. A task that injects a missing parameter does not start |
 | Host security group closed to the internet, with 8181 and 6379 open only to the job security group | Foundation network | These are the only non-loopback listeners |
 | `ecs:RegisterTaskDefinition`, `ecs:CreateService`, `ecs:UpdateService`, `ecs:DescribeServices`, `ecs:TagResource` and `iam:PassRole` on the three roles | Foundation IAM | The apply creates the task definitions and services |
 | Host firewall rule that blocks the instance metadata service for every non-root user | Foundation host | Keeps the containers away from the host role's credentials (see "Users") |
 | `kernel.core_pattern` set to a plain file path that does not start with a pipe character (for example a root-only directory), with `fs.suid_dumpable=0` | Foundation host | Every container sets hard and soft `core` ulimits of 0, but Linux ignores that limit when the pattern pipes the dump to a program. A native or JVM crash must not write injected credentials from memory to a file |
 | ECS agent with host-network task roles enabled (`ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST`, believed to default to true, not verified) | Foundation host | Task roles must work under host networking |
-| Repositories `polaris_admin` (and `marquez`, `marquez_web` when Marquez is on) | Foundation registry | They already exist in the foundation's list |
+| Repositories `polaris_admin` (and `marquez`, `marquez_web` when Marquez is on, `prometheus`, `grafana` and `statsd_exporter` when `monitoring_enabled` is true) | Foundation registry | They already exist in the foundation's list |
 
 ## Images
 
