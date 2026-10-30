@@ -29,7 +29,7 @@
     {
       "Sid": "LocateBucket",
       "Effect": "Allow",
-      "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
+      "Action": ["s3:GetBucketLocation"],
       "Resource": ["${BUCKET_ARN}"]
     },
     {

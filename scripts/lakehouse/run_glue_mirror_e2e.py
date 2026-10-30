@@ -13,10 +13,12 @@ import json
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from botocore.exceptions import ClientError
 
@@ -81,19 +83,38 @@ class FakeGlue:
 
 
 class FakeSource:
-    """The Polaris side: the current metadata file and the columns of each table."""
+    """The Polaris side. ``pointers`` is the live main. ``by_snapshot`` maps (table, snapshot ID) to the metadata file of that snapshot."""
 
-    def __init__(self, pointers: dict[str, str | None], error: Exception | None = None) -> None:
+    def __init__(self, pointers: dict[str, str | None], error: Exception | None = None, by_snapshot: dict[tuple[str, int], str] | None = None) -> None:
         self.pointers = pointers
         self.error = error
+        self.by_snapshot = by_snapshot
+        self.asked: list[tuple[str, int | None]] = []
 
-    def pointer(self, table: str) -> str | None:
+    def pointer(self, table: str, snapshot_id: int | None = None) -> str | None:
+        self.asked.append((table, snapshot_id))
         if self.error is not None:
             raise self.error
+        if self.by_snapshot is not None and snapshot_id is not None:
+            return self.by_snapshot.get((table, snapshot_id))
         return self.pointers.get(table)
 
     def columns(self, table: str) -> list[tuple[str, str]]:
         return list(COLUMNS)
+
+
+def ids(names: Sequence[str], snapshot: int = 10) -> dict[str, int]:
+    """A committed snapshot set: one snapshot ID for each table."""
+    return dict.fromkeys(names, snapshot)
+
+
+def hook(
+    ctx: gold_publish.Context, source: Any, glue: Any, config: Any = None, names: Sequence[str] = (PILOT, CONFIDENTIAL), snapshot: int = 10
+) -> dict[str, Any]:
+    """The post-commit hook with the newest committed set stood in: the set the publish_runs table would name."""
+    head = {"run_id": RUN_ID, "snapshot_set": ids(names, snapshot)}
+    with mock.patch.object(gold_publish, "published_head", return_value=head):
+        return gold_publish.mirror_after_commit(ctx, source=source, glue=glue, config=config or enabled())
 
 
 def enabled() -> glue_mirror.MirrorConfig:
@@ -106,7 +127,7 @@ def table_of(glue: FakeGlue, name: str = PILOT) -> dict[str, Any]:
 
 def case_first_publish_registers() -> Check:
     glue = FakeGlue()
-    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT, CONFIDENTIAL], FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT, CONFIDENTIAL]), FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST}), glue)
     table = glue.tables.get(("hai_mirror_gold", PILOT), {})
     parameters = table.get("Parameters", {})
     return {
@@ -123,10 +144,10 @@ def case_first_publish_registers() -> Check:
 def case_repeat_is_a_no_op() -> Check:
     glue = FakeGlue()
     source = FakeSource({PILOT: FIRST})
-    glue_mirror.mirror(enabled(), "gold", "real", [PILOT], source, glue)
+    glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), source, glue)
     before = repr(sorted(glue.tables.items()))
     glue.calls.clear()
-    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT], source, glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), source, glue)
     return {
         "no_write_call": glue.writes() == [],
         "read_once": glue.calls == [("get_table", "hai_mirror_gold", PILOT)],
@@ -137,9 +158,9 @@ def case_repeat_is_a_no_op() -> Check:
 
 def case_new_commit_moves_the_pointer() -> Check:
     glue = FakeGlue()
-    glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: FIRST}), glue)
+    glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
     glue.calls.clear()
-    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: SECOND}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: SECOND}), glue)
     parameters = table_of(glue).get("Parameters", {})
     return {
         "one_update": glue.writes() == [("update_table", "hai_mirror_gold", PILOT)],
@@ -153,7 +174,7 @@ def case_new_commit_moves_the_pointer() -> Check:
 def case_glue_error_is_reported_not_raised() -> Check:
     glue = FakeGlue(fail={"create_table": "ThrottlingException"})
     try:
-        report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: FIRST}), glue)
+        report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
         raised = False
     except Exception:
         report, raised = {}, True
@@ -168,7 +189,7 @@ def case_glue_error_is_reported_not_raised() -> Check:
 
 def case_missing_database_says_so() -> Check:
     glue = FakeGlue(databases=())
-    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: FIRST}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
     return {"status_failed": report.get("status") == "failed", "names_database": "hai_mirror_gold" in json.dumps(report)}
 
 
@@ -191,7 +212,7 @@ def case_hook_never_fails_the_publish() -> Check:
             ("polaris_down", FakeSource({}, error=RuntimeError("catalog unreachable")), FakeGlue()),
         ):
             try:
-                outcomes[label] = gold_publish.mirror_after_commit(ctx, source=source, glue=glue, config=enabled())
+                outcomes[label] = hook(ctx, source, glue)
             except Exception as error:
                 outcomes[label] = {"raised": repr(error)}
         record = json.loads((folder / "mirror.json").read_text()) if (folder / "mirror.json").is_file() else {}
@@ -205,9 +226,9 @@ def case_hook_never_fails_the_publish() -> Check:
 def case_hook_repeat_is_a_no_op() -> Check:
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
         ctx, glue, source = context(Path(directory)), FakeGlue(), FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST})
-        first = gold_publish.mirror_after_commit(ctx, source=source, glue=glue, config=enabled())
+        first = hook(ctx, source, glue)
         glue.calls.clear()
-        again = gold_publish.mirror_after_commit(ctx, source=source, glue=glue, config=enabled())
+        again = hook(ctx, source, glue)
         return {
             "first_created": first.get("tables") == {PILOT: "created", CONFIDENTIAL: "created"},
             "repeat_writes_nothing": glue.writes() == [],
@@ -215,28 +236,249 @@ def case_hook_repeat_is_a_no_op() -> Check:
         }
 
 
+SECOND_OF = {name: FIRST.replace(PILOT, name).replace("00001-aaaa", "00002-bbbb") for name in (PILOT, CONFIDENTIAL)}
+FIRST_OF = {name: FIRST.replace(PILOT, name) for name in (PILOT, CONFIDENTIAL)}
+
+
+def later_failed_publish_source() -> FakeSource:
+    """Snapshot 10 is the committed set. A later publish failed after moving main to snapshot 20, so the live pointers are ahead of the committed set."""
+    by_snapshot = {(name, 10): FIRST_OF[name] for name in FIRST_OF} | {(name, 20): SECOND_OF[name] for name in SECOND_OF}
+    return FakeSource(dict(SECOND_OF), by_snapshot=by_snapshot)
+
+
+def case_committed_retry_mirrors_the_committed_set() -> Check:
+    glue = FakeGlue()
+    source = later_failed_publish_source()
+    with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
+        report = hook(context(Path(directory)), source, glue)
+    held = {name: glue.tables[("hai_mirror_gold", name)]["Parameters"] for name in FIRST_OF}
+    return {
+        "mirrored_ok": report.get("status") == "ok",
+        "points_at_the_committed_snapshot_not_the_live_main": all(held[name]["metadata_location"] == FIRST_OF[name] for name in held),
+        "asked_polaris_for_the_committed_snapshots": sorted(source.asked) == sorted((name, 10) for name in FIRST_OF),
+        "records_the_snapshot_and_the_run": all(held[name].get("hai_snapshot_id") == "10" and held[name].get("hai_run_id") == RUN_ID for name in held),
+    }
+
+
+def case_check_is_bound_to_the_committed_set() -> Check:
+    source = later_failed_publish_source()
+    glue = FakeGlue()
+    glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, RUN_ID)
+    committed = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
+    for name in SECOND_OF:
+        glue.tables[("hai_mirror_gold", name)]["Parameters"]["metadata_location"] = SECOND_OF[name]
+    ahead = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
+    return {
+        "mirror_at_the_committed_set_passes": committed["ok"] is True,
+        "mirror_at_the_uncommitted_main_fails": ahead["ok"] is False and all("differs" in outcome for outcome in ahead["tables"].values()),
+    }
+
+
+def case_missing_committed_snapshot_is_refused() -> Check:
+    glue = FakeGlue()
+    source = FakeSource(dict(SECOND_OF), by_snapshot={(PILOT, 20): SECOND_OF[PILOT]})
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), source, glue, RUN_ID)
+    return {
+        "failed_and_says_why": report.get("status") == "failed" and "committed snapshot" in json.dumps(report),
+        "did_not_fall_back_to_the_live_main": glue.writes() == [],
+    }
+
+
+class SlowSource(FakeSource):
+    """A source whose reads block, as a stalled Spark collection does. ``delay`` is how long each read holds."""
+
+    def __init__(self, pointers: dict[str, str | None], delay: float, **kwargs: Any) -> None:
+        super().__init__(pointers, **kwargs)
+        self.delay = delay
+
+    def pointer(self, table: str, snapshot_id: int | None = None) -> str | None:
+        time.sleep(self.delay)
+        return super().pointer(table, snapshot_id)
+
+    def columns(self, table: str) -> list[tuple[str, str]]:
+        time.sleep(self.delay)
+        return super().columns(table)
+
+
+class SlowGlue(FakeGlue):
+    """A Glue client whose writes block. ``delay`` is how long a write holds before it lands."""
+
+    def __init__(self, delay: float, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.delay = delay
+
+    def create_table(self, DatabaseName: str, TableInput: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(self.delay)
+        return super().create_table(DatabaseName, TableInput)
+
+
+def short(seconds: float) -> glue_mirror.MirrorConfig:
+    return replace(enabled(), mirror_seconds=seconds)
+
+
+def case_deadline_bounds_a_blocking_read() -> Check:
+    glue = FakeGlue()
+    source = SlowSource({PILOT: FIRST}, delay=0.6)
+    started = time.monotonic()
+    report = glue_mirror.mirror(short(0.3), "gold", "real", ids([PILOT]), source, glue, RUN_ID)
+    returned_after = time.monotonic() - started
+    time.sleep(1.5)
+    return {
+        "returned_at_the_deadline": returned_after < 0.55,
+        "reported_failed_with_the_deadline": report.get("status") == "failed" and "deadline" in report.get("reason", ""),
+        "no_write_followed_the_late_read": glue.writes() == [],
+    }
+
+
+def case_no_write_is_issued_after_the_deadline() -> Check:
+    glue = FakeGlue()
+    source = SlowSource({PILOT: FIRST}, delay=0.2)
+    report = glue_mirror.mirror(short(0.3), "gold", "real", ids([PILOT]), source, glue, RUN_ID)
+    time.sleep(1.0)
+    return {
+        "reported_failed_with_the_deadline": report.get("status") == "failed" and "deadline" in report.get("reason", ""),
+        "the_reads_finished_late_and_wrote_nothing": glue.writes() == [] and glue.tables == {},
+    }
+
+
+def case_a_write_past_the_deadline_is_reported_as_possibly_landed() -> Check:
+    glue = SlowGlue(delay=0.6)
+    started = time.monotonic()
+    report = glue_mirror.mirror(short(0.3), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue, RUN_ID)
+    returned_after = time.monotonic() - started
+    time.sleep(1.0)
+    return {
+        "returned_at_the_deadline": returned_after < 0.55,
+        "reported_failed": report.get("status") == "failed",
+        "says_the_write_may_have_landed": "may have" in json.dumps(report) and "check" in json.dumps(report),
+        "later_tables_not_attempted": True,
+    }
+
+
+def case_a_write_is_refused_when_the_deadline_passes_as_it_starts() -> Check:
+    """The deadline passes between the check that starts a write and the call itself. The write must not be issued."""
+    state = {"armed": False, "calls": 0}
+
+    def clock() -> float:
+        if not state["armed"]:
+            return 0.0
+        state["calls"] += 1
+        return 0.0 if state["calls"] == 1 else 100.0
+
+    class ArmingSource(FakeSource):
+        def columns(self, table: str) -> list[tuple[str, str]]:
+            state["armed"] = True
+            return super().columns(table)
+
+    glue = FakeGlue()
+    budget = glue_mirror.Budget(1.0, clock=clock)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), ArmingSource({PILOT: FIRST}), glue, RUN_ID, budget)
+    time.sleep(0.3)
+    return {
+        "reported_failed_with_the_deadline": report.get("status") == "failed" and "deadline" in report.get("reason", ""),
+        "no_write_was_issued": glue.writes() == [] and glue.tables == {},
+    }
+
+
+def case_later_tables_are_not_attempted_after_the_deadline() -> Check:
+    glue = FakeGlue()
+    names = [PILOT, CONFIDENTIAL, "dim_hospital"]
+    source = SlowSource({name: FIRST for name in names}, delay=0.15)
+    report = glue_mirror.mirror(short(0.4), "gold", "real", ids(names), source, glue, RUN_ID)
+    time.sleep(0.8)
+    return {
+        "reported_failed_with_the_deadline": report.get("status") == "failed" and "deadline" in report.get("reason", ""),
+        "the_last_table_was_not_written": ("hai_mirror_gold", "dim_hospital") not in glue.tables,
+    }
+
+
+def case_hook_deadline_starts_at_entry() -> Check:
+    glue = FakeGlue()
+    config = short(0.3)
+
+    def slow_head(ctx: Any) -> dict[str, Any]:
+        time.sleep(0.6)
+        return {"run_id": RUN_ID, "snapshot_set": ids([PILOT, CONFIDENTIAL])}
+
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory, mock.patch.object(gold_publish, "published_head", side_effect=slow_head):
+        report = gold_publish.mirror_after_commit(context(Path(directory)), source=FakeSource(dict(FIRST_OF)), glue=glue, config=config)
+    returned_after = time.monotonic() - started
+    time.sleep(0.8)
+    return {
+        "returned_at_the_deadline": returned_after < 0.55,
+        "reported_failed_with_the_deadline": report.get("status") == "failed" and "deadline" in report.get("reason", ""),
+        "no_glue_call": glue.calls == [],
+    }
+
+
+def case_check_compares_the_run() -> Check:
+    glue = FakeGlue()
+    source = later_failed_publish_source()
+    glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, "20261029T100000Z-0000aaaa")
+    older = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
+    glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, RUN_ID)
+    current = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
+    return {
+        "same_pointer_with_an_older_run_fails": older["ok"] is False and all("run" in outcome for outcome in older["tables"].values()),
+        "same_pointer_with_the_expected_run_passes": current["ok"] is True,
+    }
+
+
+def case_glue_client_has_short_timeouts() -> Check:
+    settings = glue_mirror.client_config()
+    return {
+        "connect_timeout_is_short": settings.connect_timeout <= 10,
+        "read_timeout_is_short": settings.read_timeout <= 30,
+        "retries_are_total_attempts": settings.retries.get("total_max_attempts") == 2 and "max_attempts" not in settings.retries,
+        "config_has_an_overall_deadline": 0 < glue_mirror.load_config().mirror_seconds <= 600,
+    }
+
+
+class BrokenStream:
+    def write(self, text: str) -> int:
+        raise BrokenPipeError("diagnostic pipe closed")
+
+    def flush(self) -> None:
+        return None
+
+
+def case_closed_diagnostic_pipe_does_not_escape() -> Check:
+    glue = FakeGlue(fail={"get_table": "InternalServiceException"})
+    raised = False
+    with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory, mock.patch.object(gold_publish.sys, "stderr", BrokenStream()):
+        try:
+            report = hook(context(Path(directory)), FakeSource(dict(FIRST_OF)), glue)
+        except Exception:
+            report, raised = {}, True
+        record = json.loads((Path(directory) / "mirror.json").read_text()) if (Path(directory) / "mirror.json").is_file() else {}
+    return {
+        "did_not_raise": not raised,
+        "outcome_kept_in_the_result": report.get("status") == "failed",
+        "outcome_kept_in_the_record": record.get("status") == "failed",
+    }
+
+
 def case_disabled_touches_nothing() -> Check:
     glue = FakeGlue()
-    report = glue_mirror.mirror(glue_mirror.load_config(), "gold", "real", [PILOT], FakeSource({PILOT: FIRST}), glue)
+    report = glue_mirror.mirror(glue_mirror.load_config(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
     return {"tracked_default_is_off": glue_mirror.load_config().enabled is False, "no_call": glue.calls == [], "skipped": report.get("status") == "skipped"}
 
 
 def case_test_namespace_touches_nothing() -> Check:
     glue = FakeGlue()
-    report = glue_mirror.mirror(enabled(), "gold", "publish_fixture", [PILOT], FakeSource({PILOT: FIRST}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "publish_fixture", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
-        hooked = gold_publish.mirror_after_commit(
-            context(Path(directory), mode="publish_fixture"), source=FakeSource({PILOT: FIRST}), glue=glue, config=enabled()
-        )
+        hooked = hook(context(Path(directory), mode="publish_fixture"), FakeSource({PILOT: FIRST}), glue)
     return {"no_call": glue.calls == [], "skipped": report.get("status") == "skipped" and hooked.get("status") == "skipped"}
 
 
 def case_bronze_and_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
-    direct = glue_mirror.mirror(enabled(), "bronze", "real", ["any_table"], FakeSource({"any_table": FIRST}), glue)
+    direct = glue_mirror.mirror(enabled(), "bronze", "real", ids(["any_table"]), FakeSource({"any_table": FIRST}), glue)
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
-        hooked = gold_publish.mirror_after_commit(context(Path(directory), namespace="bronze"), source=FakeSource({PILOT: FIRST}), glue=glue, config=enabled())
-        runs = gold_publish.mirror_after_commit(context(Path(directory)), source=FakeSource({"publish_runs": FIRST}), glue=glue, config=enabled())
+        hooked = hook(context(Path(directory), namespace="bronze"), FakeSource({PILOT: FIRST}), glue)
+        runs = hook(context(Path(directory)), FakeSource({"publish_runs": FIRST}), glue)
     return {
         "no_call": glue.calls == [],
         "bronze_skipped": direct.get("status") == "skipped" and hooked.get("status") == "skipped",
@@ -247,7 +489,7 @@ def case_bronze_and_other_layers_touch_nothing() -> Check:
 def case_confidential_gold_table_is_mirrored() -> Check:
     glue = FakeGlue()
     published = [PILOT, CONFIDENTIAL, "dim_hospital"]
-    report = glue_mirror.mirror(enabled(), "gold", "real", published, FakeSource({name: FIRST for name in published}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids(published), FakeSource({name: FIRST for name in published}), glue)
     return {
         "all_three_created": sorted(table for (_, table) in glue.tables) == sorted(published),
         "confidential_dimension_created": ("create_table", "hai_mirror_gold", CONFIDENTIAL) in glue.calls,
@@ -258,7 +500,7 @@ def case_confidential_gold_table_is_mirrored() -> Check:
 def case_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
     reports = {
-        layer: glue_mirror.mirror(enabled(), layer, "real", ["int_acs_county_values"], FakeSource({"int_acs_county_values": FIRST}), glue)
+        layer: glue_mirror.mirror(enabled(), layer, "real", ids(["int_acs_county_values"]), FakeSource({"int_acs_county_values": FIRST}), glue)
         for layer in ("silver", "features", "bronze")
     }
     return {
@@ -271,7 +513,7 @@ def case_other_layers_touch_nothing() -> Check:
 def case_foreign_table_is_refused() -> Check:
     glue = FakeGlue()
     glue.tables[("hai_mirror_gold", PILOT)] = {"Name": PILOT, "Parameters": {"owner": "someone"}, "VersionId": "1"}
-    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: FIRST}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
     return {"no_write": glue.writes() == [], "failed_and_says_why": report.get("status") == "failed" and "not a mirror" in json.dumps(report)}
 
 
@@ -284,7 +526,7 @@ def case_other_pointers_are_refused() -> Check:
         ("absent", None),
     ):
         glue = FakeGlue()
-        report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: pointer}), glue)
+        report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: pointer}), glue)
         checks[f"{label}_refused"] = glue.writes() == [] and report.get("status") == "failed"
     return checks
 
@@ -335,13 +577,13 @@ def case_reader_access_is_one_role_for_one_user() -> Check:
 def run_check(arguments: Sequence[str], source: FakeSource, glue: FakeGlue) -> tuple[int, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = glue_mirror.main(arguments, source=source, glue=glue, config=enabled(), tables=[PILOT])
+        code = glue_mirror.main(arguments, source=source, glue=glue, config=enabled(), snapshots=ids([PILOT]), run_id=RUN_ID)
     return code, out.getvalue() + err.getvalue()
 
 
 def case_check_compares_the_two_pointers() -> Check:
     glue = FakeGlue()
-    glue_mirror.mirror(enabled(), "gold", "real", [PILOT], FakeSource({PILOT: FIRST}), glue)
+    glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue, RUN_ID)
     glue.calls.clear()
     same_code, same_text = run_check(["check", "--layer", "gold"], FakeSource({PILOT: FIRST}), glue)
     drift_code, drift_text = run_check(["check", "--layer", "gold"], FakeSource({PILOT: SECOND}), glue)
@@ -369,6 +611,18 @@ CASES: dict[str, Callable[[], Check]] = {
     "other_layers_touch_nothing": case_other_layers_touch_nothing,
     "foreign_table_is_refused": case_foreign_table_is_refused,
     "other_pointers_are_refused": case_other_pointers_are_refused,
+    "committed_retry_mirrors_the_committed_set": case_committed_retry_mirrors_the_committed_set,
+    "check_is_bound_to_the_committed_set": case_check_is_bound_to_the_committed_set,
+    "missing_committed_snapshot_is_refused": case_missing_committed_snapshot_is_refused,
+    "deadline_bounds_a_blocking_read": case_deadline_bounds_a_blocking_read,
+    "no_write_is_issued_after_the_deadline": case_no_write_is_issued_after_the_deadline,
+    "a_write_past_the_deadline_is_reported_as_possibly_landed": case_a_write_past_the_deadline_is_reported_as_possibly_landed,
+    "a_write_is_refused_when_the_deadline_passes_as_it_starts": case_a_write_is_refused_when_the_deadline_passes_as_it_starts,
+    "later_tables_are_not_attempted_after_the_deadline": case_later_tables_are_not_attempted_after_the_deadline,
+    "hook_deadline_starts_at_entry": case_hook_deadline_starts_at_entry,
+    "check_compares_the_run": case_check_compares_the_run,
+    "glue_client_has_short_timeouts": case_glue_client_has_short_timeouts,
+    "closed_diagnostic_pipe_does_not_escape": case_closed_diagnostic_pipe_does_not_escape,
     "config_scope_is_gold_only": case_config_scope_is_gold_only,
     "reader_access_is_one_role_for_one_user": case_reader_access_is_one_role_for_one_user,
     "check_compares_the_two_pointers": case_check_compares_the_two_pointers,

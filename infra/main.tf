@@ -105,7 +105,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
-  # Athena writes query results here, and they can hold Confidential rows. Current results expire after 7 days, replaced versions after 1 day. S3 lets
+  # Athena writes query results here, and they can hold Confidential rows. Current results expire after 7 days and replaced versions after 1 day, so the content is gone about a day after the delete marker appears. S3 lets
   # a rule carry either days or the delete-marker cleanup, so the markers of expired results stay. The prefix is exact: no other key matches it.
   rule {
     id     = "expire_athena_results"
