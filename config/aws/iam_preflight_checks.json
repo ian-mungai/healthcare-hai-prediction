@@ -1,0 +1,489 @@
+{
+  "roles": {
+    "reader": {
+      "name": "${LAKEHOUSE_READER_ROLE_NAME}",
+      "terraform": [
+        "roles.tf"
+      ],
+      "policies": [
+        "role_policies/reader.json"
+      ]
+    },
+    "writer": {
+      "name": "${LAKEHOUSE_WRITER_ROLE_NAME}",
+      "terraform": [
+        "roles.tf"
+      ],
+      "policies": [
+        "role_policies/writer.json"
+      ]
+    },
+    "job_execution": {
+      "name": "${PROJECT_NAME}_job_execution_${ENVIRONMENT}",
+      "terraform": [
+        "job_roles.tf",
+        "job_writer.tf",
+        "training.tf"
+      ],
+      "policies": [
+        "owner_policies/job_execution.json",
+        "owner_policies/job_writer_execution.json",
+        "owner_policies/job_train_parameter.json"
+      ]
+    },
+    "task_execution": {
+      "name": "${PROJECT_NAME}_task_execution_${ENVIRONMENT}",
+      "terraform": [
+        "roles.tf",
+        "broker.tf"
+      ],
+      "policies": [
+        "owner_policies/task_execution.json",
+        "owner_policies/broker_parameter.json"
+      ]
+    },
+    "job_read": {
+      "name": "${PROJECT_NAME}_job_read_task_${ENVIRONMENT}",
+      "terraform": [
+        "job_roles.tf"
+      ],
+      "policies": [
+        "owner_policies/job_stage_read.json"
+      ]
+    },
+    "write_silver": {
+      "name": "${PROJECT_NAME}_job_write_silver_task_${ENVIRONMENT}",
+      "terraform": [
+        "job_writer.tf"
+      ],
+      "layer": "silver",
+      "policies": [
+        "owner_policies/job_writer_layer_storage.json",
+        "owner_policies/job_stage_read.json"
+      ]
+    },
+    "write_gold": {
+      "name": "${PROJECT_NAME}_job_write_gold_task_${ENVIRONMENT}",
+      "terraform": [
+        "job_writer.tf"
+      ],
+      "layer": "gold",
+      "policies": [
+        "owner_policies/job_writer_layer_storage.json",
+        "owner_policies/job_stage_read.json"
+      ]
+    },
+    "write_features": {
+      "name": "${PROJECT_NAME}_job_write_features_task_${ENVIRONMENT}",
+      "terraform": [
+        "job_writer.tf"
+      ],
+      "layer": "features",
+      "policies": [
+        "owner_policies/job_writer_layer_storage.json",
+        "owner_policies/job_stage_read.json"
+      ]
+    },
+    "broker": {
+      "name": "${PROJECT_NAME}_broker_task_${ENVIRONMENT}",
+      "terraform": [
+        "broker.tf"
+      ],
+      "policies": [
+        "owner_policies/broker_jobs.json"
+      ]
+    },
+    "train": {
+      "name": "${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
+      "terraform": [
+        "training.tf",
+        "job_roles.tf"
+      ],
+      "policies": [
+        "owner_policies/job_stage_read.json",
+        "owner_policies/job_features_read.json",
+        "owner_policies/job_dvc_baseline.json"
+      ]
+    }
+  },
+  "checks": [
+    {
+      "role": "reader",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "reader",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "reader",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "reader",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_dictionary/table/metadata/v1.metadata.json",
+      "pending_fix": "The reader role policy lists no lakehouse/bronze_dictionary/ prefix. Add it to lakehouse_read_prefixes in infra/iam/roles.tf, then remove this field."
+    },
+    {
+      "role": "reader",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/bronze/table/"
+      }
+    },
+    {
+      "role": "reader",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/silver/table/"
+      }
+    },
+    {
+      "role": "reader",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/gold/table/"
+      }
+    },
+    {
+      "role": "reader",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/bronze_dictionary/table/"
+      },
+      "pending_fix": "The reader role policy lists no lakehouse/bronze_dictionary/ prefix. Add it to lakehouse_read_prefixes in infra/iam/roles.tf, then remove this field."
+    },
+    {
+      "role": "reader",
+      "action": "s3:GetBucketLocation",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+    },
+    {
+      "role": "writer",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/catalog_backups/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/catalog_backups/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:AbortMultipartUpload",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "writer",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/gold/table/"
+      }
+    },
+    {
+      "role": "writer",
+      "action": "s3:GetBucketLocation",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_ID_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_ID_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_SECRET_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_FEATURES_CLIENT_ID_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MLFLOW_ADMIN_PASSWORD_NAME}"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:example"
+    },
+    {
+      "role": "task_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${POSTGRES_PASSWORD_NAME}"
+    },
+    {
+      "role": "task_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${REDIS_PASSWORD_NAME}"
+    },
+    {
+      "role": "task_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${POLARIS_ROOT_SECRET_NAME}"
+    },
+    {
+      "role": "task_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_TOKEN_NAME}"
+    },
+    {
+      "role": "task_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}"
+    },
+    {
+      "role": "job_read",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "job_read",
+      "action": "s3:GetObjectVersion",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:DeleteObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/silver/table/"
+      }
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:DeleteObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/catalog_backups/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/catalog_backups/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:DeleteObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/catalog_backups/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/gold/table/"
+      }
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:DeleteObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/features/table/"
+      }
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "broker",
+      "action": "ecs:RunTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train:1",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
+        "aws:RequestTag/Project": "${PROJECT_NAME}",
+        "aws:RequestTag/HaiJob": "train",
+        "aws:TagKeys": [
+          "Project",
+          "HaiJob"
+        ]
+      }
+    },
+    {
+      "role": "broker",
+      "action": "ecs:StopTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
+      "context": {
+        "aws:ResourceTag/HaiJob": "train"
+      }
+    },
+    {
+      "role": "broker",
+      "action": "ecs:ListTasks",
+      "resource": "*",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+      }
+    },
+    {
+      "role": "broker",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
+      "role": "broker",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_execution_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
+      "role": "broker",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256"
+    },
+    {
+      "role": "broker",
+      "action": "logs:GetLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:example"
+    },
+    {
+      "role": "broker",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_SIGNED_PARAMETER_NAME}"
+    },
+    {
+      "role": "train",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "train",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "train",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/feast/registry.pb"
+    },
+    {
+      "role": "train",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/features/table/"
+      }
+    },
+    {
+      "role": "train",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/dvc/files/md5/example"
+    },
+    {
+      "role": "train",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "dvc/files/"
+      }
+    }
+  ]
+}
