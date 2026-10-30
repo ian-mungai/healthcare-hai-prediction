@@ -3132,11 +3132,13 @@ def mirror_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     github = github_plan_of(workflow_document())
     differences = mirror_differences(github, local)
     items = local["items"]
+    first_item = re.search(r"^== \w+ ==$", log, re.MULTILINE)
     shard_items = [item for item in items if item.startswith("acquisition_shard_")]
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "same_groups_units_shards_and_combine_as_the_github_jobs": not differences,
-        "launcher_ran_before_every_item": "TIMED launcher E2E" in log and log.index("TIMED launcher E2E") < log.index("\n== "),
+        # The sharded launcher block prints under "== launcher shard K/N ==" headers, which are not group items: compare with the first "== item ==" header.
+        "launcher_ran_before_every_item": 0 <= log.find("TIMED launcher E2E") < (first_item.start() if first_item else -1),
         "writer_set_up_ran_alone_first": items[:1] == ["lakehouse_gold_writer_setup"],
         "shards_ran_with_the_groups": len(shard_items) == 4 and all(item in items[1:-1] for item in shard_items),
         "combine_ran_last_after_every_shard": items[-1:] == ["acquisition_combine"] and local["combine_counts"] == {"4"},
