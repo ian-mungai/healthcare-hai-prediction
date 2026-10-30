@@ -851,6 +851,22 @@ def job_project_cases() -> Iterator[Case]:
         for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
             yield Case(f"layer pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
         yield Case(f"layer pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
+    for name in ("job_train_task", "mlflow_task"):
+        yield Case(
+            f"training pass: {name} to ECS tasks",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            True,
+            "PassTrainingRoles",
+        )
+        for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+            yield Case(f"training pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
+        yield Case(f"training pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
+    for name in ("job_train_task_extra", "mlflow_task_extra", "job_train", "mlflow"):
+        yield Case(
+            f"training pass: refuse {name}",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            False,
+        )
     for session in ("hai_try_example", "hai_try_", "unrelated", "hai_try", "other_hai_try_example", None):
         allowed = session in ("hai_try_example", "hai_try_")
         yield Case(
@@ -1638,6 +1654,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def job_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassReadJobRoles")["Condition"]
 
+    def training_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "iam", "PassTrainingRoles")["Condition"]
+
     def job_pass_to_ecs_service(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "iam", "PassReadJobRoles")["Condition"]["StringEquals"]["iam:PassedToService"] = "ecs.amazonaws.com"
 
@@ -1714,6 +1733,11 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 job_resource("sts", "AssumeTryOutputRole", 0, f"arn:aws:iam::{A}:role/{P}_job_*_{E}"),
             ),
             "job stage version resource widened": ("job stage: refuse lakehouse/silver", job_resource("s3", "ReadStageVersions", 0, f"{BUCKET}/lakehouse/*")),
+            "training PassRole resource widened": (
+                "training pass: refuse job_train_task_extra",
+                job_resource("iam", "PassTrainingRoles", 0, role("job_train_task*")),
+            ),
+            "training PassRole service condition removed": ("training pass: job_train_task without a service", training_pass_without_service_condition),
             "layer PassRole writer-family wildcard": (
                 "job pass: refuse job_write_other_task",
                 job_resource("iam", "PassLayerWriterRoles", 0, role("job_write_*_task")),
