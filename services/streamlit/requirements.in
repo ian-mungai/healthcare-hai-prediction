@@ -1,0 +1,3 @@
+# Streamlit page image: Streamlit and its dependencies only. The page's own client uses the standard library, so nothing else is added. Streamlit carries no
+# project pin yet, so the first lock compile chooses its release. Review the compiled requirements.txt at lock review and pin the release here afterwards.
+streamlit
