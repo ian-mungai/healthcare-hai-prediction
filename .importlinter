@@ -1,0 +1,116 @@
+# Layer boundaries of the first-party Python packages, checked by `scripts.quality.lint_tools import-linter`. Each contract states an import
+# direction that is true today (direct imports only; allow_indirect_imports lets a chain through a shared package pass). Packages that import each
+# other in both directions today (lakehouse, orchestration, acquisition and infrastructure) have no contract between them. The training scripts import
+# the orchestration runtime, the orchestration scripts, the lakehouse and the infrastructure scripts (the training job contract, the lane B check cases),
+# and the orchestration runtime imports scripts.training.step_records, so no contract keeps training away from those packages.
+[importlinter]
+root_packages =
+    scripts
+    orchestration
+    services
+
+[importlinter:contract:container_services_stand_alone]
+name = Container services import no script, launcher or orchestration code
+type = forbidden
+source_modules =
+    services
+forbidden_modules =
+    scripts
+    orchestration
+allow_indirect_imports = True
+
+[importlinter:contract:launcher_imports_no_pipeline_code]
+name = The process launcher imports no pipeline package
+type = forbidden
+source_modules =
+    scripts.process
+forbidden_modules =
+    scripts.acquisition
+    scripts.infrastructure
+    scripts.lakehouse
+    scripts.orchestration
+    scripts.quality
+    scripts.review
+    scripts.training
+    services
+allow_indirect_imports = True
+
+[importlinter:contract:acquisition_stays_below_pipeline]
+name = Acquisition imports no lakehouse, orchestration, training or review code
+type = forbidden
+source_modules =
+    scripts.acquisition
+forbidden_modules =
+    scripts.lakehouse
+    scripts.orchestration
+    scripts.training
+    scripts.review
+    orchestration
+    services
+allow_indirect_imports = True
+
+[importlinter:contract:infrastructure_stays_below_pipeline]
+name = Infrastructure scripts import no orchestration scripts, training, review or service code
+type = forbidden
+source_modules =
+    scripts.infrastructure
+forbidden_modules =
+    scripts.orchestration
+    scripts.training
+    scripts.review
+    services
+allow_indirect_imports = True
+
+[importlinter:contract:review_stands_alone]
+name = Review scripts import only the launcher
+type = forbidden
+source_modules =
+    scripts.review
+forbidden_modules =
+    scripts.acquisition
+    scripts.infrastructure
+    scripts.lakehouse
+    scripts.orchestration
+    scripts.quality
+    orchestration
+    services
+allow_indirect_imports = True
+
+[importlinter:contract:training_stays_off_data_and_quality_code]
+name = Training scripts import no acquisition, quality or service code
+type = forbidden
+source_modules =
+    scripts.training
+forbidden_modules =
+    scripts.acquisition
+    scripts.quality
+    services
+allow_indirect_imports = True
+
+[importlinter:contract:orchestration_runtime_not_tooling]
+name = The orchestration runtime package imports no orchestration script, quality or review code
+type = forbidden
+source_modules =
+    orchestration
+forbidden_modules =
+    scripts.orchestration
+    scripts.quality
+    scripts.review
+allow_indirect_imports = True
+
+[importlinter:contract:orchestration_scripts_are_the_top]
+name = Nothing imports the orchestration scripts
+type = forbidden
+source_modules =
+    scripts.acquisition
+    scripts.infrastructure
+    scripts.lakehouse
+    scripts.quality
+    scripts.review
+    scripts.process
+    scripts.process_group
+    orchestration
+    services
+forbidden_modules =
+    scripts.orchestration
+allow_indirect_imports = True

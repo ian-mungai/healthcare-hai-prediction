@@ -208,6 +208,14 @@ repos:
         pass_filenames: false
         files: ^(\.github/workflows/.*\.ya?ml|\.linter_allowlist|config/quality_tools\.json)$
         stages: [pre-commit]
+      - id: import-linter
+        # Contracts in .importlinter state the package boundaries that hold today; import-linter is installed by scripts/quality/install_lint_tools.py.
+        name: First-party packages keep their import boundaries (import-linter)
+        entry: .venv/bin/python -m scripts.quality.lint_tools import-linter
+        language: system
+        pass_filenames: false
+        files: ^(.*\.py|\.importlinter|config/quality_tools\.json)$
+        stages: [pre-commit]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata

@@ -157,6 +157,12 @@
       "installer": "homebrew",
       "formula": "zizmor",
       "executable": "/opt/homebrew/bin/zizmor"
+    },
+    "import-linter": {
+      "version": "2.15",
+      "installer": "scripts/quality/install_lint_tools.py",
+      "requirements": "scripts/quality/lint_requirements/import_linter.txt",
+      "executable": ".tools/import-linter/bin/lint-imports"
     }
   }
 }
