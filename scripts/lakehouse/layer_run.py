@@ -16,9 +16,9 @@ folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/r
 ``publish`` runs the publish steps of the layer and the acceptance checks of the first publish (rows and content fingerprints of every table against
 its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). Before any catalog
 write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin, and the pin must name exactly the
-configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold). Two extra checks run beside them: the staged code objects keep
-their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast`` run only for a run that passed them. Any failed
-check exits 1 and names the phase.
+configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold). Two extra checks run beside them: the staged
+code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast`` run only for a run that passed
+them. Any failed check exits 1 and names the phase.
 
 A run ID is used once. The first real pin writes ``lakehouse/layer_runs/<layer>/<run>/state/pinned.json`` only if it does not exist. A second pin of the
 same run ID fails with a named error before it writes anything shared. An interrupted run is not resumed: it restarts under a new run ID after the owner has

@@ -38,6 +38,7 @@ class FakeEcs:
         self.plan: dict[str, int | None] = {}
         self.omit: set[str] = set()
         self.finish_after = FINISH_AFTER
+        self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
 
     def count(self, operation: str) -> int:
         return sum(1 for name, _ in self.calls if name == operation)
@@ -95,6 +96,12 @@ class FakeEcs:
                 failures.append({"arn": arn, "reason": "MISSING"})
                 continue
             task["polls"] += 1
+            if task.get("stopping") is not None:
+                task["stopping"] -= 1
+                if task["stopping"] <= 0:
+                    self._finish(task, {item["name"]: 137 for item in task["containers"]}, "Task stopped by user", "UserInitiated")
+                tasks.append(self._view(task))
+                continue
             if task["lastStatus"] != "STOPPED" and not self.hold and task["polls"] >= self.finish_after:
                 self._finish(task, self.plan, "Essential container in task exited")
             elif task["lastStatus"] == "PROVISIONING" and task["polls"] >= 2:
@@ -107,7 +114,10 @@ class FakeEcs:
         task = self.tasks.get(arguments["task"])
         if task is None:
             raise client_error("InvalidParameterException", "StopTask", "The referenced task was not found.")
-        if task["lastStatus"] != "STOPPED":
+        if task["lastStatus"] != "STOPPED" and self.stop_lag:
+            task["desiredStatus"] = "STOPPED"
+            task["stopping"] = self.stop_lag
+        elif task["lastStatus"] != "STOPPED":
             self._finish(task, {item["name"]: 137 for item in task["containers"]}, f"Task stopped by user: {arguments.get('reason', '')}", "UserInitiated")
         return {"task": self._view(task)}
 
@@ -122,7 +132,7 @@ class FakeEcs:
 
     @staticmethod
     def _view(task: Mapping[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in task.items() if key not in ("polls", "request")}
+        return {key: value for key, value in task.items() if key not in ("polls", "request", "stopping")}
 
 
 class FakeLogs:
@@ -145,8 +155,10 @@ class FakeS3:
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.reads: list[str] = []
 
     def get_object(self, **arguments: Any) -> dict[str, Any]:
+        self.reads.append(arguments["Key"])
         body = self.objects.get(arguments["Key"])
         if body is None:
             raise client_error("NoSuchKey", "GetObject")

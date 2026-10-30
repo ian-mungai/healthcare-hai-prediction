@@ -19,7 +19,7 @@ SETTINGS = EcsSettings(
     cluster=CLUSTER,
     family_prefix="example_dev_job_",
     subnets=("subnet-0example",),
-    security_groups=("sg-0example",),
+    networks={"training": ("sg-0train",), "lakehouse": ("sg-0lake",)},
     project_tag="example",
     log_group="example_jobs_dev",
     families=frozenset({"train"}),
@@ -57,29 +57,29 @@ def settle(adapter: EcsAdapter, arn: str) -> ecs_adapter.TaskReport:
 
 def start_twice_one_task() -> None:
     adapter, ecs, _ = build()
-    first, second = adapter.start("train", KEY, ENVIRONMENT), adapter.start("train", KEY, ENVIRONMENT)
+    first, second = adapter.start("train", KEY, ENVIRONMENT, "training"), adapter.start("train", KEY, ENVIRONMENT, "training")
     require(first == second and len(ecs.tasks) == 1, "a second start with the same key made a second task")
 
 
 def lost_reply_one_task() -> None:
     adapter, ecs, _ = build()
     ecs.lose_reply_once = True
-    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training"))
     require(len(ecs.tasks) == 1, "the lost reply case did not create the task")
-    arn = adapter.start("train", KEY, ENVIRONMENT)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     require(len(ecs.tasks) == 1 and arn in ecs.tasks, "the retry after a lost reply made a second task")
 
 
 def another_key_another_task() -> None:
     adapter, ecs, _ = build()
-    adapter.start("train", KEY, ENVIRONMENT)
-    adapter.start("train", KEY.replace(":1", ":2"), ENVIRONMENT)
+    adapter.start("train", KEY, ENVIRONMENT, "training")
+    adapter.start("train", KEY.replace(":1", ":2"), ENVIRONMENT, "training")
     require(len(ecs.tasks) == 2, "a new attempt did not start its own task")
 
 
 def run_task_request() -> None:
     adapter, ecs, _ = build()
-    adapter.start("train", KEY, ENVIRONMENT)
+    adapter.start("train", KEY, ENVIRONMENT, "training")
     request = next(arguments for name, arguments in ecs.calls if name == "run_task")
     network = request["networkConfiguration"]["awsvpcConfiguration"]
     names = [item["name"] for item in request["overrides"]["containerOverrides"]]
@@ -96,13 +96,19 @@ def run_task_request() -> None:
 
 def family_not_allowed() -> None:
     adapter, ecs, _ = build()
-    raises(TaskRefused, lambda: adapter.start("write_gold", KEY, ENVIRONMENT))
+    raises(TaskRefused, lambda: adapter.start("write_gold", KEY, ENVIRONMENT, "training"))
     require(not ecs.calls, "an unnamed family reached the cloud")
+
+
+def network_not_bound() -> None:
+    adapter, ecs, _ = build()
+    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "other"))
+    require(not ecs.calls, "a family without a bound network reached the cloud")
 
 
 def all_containers_zero_passes() -> None:
     adapter, _, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     require(adapter.poll(arn).state == "pending", "a new task was not pending")
     report = settle(adapter, arn)
     require(report.state == "succeeded" and report.exit_code == 0, f"all zero exits did not pass: {report}")
@@ -111,21 +117,21 @@ def all_containers_zero_passes() -> None:
 def one_container_nonzero_fails() -> None:
     adapter, ecs, _ = build()
     ecs.plan = {"init": 0, "fetch": 0, "prepare": 0, "extract": 0, "train": 3}
-    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
+    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT, "training"))
     require(report.state == "failed" and report.exit_code == 3, f"a non-zero exit did not fail the job: {report}")
 
 
 def early_failure_names_first_nonzero() -> None:
     adapter, ecs, _ = build()
     ecs.plan = {"init": 0, "fetch": 2, "prepare": None, "extract": None, "train": None}
-    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
+    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT, "training"))
     require(report.state == "failed" and report.exit_code == 2, f"the fetch failure was not reported: {report}")
 
 
 def stopped_without_exit_codes_fails() -> None:
     adapter, ecs, _ = build()
     ecs.plan = {name: None for name in ("init", "fetch", "train")}
-    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
+    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT, "training"))
     require(report.state == "failed" and report.exit_code == 125, f"a task with no exit codes passed or lost its code: {report}")
 
 
@@ -136,7 +142,7 @@ def unknown_task_is_gone() -> None:
 
 def stop_is_repeatable() -> None:
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     adapter.stop(arn, "cancel")
     adapter.stop(arn, "cancel")
     require(ecs.tasks[arn]["lastStatus"] == "STOPPED", "the task was not stopped")
@@ -147,26 +153,26 @@ def stop_is_repeatable() -> None:
 def throttled_start_is_transient() -> None:
     adapter, ecs, _ = build()
     ecs.faults["run_task"] = [client_error("ThrottlingException", "RunTask")]
-    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training"))
     require(not ecs.tasks, "a throttled call created a task")
 
 
 def denied_start_is_permanent() -> None:
     adapter, ecs, _ = build()
     ecs.faults["run_task"] = [client_error("AccessDeniedException", "RunTask")]
-    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT))
+    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "training"))
 
 
 def throttled_poll_is_transient() -> None:
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     ecs.faults["describe_tasks"] = [client_error("ThrottlingException", "DescribeTasks")]
     raises(TaskUnavailable, lambda: adapter.poll(arn))
 
 
 def reasons_hide_identifiers() -> None:
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     account = "7" * 12
     ecs.tasks[arn]["stoppedReason"] = f"failed for {arn} in account {account}"
     ecs.tasks[arn]["lastStatus"] = "STOPPED"
@@ -176,7 +182,7 @@ def reasons_hide_identifiers() -> None:
 
 def tail_reads_the_container_stream() -> None:
     adapter, ecs, logs = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     stream = f"train/train/{arn.rsplit('/', 1)[-1]}"
     logs.streams[stream] = ["one", "two", "three"]
     require(adapter.tail(arn, "train", "train", 2) == "two\nthree", "the tail is wrong")
@@ -200,6 +206,7 @@ CASES: dict[str, Callable[[], None]] = {
     "another_key_another_task": another_key_another_task,
     "run_task_request": run_task_request,
     "family_not_allowed": family_not_allowed,
+    "network_not_bound": network_not_bound,
     "all_containers_zero_passes": all_containers_zero_passes,
     "one_container_nonzero_fails": one_container_nonzero_fails,
     "early_failure_names_first_nonzero": early_failure_names_first_nonzero,

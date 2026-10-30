@@ -4,6 +4,7 @@
     "train": {
       "deadline_seconds": 21600,
       "log_container": "train",
+      "network": "training",
       "needs_training_parameters": true,
       "containers": {
         "fetch": [
@@ -28,6 +29,7 @@
     "silver": {
       "deadline_seconds": 21600,
       "log_container": "publish",
+      "network": "lakehouse",
       "containers": {
         "fetch": [
           "RUN_ID",
@@ -69,6 +71,7 @@
     "gold": {
       "deadline_seconds": 21600,
       "log_container": "publish",
+      "network": "lakehouse",
       "containers": {
         "fetch": [
           "RUN_ID",
@@ -107,6 +110,7 @@
     "features": {
       "deadline_seconds": 21600,
       "log_container": "publish",
+      "network": "lakehouse",
       "containers": {
         "fetch": [
           "RUN_ID",
@@ -146,6 +150,7 @@
     "drift": {
       "deadline_seconds": 7200,
       "log_container": "publish",
+      "network": "training",
       "containers": {
         "fetch": [
           "RUN_ID",
@@ -171,6 +176,7 @@
     "promote": {
       "deadline_seconds": 3600,
       "log_container": "promote",
+      "network": "training",
       "needs_training_parameters": true,
       "approval": "promotion",
       "containers": {

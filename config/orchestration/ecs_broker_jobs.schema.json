@@ -26,9 +26,16 @@
         "required": [
           "deadline_seconds",
           "log_container",
+          "network",
           "containers"
         ],
         "properties": {
+          "network": {
+            "enum": [
+              "lakehouse",
+              "training"
+            ]
+          },
           "deadline_seconds": {
             "type": "integer",
             "minimum": 60,

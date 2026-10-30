@@ -1779,12 +1779,12 @@ run "broker_service_shape" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train", "silver"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train", "silver"]
     }
   }
 
@@ -1822,7 +1822,7 @@ run "broker_service_shape" {
           "BROKER_MLFLOW_URI=http://10.0.1.20:5100",
           "BROKER_SIGNED_PARAMETER=/healthcare_hai_prediction/first_publishes_signed",
           "BROKER_SUBNETS=subnet-0example1",
-          "BROKER_SECURITY_GROUPS=sg-0example1",
+          "BROKER_NETWORKS={\"lakehouse\":\"sg-0example1\",\"training\":\"sg-0example2\"}",
         ] : contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : "${item.name}=${item.value}"], expected)
       ])
       && jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].entryPoint == ["python", "-m", "scripts.orchestration.ecs_broker"]
@@ -1862,12 +1862,12 @@ run "broker_without_role_is_refused" {
   variables {
     broker_enabled = true
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train"]
     }
   }
 
@@ -1881,12 +1881,12 @@ run "broker_with_shared_role_is_refused" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train"]
     }
   }
 
@@ -1911,12 +1911,12 @@ run "broker_with_public_host_address_is_refused" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "203.0.113.20"
-      families          = ["train"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "203.0.113.20"
+      families           = ["train"]
     }
   }
 
@@ -1930,12 +1930,50 @@ run "broker_with_unknown_family_is_refused" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train", "write_gold"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train", "write_gold"]
+    }
+  }
+
+  expect_failures = [var.broker_jobs]
+}
+
+run "a_family_without_the_security_group_of_its_network_class_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["silver", "drift"]
+    }
+  }
+
+  expect_failures = [var.broker_jobs]
+}
+
+run "a_security_group_for_an_unknown_network_class_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", offline = "sg-0example3" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["silver"]
     }
   }
 
@@ -1959,12 +1997,12 @@ run "broker_definitions_for_review" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train"]
     }
   }
 }
@@ -2004,12 +2042,12 @@ run "broker_accepts_the_promote_family" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train", "promote"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train", "promote"]
     }
   }
 

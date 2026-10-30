@@ -35,7 +35,7 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
    aws ssm put-parameter --profile <ADMIN_PROFILE> --region <REGION> --name /healthcare_hai_prediction/broker_token --type SecureString --value "file://$TMPDIR/broker_token"
    ```
 
-4. `infra/services`: set `broker_enabled = true` and set `broker_task_role_arn` to the ARN in the `broker_roles` output. Set `broker_jobs` to the job subnet, the job security group, the jobs log group, the data bucket, the private address of the host and the families. Then run the host preparation task again. It creates the broker state folder on the data volume.
+4. `infra/services`: set `broker_enabled = true` and set `broker_task_role_arn` to the ARN in the `broker_roles` output. Set `broker_jobs` to the job subnet, the job security groups, the jobs log group, the data bucket, the private address of the host and the families. `security_group_ids` holds one group per network class: `lakehouse` is the group of the same name in the `job_network` output of `infra/iam`. The group `training` is `security_group_id` of the `training_network` output. The silver, gold and features jobs run in `lakehouse`, which reaches the catalog and Redis. The train, promote and drift jobs run in `training`, which also reaches MLflow. The broker gives each task only the group of its own class. Each family you enable needs its class here. Then run the host preparation task again. It creates the broker state folder on the data volume.
 5. Check that the broker service reached a `COMPLETED` deployment, as for the other services.
 6. For each run, stage the code and add the digest beside it. Build the archive with `scripts.lakehouse.code_archive`, not with `git archive` alone: the builder adds the verified dbt packages from the pinned local package archive (on a fresh clone, rebuild that archive first with `python -m scripts.lakehouse.dbt_package_archive fetch`), because the task has no network to install them. The same revision and packages always give the same bytes. The digest file is the code digest that the broker passes to the task. The pin refuses an archive without the packages before it claims the run ID. A chain needs this once, under the bronze run ID. The chain gate names that run for the four layer runs, so each layer reads the bronze run's digest:
 
@@ -121,7 +121,7 @@ Every run ID and every triggered DAG run ID derives from the bronze run ID. A se
 
 ## Stop
 
-Set `broker_enabled = false` in `infra/services` and apply the shown plan. The ledger on the data volume stays. Cancel a running job from its DAG task, which stops its Fargate task. Check that no job task runs:
+Set `broker_enabled = false` in `infra/services` and apply the shown plan. The ledger on the data volume stays. Cancel a running job from its DAG task, which stops its Fargate task. The broker records the end only after the task reports STOPPED. It waits up to two minutes for that. If the task is still stopping then, the cancel fails by name and records nothing, so repeat it. A retry of a job is refused while the task of an earlier attempt has not reached STOPPED. Check that no job task runs:
 
 ```sh
 aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --desired-status RUNNING

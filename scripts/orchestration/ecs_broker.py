@@ -24,6 +24,7 @@ import secrets
 import signal
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -308,10 +309,19 @@ class EcsBroker:
         if not ended or not all(line["event"] == "finished" and line.get("outcome") == "succeeded" for line in ended):
             raise SubmissionRefused(f"the {job} job needs the latest {after} attempt in run {input_run} to have passed")
 
-    def variables(self, request: SubmissionRequest, names: list[str], input_run: str | None) -> dict[str, str]:
+    def variables(self, request: SubmissionRequest, names: list[str], input_run: str | None, read: dict[str, str] | None = None) -> dict[str, str]:
+        """The variables of one container. ``read`` holds what an earlier container of the same start already read from the bucket, so a value that was read
+        once is the value every container gets."""
+        read = {} if read is None else read
+
+        def code_digest() -> str:
+            if "CODE_SHA256" not in read:
+                read["CODE_SHA256"] = self.code_digest(self.digest_run(request.run_id))
+            return read["CODE_SHA256"]
+
         values = {
             "RUN_ID": lambda: request.run_id,
-            "CODE_SHA256": lambda: self.code_digest(self.digest_run(request.run_id)),
+            "CODE_SHA256": code_digest,
             "TRAINING_PARAMETERS": lambda: json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":")),
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
@@ -386,11 +396,13 @@ class EcsBroker:
         if joined is not None:
             self.append({"event": "started", **identity, "job_key": key, "task_arn": joined["task_arn"], "job_started_at": joined["job_started_at"]})
             return
+        self.refuse_beside_earlier_attempt(request, job, key, everything)
         try:
             names = self.jobs[job]["containers"]
             input_run = resolve_input(request, job, everything)
-            environment = {container: self.variables(request, list(variables), input_run) for container, variables in names.items()}
-            arn = self.adapter.start(job, key, environment)
+            read: dict[str, str] = {}
+            environment = {container: self.variables(request, list(variables), input_run, read) for container, variables in names.items()}
+            arn = self.adapter.start(job, key, environment, self.jobs[job]["network"])
         except TaskUnavailable as error:
             raise Unavailable(str(error)) from None
         except TaskRefused as error:
@@ -398,6 +410,43 @@ class EcsBroker:
             raise SubmissionRefused(f"the cloud refused the {job} job: {error}") from None
         started = datetime.fromtimestamp(self.clock(), UTC).isoformat()
         self.append({"event": "started", **identity, "job_key": key, "task_arn": arn, "job_started_at": started})
+
+    def find_task(self, key: str) -> str | None:
+        try:
+            return self.adapter.find(key)
+        except TaskUnavailable as error:
+            raise Unavailable(str(error)) from None
+
+    def adopt_unresolved(self, request: SubmissionRequest, job: str, intent: dict[str, Any]) -> None:
+        """An intent without a started line may hold a task that ECS accepted without a reply. Find it by its deterministic identity and record it as started,
+        so a stop reaches it. A failed discovery raises and leaves the intent open."""
+        key = intent["job_key"]
+        arn = self.find_task(key)
+        if arn is not None:
+            started = datetime.fromtimestamp(self.clock(), UTC).isoformat()
+            self.append({"event": "started", **self.identity(request, job), "job_key": key, "task_arn": arn, "job_started_at": started})
+
+    def refuse_beside_earlier_attempt(self, request: SubmissionRequest, job: str, key: str, everything: list[dict[str, Any]]) -> None:
+        """A retry never starts beside the task of an earlier attempt that has not reached STOPPED: two writers must not overlap."""
+        prefix = f"{request.run_id}:{job}:"
+        earlier = {
+            line["task_arn"] for line in everything if line["event"] == "started" and line.get("job_key", "").startswith(prefix) and line["job_key"] != key
+        }
+        for submission in self.ledger.submissions(request.run_id).values():
+            first = submission[0]
+            if submission[-1]["event"] == "intent" and first.get("job_key", "").startswith(prefix) and first["job_key"] != key:
+                found = self.find_task(first["job_key"])
+                if found is not None:
+                    raise SubmissionRefused(
+                        f"an earlier attempt of the {job} job started a task that has no record yet ({found}). Cancel it and wait for STOPPED"
+                    )
+        for arn in sorted(earlier):
+            try:
+                report = self.adapter.poll(arn)
+            except TaskUnavailable as error:
+                raise Unavailable(str(error)) from None
+            if report.state in ("pending", "running"):
+                raise SubmissionRefused(f"an earlier attempt of the {job} job still runs ({arn}). Stop it and wait for STOPPED before a retry")
 
     def request_of(self, handle: Handle) -> tuple[SubmissionRequest, str | None]:
         run, _, _, _ = parse_submission(handle.submission_id)
@@ -438,6 +487,24 @@ class EcsBroker:
             outcome = "succeeded" if report.state == "succeeded" else "failed"
             return self.append({"event": "finished", **identity, "exit_code": report.exit_code, "outcome": outcome, "reason": self.redact(report.reason)})
 
+    # StopTask only asks for a stop: Fargate keeps the task RUNNING while it shuts down. The broker waits this long for STOPPED before it records an end.
+    STOP_WAIT_SECONDS = 120.0
+    STOP_POLL_SECONDS = 2.0
+
+    def confirm_stopped(self, task_arn: str) -> None:
+        """Wait, within the bound, until the task reports that it has stopped. A task that is still there at the end fails the call and records nothing."""
+        end = time.monotonic() + self.STOP_WAIT_SECONDS
+        while True:
+            try:
+                report = self.adapter.poll(task_arn)
+            except TaskUnavailable as error:
+                raise Unavailable(str(error)) from None
+            if report.state not in ("pending", "running"):
+                return
+            if time.monotonic() >= end:
+                raise StopFailed(f"the task is still stopping after {self.STOP_WAIT_SECONDS:g} seconds. Nothing was recorded, so the stop can be repeated")
+            time.sleep(self.STOP_POLL_SECONDS)
+
     def stop(self, task_arn: str, reason: str) -> None:
         try:
             self.adapter.stop(task_arn, reason)
@@ -446,6 +513,7 @@ class EcsBroker:
         except TaskRefused as error:
             self.log(f"stop refused ({error})")
             raise StopFailed(f"the cloud refused to stop the task ({error}). Nothing was recorded, so the stop can be repeated") from None
+        self.confirm_stopped(task_arn)
 
     def log(self, event: str) -> None:
         with contextlib.suppress(Exception):
@@ -474,6 +542,9 @@ class EcsBroker:
             last = self.ledger.submissions(run)[handle.submission_id][-1]
             if last["event"] in ("finished", "failed_closed"):
                 return self.status_of(handle, last)
+            if last["event"] == "intent" and job is not None:
+                self.adopt_unresolved(request, job, last)
+                last = self.ledger.submissions(run)[handle.submission_id][-1]
             if last["event"] == "started":
                 self.stop(last["task_arn"], "cancel")
             done = self.append({"event": "finished", **self.identity(request, job), "exit_code": CANCEL_EXIT, "outcome": "cancelled", "reason": "cancel"})
@@ -629,6 +700,31 @@ class Listener:
             self.started = False
 
 
+NETWORK_CLASSES = ("lakehouse", "training")
+SECURITY_GROUP = re.compile(r"sg-[a-z0-9]+")
+
+
+def network_groups(text: str) -> dict[str, tuple[str, ...]]:
+    """The security groups of each network class, from a JSON object such as ``{"lakehouse": "sg-0a", "training": "sg-0b"}``."""
+    try:
+        found = json.loads(text)
+    except ValueError:
+        raise BrokerError("BROKER_NETWORKS is not JSON") from None
+    if not isinstance(found, dict) or not found or set(found) - set(NETWORK_CLASSES):
+        raise BrokerError(f"BROKER_NETWORKS must name only the classes {list(NETWORK_CLASSES)}")
+    groups = {name: tuple(str(value).split(",")) for name, value in found.items()}
+    if any(not SECURITY_GROUP.fullmatch(group) for values in groups.values() for group in values):
+        raise BrokerError("BROKER_NETWORKS holds a value that is not a security group ID")
+    return groups
+
+
+def check_networks(settings: EcsSettings, jobs: dict[str, Any]) -> None:
+    """Every enabled family needs the security groups of its own network class: the broker does not start one that would run in another family's network."""
+    unbound = sorted({jobs["jobs"][family]["network"] for family in settings.families} - set(settings.networks))
+    if unbound:
+        raise BrokerError(f"BROKER_NETWORKS lacks the network classes {unbound} that the enabled families need")
+
+
 def required(environment: Mapping[str, str], name: str) -> str:
     value = environment.get(name, "")
     if not value:
@@ -649,7 +745,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
         cluster=required(env, "BROKER_CLUSTER"),
         family_prefix=required(env, "BROKER_FAMILY_PREFIX"),
         subnets=tuple(required(env, "BROKER_SUBNETS").split(",")),
-        security_groups=tuple(required(env, "BROKER_SECURITY_GROUPS").split(",")),
+        networks=network_groups(required(env, "BROKER_NETWORKS")),
         project_tag=required(env, "BROKER_PROJECT_TAG"),
         log_group=required(env, "BROKER_LOG_GROUP"),
         families=frozenset(required(env, "BROKER_FAMILIES").split(",")),
@@ -659,6 +755,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     unknown = sorted(settings.families - set(jobs["jobs"]))
     if unknown:
         raise BrokerError(f"BROKER_FAMILIES names unknown jobs {unknown}")
+    check_networks(settings, jobs)
     config = client_config()
     session = boto3.session.Session(region_name=region)
     adapter = EcsAdapter(session.client("ecs", config=config), session.client("logs", config=config), settings)
