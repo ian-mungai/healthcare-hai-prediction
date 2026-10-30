@@ -42,6 +42,7 @@ YAML_PROFILE = (ROOT / ".yamllint").read_text()
 SQLFLUFF_SIZE_LIMIT = (ROOT / ".sqlfluff").read_text().replace("large_file_skip_byte_limit = 0", "large_file_skip_byte_limit = 20000")
 if "large_file_skip_byte_limit = 20000" not in SQLFLUFF_SIZE_LIMIT:
     raise SystemExit(".sqlfluff no longer sets large_file_skip_byte_limit = 0; adapt the size-skip samples")
+NO_IMAGES = ("infra/services/images.json", '{"images": {}}\n')
 AIRFLOW_HEADER = "# docker build --tag hai-airflow:3.3.2-python3.12 --build-context hai=services/hai services/orchestration\n"
 
 
@@ -156,7 +157,7 @@ SAMPLES = (
         "FROM debian:12 AS earlier\nFROM debian:12\nCOPY --from=typo /one /two\n",
         "FROM debian:12 AS earlier\nFROM debian:12\nCOPY --from=earlier /one /two\n",
         "unknown COPY --from=typo",
-        support=(("docker-compose.yaml", "services:\n  probe:\n    build: ./services/probe\n"),),
+        support=(("docker-compose.yaml", "services:\n  probe:\n    build: ./services/probe\n"), NO_IMAGES),
     ),
     Sample(
         "build_context_reference",
@@ -168,7 +169,7 @@ SAMPLES = (
         ),
         "services:\n  probe:\n    build:\n      context: ./services/probe\n      additional_contexts:\n        hai: ./services/hai\n",
         "unknown COPY --from=hai",
-        support=(("services/probe/Dockerfile", "FROM debian:12\nCOPY --from=hai /one /two\n"),),
+        support=(("services/probe/Dockerfile", "FROM debian:12\nCOPY --from=hai /one /two\n"), NO_IMAGES),
     ),
     Sample(
         "build_header_context",
@@ -177,7 +178,7 @@ SAMPLES = (
         "# docker build --tag hai-airflow:3.3.2-python3.12 services/orchestration\nFROM debian:12\nCOPY --from=hai /one /two\n",
         AIRFLOW_HEADER + "FROM debian:12\nCOPY --from=hai /one /two\n",
         "header build command declares no contexts",
-        support=(("docker-compose.yaml", "services: {}\n"),),
+        support=(("docker-compose.yaml", "services: {}\n"), NO_IMAGES),
     ),
     Sample(
         "build_header_missing",
@@ -186,7 +187,16 @@ SAMPLES = (
         "FROM debian:12\nCOPY --from=hai /one /two\n",
         AIRFLOW_HEADER + "FROM debian:12\nCOPY --from=hai /one /two\n",
         "missing header build command",
-        support=(("docker-compose.yaml", "services: {}\n"),),
+        support=(("docker-compose.yaml", "services: {}\n"), NO_IMAGES),
+    ),
+    Sample(
+        "build_image_contexts",
+        "build-contexts",
+        "infra/services/images.json",
+        '{"images": {"probe": {"kind": "build", "context": "services/probe"}}}\n',
+        '{"images": {"probe": {"kind": "build", "context": "services/probe", "build_contexts": ["hai"]}}}\n',
+        "unknown COPY --from=hai",
+        support=(("docker-compose.yaml", "services: {}\n"), ("services/probe/Dockerfile", "FROM debian:12\nCOPY --from=hai /one /two\n")),
     ),
     Sample("gofmt", "gofmt", "services/probe/main.go", "package main\nfunc main() {}\n", "package main\n\nfunc main() {}\n", "gofmt formatting differs"),
     Sample(

@@ -350,6 +350,17 @@ def compose_contexts() -> dict[str, list[tuple[str, set[str]]]]:
     return selected
 
 
+def image_contexts() -> dict[str, list[tuple[str, set[str]]]]:
+    """The named build contexts that ``infra/services/images.json`` passes to each image it builds, keyed by Dockerfile."""
+    document = json.loads(safe_source("infra/services/images.json").read_text())
+    selected: dict[str, list[tuple[str, set[str]]]] = {}
+    for key, image in document["images"].items():
+        if image.get("kind") == "build" and image.get("build_contexts"):
+            name = (ROOT / image["context"] / image.get("dockerfile", "Dockerfile")).resolve().relative_to(ROOT).as_posix()
+            selected.setdefault(name, []).append((f"images.json image {key}", set(image["build_contexts"])))
+    return selected
+
+
 def header_contexts(name: str) -> set[str]:
     commands = []
     for line in safe_source(name).read_text().splitlines():
@@ -409,6 +420,8 @@ def docker_instructions(name: str) -> list[tuple[int, str, list[str]]]:
 def build_contexts() -> int:
     selected = dockerfiles()
     declared = compose_contexts()
+    for name, extra in image_contexts().items():
+        declared[name] = [*declared.get(name, []), *extra]
     sys.stdout.write(f"Build contexts: {len(selected)} tracked Dockerfiles\n")
     failed = False
     for name in selected:
