@@ -11,10 +11,12 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from scripts.features.serving_contract_client import CCN, YEAR_MAX, YEAR_MIN
+from scripts.serving import metrics
 from scripts.serving.service import ModelService, Reply
 
 MAX_BODY_BYTES = 1024
@@ -77,6 +79,7 @@ def create_app(service: ModelService) -> FastAPI:
         key, request_id = request.headers.get(KEY_HEADER), request.headers.get(REQUEST_HEADER)
         length = request.headers.get("content-length")
         if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            service.metrics.observe("/v1/predict", "POST", "413", 0.0)
             return send(Reply(413, {"error": "body_too_large"}))
         raw = await request.body()
         payload: Any = None
@@ -91,5 +94,23 @@ def create_app(service: ModelService) -> FastAPI:
     @app.get("/v1/health", response_model=None, summary="Report whether each HAI type has a loaded stable model")
     def health() -> JSONResponse:
         return send(service.health())
+
+    @app.get("/metrics", include_in_schema=False)
+    def scrape() -> PlainTextResponse:
+        return PlainTextResponse(service.metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    def count(request: Request, status: int) -> None:
+        service.metrics.observe(metrics.route_label(request.url.path), metrics.method_label(request.method), metrics.status_label(status), 0.0)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def refused(request: Request, error: StarletteHTTPException) -> JSONResponse:
+        count(request, error.status_code)
+        return JSONResponse({"error": "not_found" if error.status_code == 404 else "refused"}, status_code=error.status_code)
+
+    @app.exception_handler(Exception)
+    async def failed(request: Request, error: Exception) -> JSONResponse:
+        if metrics.route_label(request.url.path) != "/v1/predict":
+            count(request, 500)
+        return JSONResponse({"error": "internal"}, status_code=500)
 
     return app

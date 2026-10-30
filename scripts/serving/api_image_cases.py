@@ -40,6 +40,16 @@ def call(port: int, method: str, path: str, body: bytes | None = None, headers: 
         connection.close()
 
 
+def raw_get(port: int, path: str) -> tuple[int, str]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=REQUEST_SECONDS)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        return response.status, response.read().decode()
+    finally:
+        connection.close()
+
+
 def post(port: int, payload: dict[str, Any], key: str | None = base.KEY_A) -> tuple[int, dict[str, str], Any]:
     headers = {"Content-Type": "application/json", **({"X-API-Key": key} if key else {})}
     return call(port, "POST", "/v1/predict", json.dumps(payload).encode(), headers)
@@ -78,6 +88,20 @@ def case_http(c: Checker) -> None:
             c.check(
                 "the OpenAPI document describes the predict route and its request", "/v1/predict" in document["paths"] and "hai_type" in json.dumps(document)
             )
+            c.check("an unknown path answers 404", call(port, "GET", "/nope")[0] == 404)
+            scraped = raw_get(port, "/metrics")
+            c.check("the scrape answers 200 as text without a key", scraped[0] == 200 and scraped[1].startswith("# HELP hai_api_requests_total"))
+            c.check(
+                "the scrape holds the contract's two families",
+                "# TYPE hai_api_requests_total counter" in scraped[1] and "# TYPE hai_api_request_duration_seconds histogram" in scraped[1],
+            )
+            c.check(
+                "the counts show the 200 the 401 and the unknown path",
+                'route="/v1/predict",method="POST",status="200"' in scraped[1]
+                and 'status="401"' in scraped[1]
+                and 'route="other",method="GET",status="404"' in scraped[1],
+            )
+            c.check("the scrape holds no key or hospital", base.KEY_A not in scraped[1] and "AAA001" not in scraped[1])
             c.check("no key reached a log line", base.KEY_A not in logs.getvalue())
         finally:
             server.should_exit = True
