@@ -485,7 +485,7 @@ def promotion_needs_the_owners_approval() -> None:
         sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
         values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
         require(
-            sent["taskDefinition"] == "example_dev_job_promote" and json.loads(values["prepare"]["TRAINING_PARAMETERS"]) == {**PROMOTION, "mlflow": "aws"},
+            sent["taskDefinition"] == "example_dev_job_promote" and json.loads(values["promote"]["TRAINING_PARAMETERS"]) == {**PROMOTION, "mlflow": "aws"},
             "wrong job or parameters",
         )
         require(values["promote"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", "the promote container has no MLflow address")

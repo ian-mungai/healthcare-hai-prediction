@@ -169,13 +169,10 @@
           "RUN_ID",
           "CODE_SHA256"
         ],
-        "prepare": [
-          "RUN_ID",
-          "CODE_SHA256",
-          "TRAINING_PARAMETERS"
-        ],
         "promote": [
           "RUN_ID",
+          "CODE_SHA256",
+          "TRAINING_PARAMETERS",
           "MLFLOW_TRACKING_URI"
         ]
       }
