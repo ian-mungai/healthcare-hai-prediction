@@ -10,10 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, load_registry, read_json
+from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, load_registry, read_json, require
 
 CONFIG = REPO_ROOT / "config" / "acquisition"
 LOG_PATH = CONFIG / "source_verification_log.json"
+ALLOWLIST_PATH = CONFIG / "source_verification_text_allowlist.json"
 BRONZE_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 LOG_VERSION = 1
 NOT_RECORDED = "not recorded"
@@ -105,7 +106,10 @@ QUESTIONS = {
     "status": "What evidence verifies this source? Neither the closeout record nor the project guide lists it.",
 }
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-PHONE = re.compile(r"(?<!\d)(?:\+?1[ .-])?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)")
+PHONE = re.compile(r"(?<!\w)(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\w)")
+RECORD_SHA256 = re.compile(r"[0-9a-f]{64}")
+RECORD_POINTER = re.compile(r"acquisition-manifest\.json#/source_records/\d+")
+ROUTES = frozenset({*ROUTE_CLASSES, "access_hold"})
 
 
 def load_inputs(root: Path = REPO_ROOT) -> dict[str, Any]:
@@ -119,6 +123,7 @@ def load_inputs(root: Path = REPO_ROOT) -> dict[str, Any]:
         "bronze": read_json(root / "config" / "lakehouse" / "bronze_tables.json"),
         "closeout": read_json(config / "collection_closeout.json"),
         "terms": read_json(config / "terms_acceptance_20260928.json"),
+        "allowlist": read_json(config / ALLOWLIST_PATH.name),
         "releases": [read_json(config / name) for name in ("access_releases_20260929.json", "access_releases_20261002.json")],
     }
 
@@ -164,19 +169,38 @@ def dated_decisions(inputs: dict[str, Any]) -> dict[str, tuple[str, str]]:
     return dates
 
 
+def shape_problems(name: str, route: Any, record_sha256: Any, pointer: Any) -> list[str]:
+    """Return the problems of the registry-derived fields that are not free text: the route, the record hash and the record pointer."""
+    problems = []
+    if route not in ROUTES:
+        problems.append(f"{name}: route {route!r} is not on the route allowlist")
+    if not (isinstance(record_sha256, str) and RECORD_SHA256.fullmatch(record_sha256)):
+        problems.append(f"{name}: registry_record_sha256 is not a SHA-256 hex digest")
+    if not (isinstance(pointer, str) and RECORD_POINTER.fullmatch(pointer)):
+        problems.append(f"{name}: registry_record_pointer does not have the form acquisition-manifest.json#/source_records/<number>")
+    return problems
+
+
 def build_row(source: dict[str, Any], inputs: dict[str, Any], groups: dict[str, set[str]], dates: dict[str, tuple[str, str]]) -> dict[str, Any]:
     """Build one log row from the registry record and the committed records."""
     source_id = source["source_id"]
     publisher_slug, collection = collections_by_source(inputs["layout"])[source_id]
     guide = GUIDE_SECTION_8.get(source_id)
+    allowlist = inputs["allowlist"]
     closeout = inputs["closeout"]["sources"].get(source_id)
     reference = source["research_reference"]
     route = source["preferred_route"]
+    pointer = f"{reference['input']}#{reference['json_pointer']}"
+    shape = shape_problems(source_id, route, reference["record_sha256"], pointer)
+    require(not shape, "; ".join(shape))
+    require(allowlist["titles"].get(source_id) == source["title"], f"{source_id}: the registry title is not on the allowlist {ALLOWLIST_PATH.name}")
     route_class = "not used (rejected)" if source_id in REJECTED else ROUTE_CLASSES.get(route, NOT_RECORDED)
     if guide:
         terms = {"text": guide[1], "source": "project guide section 8"}
     else:
-        terms = {"text": source["validation"]["reviewed_access_terms"], "source": "registry validation.reviewed_access_terms"}
+        registry_terms = source["validation"]["reviewed_access_terms"]
+        require(registry_terms in allowlist["registry_terms"], f"{source_id}: the registry access terms are not on the allowlist {ALLOWLIST_PATH.name}")
+        terms = {"text": registry_terms, "source": "registry validation.reviewed_access_terms"}
     if source_id in REJECTED_CLASS:
         data_class, class_basis = REJECTED_CLASS[source_id], "project guide section 8"
     else:
@@ -211,7 +235,7 @@ def build_row(source: dict[str, Any], inputs: dict[str, Any], groups: dict[str, 
         "verification": {"date": date, "basis": basis},
         "evidence": {
             "registry_record_sha256": reference["record_sha256"],
-            "registry_record_pointer": f"{reference['input']}#{reference['json_pointer']}",
+            "registry_record_pointer": pointer,
             "capture_candidates": candidates,
             "unique_snapshot_ids": snapshots,
             "receipt_sha256": NOT_RECORDED,
@@ -271,8 +295,8 @@ def personal_data_in(value: Any) -> bool:
     return False
 
 
-def check_row(row: dict[str, Any], record_sha256: str | None, question_fields: set[str]) -> list[str]:
-    """Return the problems of one row: unknown fields, personal data, stale evidence and facts without a question."""
+def check_row(row: dict[str, Any], record_sha256: str | None, question_fields: set[str], allowlist: dict[str, Any]) -> list[str]:
+    """Return the problems of one row: unknown fields, personal data, free text off the allowlist, stale evidence and facts without a question."""
     name = str(row.get("dataset_id", "?"))
     problems = [f"{name}: unexpected field {field}" for field in sorted(set(row) - set(ROW_FIELDS))]
     for field, allowed in NESTED_FIELDS.items():
@@ -280,6 +304,14 @@ def check_row(row: dict[str, Any], record_sha256: str | None, question_fields: s
             problems.extend(f"{name}: unexpected field {field}.{extra}" for extra in sorted(set(row[field]) - set(allowed)))
     if personal_data_in(row):
         problems.append(f"{name}: personal data (email address or phone number) in the row")
+    evidence = row["evidence"] if isinstance(row.get("evidence"), dict) else {}
+    problems.extend(shape_problems(name, row.get("route"), evidence.get("registry_record_sha256"), evidence.get("registry_record_pointer")))
+    if allowlist["titles"].get(name) != row.get("title"):
+        problems.append(f"{name}: title is not on the allowlist {ALLOWLIST_PATH.name}")
+    terms = row.get("access_and_terms")
+    guide_terms = {text for _, text in GUIDE_SECTION_8.values()}
+    if not isinstance(terms, dict) or terms.get("text") not in {*guide_terms, *allowlist["registry_terms"]}:
+        problems.append(f"{name}: terms text is not on the allowlist {ALLOWLIST_PATH.name} or the project guide table")
     if record_sha256 is not None and row.get("evidence", {}).get("registry_record_sha256") != record_sha256:
         problems.append(f"{name}: stale evidence, registry_record_sha256 no longer matches the registry record")
     if row.get("status") not in STATUSES:
@@ -295,6 +327,8 @@ def check_log(log: dict[str, Any], inputs: dict[str, Any]) -> list[str]:
     problems = []
     if log.get("generated_from", {}).get("registry_sha256") != inputs["lock"]["registry_sha256"]:
         problems.append("stale evidence: generated_from.registry_sha256 no longer matches the registry lock")
+    if personal_data_in(inputs["allowlist"]):
+        problems.append(f"personal data (email address or phone number) in {ALLOWLIST_PATH.name}")
     rows = log.get("rows", [])
     seen = [row.get("dataset_id") for row in rows]
     problems.extend(f"duplicate row for {name}" for name in sorted({name for name in seen if seen.count(name) > 1}))
@@ -304,7 +338,7 @@ def check_log(log: dict[str, Any], inputs: dict[str, Any]) -> list[str]:
     records = {source["source_id"]: source["research_reference"]["record_sha256"] for source in inputs["registry"]["sources"]}
     question_fields = {question["field"] for question in log.get("questions", [])}
     for row in rows:
-        problems.extend(check_row(row, records.get(row.get("dataset_id")), question_fields))
+        problems.extend(check_row(row, records.get(row.get("dataset_id")), question_fields, inputs["allowlist"]))
     if log != build_log(inputs):
         problems.append("the log differs from a fresh build; run python -m scripts.acquisition.source_verification_log")
     return problems

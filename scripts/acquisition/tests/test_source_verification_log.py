@@ -110,3 +110,41 @@ def test_hand_edit_that_differs_from_a_fresh_build_fails_the_check(built: dict[s
         any("differs from a fresh build" in problem for problem in log_module.check_log(broken, inputs)),
         "any('differs from a fresh build' in problem for problem in log_module.",
     )
+
+
+def test_person_name_in_a_free_text_field_fails_the_check(built: dict[str, Any], inputs: dict[str, Any]) -> None:
+    titled = copy.deepcopy(built)
+    rows_by_id(titled)["CMS_OWNERS"]["title"] = "Jane Placeholder"
+    check(
+        any("title" in problem and "allowlist" in problem and "CMS_OWNERS" in problem for problem in log_module.check_log(titled, inputs)),
+        "any('title' in problem and 'allowlist' in problem and 'CMS_OWNERS' in ",
+    )
+    termed = copy.deepcopy(built)
+    rows_by_id(termed)["CMS_OWNERS"]["access_and_terms"]["text"] = "Public source; ask Jane Placeholder for access."
+    check(
+        any("terms" in problem and "allowlist" in problem and "CMS_OWNERS" in problem for problem in log_module.check_log(termed, inputs)),
+        "any('terms' in problem and 'allowlist' in problem and 'CMS_OWNERS' in ",
+    )
+
+
+def test_person_name_in_the_registry_stops_the_build(inputs: dict[str, Any]) -> None:
+    for field in ("title", "reviewed_access_terms"):
+        planted = copy.deepcopy(inputs)
+        record = next(source for source in planted["registry"]["sources"] if source["source_id"] == "CMS_OWNERS")
+        (record if field == "title" else record["validation"])[field] = "Jane Placeholder"
+        with pytest.raises(log_module.RegistryError, match="allowlist"):
+            log_module.build_log(planted)
+
+
+# Digits of a fictional number, joined by the layout under test so no complete number appears in the source.
+PHONE_LAYOUTS = ["{a}{b}{c}", "+1{a}{b}{c}", "+1 {a} {b} {c}", "1-{a}-{b}-{c}", "{a}.{b}.{c}", "({a}) {b}-{c}", "+1.{a}.{b}.{c}"]
+
+
+@pytest.mark.parametrize("layout", PHONE_LAYOUTS)
+def test_phone_number_variants_fail_the_check(layout: str, built: dict[str, Any], inputs: dict[str, Any]) -> None:
+    broken = copy.deepcopy(built)
+    rows_by_id(broken)["CMS_OWNERS"]["status_reason"] = "Call " + layout.format(a="555", b="010", c="0100") + " for access"
+    check(
+        any("personal data" in problem and "CMS_OWNERS" in problem for problem in log_module.check_log(broken, inputs)),
+        "any('personal data' in problem and 'CMS_OWNERS' in problem for pro",
+    )
