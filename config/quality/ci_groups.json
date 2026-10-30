@@ -218,7 +218,9 @@
       "lint-settings",
       "suppressions",
       "subprocess-imports",
-      "docker-calls",
+      "docker-calls"
+    ],
+    "samples": [
       "test-checks"
     ]
   },

@@ -2234,7 +2234,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     expected = sorted(hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci")
     actual: list[str] = []
     exits = []
-    for group in ("privacy", "documentation", "code"):
+    for group in ("privacy", "documentation", "code", "samples"):
         listed = run_command(str(PYTHON), ["-m", "scripts.quality.ci_hooks", "--group", group, "--list"], cwd=ROOT, timeout=60)
         exits.append(listed.returncode)
         try:
@@ -2244,7 +2244,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     results.append(
         {
             "case": "hook_groups_cover_every_manual_hook_exactly_once",
-            "passed": exits == [0, 0, 0] and sorted(actual) == expected,
+            "passed": exits == [0, 0, 0, 0] and sorted(actual) == expected,
             "missing": sorted(set(expected) - set(actual)),
             "repeated": sorted(name for name in set(actual) if actual.count(name) > 1),
             "exits": exits,
