@@ -289,12 +289,12 @@ variable "broker_signed_parameter_name" {
 variable "broker_jobs" {
   description = "Where the broker starts job tasks: the closed job subnet and security group, the jobs log group, the data bucket that holds the staged code digest, the private address of the host and the job families to enable. Required when broker_enabled is true."
   type = object({
-    subnet_id         = string
-    security_group_id = string
-    log_group_name    = string
-    bucket_name       = string
-    host_ip           = string
-    families          = list(string)
+    subnet_id          = string
+    security_group_ids = map(string)
+    log_group_name     = string
+    bucket_name        = string
+    host_ip            = string
+    families           = list(string)
   })
   default = null
 
@@ -302,11 +302,24 @@ variable "broker_jobs" {
     condition = !var.broker_enabled || (
       var.broker_jobs != null &&
       can(regex("^subnet-[a-z0-9]+$", try(var.broker_jobs.subnet_id, "!"))) &&
-      can(regex("^sg-[a-z0-9]+$", try(var.broker_jobs.security_group_id, "!"))) &&
+      length(try(var.broker_jobs.security_group_ids, {})) > 0 &&
+      alltrue([for class, group in try(var.broker_jobs.security_group_ids, {}) : contains(["lakehouse", "training"], class) && can(regex("^sg-[a-z0-9]+$", group))]) &&
       can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", try(var.broker_jobs.bucket_name, "!"))) &&
       can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", try(var.broker_jobs.host_ip, "!")))
     )
-    error_message = "Supply the job subnet, the job security group, the data bucket and the private address of the host, or set broker_enabled to false."
+    error_message = "Supply the job subnet, a security group for each network class (lakehouse and training), the data bucket and the private address of the host, or set broker_enabled to false."
+  }
+
+  # Each family runs only in the network class that config/orchestration/ecs_broker_jobs.json approves for it. The lakehouse class reaches the catalog and Redis,
+  # the training class also reaches MLflow. A test compares this map with the job table.
+  validation {
+    condition = !var.broker_enabled || (var.broker_jobs != null && alltrue([
+      for family in try(var.broker_jobs.families, []) : contains(
+        keys(try(var.broker_jobs.security_group_ids, {})),
+        lookup({ train = "training", silver = "lakehouse", gold = "lakehouse", features = "lakehouse", drift = "training", promote = "training" }, family, "none")
+      )
+    ]))
+    error_message = "Every enabled job family needs the security group of its own network class: silver, gold and features use lakehouse, and train, drift and promote use training."
   }
 
   validation {

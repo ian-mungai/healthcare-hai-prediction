@@ -60,7 +60,7 @@ class EcsSettings:
     cluster: str
     family_prefix: str
     subnets: tuple[str, ...]
-    security_groups: tuple[str, ...]
+    networks: Mapping[str, tuple[str, ...]]
     project_tag: str
     log_group: str
     families: frozenset[str]
@@ -104,12 +104,28 @@ class EcsAdapter:
         self.logs = logs
         self.settings = settings
 
-    def start(self, family: str, key: str, environment: Mapping[str, Mapping[str, str]]) -> str:
-        """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives."""
+    @staticmethod
+    def identity(key: str) -> str:
+        """The ECS ``startedBy`` value of the task started for ``key``: the same on every start, so the task can be found again after a lost reply."""
+        return f"hai-{hashlib.sha256(key.encode()).hexdigest()[:40]}"
+
+    def find(self, key: str) -> str | None:
+        """The ARN of the running task started for ``key``, or None when ECS lists none. A failed listing raises, so the caller keeps the question open."""
+        try:
+            running = self.ecs.list_tasks(cluster=self.settings.cluster, startedBy=self.identity(key))["taskArns"]
+        except (ClientError, BotoCoreError) as error:
+            raise classify(error) from None
+        return str(running[0]) if running else None
+
+    def start(self, family: str, key: str, environment: Mapping[str, Mapping[str, str]], network: str) -> str:
+        """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives. ``network`` names the
+        class whose security groups the task gets: each family runs only in the network its job table row approves."""
         if family not in self.settings.families:
             raise TaskRefused("family_not_named")
+        if network not in self.settings.networks:
+            raise TaskRefused("network_not_bound")
         digest = hashlib.sha256(key.encode()).hexdigest()
-        started_by = f"hai-{digest[:40]}"
+        started_by = self.identity(key)
         try:
             running = self.ecs.list_tasks(cluster=self.settings.cluster, startedBy=started_by)["taskArns"]
             if running:
@@ -122,7 +138,7 @@ class EcsAdapter:
                 networkConfiguration={
                     "awsvpcConfiguration": {
                         "subnets": list(self.settings.subnets),
-                        "securityGroups": list(self.settings.security_groups),
+                        "securityGroups": list(self.settings.networks[network]),
                         "assignPublicIp": "DISABLED",
                     }
                 },

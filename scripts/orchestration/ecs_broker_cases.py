@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
+import re
 import sys
 import tempfile
 from collections.abc import Callable, Iterator
@@ -433,6 +434,90 @@ def refused_stop_does_not_cancel() -> None:
         require(current.client.cancel(handle).state == State.CANCELLED, "the retried cancel did not end the submission")
 
 
+def cancel_of_an_unresolved_start_stops_the_task() -> None:
+    """ECS accepted RunTask but the reply was lost: the submission holds only an intent. Cancel must find the task by its deterministic identity and stop it."""
+    with rig() as current:
+        current.ecs.hold = True
+        current.ecs.lose_reply_once = True
+        asked = request("fit")
+        raises(BrokerUnavailable, partial(current.client.submit, asked))
+        handle = Handle(asked.submission_id, asked.container_name)
+        status = current.client.cancel(handle)
+        task = next(iter(current.ecs.tasks.values()))
+        require(task["lastStatus"] == "STOPPED", f"the cancel left the task {task['lastStatus']}")
+        require(status.state == State.CANCELLED and current.ecs.count("stop_task") == 1, f"cancel did not end the submission after the stop: {status}")
+
+
+def retry_beside_an_unresolved_start_is_refused() -> None:
+    with rig() as current:
+        current.ecs.hold = True
+        current.ecs.lose_reply_once = True
+        raises(BrokerUnavailable, partial(current.client.submit, request("fit")))
+        raises(SubmissionRefused, partial(current.client.submit, request("fit", attempt=2)))
+        require(len(current.ecs.tasks) == 1, "a later attempt started a second task beside the one that had no reply")
+
+
+def failed_discovery_keeps_an_unresolved_start_open() -> None:
+    with rig() as current:
+        current.ecs.hold = True
+        current.ecs.lose_reply_once = True
+        asked = request("fit")
+        raises(BrokerUnavailable, partial(current.client.submit, asked))
+        handle = Handle(asked.submission_id, asked.container_name)
+        current.ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
+        raises(BrokerUnavailable, partial(current.client.cancel, handle))
+        require(current.client.status(handle).state in (State.PENDING, State.RUNNING), "a cancel whose discovery failed ended the submission")
+        require(current.client.cancel(handle).state == State.CANCELLED, "the repeated cancel did not end the submission")
+        require(next(iter(current.ecs.tasks.values()))["lastStatus"] == "STOPPED", "the task was not stopped")
+
+
+def code_digest_is_read_once_per_start() -> None:
+    """The fetch and pin containers both receive the code digest. The broker reads the staged object once, so the value it checked is the value both get."""
+    with rig() as current:
+        handle = current.client.submit(silver_request())
+        require(current.client.status(handle).state in (State.RUNNING, State.SUCCEEDED), "the silver job did not start")
+        reads = [key for key in current.s3.reads if key.endswith("/inputs/code.sha256")]
+        require(len(reads) == 1, f"the code digest object was read {len(reads)} times for one start")
+        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+        digests = {item["value"] for override in sent["overrides"]["containerOverrides"] for item in override["environment"] if item["name"] == "CODE_SHA256"}
+        require(len(digests) == 1, f"the containers received different code digests: {digests}")
+
+
+def cancel_waits_for_the_task_to_stop() -> None:
+    """StopTask only requests the stop. The submission may end as cancelled once the task is STOPPED, not before."""
+    with rig() as current:
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.ecs.stop_lag = 3
+        status = current.client.cancel(handle)
+        task = next(iter(current.ecs.tasks.values()))
+        require(status.state == State.CANCELLED and task["lastStatus"] == "STOPPED", f"cancelled while the task was {task['lastStatus']}")
+
+
+def stop_that_never_completes_blocks_the_retry() -> None:
+    """A stop that the task never finishes fails visibly, ends nothing, and no later attempt starts beside the old task."""
+    with rig() as current, mock.patch.object(EcsBroker, "STOP_WAIT_SECONDS", 0.3), mock.patch.object(EcsBroker, "STOP_POLL_SECONDS", 0.01):
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.ecs.stop_lag = 10**9
+        raises(BrokerUnavailable, partial(current.client.cancel, handle))
+        require(current.client.status(handle).state in (State.PENDING, State.RUNNING), "an unconfirmed stop ended the submission")
+        tasks = len(current.ecs.tasks)
+        raises(SubmissionRefused, partial(current.client.submit, request("fit", attempt=2)))
+        require(len(current.ecs.tasks) == tasks, "a retry started a second task beside the one that was still stopping")
+
+
+def deadline_stop_waits_for_the_task_to_stop() -> None:
+    with rig() as current:
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.ecs.stop_lag = 3
+        current.clock[0] += 10**7
+        status = current.client.status(handle)
+        task = next(iter(current.ecs.tasks.values()))
+        require(status.state != State.RUNNING and task["lastStatus"] == "STOPPED", f"timeout recorded while the task was {task['lastStatus']}")
+
+
 def chain_layers_use_the_bronze_run_digest() -> None:
     with rig() as current:
         silver, gold = derived_run_id(BRONZE_RUN, "silver"), derived_run_id(silver_of(BRONZE_RUN), "gold")
@@ -450,6 +535,75 @@ def chain_layers_use_the_bronze_run_digest() -> None:
         require(digests == {"cd" * 32}, f"a layer used another digest than the bronze run's: {digests}")
         wait_for(current, current.client.submit(request("chain_gate", run=BRONZE_RUN, dag="bronze_chain_dag", attempt=2)))
         require((current.folder / "state" / "chains").is_dir(), "the chain record is missing")
+
+
+def each_family_runs_in_its_approved_network() -> None:
+    """The layer jobs reach the catalog and Redis through the lakehouse group, the training family through the group that also reaches MLflow. Each RunTask
+    carries only the group of its own family's network class, and the table names a class for every family."""
+    classes = {"train": "training", "silver": "lakehouse", "gold": "lakehouse", "features": "lakehouse", "drift": "training", "promote": "training"}
+    table = load_jobs(ROOT)["jobs"]
+    require(
+        {name: job.get("network") for name, job in table.items()} == classes,
+        f"the broker table binds the networks {[(n, j.get('network')) for n, j in table.items()]}",
+    )
+    groups = {"training": "sg-0train", "lakehouse": "sg-0lake"}
+    for template, family, run, dag in (
+        ("guard", "train", RUN, "training_dag"),
+        ("pin_bronze", "silver", SILVER_RUN, "silver_transform_dag"),
+        ("drift_run", "drift", DRIFT_RUN, "drift_monitoring_dag"),
+    ):
+        with rig() as current:
+            current.client.submit(request(template, run=run, dag=dag))
+            sent = [arguments for name, arguments in current.ecs.calls if name == "run_task"]
+            require(bool(sent), f"the {family} family started no task")
+            found = sent[0]["networkConfiguration"]["awsvpcConfiguration"]["securityGroups"]
+            require(found == [groups[classes[family]]], f"the {family} family ran in {found}, not in {groups[classes[family]]}")
+
+
+def broker_settings_name_the_networks_of_the_enabled_families() -> None:
+    from scripts.orchestration import ecs_broker
+
+    jobs = load_jobs(ROOT)
+    both = ecs_broker.network_groups('{"lakehouse": "sg-0lake", "training": "sg-0train"}')
+    require(both == {"lakehouse": ("sg-0lake",), "training": ("sg-0train",)}, f"{both}")
+    ecs_broker.check_networks(dataclasses.replace(SETTINGS, networks=both, families=frozenset({"train", "silver"})), jobs)
+    only_lakehouse = ecs_broker.network_groups('{"lakehouse": "sg-0lake"}')
+    raises(
+        ecs_broker.BrokerError, lambda: ecs_broker.check_networks(dataclasses.replace(SETTINGS, networks=only_lakehouse, families=frozenset({"train"})), jobs)
+    )
+    for bad in ("not json", '{"offline": "sg-0a"}', '{"lakehouse": "not-a-group"}', "{}"):
+        raises(ecs_broker.BrokerError, partial(ecs_broker.network_groups, bad))
+
+
+def network_classes_match_the_services_stack_and_the_iam_outputs() -> None:
+    """The family to class map in the services variable equals the job table, and each class is an output of the IAM stack that the owner passes in."""
+    table = {name: job["network"] for name, job in load_jobs(ROOT)["jobs"].items()}
+    variables = (ROOT / "infra/services/variables.tf").read_text()
+    literal = re.search(r"lookup\(\{([^}]*)\}, family", variables)
+    require(literal is not None, "the services variable has no family to class map")
+    in_variable = dict(re.findall(r'(\w+) = "(\w+)"', literal.group(1))) if literal else {}
+    require(in_variable == table, f"the services variable maps {in_variable}, the job table {table}")
+    job_outputs = (ROOT / "infra/iam/job_outputs.tf").read_text()
+    classes = (ROOT / "infra/iam/job_network.tf").read_text()
+    require(
+        "for key in local.job_classes" in job_outputs and '"lakehouse"' in classes,
+        "the IAM job_network output lacks the lakehouse class",
+    )
+    require('output "training_network"' in (ROOT / "infra/iam/training.tf").read_text(), "the IAM stack has no training_network output")
+
+
+def drift_triggered_training_fetches_the_drift_runs_code() -> None:
+    """The drift DAG derives the training run ID from the drift run ID. That run has no staged code of its own: it must fetch the code of the drift run."""
+    from orchestration.training_contract import training_run_id
+
+    training = training_run_id(DRIFT_RUN)
+    with rig() as current, dag_runtime(current, "drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}) as drift_step:
+        drift_step("drift_run")
+        with dag_runtime(current, "training_dag", {**TRAIN_PARAMS, "run_id": training}) as run_step:
+            require(run_step("guard") == "succeeded", "the drift-triggered training step did not pass")
+        sent = [arguments for name, arguments in current.ecs.calls if name == "run_task"][-1]
+        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
+        require(values["fetch"]["CODE_RUN_ID"] == DRIFT_RUN and values["fetch"]["RUN_ID"] == training, f"the training fetch names {values['fetch']}")
 
 
 def silver_of(bronze: str) -> str:
@@ -579,6 +733,17 @@ CASES: dict[str, Callable[[], None]] = {
     "refused_stop_is_not_recorded_as_a_timeout": refused_stop_is_not_recorded_as_a_timeout,
     "refused_stop_does_not_cancel": refused_stop_does_not_cancel,
     "chain_layers_use_the_bronze_run_digest": chain_layers_use_the_bronze_run_digest,
+    "cancel_of_an_unresolved_start_stops_the_task": cancel_of_an_unresolved_start_stops_the_task,
+    "retry_beside_an_unresolved_start_is_refused": retry_beside_an_unresolved_start_is_refused,
+    "failed_discovery_keeps_an_unresolved_start_open": failed_discovery_keeps_an_unresolved_start_open,
+    "each_family_runs_in_its_approved_network": each_family_runs_in_its_approved_network,
+    "broker_settings_name_the_networks_of_the_enabled_families": broker_settings_name_the_networks_of_the_enabled_families,
+    "network_classes_match_the_services_stack_and_the_iam_outputs": network_classes_match_the_services_stack_and_the_iam_outputs,
+    "drift_triggered_training_fetches_the_drift_runs_code": drift_triggered_training_fetches_the_drift_runs_code,
+    "code_digest_is_read_once_per_start": code_digest_is_read_once_per_start,
+    "cancel_waits_for_the_task_to_stop": cancel_waits_for_the_task_to_stop,
+    "stop_that_never_completes_blocks_the_retry": stop_that_never_completes_blocks_the_retry,
+    "deadline_stop_waits_for_the_task_to_stop": deadline_stop_waits_for_the_task_to_stop,
     "promotion_needs_the_owners_approval": promotion_needs_the_owners_approval,
     "drift_dag_step_reaches_the_drift_job": drift_dag_step_reaches_the_drift_job,
     "promotion_runs_through_the_dag_runtime": promotion_runs_through_the_dag_runtime,

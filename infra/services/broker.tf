@@ -31,7 +31,7 @@ locals {
         { name = "BROKER_PORT", value = tostring(local.broker_port) },
         { name = "BROKER_PROJECT_TAG", value = var.project_tag },
         { name = "BROKER_SIGNED_PARAMETER", value = var.broker_signed_parameter_name },
-        { name = "BROKER_SECURITY_GROUPS", value = try(var.broker_jobs.security_group_id, "unset") },
+        { name = "BROKER_NETWORKS", value = try(jsonencode(var.broker_jobs.security_group_ids), "unset") },
         { name = "BROKER_STATE", value = local.broker_state_mount },
         { name = "BROKER_SUBNETS", value = try(var.broker_jobs.subnet_id, "unset") },
         { name = "HOME", value = "/tmp" },
