@@ -1098,6 +1098,16 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         )
         require(listing(fixture.out) == [], "a refused check wrote output")
 
+    def sensitivity_population() -> None:
+        fixture = promoted(folder / "sensitivity", Predictor(LABEL, constant=3.0))
+        next(iter(fixture.tracking.parents().values()))["tags"]["population"] = "sensitivity"
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "population_not_primary" and "sensitivity" in error, f"{code} {error}")
+        store = fixture.tracking
+        require(len(store.models[name]["versions"]) == 1, "a sensitivity run was registered as a model version")
+        require(store.models[name]["aliases"] == {"production": "1"}, f"a sensitivity run set an alias: {store.models[name]['aliases']}")
+        require(listing(fixture.out) == [], "a refused check wrote output")
+
     def dirty_code() -> None:
         fixture = promoted(folder / "dirty")
         next(iter(fixture.tracking.parents().values()))["tags"]["git_dirty"] = "true"
@@ -1209,6 +1219,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_sets_challenger_on_pass", better_challenger)
     cases.check("job_promotion_check_fails_worse_challenger_without_alias", worse_challenger)
     cases.check("job_promotion_check_never_moves_production", production_untouched)
+    cases.check("job_promotion_check_refuses_sensitivity_population", sensitivity_population)
     cases.check("job_promotion_check_refuses_holdout_leak", holdout_leak)
     cases.check("job_promotion_check_refuses_champion_columns_outside_extract", champion_columns)
     cases.check("job_promotion_check_refuses_unloadable_champion", champion_unloadable)

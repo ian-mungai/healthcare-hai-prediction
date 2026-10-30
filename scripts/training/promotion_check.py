@@ -90,6 +90,13 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     run_tags = store.get_run(parent).data.tags
     if run_tags.get(run_tracking.COMPLETE_TAG) != bundle_hash:
         raise JobFailure("run_incomplete", f"the logged run {parent} does not carry the bundle hash of the mounted fit")
+    rules = job_inputs.read_json(root / "config/training/promotion.json", "promotion_config")
+    population = run_tags.get("population")
+    if population != rules["population"] or manifest["population"] != rules["population"]:
+        raise JobFailure(
+            "population_not_primary",
+            f"only the {rules['population']} population can become a challenger; the run is {population} and the extract {manifest['population']}",
+        )
     name = contract["registered_models"][hai_type]
     version = registry.register(
         store,
@@ -104,7 +111,6 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     challenger = predict(load_pipeline(str(base / "model")), holdout)
     current = registry.champion(store, name)
     rival = None if current is None else champion_predictions(store, current, name, manifest, holdout, year, scratch)
-    rules = job_inputs.read_json(root / "config/training/promotion.json", "promotion_config")
     regions = job_inputs.read_json(root / "config/training/census_regions.json", "promotion_config")["states"]
     seed = seed_for(job_inputs.config_of(root)["master_seed"], hai_type, "promotion_bootstrap")
     rows = promotion.comparison_rows(holdout, manifest["label_column"], challenger, rival, rules, regions)
