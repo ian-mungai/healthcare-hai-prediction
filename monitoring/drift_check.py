@@ -14,12 +14,14 @@ Run it from the repository root as a module, in an environment with DuckDB and, 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import signal
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,22 @@ class CheckError(Exception):
     def __init__(self, name: str, detail: str, code: int = 2) -> None:
         super().__init__(f"{name}: {detail}")
         self.code = code
+
+
+@contextlib.contextmanager
+def deadline(seconds: int) -> Iterator[None]:
+    """End the enclosed work with a CheckError named ``deadline`` after ``seconds`` seconds, also when it waits in a blocking read."""
+
+    def expired(_signal: int, _frame: Any) -> None:
+        raise CheckError("deadline", f"the work ran longer than {seconds} seconds")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def quote(name: str) -> str:
@@ -83,7 +101,7 @@ def open_matrix(path: Path, what: str) -> DuckDBPyRelation:
     try:
         return duckdb.read_parquet(str(path))
     except duckdb.Error as error:
-        raise CheckError(f"{what}_matrix_unreadable", f"{path}: {error}") from None
+        raise CheckError("matrix_unreadable", f"the {what} matrix {path}: {error}") from None
 
 
 def kind_of(column_type: Any) -> str | None:
@@ -224,18 +242,14 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         config, _ = drift_config.load(arguments.config)
-
-        def expired(_signal: int, _frame: Any) -> None:
-            raise CheckError("deadline", f"the check ran longer than {config['deadline_seconds']} seconds")
-
-        signal.signal(signal.SIGALRM, expired)
-        signal.alarm(int(config["deadline_seconds"]))
-        target = run(arguments)
+        with deadline(int(config["deadline_seconds"])):
+            target = run(arguments)
     except (CheckError, drift_config.ConfigError) as error:
         sys.stderr.write(f"drift check failed: {error}\n")
         return error.code if isinstance(error, CheckError) else 2
-    finally:
-        signal.alarm(0)
+    except duckdb.Error as error:
+        sys.stderr.write(f"drift check failed: matrix_unreadable: a matrix cannot be read: {error}\n")
+        return 2
     sys.stdout.write(f"drift record {target}\n")
     return 0
 

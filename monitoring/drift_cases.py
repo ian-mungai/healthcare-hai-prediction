@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,8 @@ class Fixture:
     drop_from_current: str | None = None
     drop_from_reference: str | None = None
     cat_as_number_in_current: bool = False
+    corrupt_reference: str = ""
+    corrupt_current: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -77,6 +80,13 @@ def write_matrix(path: Path, rows: int, year_of: str, shifted: tuple[str, ...], 
     duckdb.sql("SELECT range AS i FROM range(?)", params=[rows]).project(projection).write_parquet(str(path))
 
 
+def corrupt(path: Path, mode: str) -> None:
+    """Damage a written Parquet file the way a failed copy or a bad disk does."""
+    raw = path.read_bytes()
+    damaged = {"garbage": b"not a parquet file", "truncated": raw[:-20], "footer": raw[:-40] + b"\xff" * 30 + raw[-10:]}[mode]
+    path.write_bytes(damaged)
+
+
 def write_inputs(folder: Path, fixture: Fixture) -> dict[str, Path]:
     start = fixture.reference_newest_year - 2
     reference, current = folder / "reference.parquet", folder / "current.parquet"
@@ -90,6 +100,9 @@ def write_inputs(folder: Path, fixture: Fixture) -> dict[str, Path]:
         fixture.drop_from_current,
         fixture.cat_as_number_in_current,
     )
+    for path, mode in ((reference, fixture.corrupt_reference), (current, fixture.corrupt_current)):
+        if mode:
+            corrupt(path, mode)
     paths = {"reference-matrix": reference, "current-matrix": current}
     for name, hai_type, population, extra in (
         ("reference-manifest", fixture.hai_type, fixture.population, {"newest_window_year": fixture.reference_newest_year}),
@@ -156,6 +169,27 @@ def refused(name: str, fixture: Fixture, detail: str = "") -> Callable[[Path], P
         return problems
 
     return case
+
+
+def stalled_input_hits_the_deadline(folder: Path) -> Problems:
+    """A manifest that never delivers (a named pipe, as a hung mount would) must end the check at the configured deadline."""
+    config = folder / "drift.json"
+    document = json.loads((ROOT / "config/monitoring/drift.json").read_text())
+    document["deadline_seconds"] = 1
+    config.write_text(json.dumps(document) + "\n")
+    fixture = Fixture()
+    paths = write_inputs(folder, fixture)
+    paths["reference-manifest"].unlink()
+    os.mkfifo(paths["reference-manifest"])
+    arguments = [f"--{name}={path}" for name, path in paths.items()] + [f"--run-id={RUN_ID}", f"--out={folder / 'out'}", f"--config={config}"]
+    done = run_command(PYTHON, ["-m", "monitoring.drift_check", *arguments], cwd=ROOT, timeout=60)
+    text = done.stdout + done.stderr
+    problems = [] if done.returncode == 2 else [f"expected exit 2, got {done.returncode}: {text[:300]}"]
+    if "deadline" not in text or "1 seconds" not in text:
+        problems.append(f"the message does not name the deadline: {text[:300]}")
+    if list((folder / "out").glob("drift_*.json")):
+        problems.append("a check that hit its deadline left a record")
+    return problems
 
 
 def evidently_missing(folder: Path) -> Problems:
@@ -250,6 +284,11 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("refuses_a_feature_of_another_type", refused("feature_type_differs", Fixture(cat_as_number_in_current=True), "f_cat")),
         ("refuses_an_all_missing_feature", refused("feature_all_missing", Fixture(null_feature="f_num_a"), "f_num_a")),
         ("refuses_an_empty_feature_list", refused("features_empty", Fixture(features=()))),
+        ("refuses_a_garbage_reference_matrix", refused("matrix_unreadable", Fixture(corrupt_reference="garbage"), "reference")),
+        ("refuses_a_truncated_reference_matrix", refused("matrix_unreadable", Fixture(corrupt_reference="truncated"), "reference")),
+        ("refuses_a_garbage_current_matrix", refused("matrix_unreadable", Fixture(corrupt_current="garbage"), "current")),
+        ("refuses_a_current_matrix_with_a_damaged_footer", refused("matrix_unreadable", Fixture(corrupt_current="footer"), "current")),
+        ("ends_at_the_deadline_on_a_stalled_input", stalled_input_hits_the_deadline),
         ("names_the_missing_dependency", evidently_missing),
         ("triggers_when_every_feature_drifts", checked(Fixture(shifted=FEATURES), True, len(FEATURES))),
         ("stays_quiet_without_drift", checked(Fixture(), False, 0)),
