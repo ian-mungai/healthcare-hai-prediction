@@ -15,6 +15,7 @@ POLICIES = ROOT / "infra/iam/owner_policies"
 BUCKET = "arn:aws:s3:::example-data-bucket"
 PRODUCTION = ("bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check")
 TWINS = ("bronze_e2e", "bronze_dictionary_e2e", "smoke_check_e2e", "duckdb_view_check_e2e")
+PAYLOADS = "bronze_objects/sha256"
 TEST_NAMESPACES = ("silver_e2e", "gold_e2e", "features_e2e", *TWINS)
 
 
@@ -24,7 +25,7 @@ def values(names: tuple[str, ...], collections: tuple[str, ...]) -> dict[str, st
         "BUCKET_ARN": BUCKET,
         "TABLE_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/{name}/*" for name in names]),
         "TABLE_LIST_PREFIXES": json.dumps([f"lakehouse/{name}/*" for name in names]),
-        "SOURCE_OBJECT_ARNS": json.dumps([f"{BUCKET}/{collection}/*" for collection in collections]),
+        "SOURCE_OBJECT_ARNS": json.dumps([*(f"{BUCKET}/{collection}/*" for collection in collections), f"{BUCKET}/{PAYLOADS}/*"]),
         "SOURCE_LIST_PREFIXES": json.dumps([f"{collection}/*" for collection in collections]),
     }
 
@@ -60,6 +61,12 @@ def evaluate(document: dict[str, Any], names: tuple[str, ...], collections: tupl
             for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
                 check(action, f"{BUCKET}/{key}", False)
         check("s3:ListBucketVersions", BUCKET, True, prefix=f"{collection}/manifests/")
+    payload = f"{BUCKET}/{PAYLOADS}/" + "ab" * 32
+    check("s3:GetObjectVersion", payload, True)
+    for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
+        check(action, payload, False)
+    check("s3:GetObjectVersion", f"{BUCKET}/bronze_objects/other/" + "ab" * 32, False)
+    check("s3:ListBucketVersions", BUCKET, False, prefix=f"{PAYLOADS}/")
     check("s3:GetObjectVersion", f"{BUCKET}/example/not_mapped/source.csv", False)
     check("s3:ListBucketVersions", BUCKET, False, prefix="example/not_mapped/")
     check("s3:ListBucket", BUCKET, False, prefix="")

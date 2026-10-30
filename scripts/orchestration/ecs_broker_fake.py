@@ -156,12 +156,15 @@ class FakeS3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.reads: list[str] = []
+        self.after_read: dict[str, bytes] = {}
 
     def get_object(self, **arguments: Any) -> dict[str, Any]:
         self.reads.append(arguments["Key"])
         body = self.objects.get(arguments["Key"])
         if body is None:
             raise client_error("NoSuchKey", "GetObject")
+        if arguments["Key"] in self.after_read:
+            self.objects[arguments["Key"]] = self.after_read.pop(arguments["Key"])
         return {"Body": _Body(body)}
 
 

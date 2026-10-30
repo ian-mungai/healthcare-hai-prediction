@@ -109,10 +109,12 @@ Pass `--overrides file://overrides.json` to the run-task call. For a real run, l
 
 The `bronze` job writes one new source capture into bronze. It is one Fargate task with the `init` step and the containers `fetch`, `pin`, `load` and `check`. Each runs one phase of `scripts/lakehouse/bronze_run.py` from the archive the run staged. The task role is the bronze writer role and only the `load` container receives the bronze catalog pair. The job is not part of the signed chain, because bronze comes first.
 
-Two values change from run to run, the tables and the target. Both come at dispatch from a file the run stages beside its code archive. Both are checked twice. The broker reads `bronze_request.json` before it starts the task. It refuses a table outside the table map, a repeated table, a target other than `real` or `qualify`, a qualification run that spans two collections and any key beyond the three below. The `pin` phase checks the same values against the table map of the unpacked code. The `load` and `check` phases refuse values that differ from the pin.
+Two values change from run to run, the tables and the target. Both come at dispatch from a file the run stages beside its code archive. Both are checked twice. The broker reads `bronze_request.json` before it starts the task. It refuses a table outside the table map, a repeated table, a target other than `real` or `qualify`, a qualification run that spans two collections and any key beyond the three below. The broker reads the file once, persists the checked values and their digest with the intent and passes them to every container and every retry. The `pin` phase reads the staged file again and refuses it when its digest differs from the one the broker checked, so a file replaced after the check cannot change the run. A request marked as a dry run cannot run live. The `pin` phase also checks the same values against the table map of the unpacked code. The `load` and `check` phases refuse values that differ from the pin.
+
+The request also names the digest of a source inventory. The inventory lists the manifest versions and object versions the run may read. The `load` phase reads only those versions, in the dry run and in the real loader. A capture that arrives after the inventory was built is therefore not part of the run. Every attempt of the run loads the same objects. A different capture needs a new run ID with a new inventory. A selected table with no objects in the inventory is refused by name, both when the owner builds the inventory and at the pin, in dry and real runs. This also stops an empty plan from passing when a capture sits outside the prefixes the loader lists. All `load` imports (`boto3`, `pdfplumber`, `openpyxl`, `xlrd`, `pyreadstat` and Spark) are installed in the Spark image. The bronze driver E2E checks this against the image requirements.
 
 ```json
-{"tables": ["<TABLE_A>", "<TABLE_B>"], "target": "qualify", "dry_run": true}
+{"tables": ["<TABLE_A>", "<TABLE_B>"], "target": "qualify", "dry_run": true, "inventory_sha256": "<SHA256_OF_THE_INVENTORY>"}
 ```
 
 | Target | Writes |
@@ -130,11 +132,15 @@ Apply the bronze job in this order. Each apply is the owner's.
 2. Catalog (owner): the bronze writer principal needs create and load rights on the namespaces `bronze_e2e` and `bronze_dictionary_e2e` before a qualification run. The production namespaces keep their rights.
 3. `infra/jobs`: set `bronze_job_enabled = true` with the Spark image digest, the execution and bronze writer role ARNs, `writer_parameter_names.write_bronze_task` and the jobs log group. The output `bronze_run_task` lists the variables of each container.
 4. `infra/services`: add `bronze` to `broker_jobs.families` and apply, so the broker restarts with the family.
-5. Stage the run as for the layer jobs and add the request beside the code archive:
+5. Stage the run as for the layer jobs. Then build the inventory and the request with the project profile and copy both beside the code archive:
 
    ```sh
-   aws s3 cp /tmp/bronze_request.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/bronze_request.json --profile <PROJECT_PROFILE>
+   AWS_PROFILE=<PROJECT_PROFILE> AWS_REGION=<REGION> .venv/bin/python -m scripts.lakehouse.bronze_run inventory --run <RUN_ID> --bucket <DATA_BUCKET> --tables <TABLE_A>,<TABLE_B> --target qualify --dry-run --out /tmp/bronze_stage
+   aws s3 cp /tmp/bronze_stage/bronze_inventory.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/bronze_inventory.json --profile <PROJECT_PROFILE>
+   aws s3 cp /tmp/bronze_stage/bronze_request.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/bronze_request.json --profile <PROJECT_PROFILE>
    ```
+
+   Leave out `--dry-run` for a live run. Read the printed object and manifest counts before the copy.
 
 6. Submit the run on the host. The step name is `bronze_load` and the run ID is the one of the staged folder:
 
@@ -142,7 +148,7 @@ Apply the bronze job in this order. Each apply is the owner's.
    curl -s -H "Authorization: Bearer $BROKER_TOKEN" -d '{"request_version": 2, "template": "bronze_load", "run_id": "<RUN_ID>", "mode": "real", "attempt": 1, "dag_id": "manual_bronze", "task_id": "bronze_load", "dag_run_id": "manual__<RUN_ID>"}' http://127.0.0.1:18790/v1/submit
    ```
 
-   Poll `/v1/status` with `{"submission_id": "<RUN_ID>:bronze_load:real:1"}` until it is `succeeded` or `failed`. A second submit of the same run and attempt returns the same handle. A new attempt number starts a new task that repeats the same rows.
+   Poll `/v1/status` with `{"submission_id": "<RUN_ID>:bronze_load:real:1"}` until it is `succeeded` or `failed`. A second submit of the same run and attempt returns the same handle. A new attempt number starts a new task that repeats the same rows. Every attempt of a run must use the request and the inventory that its first attempt had checked. The broker refuses a changed one by name and tells the owner to start a new run ID. It keeps this binding in its ledger on the host volume, so a task started by hand outside the broker is not bound.
 
 When a `real` run passes, the `check` log line prints the command that starts the chain by hand:
 
@@ -151,6 +157,10 @@ airflow dags trigger bronze_chain_dag --conf '{"run_id": "<BRONZE_RUN_ID>", "mod
 ```
 
 A `qualify` run never prints it, because the chain reads production bronze.
+
+Every container of the job starts through the in-image deadline runner with one absolute deadline that the broker fixes when it writes the intent. No phase, including `fetch` and the dry load, can outlive it, even when no caller asks for the status. The broker cancels the job at the same deadline as a second control.
+
+A qualification run publishes the metadata of its selected tables only. A real run keeps the check that the first metadata publication covers the whole committed table map.
 
 The qualification tables stay in the test twins until the owner drops them from the catalog. No job removes them.
 
