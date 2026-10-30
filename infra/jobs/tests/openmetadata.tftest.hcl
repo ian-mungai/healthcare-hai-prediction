@@ -123,6 +123,29 @@ run "enabled_plan_registers_one_bounded_private_task" {
   }
 
   assert {
+    condition = (
+      [for c in jsondecode(output.openmetadata_container_definitions) : c.essential if c.name == "server"][0] &&
+      [for c in jsondecode(output.openmetadata_container_definitions) : c.essential if c.name == "database"][0] &&
+      [for c in jsondecode(output.openmetadata_container_definitions) : c.essential if c.name == "search"][0]
+    )
+    error_message = "A server that stops must stop the task, so the server is essential beside the database and the search index."
+  }
+
+  assert {
+    condition = (
+      can(regex("chmod 1777 /tmp", [for c in jsondecode(output.openmetadata_container_definitions) : join("\n", c.entryPoint) if c.name == "init"][0])) &&
+      can(regex("chmod 1777 /run/om", [for c in jsondecode(output.openmetadata_container_definitions) : join("\n", c.entryPoint) if c.name == "init"][0])) &&
+      !can(regex("chown -R 10001:10001 /workspace /tmp", [for c in jsondecode(output.openmetadata_container_definitions) : join("\n", c.entryPoint) if c.name == "init"][0]))
+    )
+    error_message = "The temporary folder and the run folder must be writable by every container user, so they are sticky and open and not owned by one user."
+  }
+
+  assert {
+    condition     = can(regex("openmetadata_migrate", [for c in jsondecode(output.openmetadata_container_definitions) : join(" ", c.entryPoint) if c.name == "migrate"][0]))
+    error_message = "The migration runs through the retry script that writes the abort marker."
+  }
+
+  assert {
     condition     = length(output.openmetadata_container_definitions) < 40000
     error_message = "The container JSON must stay well under the 64 KiB task definition limit."
   }
