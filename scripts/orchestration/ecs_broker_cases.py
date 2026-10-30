@@ -13,6 +13,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -218,7 +219,7 @@ def refusals() -> None:
                 "an unknown HAI type",
             ),
         ):
-            raises(SubmissionRefused, lambda bad=bad: current.client.submit(bad))
+            raises(SubmissionRefused, partial(current.client.submit, bad))
             require(not current.ecs.calls, f"{why} reached the cloud")
         wrong = BrokerClient(f"http://127.0.0.1:{current.listener.port}", "another-token-value", timeout=5)
         raises(BrokerUnavailable, lambda: wrong.health())
@@ -313,7 +314,7 @@ def chain_is_closed_until_the_first_publishes_are_signed() -> None:
     with rig(signed=None) as current:
         gate = request("chain_gate", run=SILVER_RUN, dag="bronze_chain_dag")
         for closed in (gate, silver_request(), gold_request(), request("pin_gold", run=FEATURES_RUN, dag="features_transform_dag", input_run=GOLD_RUN)):
-            raises(SubmissionRefused, lambda closed=closed: current.client.submit(closed))
+            raises(SubmissionRefused, partial(current.client.submit, closed))
         require(not current.ecs.calls, "a chain job reached the cloud before the first publishes were signed")
         require(wait_for(current, current.client.submit(request("guard"))).state == State.SUCCEEDED, "training must not wait for the chain record")
         for raw in (
@@ -349,7 +350,7 @@ def missing_acceptance_check_fails_the_job() -> None:
 def each_chain_step_needs_the_one_before_to_have_passed() -> None:
     with rig() as current:
         for bad in (gold_request(None), gold_request(RUN)):
-            raises(SubmissionRefused, lambda bad=bad: current.client.submit(bad))
+            raises(SubmissionRefused, partial(current.client.submit, bad))
         wait_for(current, current.client.submit(silver_request()))
         current.ecs.plan = {"validate": 1}
         require(wait_for(current, current.client.submit(gold_request())).state == State.FAILED, "gold did not fail its acceptance check")
