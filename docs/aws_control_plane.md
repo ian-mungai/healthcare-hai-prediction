@@ -128,6 +128,18 @@ The owner creates the AWS catalog `hai_lakehouse`, sets up its six principals an
 
 The stand-in E2E is `.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations`. It uses a loopback Polaris, the Parameter Store stand-in and the real owned relay. It contacts no AWS service.
 
+## Athena mirror
+
+Polaris stays the catalog and the source of truth. Athena reads published tables through read-only Glue registrations that point at each table's current Iceberg metadata file (`scripts/lakehouse/glue_mirror.py`). The names and limits are in `config/lakehouse/athena_mirror.json`.
+
+- **What is mirrored.** Only tables that file lists, only in mode `real` and only in the `silver` and `gold` namespaces. Bronze, the `_e2e` namespaces and `publish_runs` never reach Glue. Each listed table must be Public in the dbt model metadata. The E2E fails when one is Confidential, unknown or outside the publish contract. No Confidential class marks a table as readable, so no Confidential table is mirrored.
+- **When.** The `commit` step of a publish calls the mirror after the catalog commit, also on a rerun of a committed run. The mirror compares first and writes nothing when Glue already holds the same file. A failure never fails or undoes the publish. It prints `the Glue mirror FAILED` to standard error, sets `status` in the `mirror` field of the step's JSON line and writes `mirror.json` in the publish folder. A rerun of the step retries it.
+- **Switches.** Both `enabled` in the config file and the Terraform input `athena_mirror_prepared` of the IAM stack are `false`. Until both are on, a publish makes no Glue call.
+- **Check.** `python -m scripts.lakehouse.glue_mirror check --layer gold` compares each registration with Polaris and exits 1 on a missing, foreign or different pointer. It writes nothing.
+- **Grants.** The prepared stack makes the Glue databases, the workgroup and one reader policy that nothing attaches. The workgroup cancels a query that scans more than `bytes_scanned_limit` and writes encrypted results under `athena/results/`. A writer role may read its database and read, create and update the listed tables only. The reader policy reads those registrations and table folders and writes only query results. Neither deletes.
+
+The E2E is `.venv/bin/python -m scripts.lakehouse.run_glue_mirror_e2e --out <new_directory>`. It uses a fake Glue client and contacts no AWS service. Only a live test proves two things. Athena must read a table that Spark 4.1.2 and Iceberg 1.11.0 wrote. Athena must also accept the registration made here. The AWS documentation names Iceberg 1.4.2.
+
 ## Needs from the foundation and the secret store
 
 | Need | Who | Why |
