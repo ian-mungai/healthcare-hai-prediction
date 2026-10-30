@@ -182,23 +182,14 @@ def waits_have_explicit_deadlines() -> None:
     require(loaded["dag"].settings.get("max_active_runs") == 1, "the chain may run twice at once")
 
 
-# Child DAGs that live on a branch that is not in this tree yet. When a branch is combined, the file appears and this case fails until the entry is removed,
-# which makes the integration a deliberate step with the checks below.
-PENDING_CHILDREN = {"drift_monitoring_dag": "feat/drift-monitoring"}
-
-
 def named_child_dags_exist_and_accept_the_settings() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node.settings for node in loaded["operators"]}
     problems = []
     for layer, dag_id, _ in loaded["CHAIN"]:
         path = ROOT / "dags" / f"{dag_id}.py"
-        if dag_id in PENDING_CHILDREN:
-            if path.exists():
-                problems.append(f"{dag_id} is now in the tree: remove it from PENDING_CHILDREN so its settings are checked")
-            continue
         if not path.exists():
-            problems.append(f"{dag_id} is not in the tree and is not marked as pending on a branch")
+            problems.append(f"{dag_id} is not in the tree")
             continue
         text = path.read_text()
         if f'dag_id="{dag_id}"' not in text:
