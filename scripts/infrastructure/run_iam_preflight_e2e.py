@@ -91,7 +91,6 @@ def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Call
     """Each case: name, defect, the command run and the check of its result, which returns the failed expectations."""
     env_file = root / "project.env"
     env_file.write_text(ENV_TEXT, encoding="utf-8")
-    gap = 2  # the reader rows that carry pending_fix
 
     def planted(edits: list[tuple[str, str, str]]) -> Path:
         infra = root / f"infra_{len(list(root.glob('infra_*')))}"
@@ -115,9 +114,19 @@ def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Call
         return [f"call {call['service']} {call['operation']} is not read-only" for call in run.calls if (call["service"], call["operation"]) not in READ_ONLY]
 
     no_reader_silver = [("roles.tf", '"lakehouse/silver/", "lakehouse/gold/"]', '"lakehouse/gold/"]')]
-    with_dictionary = [("roles.tf", '["lakehouse/bronze/", "lakehouse/silver/"', '["lakehouse/bronze/", "lakehouse/bronze_dictionary/", "lakehouse/silver/"')]
     wrong_action = [("owner_policies/job_execution.json", '"Action": "ssm:GetParameters",', '"Action": "ssm:GetParameter",')]
     no_layer_policy = [("job_writer.tf", "job_writer_layer_storage", "job_writer_layer_removed")]
+    input_in_comment = [
+        ("job_writer.tf", 'resource "aws_iam_role_policy" "job_writer_layer_input" {', '# resource "aws_iam_role_policy" "job_writer_layer_input" {')
+    ]
+    layer_runs_always_on = [
+        (
+            "job_writer.tf",
+            "job_layer_run_prepared_roles = var.job_layer_runs_prepared ? aws_iam_role.job_write_layer_task : {}",
+            "job_layer_run_prepared_roles = aws_iam_role.job_write_layer_task",
+        )
+    ]
+    drift_flag_removed = [("drift.tf", "drift_policies = var.drift_prepared ? {", "drift_policies = true ? {")]
     return [
         (
             "offline real tree",
@@ -138,38 +147,44 @@ def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Call
             lambda r: expect(r, 1) + ([] if "job_execution ssm:GetParameters" in r.out else ["job_execution row not named"]),
         ),
         (
+            "offline layer input policy is only in a comment",
+            "the resource that attaches the layer input read is commented out",
+            offline_run(planted(input_in_comment)),
+            lambda r: expect(r, 1) + ([] if "job_writer_layer_input" in r.out and "no resource" in r.out else ["attachment not named"]),
+        ),
+        (
+            "offline layer run grants lose their flag",
+            "the layer run roles no longer depend on job_layer_runs_prepared",
+            offline_run(planted(layer_runs_always_on)),
+            lambda r: expect(r, 1) + ([] if "job_layer_runs_prepared" in r.out else ["flag not named"]),
+        ),
+        (
+            "offline drift grants lose their flag",
+            "the drift policies no longer depend on drift_prepared",
+            offline_run(planted(drift_flag_removed)),
+            lambda r: expect(r, 1) + ([] if "drift_prepared" in r.out else ["flag not named"]),
+        ),
+        (
             "offline policy no longer attached",
             "Terraform stops naming the layer storage policy",
             offline_run(planted(no_layer_policy)),
             lambda r: expect(r, 1) + ([] if "no longer names owner_policies/job_writer_layer_storage.json" in r.out else ["attachment not named"]),
         ),
         (
-            "offline stale pending fix",
-            "the reader gains bronze_dictionary while the table still lists it as pending",
-            offline_run(planted(with_dictionary)),
-            lambda r: expect(r, 1) + ([] if "remove its pending_fix" in r.out else ["stale pending_fix not named"]),
-        ),
-        (
             "live real tree",
-            "the reader lacks bronze_dictionary today",
+            "none",
             live_run(),
             lambda r: (
-                expect(r, 1, PASS=rows - gap, FAIL=gap)
+                expect(r, 0, PASS=rows, FAIL=0)
                 + reads_only(r)
                 + ([] if r.calls and r.calls[0]["operation"] == "get-caller-identity" else ["no identity check first"])
             ),
         ),
         (
-            "live after the reader fix",
-            "bronze_dictionary added to the reader prefixes",
-            live_run(planted(with_dictionary)),
-            lambda r: expect(r, 0, PASS=rows, FAIL=0),
-        ),
-        (
             "live grant removed",
             "silver removed from the reader prefixes",
             live_run(planted(no_reader_silver)),
-            lambda r: expect(r, 1, FAIL=gap + 2) + ([] if "FAIL reader s3:GetObject" in r.out else ["silver failure not named"]),
+            lambda r: expect(r, 1, FAIL=2) + ([] if "FAIL reader s3:GetObject" in r.out else ["silver failure not named"]),
         ),
         (
             "live simulation denied",

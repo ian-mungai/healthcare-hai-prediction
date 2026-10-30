@@ -2,8 +2,7 @@
 
 The table ``config/aws/iam_preflight_checks.json`` lists, for each project role, the policies it holds and the actions and resources it needs. This module
 renders those policies from ``infra/iam`` with the Terraform defaults and evaluates every row with the offline policy evaluator, so a policy change that
-removes a listed grant is found without AWS. A row with ``pending_fix`` names a grant that is known to be missing: the offline check requires it to stay
-denied until the fix lands, and then asks for the field to be removed. ``python -m scripts.infrastructure.iam_preflight_policies`` runs the check.
+removes a listed grant is found without AWS. ``python -m scripts.infrastructure.iam_preflight_policies`` runs the check.
 """
 
 from __future__ import annotations
@@ -31,8 +30,9 @@ OFFLINE_VALUES = {
     "DATA_BUCKET_NAME": "example-hai-data-bucket",
 }
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
-ROW_KEYS = {"role", "action", "resource", "context", "pending_fix"}
-ROLE_KEYS = {"name", "terraform", "policies", "layer"}
+ROW_KEYS = {"role", "action", "resource", "context"}
+ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments"}
+ATTACHMENT_KEYS = {"policy", "resource", "flag"}
 SAMPLE_USER_ID = "AROAEXAMPLE:task"
 
 
@@ -50,11 +50,14 @@ def load_table(path: Path = TABLE) -> dict[str, Any]:
         raise TableError("The preflight table must hold exactly the keys roles and checks.")
     for key, role in table["roles"].items():
         if not isinstance(role, dict) or not {"name", "terraform", "policies"} <= set(role) or set(role) - ROLE_KEYS:
-            raise TableError(f"Role {key} needs name, terraform and policies, and may add layer.")
+            raise TableError(f"Role {key} needs name, terraform and policies, and may add layer and attachments.")
+        for attachment in role.get("attachments", []):
+            if not isinstance(attachment, dict) or set(attachment) != ATTACHMENT_KEYS or attachment["policy"] not in role["policies"]:
+                raise TableError(f"Role {key} has an attachment without a policy of the role, a resource and a flag.")
     seen: set[str] = set()
     for row in table["checks"]:
         if not isinstance(row, dict) or not {"role", "action", "resource"} <= set(row) or set(row) - ROW_KEYS:
-            raise TableError("Each check needs role, action and resource, and may add context and pending_fix.")
+            raise TableError("Each check needs role, action and resource, and may add context.")
         if row["role"] not in table["roles"]:
             raise TableError(f"A check names the unknown role {row['role']}.")
         identity = json.dumps(row, sort_keys=True)
@@ -135,6 +138,22 @@ def lakehouse_role_policy(text: str, infra: Path, values: Mapping[str, str]) -> 
     return json.loads(expand(text, values))
 
 
+def layer_run_inputs(infra: Path) -> dict[str, str]:
+    """The input layer of each layer task, as ``job_writer.tf`` lists it in ``job_layer_run_inputs``."""
+    text = (infra / "job_writer.tf").read_text(encoding="utf-8")
+    match = re.search(r"job_layer_run_inputs\s*=\s*\{(.*?)\}", text, re.DOTALL)
+    if match is None:
+        raise TableError("job_writer.tf lists no job_layer_run_inputs.")
+    return dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', match.group(1)))
+
+
+def layer_registry_key(infra: Path) -> str:
+    match = re.search(r'job_layer_run_registry_key\s*=\s*"([^"]*)"', (infra / "job_writer.tf").read_text(encoding="utf-8"))
+    if match is None:
+        raise TableError("job_writer.tf names no Feast registry key.")
+    return match.group(1)
+
+
 def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Mapping[str, str], names: Mapping[str, str]) -> dict[str, str]:
     """The Terraform-computed placeholders of one owner policy, built the way the IAM stack builds them."""
     bucket, account, region = values["DATA_BUCKET_NAME"], values["AWS_ACCOUNT_ID"], values["AWS_REGION"]
@@ -147,6 +166,22 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "BUCKET_ARN": f"arn:aws:s3:::{bucket}",
             "TABLE_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/{p}/*" for p in layer_prefix]),
             "TABLE_LIST_PREFIXES": json.dumps([f"lakehouse/{p}/*" for p in layer_prefix]),
+        }
+    if policy.endswith("job_writer_layer_input.json"):
+        source = layer_run_inputs(infra)[role["layer"]]
+        return {
+            "BUCKET_ARN": f"arn:aws:s3:::{bucket}",
+            "INPUT_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/{source}/*"]),
+            "INPUT_LIST_PREFIXES": json.dumps([f"lakehouse/{source}/*"]),
+        }
+    if policy.endswith("job_writer_layer_upload.json"):
+        # Silver and gold upload their run folder. Features attaches the same template for its run claim object only.
+        rest = "*/state/*" if role["layer"] == "features" else "*"
+        return {"UPLOAD_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/{role['layer']}/{rest}"])}
+    if policy.endswith("job_writer_features_feast.json"):
+        return {
+            "REGISTRY_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/{layer_registry_key(infra)}"]),
+            "REDIS_PARAMETER_ARNS": json.dumps([f"arn:aws:ssm:{region}:{account}:parameter{names['REDIS_PASSWORD_NAME']}"]),
         }
     if policy.endswith("job_writer_execution.json"):
         pairs = [names[f"AWS_POLARIS_{layer}_CLIENT_{part}_NAME"] for layer in ("SILVER", "GOLD", "FEATURES") for part in ("ID", "SECRET")]
@@ -191,8 +226,54 @@ def request_context(row: Mapping[str, Any], values: Mapping[str, str]) -> dict[s
     return context
 
 
+def without_comments(text: str) -> str:
+    """Terraform text without full-line ``#`` and ``//`` comments, so that a resource in a comment does not count. A ``/*`` in a string is not a comment."""
+    return re.sub(r"(?m)^\s*(#|//).*$", "", text)
+
+
+def resource_block(text: str, kind: str, name: str) -> str | None:
+    """The body of one ``resource`` block, found by matching braces."""
+    match = re.search(rf'resource\s+"{kind}"\s+"{name}"\s*\{{', text)
+    if match is None:
+        return None
+    depth, index = 1, match.end()
+    while depth and index < len(text):
+        depth += {"{": 1, "}": -1}.get(text[index], 0)
+        index += 1
+    return text[match.end() : index - 1]
+
+
+def depends_on_flag(block: str, text: str, flag: str, seen: frozenset[str] = frozenset()) -> bool:
+    """Whether the block, or a local value that it reads, mentions ``var.<flag>``: the grant exists only while its preparation flag is on."""
+    if f"var.{flag}" in block:
+        return True
+    for name in re.findall(r"local\.(\w+)", block):
+        if name in seen:
+            continue
+        definition = re.search(rf"(?m)^\s*{name}\s*=\s*(.*?)(?=^\s*\w+\s*=|^\}}|\Z)", text, re.DOTALL | re.MULTILINE)
+        if definition and depends_on_flag(definition.group(1), text, flag, seen | {name}):
+            return True
+    return False
+
+
+def attachment_problems(key: str, role: Mapping[str, Any], infra: Path) -> list[str]:
+    """Each declared attachment must be a real ``aws_iam_role_policy`` resource that uses the policy and that exists only while its flag is on."""
+    text = without_comments(" \n".join((infra / file).read_text(encoding="utf-8") for file in role["terraform"]))
+    found = []
+    for attachment in role.get("attachments", []):
+        block = resource_block(text, "aws_iam_role_policy", attachment["resource"])
+        stem = Path(attachment["policy"]).stem
+        if block is None:
+            found.append(f"role {key}: Terraform has no resource aws_iam_role_policy.{attachment['resource']} for {attachment['policy']}")
+        elif stem not in block and stem not in text:
+            found.append(f"role {key}: aws_iam_role_policy.{attachment['resource']} no longer uses {attachment['policy']}")
+        elif not depends_on_flag(block, text, attachment["flag"]):
+            found.append(f"role {key}: aws_iam_role_policy.{attachment['resource']} no longer depends on {attachment['flag']}")
+    return found
+
+
 def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str, str] = OFFLINE_VALUES) -> list[str]:
-    """Every row that the policy files do not support, every policy that Terraform does not attach to its role and every stale ``pending_fix``."""
+    """Every row that the policy files do not support, and every policy that Terraform does not attach to its role."""
     names = infra_names(infra)
     found = []
     documents: dict[str, list[dict[str, Any]]] = {}
@@ -201,6 +282,7 @@ def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str,
         for policy in role["policies"]:
             if Path(policy).stem not in terraform:
                 found.append(f"role {key}: Terraform {', '.join(role['terraform'])} no longer names {policy}")
+        found += attachment_problems(key, role, infra)
         documents[key] = role_documents(role, infra, values, names)
     expanded = {**names, **values}
     for row in table["checks"]:
@@ -211,10 +293,7 @@ def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str,
         except UnsupportedPolicyElement as error:
             found.append(f"{label}: the policy uses an element the evaluator does not model ({error})")
             continue
-        pending = row.get("pending_fix")
-        if pending and decision.allowed:
-            found.append(f"{label}: now allowed, so remove its pending_fix")
-        elif not pending and not decision.allowed:
+        if not decision.allowed:
             found.append(f"{label}: not granted by the policies of role {row['role']} ({decision.effect})")
     return found
 
