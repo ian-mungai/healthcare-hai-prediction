@@ -395,7 +395,7 @@ def case_silver_chain(case: Case) -> None:
     require(len(model("publish_runs.json", [])) == 1, "one publish_runs row")
     require(kinds().index("publish_runs") > max(index for index, kind in enumerate(kinds()) if kind == "table"), "publish_runs is the last catalog write")
     prefix = f"lakehouse/layer_runs/silver/{SILVER_RUN}/"
-    require(UPLOADS and all(key.startswith(prefix) for _, key in UPLOADS), UPLOADS)
+    require(bool(UPLOADS) and all(key.startswith(prefix) for _, key in UPLOADS), UPLOADS)
     require(not any("/snapshot/" in key or "staging.duckdb" in key or "silver_input" in key for _, key in UPLOADS), "bulk files are not uploaded")
     require("publish acceptance passed" in case.out, case.out)
 

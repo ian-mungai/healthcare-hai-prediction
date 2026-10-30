@@ -152,7 +152,17 @@ def pin(job: Job) -> None:
     common = ["--run", job.run, "--mode", job.mode, "--source-run", job.input_run]
     if job.layer == "gold":
         run_module(job, "scripts.lakehouse.silver_publish", ["pin", *common, "--record", record, *job.local_flags])
-        arguments = ["--run", job.run, "--mode", job.mode, "--expected-pin-sha256", digest_file(record), "--folder", job.folder, *job.local_flags]
+        arguments: list[str | Path] = [
+            "--run",
+            job.run,
+            "--mode",
+            job.mode,
+            "--expected-pin-sha256",
+            digest_file(record),
+            "--folder",
+            job.folder,
+            *job.local_flags,
+        ]
         run_module(job, "scripts.lakehouse.silver_input", arguments)
         return
     run_module(job, "scripts.features.features_input", ["pin", *common, "--folder", job.folder, "--record", record, *job.local_flags])
@@ -188,7 +198,7 @@ def build(job: Job) -> None:
             provenance.VARIABLE_REVISION: identity(job)["git_revision"],
             provenance.VARIABLE_REQUIRED: "1",
         }
-    arguments = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", snapshot / "project"]
+    arguments: list[str | Path] = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", snapshot / "project"]
     arguments += ["--source-sha256", source, "--input-sha256", input_sha, *(["--extract-sha256", extract] if extract else [])]
     if job.layer == "features":
         run_module(job, "scripts.features.features_build", arguments, environment)
@@ -203,7 +213,14 @@ def validate(job: Job) -> None:
         output = job.folder / f"quality_{kind}"
         output.mkdir(exist_ok=True)
         suites = {"silver": ["suites"], "gold": ["gold"], "cross": ["suites", "gold"], "features": ["features"]}[kind]
-        arguments = ["--database", job.folder / "staging.duckdb", "--suites", *(Path(SUITES) / name for name in suites), "--output", output / "result.json"]
+        arguments: list[str | Path] = [
+            "--database",
+            job.folder / "staging.duckdb",
+            "--suites",
+            *(Path(SUITES) / name for name in suites),
+            "--output",
+            output / "result.json",
+        ]
         if kind == "features":
             run_module(job, "scripts.features.feature_validation", arguments)
         elif kind == "cross":
@@ -270,7 +287,7 @@ def export(job: Job) -> None:
     seal(job)
     sha, path = sealed(job)
     job.publish_folder.mkdir(exist_ok=True)
-    arguments = ["--run", job.run, "--sealed-sha256", sha, "--publish-dir", job.publish_folder, "--sealed", path]
+    arguments: list[str | Path] = ["--run", job.run, "--sealed-sha256", sha, "--publish-dir", job.publish_folder, "--sealed", path]
     if job.layer == "silver":
         run_module(job, "scripts.lakehouse.silver_export", arguments)
     elif job.layer == "gold":
@@ -420,7 +437,8 @@ def build_plan(job: Job, contract: Any, manifest: dict[str, Any], state: dict[st
 
     namespace = contract.namespaces[job.mode]
     tables = [table_entry(namespace, name, int(manifest["tables"][name]["rows"]), state.get("tables", {}).get(name)) for name in sorted(contract.tables)]
-    runs = state.get("runs_table") if isinstance(state.get("runs_table"), dict) else {}
+    runs_state = state.get("runs_table")
+    runs: dict[str, Any] = runs_state if isinstance(runs_state, dict) else {}
     committed = runs.get("run_committed")
     runs_entry = {"table": f"{namespace}.{contract.runs_table}", "rows_now": count(runs.get("rows_now")), "rows_added": 0 if committed is True else 1}
     runs_entry["action"] = "refused" if committed is True else "append_row"
@@ -496,7 +514,7 @@ def plan_publish(job: Job) -> dict[str, Any]:
         raise StepError("the export does not hold exactly the contract's tables: the real publish would refuse it")
     state_file = job.folder / "publish/catalog_state.json"
     state_file.unlink(missing_ok=True)
-    arguments = ["--layer", job.layer, "--run", job.run, "--mode", job.mode, "--sealed-sha256", sha, "--accepted-result-sha256", accepted]
+    arguments: list[str | Path] = ["--layer", job.layer, "--run", job.run, "--mode", job.mode, "--sealed-sha256", sha, "--accepted-result-sha256", accepted]
     arguments += ["--publish-dir", job.publish_folder, "--output", state_file, *job.local_flags]
     state: dict[str, Any] = {}
     error = ""
