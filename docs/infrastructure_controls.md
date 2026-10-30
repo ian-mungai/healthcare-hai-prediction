@@ -278,10 +278,8 @@ versions or delete markers. One exception covers only `lakehouse/`, where
 Iceberg replaces and deletes its own table files: replaced versions there expire
 30 days after they are replaced and orphaned delete markers are removed. Current
 lakehouse files never expire. A second rule, `expire_replaced_dvc_versions`, covers only `dvc/`, the prefix of the DVC remote for the training
-baseline. Replaced versions there expire after 30 days and orphaned delete markers are removed. Current DVC objects never expire. A third rule,
-`expire_replaced_mlflow_versions`, treats `mlflow/` the same way: it is the artifact prefix of the MLflow service. It exists only when the
-owner plans and applies with `terraform.sh --mlflow-retention` (the `mlflow_retention_enabled` input). A default plan of the storage stack leaves the three
-other rules as they are and changes nothing live. Everything outside `lakehouse/`, `dvc/` and `mlflow/` never expires. The storage stack and its mock-plan test hold the DVC and MLflow rules. The owner applies them and the MLflow rule is not applied yet. Local mock-plan tests, source-shape checks and live
+baseline. Replaced versions there expire after 30 days and orphaned delete markers are removed. Current DVC objects never expire. A third rule, `expire_athena_results`, covers only `athena/results/`, where Athena writes query results that can hold Confidential rows. Current results expire after 7 days and replaced versions after 1 day. S3 allows either an expiry in days or the delete-marker cleanup in one rule, so the delete markers of expired results stay. The mock-plan test checks sample keys, so no other prefix matches this rule. A fourth rule, `expire_replaced_mlflow_versions`, treats `mlflow/` like `dvc/`. It is the artifact prefix of the MLflow service. It exists only when the owner plans and applies with `terraform.sh --mlflow-retention` (the `mlflow_retention_enabled` input). Everything
+outside `lakehouse/`, `dvc/`, `athena/results/` and `mlflow/` never expires. The storage stack and its mock-plan test hold the DVC, Athena and MLflow rules. The owner applies them. The Athena and MLflow rules are not applied yet. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
