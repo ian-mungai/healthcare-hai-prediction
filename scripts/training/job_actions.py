@@ -6,10 +6,10 @@ import contextlib
 import hashlib
 import json
 import os
-import pickle
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -49,15 +49,17 @@ def guarded(action: str) -> Iterator[None]:
 
 def write_atomic(folder: Path, name: str, data: bytes) -> None:
     """Write one output beside its final name, flush it and rename it, so a crash never leaves a half file under the final name."""
-    partial = folder / f".{name}.partial"
+    target = folder / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.partial")
     with partial.open("wb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(partial, folder / name)
+    os.replace(partial, target)
 
 
-def run_step(context: Any, record: Mapping[str, Any], step: str, allowed: set[str], plan: Plan) -> None:
+def run_step(context: Any, record: Mapping[str, Any], step: str, allowed: Callable[[str], bool], plan: Plan) -> None:
     """Resume a completed step unchanged, or run the plan, write its outputs and the completion record, and print the outputs."""
     folder, digest = context.run_dir, str(record["code_digest"])
     if not folder.is_dir():
@@ -66,11 +68,12 @@ def run_step(context: Any, record: Mapping[str, Any], step: str, allowed: set[st
         completed = (folder / f"{step}.done.json").exists()
         done = step_records.verify_done(folder, step, digest) if completed else {}
         if not completed:
-            for leftover in folder.glob(".*.partial"):
+            for leftover in folder.rglob(".*.partial"):
                 leftover.unlink()
             present = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
-            if present - allowed:
-                raise JobFailure("run_dir_not_clean", f"the run folder holds files this step does not write: {sorted(present - allowed)[0]}")
+            foreign = sorted(name for name in present if not allowed(name))
+            if foreign:
+                raise JobFailure("run_dir_not_clean", f"the run folder holds files this step does not write: {foreign[0]}")
             for stale in present:
                 (folder / stale).unlink()
     except ValueError as error:
@@ -103,60 +106,51 @@ def check_targets(root: Path) -> None:
         raise JobFailure("targets_refused", "; ".join(problems))
 
 
-def fit_type(context: Any, config: Mapping[str, Any], hai_type: str, parameters: Mapping[str, Any]) -> dict[str, bytes]:
-    """Fit the six-model suite on one type's verified extract and return its outputs."""
+def fit_type(context: Any, record: Mapping[str, Any], config: Mapping[str, Any], hai_type: str) -> dict[str, bytes]:
+    """Fit the six-model suite on one type's verified extract and return the files of its bundle."""
+    from scripts.training import bundle
     from scripts.training.models import suite
 
+    started = time.monotonic()
     extract = job_inputs.input_root(context.parameters) / "extract"
     manifest, rows = job_inputs.extract_of(extract, hai_type, context.run)
     adjacency = job_inputs.auxiliary_of(extract, manifest, job_inputs.ADJACENCY)
     request = job_inputs.model_request(hai_type, rows, adjacency, config, float(config["budgets"]["fit_seconds"]), job_inputs.ROOT)
-    result = suite.fit_models(request)
-    payload = result.to_result()
-    auxiliary = manifest["auxiliary_files"]
-    payload["hai_type"] = hai_type
-    payload["inputs"] = {
-        "extract_sha256": manifest["sha256"],
-        "snapshot_set": manifest["snapshot_set"],
-        "auxiliary_sha256": {name: entry["sha256"] for name, entry in sorted(auxiliary.items())},
-        "auxiliary_rows": {name: entry["row_count"] for name, entry in sorted(auxiliary.items())},
+    contract = job_inputs.read_json(job_inputs.ROOT / "data_contracts/training/model_contract.json", "model_contract")
+    inputs = {
+        "hashes": {"extract_sha256": manifest["sha256"], "manifest_sha256": step_records.file_sha256(extract / f"manifest_{hai_type}.json")},
+        "records": {
+            "snapshot_set": manifest["snapshot_set"],
+            "auxiliary_files": {
+                name: {"sha256": entry["sha256"], "row_count": entry["row_count"]} for name, entry in sorted(manifest["auxiliary_files"].items())
+            },
+        },
     }
-    _, holdout = request.data.split()
-    chosen = result.selected
-    predictions: list[dict[str, Any]] = []
-    if chosen is not None:
-        slot = result.slots[chosen]
-        scored = sorted((holdout.keys[position], value) for position, value in zip(slot.holdout_positions, slot.predictions, strict=True))
-        predictions = [{"spine_key": key, "predicted": value} for key, value in scored]
-    outputs = {
-        f"fit_{hai_type}.json": text(payload),
-        f"holdout_{hai_type}.json": text({"hai_type": hai_type, "model": chosen, "predictions": predictions}),
-    }
-    if result.candidate is not None:
-        outputs[f"model_{hai_type}.pkl"] = pickle.dumps(result.slots[result.candidate].pipeline, protocol=4)
-    return outputs
+    return bundle.build(suite.fit_models(request), hai_type, inputs, record, context.run, contract, job_inputs.ROOT, started)
 
 
-def fit_names(hai_types: list[str]) -> set[str]:
-    """Return every output name a fit may write for the run's types."""
-    return {name for hai_type in hai_types for name in (f"fit_{hai_type}.json", f"holdout_{hai_type}.json", f"model_{hai_type}.pkl")}
+def fit_allowed(hai_types: list[str]) -> Callable[[str], bool]:
+    """Return the test for the names a fit may write: any file under a requested type's bundle folder."""
+    from scripts.training import bundle
+
+    prefixes = tuple(bundle.prefix(hai_type) + "/" for hai_type in hai_types)
+    return lambda name: name.startswith(prefixes)
 
 
 def run_fit(context: Any, record: Mapping[str, Any]) -> None:
     """Fit the six-model suite for every requested type from the mounted extract, after the target-list check."""
     with guarded("fit"):
         parameters = job_inputs.parameters_of(context.parameters)
-        names = fit_names(parameters["hai_types"])
 
         def plan() -> dict[str, bytes]:
             check_targets(job_inputs.ROOT)
             config = job_inputs.config_of(job_inputs.ROOT)
             outputs: dict[str, bytes] = {}
             for hai_type in parameters["hai_types"]:
-                outputs |= fit_type(context, config, hai_type, parameters)
+                outputs |= fit_type(context, record, config, hai_type)
             return outputs
 
-        run_step(context, record, "fit", names, plan)
+        run_step(context, record, "fit", fit_allowed(parameters["hai_types"]), plan)
 
 
 def mediation_type(context: Any, config: Mapping[str, Any], hai_type: str) -> dict[str, bytes]:
@@ -185,7 +179,7 @@ def run_mediation(context: Any, record: Mapping[str, Any]) -> None:
                 outputs |= mediation_type(context, config, hai_type)
             return outputs
 
-        run_step(context, record, "mediation", names, plan)
+        run_step(context, record, "mediation", names.__contains__, plan)
 
 
 def year_mapping(root: Path) -> dict[int, int]:
@@ -202,17 +196,19 @@ def year_mapping(root: Path) -> dict[int, int]:
 
 def hac_type(context: Any, record: Mapping[str, Any], mapping: Mapping[int, int], hai_type: str) -> dict[str, bytes]:
     """Rank one type's selected-model holdout against its HAC flags; the flag table is checked against the hash the fit recorded."""
-    from scripts.training import hac_validation
+    from scripts.training import bundle, hac_validation
     from scripts.training.models.common import Deadline
 
     inputs = job_inputs.input_root(context.parameters)
-    fit_folder = verified_step(inputs, "fit", record)
-    fit = job_inputs.read_json(fit_folder / f"fit_{hai_type}.json", "fit_changed")
-    holdout = job_inputs.read_json(fit_folder / f"holdout_{hai_type}.json", "fit_changed")
-    entry = {"file": "hac.parquet", "sha256": fit["inputs"]["auxiliary_sha256"]["hac.parquet"], "row_count": fit["inputs"]["auxiliary_rows"]["hac.parquet"]}
-    flags = job_inputs.table_of(inputs / "extract", entry)
-    result = hac_validation.validate_hac(holdout["predictions"], flags, mapping, Deadline.after(HAC_SECONDS))
-    return {f"hac_{hai_type}.json": text({"hai_type": hai_type, "model": holdout["model"], **result})}
+    folder = verified_step(inputs, "fit", record) / bundle.prefix(hai_type)
+    fitted = job_inputs.read_json(folder / "result.json", "fit_changed")
+    chosen = fitted["selection"]["selected"]
+    table = job_inputs.read_rows(folder / "holdout_predictions.parquet") if chosen is not None else []
+    predictions = [{"spine_key": row["spine_key"], "predicted": row[f"predicted_{chosen}"]} for row in table if row.get(f"predicted_{chosen}") is not None]
+    recorded = job_inputs.read_json(folder / "provenance.json", "fit_changed")["inputs"]["auxiliary_files"]["hac.parquet"]
+    flags = job_inputs.table_of(inputs / "extract", {"file": "hac.parquet", **recorded})
+    result = hac_validation.validate_hac(predictions, flags, mapping, Deadline.after(HAC_SECONDS))
+    return {f"hac_{hai_type}.json": text({"hai_type": hai_type, "model": chosen, **result})}
 
 
 def run_hac_validate(context: Any, record: Mapping[str, Any]) -> None:
@@ -228,7 +224,7 @@ def run_hac_validate(context: Any, record: Mapping[str, Any]) -> None:
                 outputs |= hac_type(context, record, mapping, hai_type)
             return outputs
 
-        run_step(context, record, "hac_validate", names, plan)
+        run_step(context, record, "hac_validate", names.__contains__, plan)
 
 
 def verified_step(inputs: Path, step: str, record: Mapping[str, Any]) -> Path:
@@ -240,66 +236,148 @@ def verified_step(inputs: Path, step: str, record: Mapping[str, Any]) -> Path:
     return inputs / step
 
 
-def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any], parameters: Mapping[str, Any], hai_type: str) -> run_tracking.RunPlan:
-    """Check every mounted output of one type against its completion record and the extract it came from, then describe its MLflow run."""
+def bundle_files(folder: Path, hai_type: str) -> Path:
+    """Return the mounted bundle folder of a type."""
+    from scripts.training import bundle
+
+    return folder / bundle.prefix(hai_type)
+
+
+def run_tags(
+    context: Any, record: Mapping[str, Any], config: Mapping[str, Any], parameters: Mapping[str, Any], manifest: Mapping[str, Any], digests: Mapping[str, str]
+) -> dict[str, str]:
+    """Return the required run tags of the model contract, all but the completion mark, which the logger writes last."""
+    from scripts.training import guards
+
+    hai_type = manifest["hai_type"]
+    try:
+        guard = guards.check(job_inputs.ROOT, git_commit=str(record["git_commit"]))
+    except guards.GuardError as error:
+        raise JobFailure("guard_refused", str(error)) from None
+    listed = job_inputs.read_json(job_inputs.ROOT / "config/training/targets.json", "targets_refused")["target_candidates"]
+    image = os.environ.get("TRAINING_IMAGE_DIGEST", "unrecorded")
+    key = {
+        "analysis_plan_sha256": guard["analysis_plan_sha256"],
+        "targets_sha256": guard["targets_sha256"],
+        "training_config_sha256": guard["training_config_sha256"],
+        "code_digest": str(record["code_digest"]),
+        "features_run_id": manifest["publication_run_id"],
+        "features_snapshot_set_sha256": manifest["features_snapshot_set_sha256"],
+        "feature_schema_sha256": manifest["feature_schema_sha256"],
+        "training_image_digest": image,
+        "master_seed": config["master_seed"],
+        "population": manifest["population"],
+        "hai_types": parameters["hai_types"],
+    }
+    return {
+        "run_id": context.run,
+        "step_key": run_tracking.PARENT_STEP,
+        "hai_type": hai_type,
+        "target_control": next(entry["control"] for entry in listed if entry["hai_type"] == hai_type),
+        "population": manifest["population"],
+        "analysis_plan_sha256": guard["analysis_plan_sha256"],
+        "targets_sha256": guard["targets_sha256"],
+        "training_config_sha256": guard["training_config_sha256"],
+        "code_digest": str(record["code_digest"]),
+        "git_commit": str(record["git_commit"]),
+        "git_dirty": "true" if record.get("git_dirty") else "false",
+        "image_digest": image,
+        "master_seed": str(config["master_seed"]),
+        "features_run_id": manifest["publication_run_id"],
+        "features_snapshot_set_sha256": manifest["features_snapshot_set_sha256"],
+        "feature_schema_sha256": manifest["feature_schema_sha256"],
+        "gold_run_id": manifest["gold_run_id"],
+        "dvc_md5": digests["dvc_md5"],
+        "extract_sha256": manifest["sha256"],
+        "manifest_sha256": digests["manifest_sha256"],
+        "newest_window": str(manifest["newest_window_year"]),
+        "feature_list_sha256": manifest["feature_list_sha256"],
+        "training_key": hashlib.sha256(text(key)).hexdigest(),
+        "reproducibility_sha256": digests["reproducibility_sha256"],
+    }
+
+
+def child_spec(
+    context: Any, manifest: Mapping[str, Any], step: str, result: Mapping[str, Any], artifacts: list[tuple[Path, str]] | None = None
+) -> run_tracking.RunSpec:
+    """Describe one child run: a model slot, a research question or a validation, with its status and every finite number of its result."""
+    tags = {"run_id": context.run, "step_key": step, "hai_type": manifest["hai_type"], "population": manifest["population"]}
+    params = {"status": str(result.get("status", "fitted"))} | ({"reason": str(result["reason"])} if result.get("reason") else {})
+    return run_tracking.RunSpec(
+        step, tags, params, run_tracking.numbers(step, {key: value for key, value in result.items() if key != "details"}), artifacts or ()
+    )
+
+
+RESEARCH = {
+    "rq1_joint": ("joint_process", "process_vs_intercept_cmi"),
+    "rq4_nested": ("nested",),
+    "rq5_moran": ("spatial",),
+    "rq6_hausman": ("hospital_effects",),
+}
+
+
+def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any], parameters: Mapping[str, Any], hai_type: str) -> run_tracking.TypePlan:
+    """Check every mounted output of one type against its completion records and the extract it came from, then describe its MLflow runs."""
+    from scripts.training import bundle
+    from scripts.training.models.common import SLOTS
+
     inputs = job_inputs.input_root(context.parameters)
     manifest = job_inputs.manifest_of(inputs / "extract", hai_type, context.run)
     job_inputs.table_of(inputs / "extract", manifest, read=False)
     folders = {step: verified_step(inputs, step, record) for step in ("version_extract", "fit", "mediation", "hac_validate")}
-    fit = job_inputs.read_json(folders["fit"] / f"fit_{hai_type}.json", "fit_changed")
-    if fit["inputs"]["extract_sha256"] != manifest["sha256"]:
+    base = bundle_files(folders["fit"], hai_type)
+    result = job_inputs.read_json(base / "result.json", "fit_changed")
+    if result["input_hashes"]["extract_sha256"] != manifest["sha256"]:
         raise JobFailure("fit_inputs_differ", f"the fit of {hai_type} read another extract than the one mounted")
     baseline = job_inputs.read_json(folders["version_extract"] / f"baseline_{hai_type}.json", "version_extract_changed")
     metafile = folders["version_extract"] / baseline["metafile"]
-    mediation_result = job_inputs.read_json(folders["mediation"] / f"mediation_{hai_type}.json", "mediation_changed")
-    hac_result = job_inputs.read_json(folders["hac_validate"] / f"hac_{hai_type}.json", "hac_validate_changed")
-    chosen, candidate = fit["selection"]["selected"], fit["selection"]["registry_candidate"]
+    mediation_path, hac_path = folders["mediation"] / f"mediation_{hai_type}.json", folders["hac_validate"] / f"hac_{hai_type}.json"
+    mediation_result, hac_result = job_inputs.read_json(mediation_path, "mediation_changed"), job_inputs.read_json(hac_path, "hac_validate_changed")
+    done = step_records.verify_done(folders["fit"], "fit", str(record["code_digest"]))
+    manifest_hash = step_records.file_sha256(inputs / "extract" / f"manifest_{hai_type}.json")
+    digests = {
+        "dvc_md5": dvc_baseline.metafile_md5(metafile),
+        "manifest_sha256": manifest_hash,
+        "reproducibility_sha256": step_records.file_sha256(base / "result.json"),
+    }
+    bundle_hash = bundle.sha256_of(done["outputs"], hai_type)
+    chosen, candidate = result["selection"]["selected"], result["selection"]["registry_candidate"]
     params = {
         "hai_type": hai_type,
-        "run_id": context.run,
         "population": manifest["population"],
         "features_run": parameters["features_run"],
         "trigger": parameters["trigger"],
-        "code_digest": str(record["code_digest"]),
-        "git_commit": str(record["git_commit"]),
-        "master_seed": config["master_seed"],
         "selected_model": chosen or "none",
         "registry_candidate": candidate or "none",
-        "extract_sha256": manifest["sha256"],
-        "feature_lists_sha256": fit["input_hashes"]["feature_lists_sha256"],
-        **{f"seed.{purpose}": seed for purpose, seed in fit["seeds"].items()},
-        **{
-            f"selected_parameters.{slot}": json.dumps(details["selected_parameters"], sort_keys=True)
-            for slot, details in fit["fitted_parameters"].items()
-            if "selected_parameters" in details
-        },
+        **{f"seed.{purpose}": seed for purpose, seed in result["seeds"].items()},
     }
-    metrics: dict[str, float] = {}
-    for slot, scores in fit["holdout_metrics"].items():
-        for name, value in scores.items():
-            metrics |= run_tracking.numbers(f"holdout_{name}.{slot}", value)
-    metrics |= run_tracking.numbers("comparison_rmse", fit["selection"]["comparison_rmse"])
-    metrics |= run_tracking.numbers("comparison_holdout_rows", fit["selection"]["comparison_holdout_rows"])
-    metrics |= run_tracking.numbers("counts", fit["counts"])
-    metrics |= run_tracking.numbers("hac", hac_result)
-    metrics |= run_tracking.numbers("mediation", mediation_result["mediators"])
-    artifacts = [(folders["fit"] / f"fit_{hai_type}.json", "fit"), (folders["fit"] / f"holdout_{hai_type}.json", "fit")]
-    if (folders["fit"] / f"model_{hai_type}.pkl").is_file():
-        artifacts.append((folders["fit"] / f"model_{hai_type}.pkl", "model"))
-    artifacts += [(folders["mediation"] / f"mediation_{hai_type}.json", "mediation"), (folders["hac_validate"] / f"hac_{hai_type}.json", "hac")]
-    tags = {
-        run_tracking.RUN_TAG: context.run,
-        run_tracking.TYPE_TAG: hai_type,
-        "population": manifest["population"],
-        "features_run": parameters["features_run"],
-        "trigger": parameters["trigger"],
-        "code_digest": str(record["code_digest"]),
-        "git_commit": str(record["git_commit"]),
-    }
-    snapshots = {table: str(snapshot) for table, snapshot in manifest["snapshot_set"].items()}
-    return run_tracking.RunPlan(
-        hai_type, tags, {key: str(value) for key, value in params.items()}, metrics, artifacts, metafile, Path(baseline["matrix_path"]), snapshots
+    metrics: dict[str, float] = run_tracking.numbers("counts", result["counts"]) | run_tracking.numbers(
+        "comparison_rmse", result["selection"]["comparison_rmse"]
     )
+    metrics |= run_tracking.numbers("comparison_holdout_rows", result["selection"]["comparison_holdout_rows"])
+    parent_files = [(base / name, "bundle") for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
+    parent_files.append((inputs / "extract" / f"manifest_{hai_type}.json", "extract"))
+    model = base / "model"
+    tags = run_tags(context, record, config, parameters, manifest, digests)
+    parent = run_tracking.RunSpec(
+        run_tracking.PARENT_STEP, tags, {key: str(value) for key, value in params.items()}, metrics, parent_files, [(model, "model")] if model.is_dir() else []
+    )
+    children = []
+    for slot in SLOTS:
+        details = {key: value for key, value in result["fitted_parameters"][slot].items() if isinstance(value, int | float) and not isinstance(value, bool)}
+        slot_result = {**result["statuses"][slot], "metrics": result["holdout_metrics"][slot], "details": details, **details}
+        spec = child_spec(context, manifest, slot, slot_result)
+        extra = {"selected_parameters": json.dumps(result["fitted_parameters"][slot].get("selected_parameters", {}), sort_keys=True)}
+        children.append(run_tracking.RunSpec(spec.step_key, spec.tags, {**spec.params, **extra}, spec.metrics))
+    for step, names in RESEARCH.items():
+        merged = {name: result["test_statistics"].get(name, {}) for name in names}
+        statuses = {str(item.get("status", "")) for item in merged.values() if isinstance(item, Mapping)}
+        children.append(child_spec(context, manifest, step, {"status": ",".join(sorted(statuses)) or "none", **merged}))
+    children.append(child_spec(context, manifest, "rq3_mediation", {"status": "fitted", **mediation_result["mediators"]}, [(mediation_path, "result")]))
+    children.append(child_spec(context, manifest, "hac_validation", hac_result, [(hac_path, "result")]))
+    snapshots = {table: str(snapshot) for table, snapshot in manifest["snapshot_set"].items()}
+    experiment = job_inputs.read_json(job_inputs.ROOT / "data_contracts/training/model_contract.json", "model_contract")["experiments"][hai_type]
+    return run_tracking.TypePlan(hai_type, experiment, bundle_hash, parent, children, metafile, Path(baseline["matrix_path"]), snapshots)
 
 
 def run_log_run(context: Any, record: Mapping[str, Any]) -> None:
@@ -321,9 +399,9 @@ def run_log_run(context: Any, record: Mapping[str, Any]) -> None:
                 raise JobFailure(error.name, error.detail) from None
             except Exception as error:
                 raise JobFailure("mlflow_failed", f"{type(error).__name__}: {error}") from None
-            return {"log_run.json": text({"experiment": run_tracking.EXPERIMENT, "runs": runs})}
+            return {"log_run.json": text({"runs": runs})}
 
-        run_step(context, record, "log_run", {"log_run.json"}, plan)
+        run_step(context, record, "log_run", {"log_run.json"}.__contains__, plan)
 
 
 def version_names(hai_types: list[str]) -> set[str]:
@@ -369,4 +447,4 @@ def run_version_extract(context: Any, record: Mapping[str, Any]) -> None:
                     raise JobFailure("dvc_failed", str(error)) from None
             return outputs
 
-        run_step(context, record, "version_extract", version_names(parameters["hai_types"]), plan)
+        run_step(context, record, "version_extract", version_names(parameters["hai_types"]).__contains__, plan)

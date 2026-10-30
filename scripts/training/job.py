@@ -22,7 +22,7 @@ ACTIONS = ("guard", "version_extract", "fit", "mediation", "hac_validate", "log_
 MODULES: dict[str, tuple[str, ...]] = {
     "guard": ("scripts.training.guards", "scripts.training.targets", "scripts.training.step_records"),
     "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records", "scripts.training.job_actions", "scripts.training.job_inputs"),
-    "fit": ("scripts.training.models.suite", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "fit": ("scripts.training.models.suite", "scripts.training.bundle", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "mediation": ("scripts.training.mediation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "hac_validate": ("scripts.training.hac_validation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "log_run": ("scripts.training.run_tracking", "scripts.training.dvc_baseline", "scripts.training.job_actions", "scripts.training.job_inputs"),
@@ -118,6 +118,7 @@ def run_guard(context: Context) -> None:
 
 def action_modules() -> tuple[ModuleType, ...]:
     """Import every action module by a static statement, so the mount check and the image smoke see the same imports."""
+    import scripts.training.bundle as bundle
     import scripts.training.dvc_baseline as dvc_baseline
     import scripts.training.guards as guards
     import scripts.training.hac_validation as hac_validation
@@ -129,7 +130,7 @@ def action_modules() -> tuple[ModuleType, ...]:
     import scripts.training.step_records as step_records
     import scripts.training.targets as targets
 
-    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation, job_actions, job_inputs, run_tracking)
+    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation, job_actions, job_inputs, run_tracking, bundle)
 
 
 def run_smoke(context: Context) -> None:

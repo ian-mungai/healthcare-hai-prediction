@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import os
+import pickle
 import re
 import shutil
 import tempfile
@@ -19,7 +20,7 @@ from typing import Any
 from unittest import mock
 
 from scripts.features.training_extract import canonical, content_sha256
-from scripts.training import dvc_baseline, hac_validation, job, job_inputs, mediation, run_tracking
+from scripts.training import bundle, dvc_baseline, guards, hac_validation, job, job_inputs, mediation, run_tracking
 from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
 from scripts.training.lane_b_cases import RUN, require
@@ -30,7 +31,10 @@ from scripts.training.models.common import SLOTS
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
+GUARD = {"analysis_plan_sha256": "7" * 64, "targets_sha256": "8" * 64, "training_config_sha256": "9" * 64}
+CHILDREN = {*SLOTS, "rq1_joint", "rq3_mediation", "rq4_nested", "rq5_moran", "rq6_hausman", "hac_validation"}
 HAI_TYPE = "HAI_1"
+BUNDLE = f"bundles/bundle_{HAI_TYPE}"
 LABEL = "hai_1__sir__number"
 SQL_TYPES = {"varchar": "VARCHAR", "double": "DOUBLE", "bigint": "BIGINT", "boolean": "BOOLEAN", "date": "DATE"}
 FIXTURE_COLUMNS = {
@@ -151,6 +155,7 @@ class Fixture:
             "config/training/excluded_controls.json",
             "dbt/seeds/gold/hai_outcome_measures_bridge.csv",
             "data_contracts/training/extract_manifest.schema.json",
+            "data_contracts/training/model_contract.json",
         ):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REAL / name, self.root / name)
@@ -266,6 +271,9 @@ def standins(fixture: Fixture) -> Iterator[None]:
     with (
         mock.patch.object(job_inputs, "ROOT", fixture.root),
         mock.patch.object(job_inputs, "read_rows", read_parquet),
+        mock.patch.object(guards, "check", return_value=GUARD),
+        mock.patch.object(bundle, "write_table", write_parquet),
+        mock.patch.object(bundle, "save_model", save_model_standin),
         mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
         mock.patch.dict(
             os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100", "DVC_REMOTE_URL": str(fixture.folder / "dvc_remote"), "DVC_NO_ANALYTICS": "1"}
@@ -304,7 +312,15 @@ class FileTracking:
     def create_run(self, experiment_id: str, tags: dict[str, str] | None = None, run_name: str | None = None) -> SimpleNamespace:
         self.enter("create_run")
         run_id = f"{len(self.runs):032x}"
-        self.runs[run_id] = {"experiment": experiment_id, "name": run_name, "status": "RUNNING", "params": {}, "metrics": {}, "tags": dict(tags or {})}
+        self.runs[run_id] = {
+            "experiment": experiment_id,
+            "name": run_name,
+            "status": "RUNNING",
+            "deleted": False,
+            "params": {},
+            "metrics": {},
+            "tags": dict(tags or {}),
+        }
         return SimpleNamespace(info=SimpleNamespace(run_id=run_id))
 
     def search_runs(self, experiment_ids: list[str], filter_string: str = "", max_results: int = 1000) -> list[SimpleNamespace]:
@@ -313,7 +329,7 @@ class FileTracking:
         found = [
             run_id
             for run_id, run in self.runs.items()
-            if run["experiment"] in experiment_ids and all(run["tags"].get(key) == value for key, value in wanted.items())
+            if run["experiment"] in experiment_ids and not run["deleted"] and all(run["tags"].get(key) == value for key, value in wanted.items())
         ]
         return [self.get_run(run_id) for run_id in found[:max_results]]
 
@@ -337,6 +353,22 @@ class FileTracking:
         target = self.root / run_id / (artifact_path or "")
         target.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local_path, target / Path(local_path).name)
+
+    def log_artifacts(self, run_id: str, local_dir: str, artifact_path: str | None = None) -> None:
+        self.enter("log_artifacts")
+        shutil.copytree(local_dir, self.root / run_id / (artifact_path or ""), dirs_exist_ok=True)
+
+    def delete_run(self, run_id: str) -> None:
+        self.enter("delete_run")
+        self.runs[run_id]["deleted"] = True
+
+    def active(self) -> dict[str, dict[str, Any]]:
+        """Return the runs that are not deleted."""
+        return {run_id: run for run_id, run in self.runs.items() if not run["deleted"]}
+
+    def parents(self) -> dict[str, dict[str, Any]]:
+        """Return the active parent runs."""
+        return {run_id: run for run_id, run in self.active().items() if run["tags"].get("step_key") == "parent"}
 
     def set_terminated(self, run_id: str, status: str = "FINISHED") -> None:
         self.enter("set_terminated")
@@ -376,6 +408,13 @@ def stage_baseline(fixture: Fixture) -> dict[str, Any]:
     return records
 
 
+def save_model_standin(pipeline: Any, folder: Path, features: Any, contract: Any, code_root: Path) -> None:
+    """Stand in for mlflow.sklearn.save_model: write the pickled pipeline and the bare feature columns the signature would list."""
+    folder.mkdir(parents=True)
+    (folder / "model.pkl").write_bytes(pickle.dumps(pipeline, protocol=4))
+    (folder / "MLmodel").write_text(json.dumps({"columns": [feature.name for feature in features], "format": contract["serialization"]["format"]}) + "\n")
+
+
 def run_action(fixture: Fixture, action: str, out: Path | None = None) -> tuple[int, str, str]:
     """Run one action of the fixture's run through the job entry point."""
     with standins(fixture):
@@ -404,24 +443,37 @@ def fit_cases(cases: Any, folder: Path) -> None:
         code, out, error = run_action(fixture, "fit")
         require(code == 0, f"fit failed: {error}")
         names = listing(fixture.out)
-        expected = [f"fit_{HAI_TYPE}.json", f"holdout_{HAI_TYPE}.json", "fit.done.json"]
-        require(all(name in names for name in expected), f"missing outputs: {names}")
-        result = output_of(fixture, f"fit_{HAI_TYPE}.json")
-        require(set(result["statuses"]) == set(SLOTS), "fit_ result lacks a slot status")
-        require(result["statuses"]["m1_ols"]["status"] == "fitted", f"OLS did not fit: {result['statuses']['m1_ols']}")
-        candidate = result["selection"]["registry_candidate"]
-        require(candidate is not None and f"model_{HAI_TYPE}.pkl" in names, "the registry candidate was not saved")
-        holdout = output_of(fixture, f"holdout_{HAI_TYPE}.json")
-        require(holdout["model"] == result["selection"]["selected"] and holdout["predictions"], "holdout predictions are missing")
-        require({"spine_key", "predicted"} == set(holdout["predictions"][0]), "a holdout prediction has another shape")
+        required = [f"{BUNDLE}/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
+        require(all(name in names for name in [*required, "fit.done.json"]), f"missing outputs: {names}")
+        require(any(name.startswith(f"{BUNDLE}/model/") for name in names), "the registry candidate was not saved")
+        require(all(name.startswith(f"{BUNDLE}/") or name == "fit.done.json" for name in names), f"files outside the bundle: {names}")
+        result = output_of(fixture, f"{BUNDLE}/result.json")
+        contract = json.loads((REAL / "data_contracts/training/bundle.json").read_text())
+        require(set(result) == set(contract["result_fields"]), f"result.json fields differ from the bundle contract: {sorted(result)}")
+        require(set(result["statuses"]) == set(SLOTS) and result["statuses"]["m1_ols"]["status"] == "fitted", f"statuses: {result['statuses']}")
         manifest = fixture.manifest()
-        require(result["inputs"]["extract_sha256"] == manifest["sha256"], "fit does not record the extract it read")
+        require(result["input_hashes"]["extract_sha256"] == manifest["sha256"], "result.json does not record the extract it read")
+        provenance = output_of(fixture, f"{BUNDLE}/provenance.json")
+        require(set(contract["provenance_fields"]) <= set(provenance) and provenance["run_id"] == RUN, f"provenance: {sorted(provenance)}")
+        require("run_id" not in json.dumps(result), "result.json carries a run-specific fact")
         require(
-            result["inputs"]["auxiliary_sha256"]["hac.parquet"] == manifest["auxiliary_files"]["hac.parquet"]["sha256"],
-            "fit does not record the HAC table hash",
+            provenance["inputs"]["auxiliary_files"]["hac.parquet"]["sha256"] == manifest["auxiliary_files"]["hac.parquet"]["sha256"],
+            "provenance lacks the HAC table hash",
         )
+        table = read_parquet(fixture.out / f"{BUNDLE}/holdout_predictions.parquet")
+        require(set(table[0]) == {"spine_key", "observed_sir", *(f"predicted_{slot}" for slot in SLOTS)}, f"holdout columns: {sorted(table[0])}")
+        require([row["spine_key"] for row in table] == sorted(row["spine_key"] for row in table), "holdout rows are not sorted by key")
+        feature_list = output_of(fixture, f"{BUNDLE}/feature_list.json")
+        require(feature_list["slot"] == result["selection"]["registry_candidate"] and feature_list["columns"], f"feature list: {feature_list}")
         verify_done(fixture.out, "fit", DIGEST)
         require(json.loads(out)["action"] == "fit" and json.loads(out)["resumed"] is False, "fit printed no summary")
+
+    def reproducible() -> None:
+        first, second = Fixture(folder / "repeat_a"), Fixture(folder / "repeat_b")
+        for fixture in (first, second):
+            require(run_action(fixture, "fit")[0] == 0, "a fit failed")
+        name = f"{BUNDLE}/result.json"
+        require((first.out / name).read_bytes() == (second.out / name).read_bytes(), "two fits of one input gave different result.json bytes")
 
     def retried() -> None:
         fixture = Fixture(folder / "retried")
@@ -435,7 +487,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
     def interrupted() -> None:
         fixture = Fixture(folder / "interrupted")
         require(run_action(fixture, "fit")[0] == 0, "the first fit failed")
-        first = {name: (fixture.out / name).read_bytes() for name in listing(fixture.out) if name.endswith(".json") and name != "fit.done.json"}
+        first = {name: (fixture.out / name).read_bytes() for name in listing(fixture.out) if name.endswith("result.json")}
         (fixture.out / "fit.done.json").unlink()
         code, _, error = run_action(fixture, "fit")
         require(code == 0 and verify_done(fixture.out, "fit", DIGEST)["step"] == "fit", f"the retry after an interrupt failed: {error}")
@@ -444,7 +496,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
     def conflict() -> None:
         fixture = Fixture(folder / "conflict")
         require(run_action(fixture, "fit")[0] == 0, "the first fit failed")
-        (fixture.out / f"fit_{HAI_TYPE}.json").write_text("{}\n")
+        (fixture.out / f"{BUNDLE}/result.json").write_text("{}\n")
         code, _, error = run_action(fixture, "fit")
         require(code == job.EXIT_FAILED and failure_of(error) == "done_conflict", f"{code} {error}")
 
@@ -523,7 +575,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_action(fixture, "fit")
         require(code == 0, f"fit failed: {error}")
         names = listing(fixture.out)
-        require(all(f"fit_{kind}.json" in names and f"holdout_{kind}.json" in names for kind in fixture.hai_types), f"missing outputs: {names}")
+        require(all(f"bundles/bundle_{kind}/result.json" in names for kind in fixture.hai_types), f"missing outputs: {names}")
 
     def second_type_missing() -> None:
         fixture = Fixture(folder / "second_missing", hai_types=("HAI_1", "HAI_2"))
@@ -533,6 +585,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require(listing(fixture.out) == [], "a failed type left partial output")
 
     cases.check("job_fit_writes_results_and_done", fitted)
+    cases.check("job_fit_result_is_reproducible", reproducible)
     cases.check("job_fit_retry_resumes_completed", retried)
     cases.check("job_fit_retry_after_interrupt", interrupted)
     cases.check("job_fit_done_conflict", conflict)
@@ -778,39 +831,52 @@ def staged(folder: Path, *, baseline: bool = True, **options: Any) -> Fixture:
 
 
 def log_run_cases(cases: Any, folder: Path) -> None:
-    """Log one MLflow run per type with params, metrics, artifacts, the DVC metafile and the snapshot tags, once, even after a retry."""
+    """Log one parent run and its child runs per type, with the required tags and the completion mark last, once, even after a retry."""
 
     def logged() -> None:
         fixture = staged(folder / "logged")
         code, out, error = run_action(fixture, "log_run")
         require(code == 0, f"log_run failed: {error}")
         store = fixture.tracking
-        require(len(store.runs) == 1, f"expected one run, found {len(store.runs)}")
-        run_id, run = next(iter(store.runs.items()))
+        require(list(store.experiments) == [f"hai_training_{HAI_TYPE}"], f"experiments: {list(store.experiments)}")
+        require(len(store.active()) == 1 + len(CHILDREN) and len(store.parents()) == 1, f"runs: {len(store.active())}")
+        run_id, run = next(iter(store.parents().items()))
         manifest = fixture.manifest()
+        contract = json.loads((REAL / "data_contracts/training/model_contract.json").read_text())
+        missing = [tag for tag in contract["required_run_tags"] if tag not in run["tags"]]
+        require(not missing, f"required tags are missing: {missing}")
+        base = fixture.folder / f"in/fit/{BUNDLE}"
+        done = json.loads((fixture.folder / "in/fit/fit.done.json").read_text())["outputs"]
+        require(run["tags"]["bundle_sha256"] == bundle.sha256_of(done, HAI_TYPE), "the completion mark is not the bundle hash")
+        require(run["tags"]["reproducibility_sha256"] == file_sha256(base / "result.json"), "the reproducibility hash is not the result.json hash")
+        require(
+            run["tags"]["extract_sha256"] == manifest["sha256"] and run["tags"]["newest_window"] == str(manifest["newest_window_year"]), "extract tags differ"
+        )
+        require(run["tags"]["target_control"] == "C269" and run["tags"]["git_dirty"] == "false" and run["tags"]["master_seed"] == "42", f"tags: {run['tags']}")
+        require(run["status"] == "FINISHED" and run["name"] == f"{RUN}_primary", f"parent: {run['status']} {run['name']}")
         metafile = fixture.folder / f"in/version_extract/extract_{HAI_TYPE}.parquet.dvc"
-        require(run["status"] == "FINISHED" and run["tags"][run_tracking.COMPLETE_TAG] == "true", "the run was not finished and marked complete")
-        require(run["tags"][HASH_TAG] == file_sha256(metafile), "the metafile hash tag differs from the metafile")
+        require(run["tags"][HASH_TAG] == file_sha256(metafile) and run["tags"]["dvc_md5"] == "a" * 32, "the metafile tags differ from the metafile")
         require(run["tags"][PATH_TAG] == f"data/training/{RUN}/extract_{HAI_TYPE}.parquet", "the matrix path tag is wrong")
         snapshots = {key.removeprefix(SNAPSHOT_TAG): value for key, value in run["tags"].items() if key.startswith(SNAPSHOT_TAG)}
         require(snapshots == {table: str(value) for table, value in manifest["snapshot_set"].items()}, f"snapshot tags differ: {snapshots}")
-        require(run["tags"][run_tracking.RUN_TAG] == RUN and run["tags"]["hai_type"] == HAI_TYPE, "the run does not name its training run and type")
+        require("counts.holdout" in run["metrics"] and run["params"]["selected_model"], f"parent: {sorted(run['metrics'])[:5]} {run['params']}")
+        children = {item["tags"]["step_key"]: item for item in store.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
+        require(set(children) == CHILDREN, f"children: {sorted(children)}")
         require(
-            run["params"]["master_seed"] == "42" and run["params"]["selected_model"] and run["params"]["extract_sha256"] == manifest["sha256"],
-            f"params: {run['params']}",
+            all(item["status"] == "FINISHED" and item["tags"]["run_id"] == RUN for item in children.values()), "a child was not finished or lacks its run ID"
         )
-        require("holdout_rmse.m1_ols" in run["metrics"] and "counts.holdout" in run["metrics"], f"metrics: {sorted(run['metrics'])[:8]}")
-        require(
-            any(name.startswith("mediation.PSI_90.") for name in run["metrics"]) and "hac.matched_hospitals" in run["metrics"],
-            "mediation or HAC metrics are missing",
-        )
-        require(all(len(values) == 1 for values in run["metrics"].values()), "a metric was logged twice")
+        require("m1_ols.metrics.rmse" in children["m1_ols"]["metrics"], f"m1: {sorted(children['m1_ols']['metrics'])}")
+        require(any(name.startswith("rq3_mediation.PSI_90.") for name in children["rq3_mediation"]["metrics"]), "mediation metrics are missing")
+        require("hac_validation.matched_hospitals" in children["hac_validation"]["metrics"], "HAC metrics are missing")
+        require(all(len(values) == 1 for item in store.active().values() for values in item["metrics"].values()), "a metric was logged twice")
         artifacts = store.artifacts(run_id)
-        expected = [f"fit/fit_{HAI_TYPE}.json", f"fit/holdout_{HAI_TYPE}.json", f"mediation/mediation_{HAI_TYPE}.json", f"hac/hac_{HAI_TYPE}.json"]
-        require(all(name in artifacts for name in expected) and f"model/model_{HAI_TYPE}.pkl" in artifacts, f"artifacts: {artifacts}")
+        expected = [f"bundle/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
+        require(all(name in artifacts for name in expected), f"bundle artifacts: {artifacts}")
+        require("model/model.pkl" in artifacts and "model/MLmodel" in artifacts and f"extract/manifest_{HAI_TYPE}.json" in artifacts, f"artifacts: {artifacts}")
         require(f"dvc/{metafile.name}" in artifacts, f"the DVC metafile was not logged: {artifacts}")
-        record = output_of(fixture, "log_run.json")
-        require(record["runs"] == {HAI_TYPE: run_id} and json.loads(out)["resumed"] is False, f"log_run.json: {record}")
+        mediation_id = next(key for key, item in store.active().items() if item["tags"].get("step_key") == "rq3_mediation")
+        require(f"result/mediation_{HAI_TYPE}.json" in store.artifacts(mediation_id), "the mediation result was not logged on its child run")
+        require(output_of(fixture, "log_run.json") == {"runs": {HAI_TYPE: run_id}} and json.loads(out)["resumed"] is False, "log_run.json differs")
         verify_done(fixture.out, "log_run", DIGEST)
 
     def retried() -> None:
@@ -819,39 +885,50 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         calls = len(fixture.tracking.calls)
         code, out, error = run_action(fixture, "log_run")
         require(code == 0 and json.loads(out)["resumed"] is True, f"the retry did not resume: {error}")
-        require(len(fixture.tracking.calls) == calls and len(fixture.tracking.runs) == 1, "a completed step called the tracking store again")
+        require(len(fixture.tracking.calls) == calls, "a completed step called the tracking store again")
 
     def interrupted() -> None:
         fixture = staged(folder / "interrupted")
         require(run_action(fixture, "log_run")[0] == 0, "the first log_run failed")
+        before = len(fixture.tracking.runs)
         (fixture.out / "log_run.done.json").unlink()
         (fixture.out / "log_run.json").unlink()
         code, _, error = run_action(fixture, "log_run")
         require(code == 0, f"the retry failed: {error}")
-        runs = fixture.tracking.runs
-        require(len(runs) == 1 and all(len(values) == 1 for values in next(iter(runs.values()))["metrics"].values()), "a retry duplicated a run or a metric")
+        require(len(fixture.tracking.runs) == before and len(fixture.tracking.parents()) == 1, "a retry of a complete run created or deleted runs")
 
-    def partial_run() -> None:
-        fixture = staged(folder / "partial")
+    def unfinished() -> None:
+        fixture = staged(folder / "unfinished")
         fixture.tracking.fail_on = "set_terminated"
         code, _, error = run_action(fixture, "log_run")
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_failed", f"{code} {error}")
-        require(listing(fixture.out) == [] and len(fixture.tracking.runs) == 1, "a failed log_run left output or no run to resume")
+        require(listing(fixture.out) == [] and len(fixture.tracking.active()) == 2, "a failed log_run left output or an unexpected set of runs")
         fixture.tracking.fail_on = None
         code, _, error = run_action(fixture, "log_run")
-        run = next(iter(fixture.tracking.runs.values()))
-        require(code == 0 and len(fixture.tracking.runs) == 1 and run["status"] == "FINISHED", f"the retry did not finish the same run: {error}")
-        require(all(len(values) == 1 for values in run["metrics"].values()), "a retry duplicated a metric")
+        store = fixture.tracking
+        require(code == 0 and len(store.active()) == 1 + len(CHILDREN), f"the retry did not leave one complete set of runs: {error}")
+        require(len(store.runs) - len(store.active()) == 2, "the interrupted runs were not deleted")
+        require(all(len(values) == 1 for run in store.active().values() for values in run["metrics"].values()), "a retry duplicated a metric")
 
-    def duplicate_runs() -> None:
+    def duplicate_parents() -> None:
         fixture = staged(folder / "duplicates")
         require(run_action(fixture, "log_run")[0] == 0, "the first log_run failed")
-        run = next(iter(fixture.tracking.runs.values()))
+        run = next(iter(fixture.tracking.parents().values()))
         fixture.tracking.runs["f" * 32] = {**run, "tags": dict(run["tags"])}
         (fixture.out / "log_run.done.json").unlink()
         (fixture.out / "log_run.json").unlink()
         code, _, error = run_action(fixture, "log_run")
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_duplicate_runs", f"{code} {error}")
+
+    def bundle_conflict() -> None:
+        fixture = staged(folder / "conflict")
+        require(run_action(fixture, "log_run")[0] == 0, "the first log_run failed")
+        next(iter(fixture.tracking.parents().values()))["tags"]["bundle_sha256"] = "0" * 64
+        (fixture.out / "log_run.done.json").unlink()
+        (fixture.out / "log_run.json").unlink()
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_bundle_conflict", f"{code} {error}")
+        require(len(fixture.tracking.active()) == 1 + len(CHILDREN), "a conflicting run was deleted")
 
     def no_uri() -> None:
         fixture = staged(folder / "no_uri")
@@ -868,7 +945,7 @@ def log_run_cases(cases: Any, folder: Path) -> None:
 
     def changed_fit() -> None:
         fixture = staged(folder / "changed_fit")
-        (fixture.folder / "in/fit" / f"fit_{HAI_TYPE}.json").write_text("{}\n")
+        (fixture.folder / "in/fit" / f"{BUNDLE}/result.json").write_text("{}\n")
         code, _, error = run_action(fixture, "log_run")
         require(code == job.EXIT_FAILED and failure_of(error) == "fit_changed" and not fixture.tracking.calls, f"{code} {error}")
 
@@ -904,11 +981,12 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         )
         require(len(run_tracking.metric_name("a" * 400)) == 250, "a metric name was not shortened")
 
-    cases.check("job_log_run_logs_params_metrics_artifacts_and_tags", logged)
+    cases.check("job_log_run_logs_runs_tags_metrics_artifacts_and_metafile", logged)
     cases.check("job_log_run_retry_resumes_completed", retried)
-    cases.check("job_log_run_retry_after_interrupt_keeps_one_run", interrupted)
-    cases.check("job_log_run_resumes_unfinished_run", partial_run)
-    cases.check("job_log_run_refuses_duplicate_runs", duplicate_runs)
+    cases.check("job_log_run_retry_after_interrupt_keeps_complete_runs", interrupted)
+    cases.check("job_log_run_redoes_unfinished_runs", unfinished)
+    cases.check("job_log_run_refuses_duplicate_parents", duplicate_parents)
+    cases.check("job_log_run_refuses_other_bundle_hash", bundle_conflict)
     cases.check("job_log_run_needs_tracking_uri", no_uri)
     cases.check("job_log_run_tracking_failure_named", tracking_down)
     cases.check("job_log_run_refuses_changed_fit_output", changed_fit)
