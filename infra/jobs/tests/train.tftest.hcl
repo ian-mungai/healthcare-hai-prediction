@@ -59,25 +59,56 @@ run "train_definition_shape" {
 
   assert {
     condition = (
-      [for container in jsondecode(output.train_container_definitions) : container.name] == ["fetch", "prepare", "extract", "train"] &&
-      [for container in jsondecode(output.train_container_definitions) : container.image] == [var.train_images.training, var.train_images.training, var.train_images.feature_store, var.train_images.training] &&
-      [for container in jsondecode(output.train_container_definitions) : container.essential] == [false, false, false, true] &&
+      [for container in jsondecode(output.train_container_definitions) : container.name] == ["init", "fetch", "prepare", "extract", "train"] &&
+      [for container in jsondecode(output.train_container_definitions) : container.image] == [var.train_images.training, var.train_images.training, var.train_images.training, var.train_images.feature_store, var.train_images.training] &&
+      [for container in jsondecode(output.train_container_definitions) : container.essential] == [false, false, false, false, true] &&
       alltrue([for index, container in jsondecode(output.train_container_definitions) : (
         index == 0 ? length(container.dependsOn) == 0 : (
           length(container.dependsOn) == 1 && container.dependsOn[0].containerName == jsondecode(output.train_container_definitions)[index - 1].name && container.dependsOn[0].condition == "SUCCESS"
         )
       )])
     )
-    error_message = "Fetch, prepare, extract and train run in this order, each after the success of the one before, and only the last one is essential."
+    error_message = "Init, fetch, prepare, extract and train run in this order, each after the success of the one before, and only the last one is essential."
   }
 
   assert {
-    condition = alltrue([for container in jsondecode(output.train_container_definitions) : (
+    condition = alltrue([for container in slice(jsondecode(output.train_container_definitions), 1, 5) : (
       !container.privileged && container.readonlyRootFilesystem && container.user == "10001:10001" && container.linuxParameters.capabilities.drop == ["ALL"] &&
       container.logConfiguration.options["awslogs-group"] == "example_project_jobs_dev" && container.logConfiguration.options["awslogs-stream-prefix"] == "train" &&
       container.entryPoint == ["sh", "-c"] && container.workingDirectory == "/workspace"
     )])
-    error_message = "Every container is unprivileged with a read-only root, no capability, the numeric user and the existing jobs log group."
+    error_message = "Every container after the init step is unprivileged with a read-only root, no capability, the numeric user and the existing jobs log group."
+  }
+}
+
+run "train_init_step_makes_the_volumes_writable_for_the_job_user" {
+  command = plan
+
+  variables {
+    train_enabled = true
+  }
+
+  assert {
+    condition = (
+      jsondecode(output.train_container_definitions)[0].name == "init" &&
+      jsondecode(output.train_container_definitions)[0].user == "0:0" &&
+      jsondecode(output.train_container_definitions)[0].command == ["chown 10001:10001 /workspace /tmp"] &&
+      !jsondecode(output.train_container_definitions)[0].privileged &&
+      jsondecode(output.train_container_definitions)[0].readonlyRootFilesystem &&
+      jsondecode(output.train_container_definitions)[0].linuxParameters.capabilities.add == [] &&
+      !contains(jsondecode(output.train_container_definitions)[0].linuxParameters.capabilities.drop, "CHOWN") &&
+      toset(jsondecode(output.train_container_definitions)[0].linuxParameters.capabilities.drop) == toset(["DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]) &&
+      length(jsondecode(output.train_container_definitions)[0].secrets) == 0
+    )
+    error_message = "The init step runs as root with only the capability to change owners (Fargate allows dropping, not adding), no secret and a read-only root, and hands both volumes to the job user."
+  }
+
+  assert {
+    condition = (
+      toset(["/workspace", "/tmp"]) == toset([for mount in jsondecode(output.train_container_definitions)[0].mountPoints : mount.containerPath]) &&
+      alltrue([for container in jsondecode(output.train_container_definitions) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])])
+    )
+    error_message = "Every writable mount of every container is one of the two volumes that the init step hands to the job user. No container writes anywhere else."
   }
 }
 
@@ -90,17 +121,18 @@ run "train_commands_and_environment" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[0].command == ["python -I /opt/hai/fetch_code.py"] &&
-      jsondecode(output.train_container_definitions)[1].command == ["cd /workspace/code && python -m scripts.training.aws_run prepare --run \"$RUN_ID\""] &&
-      jsondecode(output.train_container_definitions)[2].command == ["cd /workspace/code && python -m scripts.training.aws_run extract --run \"$RUN_ID\""] &&
-      jsondecode(output.train_container_definitions)[3].command == ["cd /workspace/code && python -m scripts.training.aws_run train --run \"$RUN_ID\""]
+      jsondecode(output.train_container_definitions)[0].command == ["chown 10001:10001 /workspace /tmp"] &&
+      jsondecode(output.train_container_definitions)[1].command == ["python -I /opt/hai/fetch_code.py"] &&
+      jsondecode(output.train_container_definitions)[2].command == ["cd /workspace/code && python -m scripts.training.aws_run prepare --run \"$RUN_ID\""] &&
+      jsondecode(output.train_container_definitions)[3].command == ["cd /workspace/code && python -m scripts.training.aws_run extract --run \"$RUN_ID\""] &&
+      jsondecode(output.train_container_definitions)[4].command == ["cd /workspace/code && python -m scripts.training.aws_run train --run \"$RUN_ID\""]
     )
     error_message = "The fetch step runs the script baked into the image. The other three run the phases of the fetched code."
   }
 
   assert {
     condition = alltrue([
-      for container in jsondecode(output.train_container_definitions) :
+      for container in slice(jsondecode(output.train_container_definitions), 1, 5) :
       contains(container.environment, { name = "DATA_BUCKET_NAME", value = "example-project-data-dev" }) &&
       contains(container.environment, { name = "PYTHONHASHSEED", value = "0" }) &&
       contains(container.environment, { name = "RUN_ID", value = "" }) &&
@@ -111,10 +143,10 @@ run "train_commands_and_environment" {
 
   assert {
     condition = (
-      toset([for variable in jsondecode(output.train_container_definitions)[0].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256"]) &&
-      toset([for variable in jsondecode(output.train_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS"]) &&
-      toset([for variable in jsondecode(output.train_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
-      toset([for variable in jsondecode(output.train_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI"])
+      toset([for variable in jsondecode(output.train_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256"]) &&
+      toset([for variable in jsondecode(output.train_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS"]) &&
+      toset([for variable in jsondecode(output.train_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
+      toset([for variable in jsondecode(output.train_container_definitions)[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI"])
     )
     error_message = "Each container lists exactly the empty variables the run-task override must fill for it."
   }
@@ -129,8 +161,8 @@ run "train_container_records_its_image_digest" {
 
   assert {
     condition = (
-      contains(jsondecode(output.train_container_definitions)[3].environment, { name = "TRAINING_IMAGE_DIGEST", value = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }) &&
-      alltrue([for container in slice(jsondecode(output.train_container_definitions), 0, 3) : !contains([for variable in container.environment : variable.name], "TRAINING_IMAGE_DIGEST")])
+      contains(jsondecode(output.train_container_definitions)[4].environment, { name = "TRAINING_IMAGE_DIGEST", value = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }) &&
+      alltrue([for container in slice(jsondecode(output.train_container_definitions), 0, 4) : !contains([for variable in container.environment : variable.name], "TRAINING_IMAGE_DIGEST")])
     )
     error_message = "The train container carries the digest of the training image, which the run key records. The other containers do not."
   }
@@ -145,8 +177,8 @@ run "train_secrets_reach_only_the_extract_step" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[0].secrets == [] && jsondecode(output.train_container_definitions)[1].secrets == [] && jsondecode(output.train_container_definitions)[3].secrets == [] &&
-      jsondecode(output.train_container_definitions)[2].secrets == [
+      jsondecode(output.train_container_definitions)[0].secrets == [] && jsondecode(output.train_container_definitions)[1].secrets == [] && jsondecode(output.train_container_definitions)[2].secrets == [] && jsondecode(output.train_container_definitions)[4].secrets == [] &&
+      jsondecode(output.train_container_definitions)[3].secrets == [
         { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
         { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
       ]

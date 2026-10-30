@@ -74,7 +74,11 @@ locals {
     train   = ["RUN_ID", "MLFLOW_TRACKING_URI"]
   }
   train_phase = "cd /workspace/code && python -m scripts.training.aws_run %s --run \"$RUN_ID\""
+  # Fargate bind mounts are created owned by root, and the job user is 10001. The init step runs first as root, with only the capability to change owners
+  # (Fargate lets a container drop default capabilities but not add one), and hands the two volumes to the job user.
+  train_init_drop = ["DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]
   train_steps = [
+    { name = "init", image = "training", script = "chown 10001:10001 /workspace /tmp", secrets = [] },
     { name = "fetch", image = "training", script = "python -I /opt/hai/fetch_code.py", secrets = [] },
     { name = "prepare", image = "training", script = format(local.train_phase, "prepare"), secrets = [] },
     { name = "extract", image = "feature_store", script = format(local.train_phase, "extract"), secrets = local.reader_parameters },
@@ -87,12 +91,12 @@ locals {
       essential              = step.name == "train"
       privileged             = false
       readonlyRootFilesystem = true
-      user                   = "10001:10001"
+      user                   = step.name == "init" ? "0:0" : "10001:10001"
       workingDirectory       = "/workspace"
       entryPoint             = ["sh", "-c"]
       command                = [step.script]
       stopTimeout            = 90
-      linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
+      linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.train_init_drop : ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn              = index == 0 ? [] : [{ containerName = local.train_steps[index - 1].name, condition = "SUCCESS" }]
       environment = concat(
@@ -110,7 +114,7 @@ locals {
           { name = "MKL_NUM_THREADS", value = "4" },
           { name = "DUCKDB_MEMORY_LIMIT", value = "12GB" },
         ],
-        [for name in local.train_run_variables[step.name] : { name = name, value = "" }],
+        [for name in lookup(local.train_run_variables, step.name, []) : { name = name, value = "" }],
         step.name == "train" ? [{ name = "TRAINING_IMAGE_DIGEST", value = split("@", lookup(var.train_images, step.image, "invalid@invalid"))[1] }] : []
       )
       secrets = step.secrets

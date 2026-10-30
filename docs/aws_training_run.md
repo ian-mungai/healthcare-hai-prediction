@@ -13,10 +13,11 @@ Nothing here has run against AWS. The offline checks cover the Terraform plans, 
 
 ## What runs
 
-The task `<project>_<environment>_job_train` has four containers that share `/workspace`. Each one starts after the success of the one before.
+The task `<project>_<environment>_job_train` has five containers that share `/workspace` and `/tmp`. Each one starts after the success of the one before, so a failed `init` stops the task before any code is fetched.
 
 | Container | Image | What it does |
 | --- | --- | --- |
+| `init` | training | Runs as root for one command, `chown 10001:10001 /workspace /tmp`. Fargate creates the volumes owned by root and every other container runs as user 10001 |
 | `fetch` | training | Downloads `code.tar.gz` of the run, checks `CODE_SHA256`, unpacks it to `/workspace/code` and links the image's DVC into it |
 | `prepare` | training | Records the code identity and the parameters, then runs the guard |
 | `extract` | feature store | Reads one feature publication through the catalog and writes the training matrices. Only this container holds the catalog reader pair |
@@ -110,7 +111,7 @@ Stop steps, in this order:
 
 ## Not proven
 
-- Whether `/workspace` accepts writes from user 10001 on Fargate. The other job definitions use the same volume and user.
+- Whether the `init` step leaves `/workspace` and `/tmp` writable for user 10001 on Fargate. Whether Fargate accepts the dropped capability list that keeps only the owner change is also open. The offline plan test proves the definition only. It checks the order, the command, the capability list and that every writable mount of every container is one of the two volumes.
 - The `linux/arm64` build of both new images and the DVC hashes for that platform.
 - The library versions of the model code against real data.
 - The MLflow server memory limit of 640 MiB under a real run.
