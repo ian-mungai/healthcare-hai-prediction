@@ -176,38 +176,38 @@ repos:
         pass_filenames: false
         always_run: true
       - id: tflint
-        # Terraform recommended preset plus the pinned AWS ruleset (.tflint.hcl); the plugin is installed once with `tflint --init`. Exceptions: .linter_allowlist.
-        # Local only: the hosted runner has no AWS ruleset (docs/quality_checks.md, Linters beside lint_sources).
+        # Terraform recommended preset plus the pinned AWS ruleset (.tflint.hcl); the plugin is installed with `tflint --init`, by the setup action on the hosted runner.
+        # Exceptions: .linter_allowlist.
         name: Terraform follows the TFLint recommended and AWS rules
         entry: .venv/bin/python -m scripts.quality.lint_tools tflint
         language: system
         pass_filenames: false
         files: ^(infra/.*\.(tf|hcl)|\.tflint\.hcl|\.linter_allowlist|config/quality_tools\.json)$
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
       - id: trivy-config
-        # Homebrew trivy at the pinned version, embedded checks only (no network); *.tfvars, *.tfvars.json and terraform.tfstate* are skipped by name and never read.
+        # The pinned release trivy in .tools/bin (the one trivy of the project), embedded checks only (no network); *.tfvars, *.tfvars.json and terraform.tfstate* are skipped by name and never read.
         name: Terraform has no trivy config misconfigurations
         entry: .venv/bin/python -m scripts.quality.lint_tools trivy-config
         language: system
         pass_filenames: false
         files: ^(infra/.*\.tf|\.linter_allowlist|config/quality_tools\.json)$
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
       - id: osv-scanner
-        # Queries osv.dev, so it needs the network and runs at the pre-push stage (pre-commit run osv-scanner --hook-stage pre-push --all-files); Homebrew tool, local only.
+        # Queries osv.dev, so it needs the network and runs at the pre-push stage (pre-commit run osv-scanner --hook-stage pre-push --all-files) and in the hosted manual stage.
         name: Pinned requirements have no unreviewed known vulnerabilities (OSV-Scanner)
         entry: .venv/bin/python -m scripts.quality.lint_tools osv-scanner
         language: system
         pass_filenames: false
         files: ^(.*requirements[^/]*\.txt|services/orchestration/constraints-3\.12\.txt|\.linter_allowlist|config/quality_tools\.json)$
-        stages: [pre-push]
+        stages: [pre-push, manual]
       - id: zizmor
-        # Offline audits only (the online ones need a GitHub token); Homebrew tool, local only.
+        # Offline audits only (the online ones need a GitHub token).
         name: Workflows pass the zizmor security audits
         entry: .venv/bin/python -m scripts.quality.lint_tools zizmor
         language: system
         pass_filenames: false
         files: ^(\.github/workflows/.*\.ya?ml|\.linter_allowlist|config/quality_tools\.json)$
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
       - id: import-linter
         # Contracts in .importlinter state the package boundaries that hold today; import-linter is installed by scripts/quality/install_lint_tools.py.
         name: First-party packages keep their import boundaries (import-linter)
@@ -215,14 +215,14 @@ repos:
         language: system
         pass_filenames: false
         files: ^(.*\.py|\.importlinter|config/quality_tools\.json)$
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
       - id: typos
-        # Homebrew typos at the pinned version with _typos.toml; local only.
+        # The pinned typos with _typos.toml.
         name: Text and source files have no common misspellings (typos)
         entry: .venv/bin/python -m scripts.quality.lint_tools typos
         language: system
         types: [text]
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
       - id: check-jsonschema
         # Workflows and actions against the bundled GitHub schemas, every *.schema.json against its metaschema and the contracts mapped in config/quality/json_schemas.json;
         # check-jsonschema is installed by scripts/quality/install_lint_tools.py.
@@ -231,7 +231,7 @@ repos:
         language: system
         pass_filenames: false
         files: ^(\.github/(workflows|actions)/.*\.ya?ml|.*\.schema\.json|config/quality/json_schemas\.json|config/(orchestration|training|acquisition)/.*\.json|data_contracts/(training|orchestration)/.*\.json)$
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata

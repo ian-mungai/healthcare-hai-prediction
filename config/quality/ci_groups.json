@@ -219,7 +219,14 @@
       "lint-settings",
       "suppressions",
       "subprocess-imports",
-      "docker-calls"
+      "docker-calls",
+      "tflint",
+      "trivy-config",
+      "zizmor",
+      "import-linter",
+      "check-jsonschema",
+      "typos",
+      "osv-scanner"
     ],
     "samples": [
       "test-checks"

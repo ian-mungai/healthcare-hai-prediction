@@ -3390,7 +3390,7 @@ FAST_COMMIT_HOOKS = frozenset(
 PUSH_HOOKS = frozenset({"local_ci_pushed", "acquisition-checks"})
 INSTALL_TYPES = ("pre-commit", "commit-msg", "pre-push")
 FINGERPRINT_KEYS = ("entry", "language", "files", "exclude", "types", "types_or", "always_run", "pass_filenames", "verbose", "args")
-# What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced.
+# What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced, and the seven linters of lint_tools.
 MANUAL_FINGERPRINTS = {
     "gitleaks-outgoing": "f1c92f2c178a",
     "credential-files": "9d1f2d4ee86b",
@@ -3422,6 +3422,13 @@ MANUAL_FINGERPRINTS = {
     "suppressions": "eda6794008b9",
     "subprocess-imports": "7bae5ddf818b",
     "docker-calls": "2f3e46d94779",
+    "tflint": "1cea729b9600",
+    "trivy-config": "7303359ce5bc",
+    "zizmor": "a7d8a0e15bb0",
+    "import-linter": "5409790957ac",
+    "check-jsonschema": "3b0e5a36602c",
+    "typos": "61801f4f88b0",
+    "osv-scanner": "a3e0e7a4f358",
     "test-checks": "0328ad4bb1bd",
     "test-documentation-review": "db426284e54a",
 }

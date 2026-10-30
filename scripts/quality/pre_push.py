@@ -9,7 +9,8 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
   ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
 - Every scope also runs the ``osv-scanner`` hook (``pre-commit run osv-scanner --hook-stage pre-push``) over the range, or over all files when there is no
-  range. Hosted CI does not run it, so a small change runs it too. The hook skips itself unless the range changes a pinned requirements file or its allowlist.
+  range. Hosted CI runs it in the code hook partition, which a small change leaves out, so a small change runs it here only. The hook skips itself
+  unless the range changes a pinned requirements file or its allowlist.
 - A ``range`` of a small change (``pre_push.small_change``: at most ``max_files`` files and ``max_changed_lines`` changed lines, none on the ``not_paths``
   list, none a CI file) leaves out the acquisition hook and the three hook partitions. Hosted CI runs them.
 
