@@ -153,6 +153,45 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         "spark_read",
     ]
     checks["selection_reset_restores_bytes"] = invoke(document).returncode == 0 and output.read_bytes() == original
+    account = "111111111111"
+    registry = account + ".dkr.ecr.us-west-2.amazonaws.com/example_project_"
+    training_variables: dict[str, Any] = {
+        "train_enabled": True,
+        "train_images": {"training": registry + "training_dev@sha256:" + "d" * 64, "feature_store": registry + "feature_store_dev@sha256:" + "e" * 64},
+        "train_roles": {
+            "execution": "arn:aws:iam::" + account + ":role/example_project_job_execution_dev",
+            "train_task": "arn:aws:iam::" + account + ":role/example_project_job_train_task_dev",
+        },
+        "train_resources": {"cpu": 4096, "memory": 16384, "ephemeral_storage_gib": 50},
+        "mlflow_admin_password_name": "/example_project/mlflow_admin_password",
+        "log_group_name": "example_project_jobs_dev",
+    }
+    training_document = document | {"variables": document["variables"] | training_variables}
+    result = invoke(training_document)
+    checks["training_inputs_render"] = result.returncode == 0 and json.loads(output.read_text()) == values | training_document["variables"]
+    for name, change in (
+        (
+            "training_image_of_another_repository",
+            {"train_images": training_variables["train_images"] | {"analytics": registry + "analytics_dev@sha256:" + "a" * 64}},
+        ),
+        ("training_image_by_tag", {"train_images": training_variables["train_images"] | {"training": registry + "training_dev:latest"}}),
+        (
+            "training_role_of_another_layer",
+            {"train_roles": training_variables["train_roles"] | {"train_task": "arn:aws:iam::" + account + ":role/example_project_job_write_gold_task_dev"}},
+        ),
+        (
+            "training_role_key_of_another_layer",
+            {"train_roles": training_variables["train_roles"] | {"write_gold_task": training_variables["train_roles"]["train_task"]}},
+        ),
+        ("training_password_name_of_another_secret", {"mlflow_admin_password_name": "/example_project/aws_polaris_reader_client_secret"}),
+        ("training_resources_beyond_scratch", {"train_resources": {"cpu": 4096, "memory": 16384, "ephemeral_storage_gib": 500}}),
+        ("training_resources_unknown_field", {"train_resources": training_variables["train_resources"] | {"gpu": 1}}),
+    ):
+        altered = training_document | {"variables": training_document["variables"] | change}
+        before = output.read_bytes()
+        result = invoke(altered)
+        checks[name + "_is_refused"] = result.returncode == 2 and "preparation contract" in result.stderr and output.read_bytes() == before
+    checks["training_inputs_reset_restores_bytes"] = invoke(document).returncode == 0 and output.read_bytes() == original
     for name, altered, digest, cause in (
         ("changed_reviewed_bytes", document, "0" * 64, "preparation SHA-256"),
         ("base_identity_override", document | {"variables": document["variables"] | {"aws_profile": "example_admin"}}, None, "preparation contract"),
