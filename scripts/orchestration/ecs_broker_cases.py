@@ -789,16 +789,16 @@ def bronze_job_gets_its_checked_dispatch_values() -> None:
             sent["taskDefinition"] == "example_dev_job_bronze" and list(values) == ["fetch", "pin", "load", "check"],
             f"wrong definition or containers: {list(values)}",
         )
-        require(values["fetch"] == {"RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST}, values["fetch"])
+        require(values["fetch"] == {"RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST}, str(values["fetch"]))
         dispatch = {"BRONZE_TABLES": ",".join(pair), "BRONZE_TARGET": "real", "BRONZE_DRY_RUN": ""}
         for container in ("pin", "load", "check"):
-            require(all(values[container][name] == value for name, value in dispatch.items()), (container, values[container]))
-        require(values["load"]["POLARIS_URI"] == "http://10.0.0.5:8181/api/catalog" and "POLARIS_URI" not in values["check"], values["load"])
+            require(all(values[container][name] == value for name, value in dispatch.items()), f"{container}: {values[container]}")
+        require(values["load"]["POLARIS_URI"] == "http://10.0.0.5:8181/api/catalog" and "POLARIS_URI" not in values["check"], str(values["load"]))
         stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True})
         wait_for(current, current.client.submit(bronze_request(2)))
         second = [arguments for name, arguments in current.ecs.calls if name == "run_task"][1]
         later = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in second["overrides"]["containerOverrides"]}
-        require(later["load"]["BRONZE_TARGET"] == "qualify" and later["load"]["BRONZE_DRY_RUN"] == "1", later["load"])
+        require(later["load"]["BRONZE_TARGET"] == "qualify" and later["load"]["BRONZE_DRY_RUN"] == "1", str(later["load"]))
 
 
 def bronze_job_is_off_unless_enabled() -> None:

@@ -377,7 +377,7 @@ class EcsBroker:
                 read["CODE_SHA256"] = self.code_digest(self.digest_run(request.run_id))
             return read["CODE_SHA256"]
 
-        values = {
+        values: dict[str, Callable[[], str]] = {
             "RUN_ID": lambda: request.run_id,
             "CODE_RUN_ID": lambda: self.digest_run(request.run_id),
             "CODE_SHA256": code_digest,
