@@ -2705,7 +2705,7 @@ def resumed_start_stopped(env: Env, elsewhere: Path, when: str) -> bool:
     dies; a launcher whose checkout differs then opens the registry. It must not resume the startup: it tears down what exists and stays down.
 
     A create paused before its effect is released before the second launcher starts, so its effect lands first. A dead launcher's request that
-    lands after the second launcher's teardown can leave one empty network, which no scan sees (issue WV3-010, amendment A88)."""
+    lands after the second launcher's teardown can leave one empty network, which no scan sees (amendment A88)."""
     env.settings.pop("catalog_checkout", None)
     env.write_settings()
     env.start()

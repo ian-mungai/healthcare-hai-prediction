@@ -626,9 +626,9 @@ CASES = [
         "issue ID after Refs, ee93061",
         "commit-msg",
         False,
-        message="fix(quality): run the hook partitions one after the other (#42)\n\nThe partitions run in one worker.\n\nRefs WV3-033\n",
+        message="fix(quality): run the hook partitions one after the other (#42)\n\nThe partitions run in one worker.\n\nRefs ABC1-033\n",
     ),
-    Case("bracketed issue ID", "commit-msg", False, message="fix(api): handle retries\n\nThe pair is reset (WV3-033).\n"),
+    Case("bracketed issue ID", "commit-msg", False, message="fix(api): handle retries\n\nThe pair is reset (ABC1-033).\n"),
     Case(
         "review rounds in number words, 4c524c7",
         "commit-msg",

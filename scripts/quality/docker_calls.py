@@ -32,7 +32,7 @@ non-comment line that runs ``docker`` or ``docker-compose`` (directly, through `
 
 Process starts the check cannot prove and the lead has read are listed in ``REVIEWED``; each entry binds its whole file, the repository
 modules that file imports, its finding class and its exact number of findings. Three files are exempt, each for a stated reason
-(``EXEMPT``). Known limits (issue WV3-006): a ``PATH`` the repository changes, a program symlink the repository creates, a script the
+(``EXEMPT``). Known limits: a ``PATH`` the repository changes, a program symlink the repository creates, a script the
 repository writes at run time and then runs, and shell commands assembled from variables are not followed. The check covers the
 repository's own code, which is the trust boundary (D1 section 12). Failure mode 918 is in plans/wp/l1a_failure_modes.md.
 """

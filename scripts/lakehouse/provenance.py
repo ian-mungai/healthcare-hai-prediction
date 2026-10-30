@@ -536,7 +536,7 @@ def sealed_directory(folder: int, run_id: str) -> int:
 def seal_lock(folder: int, run_id: str) -> Iterator[None]:
     """Hold an exclusive lock on the held run folder for one seal, so two seals of a run (the launcher's seal worker and a direct caller) never overlap.
 
-    Without it the second seal removed the first one's temporary copy or made the sealed folder read-only before the first one's rename (WV3-015).
+    Without it the second seal removed the first one's temporary copy or made the sealed folder read-only before the first one's rename.
     The second seal waits, then finds the sealed copy and returns the same record. A seal that waits more than ``SEAL_LOCK_SECONDS`` refuses.
     """
     deadline = time.monotonic() + SEAL_LOCK_SECONDS
