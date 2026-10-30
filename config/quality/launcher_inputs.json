@@ -1042,6 +1042,7 @@
     "orchestration/code_digest.py",
     "orchestration/dag_runtime.py",
     "orchestration/dbt_lineage.py",
+    "orchestration/ecs_adapter.py",
     "orchestration/ecs_api.py",
     "orchestration/ecs_stage.py",
     "orchestration/ecs_target.py",
