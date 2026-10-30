@@ -3777,7 +3777,7 @@ def hook_partition_case(scratch: Path, mutate: Callable[[str], str] | None = Non
     """
     root = pre_push_repo(scratch, "pre_push_hook_partitions", ("scripts/acquisition/example.py", "README.md"), mutate=mutate)
     lock = root / "index.lock"
-    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "1.5", "STUB_WAIT_FOR_LOCK": str(lock)}, timeout=300)
+    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "5", "STUB_WAIT_FOR_LOCK": str(lock)}, timeout=300)
     calls = pre_push_calls(root)
     hooks = [call for call in calls if call["stub"] == "ci_hooks"]
     acquisition = [call for call in calls if call["stub"] == "acquisition"]
