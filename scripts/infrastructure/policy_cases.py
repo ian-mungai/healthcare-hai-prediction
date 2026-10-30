@@ -64,6 +64,8 @@ PUBLIC_PARAMETER = f"arn:aws:ssm:{R}::parameter/aws/service/ecs/optimized-ami/am
 # The lakehouse roles take their names from the Terraform variable defaults, whatever PROJECT_NAME is, so the oracle names them outright.
 READER = f"arn:aws:iam::{A}:role/healthcare_hai_prediction_lakehouse_reader"
 WRITER = f"arn:aws:iam::{A}:role/healthcare_hai_prediction_lakehouse_writer"
+# The Athena reader role of the IAM stack, named from PROJECT_NAME and ENVIRONMENT. The project user may assume it and holds no Athena or Glue grant itself.
+ATHENA_READER = f"arn:aws:iam::{A}:role/{P}_athena_reader_{E}"
 PROJECT_NAME_ROLES = (f"arn:aws:iam::{A}:role/{P}_lakehouse_reader", f"arn:aws:iam::{A}:role/{P}_lakehouse_writer")
 BUCKET = f"arn:aws:s3:::{B}"
 PARAMETERS = (
@@ -254,7 +256,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("ssm", "StartSession", DOCUMENT, region=None)
     for action in ("ResumeSession", "TerminateSession"):
         add("ssm", action, SESSION, region=None, extra={"aws:username": USER})
-    for target in (READER, WRITER):
+    for target in (READER, WRITER, ATHENA_READER):
         add("sts", "AssumeRole", target, region=None)
     add("sts", "AssumeRole", role("job_try_writer"), region=None, extra={"sts:RoleSessionName": "hai_try_example"})
     add("s3", "GetObjectVersion", f"{BUCKET}/lakehouse/run_stage/run/inputs/pins.json", region=None)
@@ -823,6 +825,28 @@ def pass_role_cases() -> Iterator[Case]:
             f"AssumeRole {target.rsplit('/', 1)[-1]}, named from PROJECT_NAME, not by the role variables", request("sts:AssumeRole", target, region=None), False
         )
     yield Case("AssumeRole a lakehouse role of another account", request("sts:AssumeRole", READER.replace(A, "222222222222"), region=None), False)
+    yield Case("AssumeRole athena_reader", request("sts:AssumeRole", ATHENA_READER, region=None), True, "AssumeAthenaReaderOnly")
+    for label, target in (
+        ("athena_reader of another environment", ATHENA_READER.replace(f"_{E}", "_other")),
+        ("athena_reader of another account", ATHENA_READER.replace(A, "222222222222")),
+        ("athena_reader with a suffix", f"{ATHENA_READER}_extra"),
+        ("another athena role", f"arn:aws:iam::{A}:role/{P}_athena_writer_{E}"),
+    ):
+        yield Case(f"AssumeRole {label}", request("sts:AssumeRole", target, region=None), False)
+    athena_workgroup = arn("athena", "workgroup/hai_mirror")
+    glue_table = arn("glue", "table/hai_mirror_gold/dim_state")
+    for action, target in (
+        ("athena:StartQueryExecution", athena_workgroup),
+        ("athena:GetQueryResults", athena_workgroup),
+        ("athena:GetWorkGroup", athena_workgroup),
+        ("glue:GetDatabase", arn("glue", "database/hai_mirror_gold")),
+        ("glue:GetTable", glue_table),
+        ("glue:CreateTable", glue_table),
+        ("s3:GetObject", f"{BUCKET}/athena/results/query.csv"),
+    ):
+        service = action.split(":")[0]
+        if service != "s3":
+            yield Case(f"the project user has no direct {action}", request(action, target), False)
     for action in ("AssumeRoleWithWebIdentity", "AssumeRoleWithSAML", "GetFederationToken", "GetSessionToken"):
         yield Case(f"sts: no {action}", request(f"sts:{action}", READER, region=None), False)
 
@@ -1580,6 +1604,20 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def roles_wildcard(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sts", "AssumeLakehouseRolesOnly")["Resource"] = f"arn:aws:iam::{A}:role/*"
 
+    def athena_roles_wildcard(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sts", "AssumeAthenaReaderOnly")["Resource"] = f"arn:aws:iam::{A}:role/*"
+
+    def athena_role_prefix(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sts", "AssumeAthenaReaderOnly")["Resource"] = f"arn:aws:iam::{A}:role/{P}_athena_*"
+
+    def athena_any_environment(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sts", "AssumeAthenaReaderOnly")["Resource"] = f"arn:aws:iam::{A}:role/{P}_athena_reader_*"
+
+    def athena_direct_access(documents: dict[str, dict[str, Any]]) -> None:
+        documents["healthcare_hai_prediction_sts_policy"]["Statement"].append(
+            {"Sid": "PlantedDirectAthena", "Effect": "Allow", "Action": ["athena:StartQueryExecution", "glue:GetTable"], "Resource": "*"}
+        )
+
     def percent_deny_missing(documents: dict[str, dict[str, Any]]) -> None:
         drop(documents, "s3", "DenyPercentSignInSingleCopyKeys")
 
@@ -1833,6 +1871,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "parameter path read": ("forbidden ssm:GetParametersByPath", parameter_path_read),
         "write access to the read-only administrator password": ("parameter: overwrite the Airflow administrator password", admin_password_write),
         "sts AssumeRole on every role": ("AssumeRole administrator", roles_wildcard),
+        "the Athena statement reaches every role": ("AssumeRole administrator", athena_roles_wildcard),
+        "the Athena statement reaches every Athena role": ("AssumeRole another athena role", athena_role_prefix),
+        "the Athena statement reaches the reader of every environment": ("AssumeRole athena_reader of another environment", athena_any_environment),
+        "the Athena statement carries direct Athena and Glue actions": ("the project user has no direct athena:StartQueryExecution", athena_direct_access),
         "the percent-sign deny is missing": ("single copy: PutObject leaf", percent_deny_missing),
         "the older-grants deny is missing": ("single copy: PutObject bronze_objects", older_grants_deny_missing),
         "the single-copy create loses its header condition": ("single copy: create without the header", create_once_unconditional),

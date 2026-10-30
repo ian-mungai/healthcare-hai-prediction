@@ -13,6 +13,14 @@
       ]
     },
     {
+      "Sid": "AssumeAthenaReaderOnly",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole"
+      ],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_athena_reader_${ENVIRONMENT}"
+    },
+    {
       "Sid": "AssumeTryOutputRole",
       "Effect": "Allow",
       "Action": "sts:AssumeRole",

@@ -105,6 +105,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
+  # Athena writes query results here, and they can hold Confidential rows. Current results expire after 7 days, replaced versions after 1 day. S3 lets
+  # a rule carry either days or the delete-marker cleanup, so the markers of expired results stay. The prefix is exact: no other key matches it.
+  rule {
+    id     = "expire_athena_results"
+    status = "Enabled"
+
+    filter {
+      prefix = "athena/results/"
+    }
+
+    expiration {
+      days = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
   # DVC stores each training matrix once, as an object named by its content hash under dvc/, and a push never replaces an
   # object with different content. Only replaced or deleted versions are old, so they expire after 30 days. Current DVC objects never expire.
   rule {
@@ -126,7 +145,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
 
   # The MLflow server writes each artifact once, under mlflow/. Only replaced or deleted versions are old, so they expire after
   # 30 days. Current artifacts never expire. The rule changes the live lifecycle configuration, so it exists only while the owner
-  # sets mlflow_retention_enabled; a default plan leaves the three rules above as they are.
+  # sets mlflow_retention_enabled; a default plan leaves the four rules above as they are.
   dynamic "rule" {
     for_each = var.mlflow_retention_enabled ? [1] : []
 
