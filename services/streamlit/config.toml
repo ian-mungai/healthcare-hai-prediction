@@ -1,0 +1,20 @@
+# Streamlit settings of the page image. The address and port are set again by the service environment, which is what the plan test checks.
+[server]
+headless = true
+address = "127.0.0.1"
+port = 8501
+fileWatcherType = "none"
+runOnSave = false
+enableXsrfProtection = true
+maxUploadSize = 1
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# The page must never show a traceback: it would name internal paths, and an error text must not carry request data.
+showErrorDetails = "none"
+toolbarMode = "viewer"
+
+[logger]
+level = "info"
