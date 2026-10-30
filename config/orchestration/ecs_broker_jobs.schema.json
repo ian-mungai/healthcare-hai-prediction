@@ -73,6 +73,10 @@
               "type": "string"
             },
             "description": "Containers that hold the acceptance checks. Each must be in the task's report and exit 0"
+          },
+          "approval": {
+            "const": "promotion",
+            "description": "The job runs only with the owner's approval record for exactly this promotion in the run's staged inputs"
           }
         }
       }

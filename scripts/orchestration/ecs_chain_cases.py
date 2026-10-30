@@ -19,6 +19,7 @@ from unittest import mock
 import jinja2
 
 from scripts.orchestration.ecs_adapter_cases import require
+from scripts.orchestration.ecs_broker import CHAIN_LAYERS, derived_run_id
 
 ROOT = Path(__file__).resolve().parents[2]
 BRONZE = "20261030T090000Z-b0b0b0b0"
@@ -113,6 +114,16 @@ def derived_ids_are_valid_and_stable() -> None:
     require(loaded["chain_run"]("gold", BRONZE) == loaded["derived_run_id"](ids[0], "gold"), "gold does not derive from silver")
 
 
+def broker_and_dag_derive_the_same_run_ids() -> None:
+    loaded = load_dag()
+    require(tuple(layer for layer, _, _ in loaded["CHAIN"]) == CHAIN_LAYERS, "the broker and the DAG list different layers")
+    for bronze in (BRONZE, OTHER_BRONZE):
+        run = bronze
+        for layer in CHAIN_LAYERS:
+            run = derived_run_id(run, layer)
+            require(run == loaded["chain_run"](layer, bronze), f"the broker derives another {layer} run ID than the DAG")
+
+
 def chain_runs_in_order_after_the_gate() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
@@ -200,6 +211,7 @@ def named_child_dags_exist_and_accept_the_settings() -> None:
 
 CASES: dict[str, Callable[[], None]] = {
     "derived_ids_are_valid_and_stable": derived_ids_are_valid_and_stable,
+    "broker_and_dag_derive_the_same_run_ids": broker_and_dag_derive_the_same_run_ids,
     "chain_runs_in_order_after_the_gate": chain_runs_in_order_after_the_gate,
     "triggers_send_derived_ids": triggers_send_derived_ids,
     "a_retried_bronze_run_names_the_same_runs": a_retried_bronze_run_names_the_same_runs,
