@@ -127,8 +127,8 @@ def usable_commit(value: str) -> bool:
     return run_command("git", ["cat-file", "-e", f"{value}^{{commit}}"], timeout=60).returncode == 0
 
 
-def plan(scope: str, part: str, start: str = "", end: str = "", paths: list[str] | None = None) -> dict[str, Any]:
-    config = load()
+def plan(scope: str, part: str, start: str = "", end: str = "", paths: list[str] | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or load()
     groups = groups_of(part, config)
     changed: list[str] | None
     if scope == "full":

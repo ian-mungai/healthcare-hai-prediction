@@ -217,6 +217,11 @@
       "test-checks"
     ]
   },
+  "reuse": {
+    "never": [
+      "repository_hooks"
+    ]
+  },
   "pre_push": {
     "full_paths": [
       "^scripts/run_ci\\.sh$",

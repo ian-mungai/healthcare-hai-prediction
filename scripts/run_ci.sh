@@ -12,6 +12,8 @@ set -euo pipefail
 # every group: the pre-push run escalates to it when the selector or the CI scripts change; run it on demand or when hosted CI is unavailable), "staged"
 # (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
+# HAI_CI_REUSE=main (the local default) skips a group whose input hash matches a pass recorded by a full run on a commit of origin/main; off runs every group. A passed full run on
+# a clean commit of origin/main records its groups (scripts/quality/ci_main_passes.py). The pre-push gate never reuses.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
@@ -100,6 +102,31 @@ done <<<"$plan"
 if [[ "${CI_LIST_ONLY:-0}" == "1" ]]; then
   ci_finished=1
   exit 0
+fi
+# Reuse of a group's pass from main (scripts/quality/ci_main_passes.py). HAI_CI_REUSE is "main" (the default for a local run) or "off" (the default on hosted CI). The pre-push
+# gate sets it to off, and HAI_DOCKER_RELEASE=outer (the gate's marker) forces it off here too: the gate never reuses a local pass. Only a full run of part all reuses and records
+# (no CI_UNITS, LAUNCHER_SHARD or FEATURE_SHARD). A group is reused only when a full run on a commit of origin/main recorded a pass with the same input hash.
+reuse_mode="${HAI_CI_REUSE:-}"
+if [[ -z "$reuse_mode" ]]; then
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then reuse_mode=off; else reuse_mode=main; fi
+fi
+case "$reuse_mode" in
+  main | off) ;;
+  *) printf 'HAI_CI_REUSE must be main or off, not %s\n' "$reuse_mode" >&2; exit 2 ;;
+esac
+if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then reuse_mode=off; fi
+full_run=0
+if [[ "$part" == "all" && -z "${CI_UNITS:-}" && -z "${LAUNCHER_SHARD:-}" && -z "${FEATURE_SHARD:-}" ]]; then full_run=1; fi
+if [[ "$reuse_mode" == "main" && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then
+  kept=()
+  while read -r kind group commit; do
+    case "$kind" in
+      reuse) printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary" ;;
+      run) kept+=("$group") ;;
+    esac
+  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --groups "${run_groups[@]}")
+  run_groups=(${kept[@]+"${kept[@]}"})
+  selected=" ${run_groups[*]:-} "
 fi
 is_selected() { [[ "$selected" == *" $1 "* ]]; }
 # require_group_file <group>: a missing or unreadable body file of a check group fails the run with its name.
@@ -364,5 +391,8 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
   fi
 fi
 
+if [[ "$reuse_mode" == "main" && "$full_run" == 1 && "$scope" == "full" && ${#run_groups[@]} -gt 0 ]]; then
+  "$python_bin" -m scripts.quality.ci_main_passes record --groups "${run_groups[@]}" || printf 'Recording the passes failed; the run result stands\n'
+fi
 printf '\nAll local CI checks passed without AWS credentials.\n'
 ci_finished=1

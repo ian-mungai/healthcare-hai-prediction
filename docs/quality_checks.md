@@ -871,6 +871,20 @@ compared. When the run is reused, the jobs of the workflow are skipped; "Quick G
 `CI_PART=gates` (the privacy, secret, credential, data-file, writing, Markdown, documentation and source gates). The plan job's summary names the pull request, the head commit, the
 tree, the reused run and the conclusion of each required job. `.venv/bin/python -m scripts.quality.run_ci_reuse_e2e` checks the reuse and every case that must run in full.
 
+## Reuse of local passes
+
+A full local run of `scripts/run_ci.sh` (part `all`, no `CI_UNITS`, `LAUNCHER_SHARD` or `FEATURE_SHARD`) skips a check group when a full run on a commit of `origin/main` recorded a pass of that
+group with the same inputs (`scripts/quality/ci_main_passes.py`). The inputs of a group are the files of the working tree, tracked or new and not ignored, whose change would select the group in
+`scripts/quality/ci_groups.py`; a path that no group lists or that selects every group counts for every group. The input hash covers each such file's path and Git blob hash. The run prints
+`reused <group>: passed in a full run on main commit <commit> with identical inputs` and adds the line to the job summary.
+
+A passed full-scope run records its groups only when the checked-out commit is in `origin/main` and the working tree has no change. The records are files in the Git common folder
+(`hai_ci_main_passes/<group>.json`), shared by every worktree and never committed. A record is used only while its commit is still in `origin/main`. `repository_hooks` (it checks the pushed
+range) is never recorded or reused (`reuse.never` in `config/quality/ci_groups.json`).
+
+`HAI_CI_REUSE=off` runs every group. Hosted CI never reuses a local pass. The pre-push gate never reuses one: it sets `HAI_CI_REUSE=off`. The marker `HAI_DOCKER_RELEASE=outer`, which only the gate sets,
+turns reuse off in `scripts/run_ci.sh` as well. `HAI_CI_PASSES_DIR` and `HAI_CI_MAIN_REF` replace the folder and the main reference for the E2E cases only.
+
 ## Practice
 
 Keep edits to CI-wide files rare: `scripts/run_ci.sh` (the dispatcher), `scripts/quality/timing.sh`, `scripts/process.py`, `scripts/quality/ci_groups.py`,

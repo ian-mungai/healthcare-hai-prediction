@@ -67,6 +67,8 @@ SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
 # The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
 OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
+# The gate never reuses a local pass of a check group (docs/quality_checks.md; scripts/quality/ci_main_passes.py).
+NO_REUSE = {"HAI_CI_REUSE": "off"}
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
     "CI_PART",
@@ -84,6 +86,7 @@ EXECUTION_CONTROLS = (
     "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
     "HAI_DOCKER_RELEASE",
+    "HAI_CI_REUSE",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
     "PRE_COMMIT_FROM_REF",
@@ -228,7 +231,12 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
         ]
     if scope == "range":
         steps.append(
-            {"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE}}
+            {
+                "name": "local_ci",
+                "kind": "run_ci",
+                "arguments": [],
+                "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE, **NO_REUSE},
+            }
         )
         if not small:
             steps.append(
@@ -249,7 +257,7 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
                 for group in config["hook_groups"]
             ]
     else:
-        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE}})
+        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE, **NO_REUSE}})
     first = (
         {"name": "changed_file_checks", "kind": "changed_files", "arguments": ["--root", str(root), "--from", start, "--to", end], "env": {}}
         if start and end

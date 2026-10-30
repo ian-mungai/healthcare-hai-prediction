@@ -100,6 +100,7 @@ COPIED = (
     "orchestration/network_policy.py",
     "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/ci_main_passes.py",
     "scripts/quality/launcher_inputs.py",
     "scripts/quality/source_reads.py",
     "scripts/quality/lint_sources.py",
@@ -3493,7 +3494,8 @@ ORDINARY_PATHS = (
     "scripts/acquisition/run_checks.sh",
 )
 INHERITED_PATTERN = (
-    "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|HAI_DOCKER_RELEASE$|GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
+    "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|HAI_DOCKER_RELEASE$|HAI_CI_REUSE$|"
+    "GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
 )
 NOT_CONTROLS = frozenset(
     {
@@ -3556,8 +3558,9 @@ if [[ -n "${STUB_WAIT_FOR_LOCK:-}" ]]; then
     sleep 0.1
   done
 fi
-printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s"}, "seen": "%s", "overlap": "%s"}\\n' \\
-  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}" "$seen" "$overlap" >>"$STUB_LOG"
+printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s", ' \\
+  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}" >>"$STUB_LOG"
+printf '"HAI_CI_REUSE": "%s"}, "seen": "%s", "overlap": "%s"}\\n' "${HAI_CI_REUSE-unset}" "$seen" "$overlap" >>"$STUB_LOG"
 if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
 exit "${STUB_EXIT_RUN_CI:-0}"
 """.replace("@PATTERN@", INHERITED_PATTERN)
@@ -3798,6 +3801,7 @@ def gate_release_case(
         "since_is_the_run_start": before - 1 <= since <= after,
         "release_environment_clean": launcher_calls[0]["seen"] == "" if launcher_calls else False,
         "run_ci_defers_to_the_gate": bool(ci_calls) and all(call["env"]["HAI_DOCKER_RELEASE"] == "outer" for call in ci_calls),
+        "run_ci_never_reuses_under_the_gate": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "off" for call in ci_calls),
         "line_printed": f"pre-push: Docker release: {want_text}" in out,
         "report_entry": released.get("outcome") == want_outcome,
         "within_limit": seconds < seconds_limit,
@@ -4051,7 +4055,8 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
     hooks = [steps.get(f"hooks_{group}", {}).get("argv", []) for group in config["hook_groups"]]
     matches = {
         "scope": plan["scope"] == "range" and plan["start"] == base and plan["end"] == head,
-        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE"},
+        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
+        "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
         "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
         "env_values": local.get("env", {}).get("CI_SCOPE") == hosted_env["CI_SCOPE"]
         and local.get("env", {}).get("RANGE_START") == base
@@ -4073,7 +4078,7 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
             "case": "pre_push_full_plan_runs_the_full_scope_once",
             "passed": bool(full)
             and full["scope"] == "full"
-            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer"}
+            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "off"}
             and not any(name.startswith("hooks_") or name == "acquisition" for name in full_steps),
             "steps": list(full_steps),
         }
@@ -4290,6 +4295,199 @@ def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
             mutate=source_edit('if matching([*small["not_paths"], *config["pre_push"]["full_paths"]], paths):', "if False:"),
         ),
     ]
+    return results
+
+
+MAIN_PASSES = "scripts.quality.ci_main_passes"
+PASS_FILES = (
+    "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
+    "scripts/process.py",
+    "scripts/quality/ci_groups.py",
+    "scripts/quality/ci_main_passes.py",
+)
+
+
+def passes(root: Path, folder: Path, command: str, groups: list[str], main_ref: str = "HEAD", extra: tuple[str, ...] = ()) -> tuple[str, dict[str, str]]:
+    """Run the pass-record module in ``root`` and return its output and the group lines of ``filter`` (reuse or run)."""
+    environment = {**os.environ, "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": main_ref, "PYTHONDONTWRITEBYTECODE": "1"}
+    result = run_command(str(PYTHON), ["-B", "-m", MAIN_PASSES, command, "--groups", *groups, *extra], cwd=root, env=environment, timeout=300)
+    lines = [line.split() for line in result.stdout.splitlines()]
+    return result.stdout, {line[1]: line[0] for line in lines if line and line[0] in {"reuse", "run"}}
+
+
+def passes_repo(scratch: Path, name: str) -> Path:
+    root = scratch / name
+    for path in PASS_FILES:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / path, root / path)
+    for package in ("scripts", "scripts/quality"):
+        (root / package / "__init__.py").write_text("")
+    for path in ("README.md", "features/example.py", "dbt/models/silver/example.sql", "scripts/lakehouse/example.py"):
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text("base\n")
+    probe_git(root, "init", "--quiet", "--initial-branch", "main")
+    probe_git(root, "add", "--all")
+    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "base")
+    return root
+
+
+def affected(path: str) -> set[str]:
+    return set(ci_groups.plan("paths", "all", paths=[path])["run"])
+
+
+def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
+    """A group's pass is recorded only on a clean commit of main and reused only for identical inputs."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
+    groups = [*config["groups"], *config["full_only"]]
+    recordable = [group for group in groups if group not in config["reuse"]["never"]]
+    root = passes_repo(scratch, "passes_clean")
+    folder = scratch / "passes_clean_records"
+    written, _ = passes(root, folder, "record", groups)
+    _, clean = passes(root, folder, "filter", groups)
+    results = [
+        {
+            "case": "pass_records_are_written_on_a_clean_commit_of_main_and_reused",
+            "passed": "recorded" in written
+            and sorted(path.stem for path in folder.glob("*.json")) == sorted(recordable)
+            and all(clean[group] == "reuse" for group in recordable)
+            and clean["repository_hooks"] == "run",
+            "written": written.strip()[:200],
+            "filter": clean,
+        }
+    ]
+    probe = "dbt/models/silver/example.sql"
+    (root / probe).write_text("changed\n")
+    _, changed = passes(root, folder, "filter", groups)
+    hit = affected(probe)
+    results.append(
+        {
+            "case": "pass_reuse_stops_for_the_groups_a_changed_file_selects",
+            "passed": all(changed[group] == ("run" if group in hit else "reuse") for group in recordable) and hit and hit != set(recordable),
+            "run": sorted(group for group in groups if changed[group] == "run"),
+            "selected_by_the_file": sorted(hit),
+        }
+    )
+    written_dirty, _ = passes(root, scratch / "passes_dirty_records", "record", groups)
+    results.append(
+        {
+            "case": "pass_record_refused_for_a_changed_tree",
+            "passed": "not recorded" in written_dirty and "changes" in written_dirty and not (scratch / "passes_dirty_records").exists(),
+            "output": written_dirty.strip()[:200],
+        }
+    )
+    (root / probe).write_text("base\n")
+    (root / "features/new_file.py").write_text("new\n")
+    _, untracked = passes(root, folder, "filter", groups)
+    results.append(
+        {
+            "case": "pass_reuse_stops_for_a_new_untracked_file",
+            "passed": all(untracked[group] == ("run" if group in affected("features/new_file.py") else "reuse") for group in recordable)
+            and bool(affected("features/new_file.py")),
+            "run": sorted(group for group in groups if untracked[group] == "run"),
+        }
+    )
+    (root / "features/new_file.py").unlink()
+    (root / "README.md").write_text("docs change\n")
+    _, documentation = passes(root, folder, "filter", groups)
+    expected = affected("README.md")
+    results.append(
+        {
+            "case": "pass_reuse_follows_the_selector_for_a_documentation_change",
+            "passed": all(documentation[group] == ("run" if group in expected else "reuse") for group in recordable) and expected != set(recordable),
+            "run": sorted(group for group in groups if documentation[group] == "run"),
+            "selected_by_the_file": sorted(expected),
+        }
+    )
+    (root / "README.md").write_text("base\n")
+    unrelated = probe_git(root, "commit-tree", "HEAD^{tree}", "-m", "unrelated")
+    probe_git(root, "branch", "elsewhere", unrelated)
+    written_topic, _ = passes(root, scratch / "passes_topic_records", "record", groups, main_ref="elsewhere")
+    _, away = passes(root, folder, "filter", groups, main_ref="elsewhere")
+    results.append(
+        {
+            "case": "pass_record_and_reuse_need_the_commit_to_be_in_main",
+            "passed": "not recorded" in written_topic and "not in" in written_topic and all(away[group] == "run" for group in groups),
+            "output": written_topic.strip()[:200],
+            "filter": away,
+        }
+    )
+    return results
+
+
+def reuse_dry_run(
+    work: Path, out: Path, label: str, env: dict[str, str], folder: Path, record: bool = True, edit: Callable[[Path], None] | None = None
+) -> tuple[int, str]:
+    """A dry run of the dispatcher after a record of every group made inside the run's own state (the stand-ins change the inputs)."""
+
+    def prepare(tree: Path) -> None:
+        if record:
+            passes(tree, folder, "record", GROUP_NAMES, extra=("--test-any-state",))
+        if edit:
+            edit(tree)
+
+    return dry_run(
+        work, out, label, {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": "HEAD", **env}, prepare=prepare
+    )
+
+
+GROUP_NAMES = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["groups"]) + list(
+    json.loads((ROOT / "config/quality/ci_groups.json").read_text())["full_only"]
+)
+
+
+def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
+    """The dispatcher skips the groups whose pass was recorded on main, only in a full local run, and never under the gate."""
+    results = pass_record_cases(scratch)
+    results.append(
+        planted_case(
+            "gate_without_the_reuse_switch",
+            failing_step_release_case,
+            scratch,
+            mutate=source_edit("**OUTER_RELEASE, **NO_REUSE}", "**OUTER_RELEASE}"),
+        )
+    )
+    recordable = [group for group in GROUP_NAMES if group != "repository_hooks"]
+    code, log = reuse_dry_run(work, out, "reuse_on", {"HAI_CI_REUSE": "main"}, scratch / "reuse_on_records")
+    items = local_plan_of(log)["items"]
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "every_recorded_group_is_reused": all(f"reused {group}:" in log for group in recordable),
+        "no_reused_group_ran": "TIMED launcher E2E" not in log and not any(item in items for item in ("python_lint", "lakehouse_bronze", "sql_style")),
+        "the_hook_partitions_still_ran": any(item.startswith("hook_") for item in items),
+        "no_acquisition_shard_ran": not any(item.startswith("acquisition_") for item in items),
+        "nothing_recorded_from_a_changed_tree": "not recorded" in log,
+    }
+    results.append({"case": "local_run_reuses_the_groups_recorded_on_main", "passed": all(checks.values()), "checks": checks, "items": items})
+    probe = "dbt/models/silver/example_probe.sql"
+
+    def add_probe(tree: Path) -> None:
+        (tree / probe).parent.mkdir(parents=True, exist_ok=True)
+        (tree / probe).write_text("select 1\n")
+
+    code, log = reuse_dry_run(work, out, "reuse_changed_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_changed_records", edit=add_probe)
+    hit = affected(probe)
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "selected_groups_ran": all(f"reused {group}:" not in log for group in hit),
+        "other_groups_reused": all(f"reused {group}:" in log for group in recordable if group not in hit),
+    }
+    results.append(
+        {"case": "local_run_reuse_stops_for_a_changed_input", "passed": all(checks.values()) and bool(hit), "checks": checks, "selected": sorted(hit)}
+    )
+    for label, env, why in (
+        ("off", {"HAI_CI_REUSE": "off"}, "off by request"),
+        ("under_the_gate", {"HAI_CI_REUSE": "main", "HAI_DOCKER_RELEASE": "outer"}, "the gate marker"),
+        ("hosted_default", {}, "hosted default"),
+        ("part_core", {"HAI_CI_REUSE": "main", "CI_PART": "core"}, "a partial run"),
+        ("unit_subset", {"HAI_CI_REUSE": "main", "CI_UNITS": "checks"}, "a unit subset"),
+    ):
+        code, log = reuse_dry_run(work, out, f"reuse_{label}", env, scratch / f"reuse_{label}_records")
+        results.append({"case": f"local_run_does_not_reuse_{label}", "passed": "reused " not in log and code == 0, "why": why, "exit": code})
+    code, log = reuse_dry_run(work, out, "reuse_bad_value", {"HAI_CI_REUSE": "sometimes"}, scratch / "reuse_bad_records", record=False)
+    results.append(
+        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main or off" in log and "TIMED" not in log}
+    )
     return results
 
 
@@ -4723,6 +4921,7 @@ EXPECTED_CONTROLS = (
     "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
     "HAI_DOCKER_RELEASE",
+    "HAI_CI_REUSE",
     "PRE_COMMIT_FROM_REF",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
@@ -4735,7 +4934,10 @@ EXPECTED_CONTROLS = (
     "PRE_COMMIT_RUNNING_LEGACY",
     "_PRE_COMMIT_SKIP_POST_CHECKOUT",
 )
-STEP_SETS = {"run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE"}, "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"}}
+STEP_SETS = {
+    "run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
+    "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"},
+}
 
 
 def inherited_controls_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
@@ -5100,6 +5302,7 @@ def main() -> int:
         return int(bool(shard_report["failed"]))
     selection_only = "--selection-only" in sys.argv[1:]
     speed_only = "--speed-only" in sys.argv[1:]
+    reuse_only = "--reuse-only" in sys.argv[1:]
     out = ROOT / "data" / "e2e" / "ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     out.mkdir(parents=True)
     scratch = Path(tempfile.mkdtemp(prefix="ci_groups_e2e."))
@@ -5114,11 +5317,14 @@ def main() -> int:
         identity = code_identity(work)
         if speed_only:
             results += speed_static_cases(scratch) + speed_real_cases(work, out)
+        elif reuse_only:
+            results += reuse_cases(work, out, scratch)
         else:
             results.append(scratch_cleanup_interrupt_case(scratch))
             results += selection_cases(work)
             results += fast_hook_cases(scratch)
             results += pre_push_cases(work, scratch)
+            results += reuse_cases(work, out, scratch)
             results += runner_stage_cases(scratch)
             results += speed_static_cases(scratch)
             if not selection_only:
@@ -5159,7 +5365,7 @@ def main() -> int:
         "staged_body_edit_runs_only_its_group_items",
         "real_run_*",
     ]
-    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only else {"mode": "full"}
+    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only or reuse_only else {"mode": "full"}
     report = {"started": out.name, **mode, "code": identity, "cases": results, "passed": len(results) - len(failed), "total": len(results), "failed": failed}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"Bash used by the group-file guard cases: {identity.get('tools', {}).get('bash (the group-file guard)', 'unknown')}\n")
