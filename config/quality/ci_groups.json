@@ -228,6 +228,21 @@
       "^\\.github/(workflows|actions)/",
       "^\\.pre-commit-config\\.yaml$"
     ],
+    "changed_file_seconds": 600,
+    "small_change": {
+      "max_files": 6,
+      "max_changed_lines": 250,
+      "not_paths": [
+        "^infra/",
+        "^scripts/infrastructure/",
+        "^config/aws/",
+        "\\.tf(vars)?(\\.json)?$",
+        "(^|/)Dockerfile",
+        "^docker-compose\\.yaml$",
+        "^services/",
+        "\\.sh$"
+      ]
+    },
     "timeout_seconds": {
       "range": 2700,
       "full": 3600

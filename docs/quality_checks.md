@@ -514,7 +514,10 @@ One commit per reviewed change stays the rule.
   check group or a heavy hook.
 - **Pre-push stage:** the gate (`.venv/bin/python -m scripts.quality.pre_push run --hook`, registered as a Git config hook) runs once
   for the pushed range, from its merge base with `origin/main` to the pushed head, with the selector and path lists
-  GitHub CI uses, so the local result predicts the hosted run. It runs the commit-message and removed-name checks
+  GitHub CI uses, so the local result predicts the hosted run. **First** it runs the changed-file checks
+  (`scripts/quality/ci_changed_files.py`, a few minutes): Ruff format and check and mypy on the changed Python files (mypy skips the files that wait for their runtime in
+  `config/quality/mypy_runtimes.json`), SQLFluff on the changed dbt SQL files, the Docker-call guard and the check group file guard. A failed check stops the gate before the long
+  groups start and names itself; each check has the deadline `pre_push.changed_file_seconds`. It then runs the commit-message and removed-name checks
   of the hosted hooks job, `CI_SCOPE=range RANGE_START=<base> RANGE_END=<head> bash scripts/run_ci.sh` and the three
   hosted hook partitions over the same range. The steps run in parallel, except the acquisition hook and the three hook
   partitions: they run one after the other in one worker (the partitions take about 3 minutes together), because
@@ -530,6 +533,9 @@ One commit per reviewed change stays the rule.
   `scripts/acquisition/run_checks_ci.sh` does), so the hook's own path list decides whether the 12 to 14 minute suite
   runs and an acquisition change earlier in the range still counts. In the full scope the shards of `scripts/run_ci.sh`
   run it. The native hook of the push skips. `pre_push plan` prints the scope and steps without running them.
+  **Small changes.** A range in the range scope that changes at most `pre_push.small_change.max_files` files and `max_changed_lines` lines, touches no path on `not_paths` (infrastructure,
+  Terraform, Dockerfiles, Compose, service folders, shell scripts) and no CI file runs only the changed-file checks, the commit-message and removed-name checks and the affected groups of
+  `scripts/run_ci.sh`. The acquisition hook and the three hook partitions stay with hosted CI, which remains the full gate. `pre_push plan` says when a range is small.
   **Docker release:** after the last step ends, in a `finally` path that also covers a failed step, a step deadline and Ctrl-C, the
   gate runs `.venv/bin/python -m orchestration.launcher docker-release --owner --since <start of the gate>` under one 600 second
   deadline (`RELEASE_SECONDS`). The launcher skips the release unless a container was created since the gate started, stops this

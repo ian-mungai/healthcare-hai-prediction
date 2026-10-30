@@ -3619,10 +3619,12 @@ def pre_push_repo(
     timeout: int | None = None,
     mutate: Callable[[str], str] | None = None,
     config_edit: Callable[[str], str] | None = None,
+    small: dict[str, Any] | None = None,
 ) -> Path:
     """A small repository with the real selector configuration, a copy of the pre-push run and stand-ins for the commands a push runs.
 
     One topic commit per path in ``changed`` follows the base commit; ``mutate`` rewrites the copy of ``scripts/quality/pre_push.py`` to plant a defect.
+    No range is a small change unless ``small`` overrides the thresholds of ``pre_push.small_change``.
     """
     root = scratch / name
     suffix = 1
@@ -3635,8 +3637,10 @@ def pre_push_repo(
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     if timeout is not None:
         config["pre_push"]["timeout_seconds"] = {"range": timeout, "full": timeout}
+    config["pre_push"]["small_change"] = {**config["pre_push"]["small_change"], **({"max_files": 0} if small is None else small)}
     (root / "config/quality/ci_groups.json").write_text(json.dumps(config))
     (root / "scripts/run_ci.sh").write_text(STUB_RUN_CI)
+    (root / "scripts/quality/ci_changed_files.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "changed_files", "CHANGED_FILES"))
     (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
     for package in ("scripts", "scripts/quality", "orchestration"):
@@ -4121,6 +4125,7 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
         planted_case("acquisition_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_kinds, 'SERIAL_KINDS = frozenset({"ci_hooks"})')),
         planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [steps]")),
     ]
+    results += gate_stage_cases(scratch)
     return (
         results + hook_and_tree_cases(scratch) + acquisition_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + entry_cases() + docs_cases()
     )
@@ -4142,6 +4147,150 @@ def planted_case(label: str, case: Callable[..., dict[str, Any]], scratch: Path,
     except ValueError as error:
         return {"case": f"planted_{label}_caught_by_{case.__name__}", "passed": False, "error": str(error)}
     return {"case": f"planted_{label}_caught_by_{result['case']}", "passed": not result["passed"], "caught": not result["passed"]}
+
+
+def first_stub(calls: list[dict[str, Any]]) -> str:
+    return calls[0]["stub"] if calls else ""
+
+
+def changed_files_first_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """The changed-file checks run first, over the pushed range, and the long steps start after they passed."""
+    root = pre_push_repo(scratch, "gate_changed_files_first", "README.md", mutate=mutate)
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = pre_push_calls(root)
+    base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
+    argv = calls[0].get("argv", []) if calls else []
+    order = [call["stub"] for call in calls]
+    return {
+        "case": "pre_push_changed_file_checks_run_first_over_the_range",
+        "passed": code == 0
+        and first_stub(calls) == "changed_files"
+        and order.count("changed_files") == 1
+        and argv[argv.index("--from") + 1 : argv.index("--from") + 2] == [base]
+        and argv[argv.index("--to") + 1 : argv.index("--to") + 2] == [head]
+        and "run_ci" in order,
+        "exit": code,
+        "order": order,
+        "output": (out + error)[-300:],
+    }
+
+
+def changed_files_failure_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """A failed changed-file check stops the gate before the long groups, the hook partitions and the acquisition hook, and names itself."""
+    root = pre_push_repo(scratch, "gate_changed_files_failure", ("README.md",), mutate=mutate)
+    code, out, error = pre_push(root, "run", extra={"STUB_EXIT_CHANGED_FILES": "1"}, timeout=300)
+    order = [call["stub"] for call in pre_push_calls(root)]
+    return {
+        "case": "pre_push_changed_file_failure_stops_before_the_long_groups",
+        "passed": code != 0 and order == ["changed_files"] and "changed_file_checks" in out + error,
+        "exit": code,
+        "order": order,
+        "output": (out + error)[-300:],
+    }
+
+
+def changed_files_without_a_range_case(scratch: Path) -> dict[str, Any]:
+    """With no merge base there is no range to read, so the checks are left out and the full scope runs."""
+    root = pre_push_repo(scratch, "gate_changed_files_no_range", "README.md", remote=False)
+    code, out, error = pre_push(root, "run", timeout=300)
+    order = [call["stub"] for call in pre_push_calls(root)]
+    return {"case": "pre_push_changed_file_checks_need_a_range", "passed": code == 0 and "changed_files" not in order and "run_ci" in order, "order": order}
+
+
+def small_case(
+    scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_small: bool, mutate: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """A small change runs the commit checks and the affected groups; the hosted partitions and the acquisition hook stay with hosted CI."""
+    root = pre_push_repo(scratch, f"gate_small_{name}", changed, small=small, mutate=mutate)
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = pre_push_calls(root)
+    stubs = [call["stub"] for call in calls]
+    hosted = "ci_hooks" in stubs or "acquisition" in stubs
+    ran_ci = [call["env"]["CI_SCOPE"] for call in calls if call["stub"] == "run_ci"]
+    passed = (
+        code == 0
+        and ran_ci == ["range"]
+        and "changed_files" in stubs
+        and (not hosted if want_small else "ci_hooks" in stubs)
+        and (("small change" in out) == want_small)
+    )
+    return {"case": f"pre_push_small_change_{name}", "passed": passed, "exit": code, "calls": stubs, "output": (out + error)[-300:]}
+
+
+SMALL = {"max_files": 6, "max_changed_lines": 250}
+
+
+def changed_file_check_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The changed-file checks choose their steps from the changed paths and fail with the file named."""
+    changed_files = importlib.import_module("scripts.quality.ci_changed_files")
+
+    def names(files: list[str]) -> list[str]:
+        return [step["name"] for step in changed_files.steps(ROOT, files, lambda listed: listed)]
+
+    results = [
+        {
+            "case": "changed_file_checks_pick_steps_from_the_changed_paths",
+            "passed": names(["a.py", "dbt/models/gold/x.sql", "README.md"])
+            == ["ruff_format", "ruff_check", "mypy", "sqlfluff", "docker_calls", "ci_group_files"]
+            and names(["README.md"]) == ["docker_calls", "ci_group_files"]
+            and names(["scripts/x.py"]) == ["ruff_format", "ruff_check", "mypy", "docker_calls", "ci_group_files"]
+            and names(["scripts/x.sql"]) == ["docker_calls", "ci_group_files"],
+        }
+    ]
+    root = scratch / "changed_file_ruff"
+    (root / "config/quality").mkdir(parents=True)
+    (root / "config/quality/ci_groups.json").write_text(json.dumps({"pre_push": {"changed_file_seconds": 120}}))
+    (root / "good.py").write_text("print(1)\n")
+    (root / "bad.py").write_text("import os\nprint( 1 )\n")
+    outcomes = {}
+    for name, only in (("good", "ruff_check"), ("bad", "ruff_check"), ("bad_format", "ruff_format")):
+        file = "good.py" if name == "good" else "bad.py"
+        result = run_command(
+            str(PYTHON), ["-m", "scripts.quality.ci_changed_files", "--root", str(root), "--file", file, "--only", only], cwd=ROOT, timeout=120
+        )
+        outcomes[name] = (result.returncode, result.stdout)
+    results.append(
+        {
+            "case": "changed_file_checks_fail_with_the_file_named",
+            "passed": outcomes["good"][0] == 0
+            and outcomes["bad"][0] == 1
+            and "bad.py" in outcomes["bad"][1]
+            and "FAIL ruff_check" in outcomes["bad"][1]
+            and outcomes["bad_format"][0] == 1
+            and "FAIL ruff_format" in outcomes["bad_format"][1],
+            "outcomes": {key: value[0] for key, value in outcomes.items()},
+        }
+    )
+    return results
+
+
+def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The changed-file checks and the small-change rule of the pre-push run."""
+    results = [changed_files_first_case(scratch), changed_files_failure_case(scratch), changed_files_without_a_range_case(scratch)]
+    results += changed_file_check_cases(scratch)
+    results += [
+        small_case(scratch, "runs_only_checks_and_groups", ("features/example.py", "README.md"), SMALL, True),
+        small_case(scratch, "too_many_files_runs_everything", tuple(f"features/example_{index}.py" for index in range(7)), SMALL, False),
+        small_case(scratch, "too_many_lines_runs_everything", ("features/example.py",), {**SMALL, "max_changed_lines": 1}, False),
+        small_case(scratch, "infrastructure_runs_everything", ("infra/example.tf",), SMALL, False),
+        small_case(scratch, "shell_script_runs_everything", ("scripts/lakehouse/example.sh",), SMALL, False),
+        small_case(scratch, "disabled_by_the_threshold", ("features/example.py",), None, False),
+    ]
+    results += [
+        planted_case("changed_file_checks_last", changed_files_first_case, scratch, mutate=source_edit('    first = chosen["first"]\n', "    first = None\n")),
+        planted_case("changed_file_failure_ignored", changed_files_failure_case, scratch, mutate=source_edit('if first_result["exit"] != 0:', "if False:")),
+        planted_case(
+            "every_change_small",
+            small_case,
+            scratch,
+            name="infrastructure_runs_everything",
+            changed=("infra/example.tf",),
+            small=SMALL,
+            want_small=False,
+            mutate=source_edit('if matching([*small["not_paths"], *config["pre_push"]["full_paths"]], paths):', "if False:"),
+        ),
+    ]
+    return results
 
 
 def head_of(root: Path) -> str:
@@ -4926,6 +5075,14 @@ def runner_stage_cases(scratch: Path) -> list[dict[str, Any]]:
 
 def main() -> int:
     clear_git_environment()
+    if "--gate-stage-only" in sys.argv[1:]:
+        with tempfile.TemporaryDirectory(prefix="ci_gate_stage_e2e.") as folder:
+            gate_results = gate_stage_cases(Path(folder))
+        gate_failed = [row["case"] for row in gate_results if not row["passed"]]
+        for row in gate_results:
+            sys.stdout.write(("PASS " if row["passed"] else "FAIL ") + row["case"] + "\n")
+        sys.stdout.write(f"{len(gate_results) - len(gate_failed)}/{len(gate_results)} passed (iteration mode, not commit evidence)\n")
+        return int(bool(gate_failed))
     if "--sharding-only" in sys.argv[1:]:
         with tempfile.TemporaryDirectory(prefix="ci_sharding_e2e.") as folder:
             shard_results = parallel_ci_cases(Path(folder)) + parallel_plan_cases(Path(folder))

@@ -8,6 +8,11 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
 - ``full`` scope: ``scripts/run_ci.sh`` with ``CI_SCOPE=full`` (it holds the hook partitions and the acquisition suite) when the range changes a path in
   ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
+- A ``range`` of a small change (``pre_push.small_change``: at most ``max_files`` files and ``max_changed_lines`` changed lines, none on the ``not_paths``
+  list, none a CI file) leaves out the acquisition hook and the three hook partitions. Hosted CI runs them.
+
+Before any of these steps the changed-file checks run (scripts/quality/ci_changed_files.py: Ruff, mypy, SQLFluff, the Docker-call guard and the guard of the
+check group files). A failed check stops the run before the long groups.
 
 The steps run at once, except the acquisition hook and the hook partitions: pre-commit takes the worktree's index lock,
 so they run one after the other in one worker.
@@ -140,7 +145,12 @@ def escalating_path(root: Path, config: dict[str, Any], start: str, end: str) ->
 def command(root: Path, step: dict[str, Any]) -> list[str]:
     """The command line of a step, for the plan and for ``launch``."""
     python = str(root / ".venv/bin/python")
-    modules = {"repo_checks": "scripts.quality.repo_checks", "ci_hooks": "scripts.quality.ci_hooks", "pre_commit": "pre_commit"}
+    modules = {
+        "repo_checks": "scripts.quality.repo_checks",
+        "ci_hooks": "scripts.quality.ci_hooks",
+        "pre_commit": "pre_commit",
+        "changed_files": "scripts.quality.ci_changed_files",
+    }
     return ["bash", "scripts/run_ci.sh"] if step["kind"] == "run_ci" else [python, "-m", modules[step["kind"]], *step["arguments"]]
 
 
@@ -154,7 +164,41 @@ def launch(root: Path, step: dict[str, Any], environment: dict[str, str]) -> Com
         return run_command(python, ["-m", "scripts.quality.ci_hooks", *arguments], cwd=root, env=environment, timeout=timeout)
     if step["kind"] == "pre_commit":
         return run_command(python, ["-m", "pre_commit", *arguments], cwd=root, env=environment, timeout=timeout)
+    if step["kind"] == "changed_files":
+        return run_command(python, ["-m", "scripts.quality.ci_changed_files", *arguments], cwd=root, env=environment, timeout=timeout)
     return run_command("bash", ["scripts/run_ci.sh"], cwd=root, env=environment, timeout=timeout)
+
+
+def range_paths(root: Path, start: str, end: str) -> list[str]:
+    code, listing = git(root, "diff", "--name-only", "--no-renames", start, end)
+    return listing.splitlines() if code == 0 else []
+
+
+def matching(patterns: list[str], paths: list[str]) -> list[str]:
+    compiled = [re.compile(pattern) for pattern in patterns]
+    return [path for path in paths if any(pattern.search(path) for pattern in compiled)]
+
+
+def changed_lines(root: Path, start: str, end: str) -> int:
+    """Added and removed lines of the range; a binary file counts as unbounded."""
+    code, listing = git(root, "diff", "--numstat", "--no-renames", start, end)
+    if code != 0:
+        return 10**9
+    total = 0
+    for line in listing.splitlines():
+        added, removed = line.split("\t")[:2]
+        total += 10**9 if "-" in (added, removed) else int(added) + int(removed)
+    return total
+
+
+def small_change(root: Path, config: dict[str, Any], start: str, end: str, paths: list[str]) -> bool:
+    """Whether the range is small: few files and lines, no infrastructure and no CI file (thresholds in ``pre_push.small_change``)."""
+    small = config["pre_push"]["small_change"]
+    if not paths or len(paths) > small["max_files"]:
+        return False
+    if matching([*small["not_paths"], *config["pre_push"]["full_paths"]], paths):
+        return False
+    return changed_lines(root, start, end) <= small["max_changed_lines"]
 
 
 def output_directory(root: Path) -> Path:
@@ -174,6 +218,8 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
         scope, reason = ("full", f"{trigger} changes the group selector or the CI scripts: every group runs") if trigger else ("range", f"range {start}..{end}")
     output = output_directory(root)
     seconds = int(config["pre_push"]["timeout_seconds"][scope])
+    paths = range_paths(root, start, end) if start and end else []
+    small = scope == "range" and small_change(root, config, start, end, paths)
     steps: list[dict[str, Any]] = []
     if start and end:
         steps += [
@@ -184,29 +230,37 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
         steps.append(
             {"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE}}
         )
-        steps.append(
-            {
-                "name": "acquisition",
-                "kind": "pre_commit",
-                "arguments": ["run", "acquisition-checks", "--hook-stage", "pre-push", "--from-ref", start, "--to-ref", end],
-                "env": {},
-            }
-        )
-        steps += [
-            {
-                "name": f"hooks_{group}",
-                "kind": "ci_hooks",
-                "arguments": ["--group", group, "--from", start, "--to", end, "--output-directory", str(output / "hooks" / group)],
-                "env": {},
-            }
-            for group in config["hook_groups"]
-        ]
+        if not small:
+            steps.append(
+                {
+                    "name": "acquisition",
+                    "kind": "pre_commit",
+                    "arguments": ["run", "acquisition-checks", "--hook-stage", "pre-push", "--from-ref", start, "--to-ref", end],
+                    "env": {},
+                }
+            )
+            steps += [
+                {
+                    "name": f"hooks_{group}",
+                    "kind": "ci_hooks",
+                    "arguments": ["--group", group, "--from", start, "--to", end, "--output-directory", str(output / "hooks" / group)],
+                    "env": {},
+                }
+                for group in config["hook_groups"]
+            ]
     else:
         steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE}})
-    for step in steps:
-        step["timeout_seconds"] = seconds
+    first = (
+        {"name": "changed_file_checks", "kind": "changed_files", "arguments": ["--root", str(root), "--from", start, "--to", end], "env": {}}
+        if start and end
+        else None
+    )
+    for step in [*steps, *([first] if first else [])]:
+        step["timeout_seconds"] = seconds if step is not first else int(config["pre_push"]["changed_file_seconds"]) * 2
         step["argv"] = command(root, step)
-    return {"scope": scope, "reason": reason, "start": start, "end": end, "output": str(output), "steps": steps}
+    if small:
+        reason += "; small change: the hook partitions and the acquisition hook stay with hosted CI"
+    return {"scope": scope, "reason": reason, "start": start, "end": end, "output": str(output), "first": first, "steps": steps}
 
 
 @cache
@@ -388,6 +442,15 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
     output = Path(chosen["output"])
     output.mkdir(parents=True, exist_ok=True)
     sys.stdout.write(f"pre-push: scope {chosen['scope']}: {chosen['reason']}\n")
+    first = chosen["first"]
+    if first:
+        first_result = run_step(root, output, first)
+        sys.stdout.write(f"pre-push: {'PASS' if first_result['exit'] == 0 else 'FAIL'} {first['name']} ({first_result['seconds']} s)\n")
+        if first_result["exit"] != 0:
+            sys.stdout.write("\n".join(first_result["output"].splitlines()[-80:]) + "\n" + first_result["error"] + "\n")
+            record(output, chosen, [{k: v for k, v in first_result.items() if k != "output"}], decisions)
+            sys.stdout.write(f"pre-push: failed steps: {first['name']}; the long groups did not start; logs in {output}\n")
+            return 1
     started = time.time()
     try:
         results = run_steps(root, output, chosen["steps"])
