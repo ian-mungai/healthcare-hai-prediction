@@ -175,6 +175,15 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: tflint
+        # Terraform recommended preset plus the pinned AWS ruleset (.tflint.hcl); the plugin is installed once with `tflint --init`. Exceptions: .linter_allowlist.
+        # Local only: the hosted runner has no AWS ruleset (docs/quality_checks.md, Linters beside lint_sources).
+        name: Terraform follows the TFLint recommended and AWS rules
+        entry: .venv/bin/python -m scripts.quality.lint_tools tflint
+        language: system
+        pass_filenames: false
+        files: ^(infra/.*\.(tf|hcl)|\.tflint\.hcl|\.linter_allowlist|config/quality_tools\.json)$
+        stages: [pre-commit]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata

@@ -1,2 +1,3 @@
 # Exceptions to the linters in scripts/quality/lint_tools.py: <check> <key> -- <reason> (docs/quality_checks.md, Linters beside lint_sources).
 # A key is path:rule (tflint, trivy-config, zizmor) or path:package==version (osv-scanner); it may use * as a wildcard. An entry that matches nothing is a finding.
+tflint infra/services/tests/flow/main.tf:terraform_required_version -- test-only stand-in network that the jobs stack tests load as a module; it never plans or applies on its own, so it needs no Terraform version constraint

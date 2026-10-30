@@ -17,16 +17,24 @@
       }
     },
     "tflint": {
-      "version": "0.64.0",
+      "version": "0.65.0",
+      "checksum_source": "https://github.com/terraform-linters/tflint/releases/tag/v0.65.0",
+      "plugins": {
+        "aws": {
+          "version": "0.50.0",
+          "source": "github.com/terraform-linters/tflint-ruleset-aws",
+          "install": "tflint --init, run by hand once; the hook refuses to run without the plugin"
+        }
+      },
       "releases": {
         "darwin_arm64": {
-          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_darwin_arm64.zip",
-          "sha256": "2496e9cb3d24992d553b45e7c87a0fdc9449ca975233876247a9bfeda857e6c0",
+          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.65.0/tflint_darwin_arm64.zip",
+          "sha256": "5a71c63481ba56760864298011fdb7317a9ae80a0bbaeceefa35883c7f62ac71",
           "format": "zip"
         },
         "linux_amd64": {
-          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_linux_amd64.zip",
-          "sha256": "cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537",
+          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.65.0/tflint_linux_amd64.zip",
+          "sha256": "d4c545ed2e29d6338604b586f34f544f380f70f243aa72f7b484713835eaec61",
           "format": "zip"
         }
       }
