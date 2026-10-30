@@ -14,9 +14,9 @@ The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac). 
 start. Its container limit is the smaller of two values:
 
 - Docker's total memory, minus the memory that running containers use, minus 8 GiB of headroom.
-- The Mac's free, file-backed and purgeable memory, minus 2 GiB.
+- The Mac's free, file-backed and purgeable memory, plus the memory that Docker's VM already holds and no running container uses (less a 2 GiB VM base), minus 2 GiB.
 
-The launcher adds the memory that Docker's VM already holds and no running container uses, less a 2 GiB VM base. A build that follows another build can reuse this memory. The launcher skips the Mac cap once Docker's VM holds its full allocation.
+The launcher adds that VM memory to the Mac value before it takes the smaller value, so a build that follows another build can reuse it. The launcher skips the Mac cap once Docker's VM holds its full allocation.
 
 That figure is the free memory. An allocation takes 75% of it (`ALLOCATION_SHARE_PERCENT` in `memory_budget.py`), so a process that grows before the containers start still has room. The plan record shows both figures. A container budget below 4 GiB, after the 75% cap, stops the launch.
 

@@ -82,7 +82,7 @@ The case-mix index models choose one CMI per hospital and rule year from the bes
 - the CMI of the fiscal year that ends before the window (`int_cmi_hospital_data_years`)
 - the primary and sensitivity population flags
 
-A window missing its own snapshot takes its state and ZIP from the latest earlier snapshot of the same hospital within 24 months. If none exists, it takes them from the latest enrollment row that ends before the start. For every window, the county comes from the own or the latest earlier snapshot. Otherwise the county comes from the hospital ZIP, when the latest HUD quarter that ends before the start places that ZIP in one county only. A ZIP split across counties gives none. Classification comes from the own or the latest earlier snapshot. Each filled field names its source (`pos_own`, `pos_earlier`, `enrollment`, `hud_quarter`) and the period end of that source, which is always before the window start. Connecticut windows also carry their planning region when the ZIP lies in one region in the latest HUD quarter that ends before the start.
+A window missing its own snapshot takes its state and ZIP from the latest earlier snapshot of the same hospital within 24 months. If either field is still missing, it takes it from the latest enrollment row that ends before the window starts. For every window, the county comes from the own or the latest earlier snapshot. Otherwise the county comes from the hospital ZIP, when the latest HUD quarter that ends before the start places that ZIP in one county only. A ZIP split across counties gives none. Classification comes from the own or the latest earlier snapshot. Each filled field names its source (`pos_own`, `pos_earlier`, `enrollment`, `hud_quarter`) and the period end of that source, which is always before the window start. Connecticut windows also carry their planning region when the ZIP lies in one region in the latest HUD quarter that ends before the start.
 
 ## Differences from the earlier silver models
 
@@ -123,7 +123,7 @@ The alignment stage lines each staged source up with the hospital-year spine as 
 
 ## History models
 
-The history models are type 2 slowly changing dimensions (SCD2), built in silver. The Oct 10 2026 layer design moves the history method to the feature phase. Gold keeps the snapshot and release rows. The publishers' own dates date the versions, so a clean checkout rebuilds the same versions. The models are:
+The history models are type 2 slowly changing dimensions (SCD2), built in silver. The Oct 10 2026 layer design moves the history method to the Feast phase. Gold keeps the snapshot and release rows. The publishers' own dates date the versions, so a clean checkout rebuilds the same versions. The models are:
 
 - `int_hospital_pos_history` (Provider of Services attributes per snapshot)
 - `int_hospital_hgi_history` (Hospital General Information descriptions per release, while the overall rating stays a measure)
