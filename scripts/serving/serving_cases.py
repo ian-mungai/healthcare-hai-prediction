@@ -805,6 +805,38 @@ def raised_body(call: Callable[[], object], kind: type[body.BodyRefused], status
     return False
 
 
+def case_key_tool(c: Checker) -> None:
+    """The documented way to make a key gives a hash of exactly the bytes a caller presents, and the key is never printed."""
+    with tempfile.TemporaryDirectory(prefix="serving_keys_") as folder:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = keys.main(["new", "--id", "ops", "--output", folder])
+        key_file = Path(folder) / "api_key"
+        raw = key_file.read_bytes() if key_file.exists() else b""
+        c.check("the tool succeeds and writes the key file", code == 0 and bool(raw))
+        c.check("the key file holds the key and no trailing whitespace", raw == raw.strip() and len(raw) == 48)
+        c.check("the key file is private to its owner", key_file.exists() and (key_file.stat().st_mode & 0o777) == 0o600)
+        printed = output.getvalue()
+        entry = json.loads(printed.splitlines()[-1]) if printed.strip() else {}
+        c.check("what the tool prints is the hash entry for the key identifier", list(entry) == ["ops"])
+        c.check("the key ring made from that entry accepts exactly the key file's text", keys.KeyRing.from_hashes(entry).identify(raw.decode()) == "ops")
+        c.check("the key ring refuses the key with a newline added", keys.KeyRing.from_hashes(entry).identify(raw.decode() + "\n") is None)
+        c.check("the tool never prints the key", raw.decode() not in printed)
+        again = io.StringIO()
+        with contextlib.redirect_stdout(again), contextlib.redirect_stderr(again):
+            second = keys.main(["new", "--id", "ops", "--output", folder])
+        c.check("a second run does not overwrite the key file", second != 0 and key_file.read_bytes() == raw)
+        bad = io.StringIO()
+        with contextlib.redirect_stdout(bad), contextlib.redirect_stderr(bad):
+            wrong = keys.main(["new", "--id", "Not A Key Id", "--output", folder])
+        c.check("a key identifier that the ring refuses is refused at creation", wrong != 0)
+    text = (ROOT / "docs/model_api.md").read_text()
+    c.check(
+        "the document points to the tool and no longer hashes a file with a newline",
+        "scripts.serving.keys new" in text and "openssl rand" not in text and "shasum" not in text,
+    )
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -1103,6 +1135,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "missing_feature_503": (case_missing_feature, "feast"),
     "absent_row": (case_absent_row, "feast"),
     "admit_before_body": (case_admit_before_body, "api"),
+    "key_tool": (case_key_tool, "api key"),
     "split_deterministic": (case_split, "canary"),
     "version_failure_isolated": (case_version_failure, "canary"),
     "candidate_feature_errors": (case_candidate_feature_errors, "canary"),
