@@ -46,6 +46,7 @@ EXPECTED_RULES = {"run_record": "none_failed_min_one_success", "catalog_release"
 PIPELINE_CHAINS = {
     "training_dag": TRAINING_STEPS,
     "model_promotion_dag": PROMOTION_STEPS,
+    "serving_deploy_dag": ("acquire_run", "snapshot_serving", "serve_deploy", "run_record"),
     "silver_transform_dag": (
         "acquire_run",
         "catalog_up",

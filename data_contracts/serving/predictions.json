@@ -1,0 +1,22 @@
+{
+  "note": "Contract of the predictions Iceberg table the model API appends to: one row per answered request. The row holds the key's identifier, never the key, and no feature value. A reader removes duplicates by request_id, because an append whose answer was lost may be sent again.",
+  "table": "predictions",
+  "namespace": "serving",
+  "classification": "Public",
+  "columns": {
+    "request_id": "string",
+    "predicted_at": "timestamp",
+    "hai_type": "string",
+    "ccn": "string",
+    "window_year": "long",
+    "prediction": "double",
+    "model_version": "string",
+    "routed_version": "string",
+    "served_by": "string",
+    "fallback": "boolean",
+    "deployment_id": "string",
+    "api_key_id": "string",
+    "feature_schema_sha256": "string",
+    "features_as_of": "date"
+  }
+}
