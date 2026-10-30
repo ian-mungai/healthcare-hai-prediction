@@ -123,7 +123,7 @@ The alignment stage lines each staged source up with the hospital-year spine as 
 
 ## History models
 
-The history models are type 2 slowly changing dimensions (SCD2), built in silver. The Oct 10 2026 layer design moves the history method to the Feast phase. Gold keeps the snapshot and release rows. The publishers' own dates date the versions, so a clean checkout rebuilds the same versions. The models are:
+The history models are type 2 slowly changing dimensions (SCD2), built in silver. The Oct 10 2026 layer design moves the history method to the feature phase. Gold keeps the snapshot and release rows. The publishers' own dates date the versions, so a clean checkout rebuilds the same versions. The models are:
 
 - `int_hospital_pos_history` (Provider of Services attributes per snapshot)
 - `int_hospital_hgi_history` (Hospital General Information descriptions per release, while the overall rating stays a measure)
