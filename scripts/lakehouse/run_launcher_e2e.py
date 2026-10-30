@@ -3394,6 +3394,28 @@ def docker_desktop_defaults(env: Env) -> dict[str, bool]:
     }
 
 
+@case("docker_release_deadline_covers_the_catalog_stop", timings={"quit_wait": 8, "restart_wait": 20})
+def docker_release_deadline_covers_the_catalog_stop(env: Env) -> dict[str, bool]:
+    """A deadline the caller gives covers the whole release: a catalog that will not stop ends the release at that deadline and the quit never runs later."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    catalog_script(env)
+    env.start()
+    catalog_up(env)
+    env.daemon.fail_remove = 10**6
+    began = time.monotonic()
+    failure = expect_error(lambda: env.client().call("docker_release", {"owner": True, "deadline": 2}, {"kind": "any", "owner": True}, timeout=40))
+    seconds = time.monotonic() - began
+    time.sleep(1.5)
+    env.daemon.fail_remove = 0
+    return {
+        "the release fails naming its deadline": refused(failure, "degraded", "within its deadline of 2 s"),
+        "it ends at the deadline, not at the restart wait": seconds < 10,
+        "the quit command never ran": command_runs(env, "quit") == [],
+        "no release record is left": env.state()["launcher"].get("release") is None,
+    }
+
+
 @case("docker_release_client_deadline", timings={"quit_wait": 8})
 def docker_release_client_deadline(env: Env) -> dict[str, bool]:
     """F1: a quit command that returns while the daemon keeps answering, with `--deadline 1`, ends the CLI as degraded (exit 5) naming the deadline, not as a
@@ -10134,6 +10156,7 @@ ALL_CASES = (
     docker_release_quit,
     docker_release_quit_deadlines,
     docker_desktop_defaults,
+    docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,
     docker_context_program_lookup,
     effective_spec_mutations,

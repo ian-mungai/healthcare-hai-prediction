@@ -9320,7 +9320,15 @@ class Launcher:
         if ctx.state["launcher"].get("release"):
             raise LauncherError("a Docker release is already running", "refused")
         self.desktop_program(self.cfg.quit_command)
-        ctx.state["launcher"]["release"] = {"phase": "check", "request": ctx.key, "at": utc_now(), "began": time.time(), "deadline": deadline}
+        explicit = ctx.params.get("deadline") is not None
+        ctx.state["launcher"]["release"] = {
+            "phase": "check",
+            "request": ctx.key,
+            "at": utc_now(),
+            "began": time.time(),
+            "deadline": deadline,
+            "explicit": explicit,
+        }
         return PENDING
 
     def release_refusal(self, problems: Sequence[str], foreign: Sequence[str]) -> str:
@@ -9341,6 +9349,9 @@ class Launcher:
         result: dict[str, Any] = {}
         if not (self.status == "serving" and self.docker_ok):
             result = {"outcome": "skipped", "reason": "Docker Desktop is not running"}
+        elif release.get("explicit") and time.time() - release["began"] > release["deadline"]:
+            # A deadline the caller gave covers the whole release: the caller stops waiting then, so the quit must not start after it.
+            error = Degraded(f"docker_release did not reach the quit within its deadline of {release['deadline']:g} s")
         elif time.time() - release["began"] > self.timings.restart_wait:
             error = LauncherError(f"docker_release failed: the catalog did not stop within {self.timings.restart_wait:g} s", "command_failed")
         elif release["phase"] == "catalog":
@@ -9378,7 +9389,7 @@ class Launcher:
                         "kind": "quit",
                         "request": request,
                         "at": utc_now(),
-                        "began": time.time(),
+                        "began": release["began"] if release.get("explicit") else time.time(),
                         "deadline": release["deadline"],
                     }
                     state["launcher"]["release"] = None
