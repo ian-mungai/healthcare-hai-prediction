@@ -21,7 +21,7 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = (
     "orchestration/ecs_adapter.py",
-    "orchestration/ecs_broker.py",
+    "scripts/orchestration/ecs_broker.py",
     "config/orchestration/ecs_broker_jobs.json",
     "config/orchestration/ecs_broker_jobs.schema.json",
     "data_contracts/orchestration/ecs_ledger_line.schema.json",

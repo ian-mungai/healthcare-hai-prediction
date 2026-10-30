@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_broker_jobs.schema.json",
+  "title": "ECS broker jobs",
+  "description": "The closed table of the lean ECS broker. A step names its job, or null when the broker answers it without a task. A job names its deadline, the container whose log the logs route shows and the variables each container receives.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "jobs", "steps"],
+  "properties": {
+    "version": {"const": 1},
+    "jobs": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,30}$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deadline_seconds", "log_container", "containers"],
+        "properties": {
+          "deadline_seconds": {"type": "integer", "minimum": 60, "maximum": 86400},
+          "log_container": {"type": "string"},
+          "needs_training_parameters": {"const": true},
+          "containers": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {"type": "array", "uniqueItems": true, "items": {"enum": ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "POLARIS_URI", "MLFLOW_TRACKING_URI", "INPUT_RUN_ID"]}}
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,40}$"},
+      "additionalProperties": {"type": ["string", "null"]}
+    }
+  }
+}
