@@ -19,7 +19,7 @@ resource "aws_iam_role" "job" {
   for_each = local.job_role_names
 
   name                 = each.value
-  description          = each.key == "try_writer" ? "Upper bound for staged try outputs and the authority epoch read." : "Private read jobs: ${each.key}."
+  description          = each.key == "try_writer" ? "Upper bound for staged try outputs." : "Private read jobs: ${each.key}."
   max_session_duration = each.key == "try_writer" ? 43200 : 3600
   assume_role_policy   = each.key == "try_writer" ? local.job_policy_documents.job_try_trust : local.ecs_tasks_trust
   tags                 = local.project_tags
