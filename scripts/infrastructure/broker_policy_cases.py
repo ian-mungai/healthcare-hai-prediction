@@ -20,6 +20,7 @@ from scripts.infrastructure.policy_evaluator import Request, decide
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "infra/iam/owner_policies/broker_jobs.json"
 PARAMETER_TEMPLATE = ROOT / "infra/iam/owner_policies/broker_parameter.json"
+BRONZE_REQUEST_TEMPLATE = ROOT / "infra/iam/owner_policies/broker_bronze_request.json"
 ACCOUNT = "111111111111"
 REGION = "eu-west-1"
 PROJECT = "example_project"
@@ -52,6 +53,7 @@ def values(families: list[str]) -> dict[str, str]:
     roles = {
         "promote": "job_train_task",
         "train": "job_train_task",
+        "bronze": "job_write_bronze_task",
         "silver": "job_write_silver_task",
         "gold": "job_write_gold_task",
         "features": "job_write_features_task",
@@ -229,6 +231,27 @@ def token_cases() -> list[Case]:
     ]
 
 
+def bronze_request_cases() -> list[Case]:
+    """The grant that exists only with the bronze family: one get action on the staged request key of a run."""
+    stage = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T090000Z-b0b0b0b0/inputs"
+    return [
+        ("read the staged bronze request", "s3:GetObject", f"{stage}/bronze_request.json", True, {}),
+        ("read the code archive", "s3:GetObject", f"{stage}/code.tar.gz", False, {}),
+        ("read the code digest", "s3:GetObject", f"{stage}/code.sha256", False, {}),
+        ("read a request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/bronze/inputs/bronze_request.json", False, {}),
+        (
+            "read a request in another bucket",
+            "s3:GetObject",
+            "arn:aws:s3:::another-bucket/lakehouse/run_stage/20261030T090000Z-b0b0b0b0/inputs/bronze_request.json",
+            False,
+            {},
+        ),
+        ("write the staged bronze request", "s3:PutObject", f"{stage}/bronze_request.json", False, {}),
+        ("delete the staged bronze request", "s3:DeleteObject", f"{stage}/bronze_request.json", False, {}),
+        ("list the staging prefix", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False, {"s3:prefix": ("lakehouse/run_stage/",)}),
+    ]
+
+
 def evaluate(document: dict[str, Any], rows: list[Case]) -> list[dict[str, Any]]:
     observations = []
     for label, action, resource, expected, context in rows:
@@ -266,9 +289,11 @@ def as_list(value: Any) -> list[Any]:
 def verify(output: Path) -> int:
     document = render(TEMPLATE, FAMILIES)
     parameter = render(PARAMETER_TEMPLATE, FAMILIES)
+    request = render(BRONZE_REQUEST_TEMPLATE, FAMILIES)
     document_rows = cases() + extra_action_cases(document)
     parameter_rows = token_cases() + extra_action_cases(parameter)
-    checks = evaluate(document, document_rows) + evaluate(parameter, parameter_rows)
+    request_rows = bronze_request_cases() + extra_action_cases(request)
+    checks = evaluate(document, document_rows) + evaluate(parameter, parameter_rows) + evaluate(request, request_rows)
     defects = []
     for name, changed in mutations(document):
         failures = [item["case"] for item in evaluate(changed, document_rows) if not item["passed"]]
@@ -276,6 +301,9 @@ def verify(output: Path) -> int:
     for name, changed in mutations(parameter):
         failures = [item["case"] for item in evaluate(changed, parameter_rows) if not item["passed"]]
         defects.append({"defect": f"parameter_{name}", "caught": bool(failures), "failed_cases": failures[:3]})
+    for name, changed in mutations(request):
+        failures = [item["case"] for item in evaluate(changed, request_rows) if not item["passed"]]
+        defects.append({"defect": f"bronze_request_{name}", "caught": bool(failures), "failed_cases": failures[:3]})
     output.mkdir(parents=True, exist_ok=False)
     (output / "report.json").write_text(json.dumps({"checks": checks, "defects": defects}, indent=2) + "\n")
     failed = [item["case"] for item in checks if not item["passed"]] + [f"defect not caught: {item['defect']}" for item in defects if not item["caught"]]

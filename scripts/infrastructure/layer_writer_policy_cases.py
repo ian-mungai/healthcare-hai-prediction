@@ -16,7 +16,7 @@ PREFIXES = {
     "silver": ("silver",),
     "gold": ("gold", "catalog_backups"),
     "features": ("features",),
-    "bronze": ("bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check"),
+    "bronze": ("bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check", "bronze_e2e", "bronze_dictionary_e2e"),
 }
 INPUTS = {"silver": "bronze", "gold": "silver", "features": "gold"}  # the one layer each job reads besides its own
 UPLOADS = ("silver", "gold")

@@ -24,7 +24,16 @@ from orchestration.client import BrokerClient, BrokerUnavailable
 from orchestration.ecs_adapter import EcsAdapter
 from orchestration.interface import Handle, State, SubmissionRefused, SubmissionRequest
 from scripts.orchestration.ecs_adapter_cases import SETTINGS, raises, require
-from scripts.orchestration.ecs_broker import BrokerSettings, EcsBroker, Listener, derived_run_id, load_jobs, s3_digest_reader, s3_object_reader
+from scripts.orchestration.ecs_broker import (
+    BrokerSettings,
+    EcsBroker,
+    Listener,
+    bronze_request_reader,
+    derived_run_id,
+    load_jobs,
+    s3_digest_reader,
+    s3_object_reader,
+)
 from scripts.orchestration.ecs_broker_fake import FakeEcs, FakeLogs, FakeS3, client_error
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +49,23 @@ SIGNED = json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN})
 DIGEST = "ab" * 32
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
 JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote"})
+BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
+BRONZE_FAMILIES = JOB_FAMILIES | {"bronze"}
+
+
+def collections_of_table_map() -> dict[str, str]:
+    """The table map's collection of each table, from the committed file."""
+    return {entry["table"]: entry["collection"] for entry in json.loads((ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"]}
+
+
+def table_pair() -> tuple[list[str], str]:
+    """Two tables of one collection and one table of another, in table map order."""
+    by_collection: dict[str, list[str]] = {}
+    for table, collection in collections_of_table_map().items():
+        by_collection.setdefault(collection, []).append(table)
+    pair = next(tables[:2] for tables in by_collection.values() if len(tables) >= 2)
+    other = next(tables[0] for tables in by_collection.values() if tables[0] not in pair)
+    return pair, other
 
 
 class Rig:
@@ -50,6 +76,7 @@ class Rig:
         self.signed = signed
         self.ecs, self.logs, self.s3 = FakeEcs(), FakeLogs(), FakeS3()
         self.s3.objects[f"lakehouse/run_stage/{RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
+        self.s3.objects[f"lakehouse/run_stage/{BRONZE_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN):
             self.s3.objects[f"lakehouse/run_stage/{run}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         self.clock = [1_800_000_000.0]
@@ -73,6 +100,7 @@ class Rig:
             lambda: self.signed,
             approvals,
             lambda: self.clock[0],
+            bronze_request=bronze_request_reader(self.s3, "example-bucket", collections_of_table_map()),
         )
 
     def close(self) -> None:
@@ -555,7 +583,16 @@ def chain_layers_use_the_bronze_run_digest() -> None:
 def each_family_runs_in_its_approved_network() -> None:
     """The layer jobs reach the catalog and Redis through the lakehouse group, the training family through the group that also reaches MLflow. Each RunTask
     carries only the group of its own family's network class, and the table names a class for every family."""
-    classes = {"train": "training", "silver": "lakehouse", "gold": "lakehouse", "features": "lakehouse", "drift": "training", "promote": "training"}
+    classes = {
+        "train": "training",
+        "silver": "lakehouse",
+        "gold": "lakehouse",
+        "features": "lakehouse",
+        "drift": "training",
+        "promote": "training",
+        "metadata": "lakehouse",
+        "bronze": "lakehouse",
+    }
     table = load_jobs(ROOT)["jobs"]
     require(
         {name: job.get("network") for name, job in table.items()} == classes,
@@ -723,6 +760,125 @@ def logs_hide_the_token() -> None:
         require("step done" in text and SESSION_KEY not in text and "[redacted]" in text, f"the log tail is wrong: {text!r}")
 
 
+def stage_bronze_request(current: Rig, document: object) -> None:
+    current.s3.objects[f"lakehouse/run_stage/{BRONZE_RUN}/inputs/bronze_request.json"] = (
+        document if isinstance(document, bytes) else json.dumps(document).encode()
+    )
+
+
+def bronze_request(attempt: int = 1) -> SubmissionRequest:
+    return SubmissionRequest("bronze_load", BRONZE_RUN, "real", attempt, "ingestion_dag", "bronze_load", "manual__test", None, None, None)
+
+
+def bronze_variables(current: Rig) -> dict[str, dict[str, str]]:
+    sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+    return {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
+
+
+def bronze_job_gets_its_checked_dispatch_values() -> None:
+    pair, _ = table_pair()
+    with rig(BRONZE_FAMILIES, signed=None) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        require(
+            wait_for(current, current.client.submit(bronze_request())).state == State.SUCCEEDED,
+            "the bronze job did not pass before the first publishes were signed",
+        )
+        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+        values = bronze_variables(current)
+        require(
+            sent["taskDefinition"] == "example_dev_job_bronze" and list(values) == ["fetch", "pin", "load", "check"],
+            f"wrong definition or containers: {list(values)}",
+        )
+        require(values["fetch"] == {"RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST}, values["fetch"])
+        dispatch = {"BRONZE_TABLES": ",".join(pair), "BRONZE_TARGET": "real", "BRONZE_DRY_RUN": ""}
+        for container in ("pin", "load", "check"):
+            require(all(values[container][name] == value for name, value in dispatch.items()), (container, values[container]))
+        require(values["load"]["POLARIS_URI"] == "http://10.0.0.5:8181/api/catalog" and "POLARIS_URI" not in values["check"], values["load"])
+        stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True})
+        wait_for(current, current.client.submit(bronze_request(2)))
+        second = [arguments for name, arguments in current.ecs.calls if name == "run_task"][1]
+        later = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in second["overrides"]["containerOverrides"]}
+        require(later["load"]["BRONZE_TARGET"] == "qualify" and later["load"]["BRONZE_DRY_RUN"] == "1", later["load"])
+
+
+def bronze_job_is_off_unless_enabled() -> None:
+    pair, _ = table_pair()
+    with rig(JOB_FAMILIES) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        raises(SubmissionRefused, lambda: current.client.submit(bronze_request()))
+        require(not current.ecs.calls, "a disabled bronze job reached the cloud")
+
+
+def bronze_refuses_bad_dispatch_values() -> None:
+    pair, other = table_pair()
+    bad = {
+        "unknown table": {"tables": ["not_a_table"], "target": "real", "dry_run": False},
+        "no tables": {"tables": [], "target": "real", "dry_run": False},
+        "repeated table": {"tables": [pair[0], pair[0]], "target": "real", "dry_run": False},
+        "other target": {"tables": pair, "target": "production", "dry_run": False},
+        "two collections in a qualification": {"tables": [pair[0], other], "target": "qualify", "dry_run": False},
+        "dry run not a flag": {"tables": pair, "target": "real", "dry_run": "yes"},
+        "extra key": {"tables": pair, "target": "real", "dry_run": False, "namespace": "bronze"},
+        "missing key": {"tables": pair, "target": "real"},
+        "tables not a list": {"tables": ",".join(pair), "target": "real", "dry_run": False},
+        "not an object": [pair],
+    }
+    with rig(BRONZE_FAMILIES) as current:
+        for label, document in bad.items():
+            stage_bronze_request(current, document)
+            raises(SubmissionRefused, lambda: current.client.submit(bronze_request()))
+            require(not current.ecs.calls, f"{label} reached the cloud")
+        stage_bronze_request(current, b"not json")
+        raises(SubmissionRefused, lambda: current.client.submit(bronze_request()))
+        stage_bronze_request(current, b"x" * 5000)
+        raises(SubmissionRefused, lambda: current.client.submit(bronze_request()))
+        require(not current.ecs.calls, "a malformed request reached the cloud")
+
+
+def bronze_without_a_staged_request_is_retryable() -> None:
+    with rig(BRONZE_FAMILIES) as current:
+        try:
+            current.client.submit(bronze_request())
+        except BrokerUnavailable as error:
+            require("answered 503" in str(error) and not current.ecs.calls, f"a missing request was not a retryable 503: {error}")
+        else:
+            raise AssertionError("a bronze run without a staged request started")
+
+
+def bronze_failure_fails_the_job() -> None:
+    pair, _ = table_pair()
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        current.ecs.plan = {"load": 1}
+        status = wait_for(current, current.client.submit(bronze_request()))
+        require(status.state == State.FAILED and status.exit_code == 1, f"a failed load did not fail the job: {status}")
+        current.ecs.plan = {}
+        current.ecs.omit = {"check"}
+        status = wait_for(current, current.client.submit(bronze_request(2)))
+        require(status.state == State.FAILED and status.exit_code == 125, f"a task without its check container passed: {status}")
+
+
+def bronze_retry_starts_no_second_task() -> None:
+    pair, _ = table_pair()
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        first, second = current.client.submit(bronze_request()), current.client.submit(bronze_request())
+        require(first == second and current.ecs.count("run_task") == 1, "a retried bronze submit started a second task")
+        wait_for(current, first)
+        current.ecs.tokens.clear()
+        again = wait_for(current, current.client.submit(bronze_request()))
+        require(again.state == State.SUCCEEDED and current.ecs.count("run_task") == 1, "a finished bronze run started again")
+
+
+def chain_stays_closed_while_bronze_runs() -> None:
+    pair, _ = table_pair()
+    with rig(BRONZE_FAMILIES, signed=None) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        wait_for(current, current.client.submit(bronze_request()))
+        raises(SubmissionRefused, partial(current.client.submit, silver_request()))
+        require(current.ecs.count("run_task") == 1, "silver started on a bronze run without the signed record")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "task_runs_through_the_broker": task_runs_through_the_broker,
     "repeated_submit_one_task": repeated_submit_one_task,
@@ -765,4 +921,11 @@ CASES: dict[str, Callable[[], None]] = {
     "another_promotion_is_not_approved": another_promotion_is_not_approved,
     "training_needs_no_promotion_approval": training_needs_no_promotion_approval,
     "logs_hide_the_token": logs_hide_the_token,
+    "bronze_job_gets_its_checked_dispatch_values": bronze_job_gets_its_checked_dispatch_values,
+    "bronze_job_is_off_unless_enabled": bronze_job_is_off_unless_enabled,
+    "bronze_refuses_bad_dispatch_values": bronze_refuses_bad_dispatch_values,
+    "bronze_without_a_staged_request_is_retryable": bronze_without_a_staged_request_is_retryable,
+    "bronze_failure_fails_the_job": bronze_failure_fails_the_job,
+    "bronze_retry_starts_no_second_task": bronze_retry_starts_no_second_task,
+    "chain_stays_closed_while_bronze_runs": chain_stays_closed_while_bronze_runs,
 }

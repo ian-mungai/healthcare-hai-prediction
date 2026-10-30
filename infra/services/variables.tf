@@ -336,15 +336,15 @@ variable "broker_jobs" {
     condition = !var.broker_enabled || (var.broker_jobs != null && alltrue([
       for family in try(var.broker_jobs.families, []) : contains(
         keys(try(var.broker_jobs.security_group_ids, {})),
-        lookup({ train = "training", silver = "lakehouse", gold = "lakehouse", features = "lakehouse", drift = "training", promote = "training" }, family, "none")
+        lookup({ train = "training", silver = "lakehouse", gold = "lakehouse", features = "lakehouse", drift = "training", promote = "training", metadata = "lakehouse", bronze = "lakehouse" }, family, "none")
       )
     ]))
-    error_message = "Every enabled job family needs the security group of its own network class: silver, gold and features use lakehouse, and train, drift and promote use training."
+    error_message = "Every enabled job family needs the security group of its own network class: silver, gold, features, metadata and bronze use lakehouse, and train, drift and promote use training."
   }
 
   validation {
-    condition     = !var.broker_enabled || (var.broker_jobs != null && length(try(var.broker_jobs.families, [])) > 0 && alltrue([for family in try(var.broker_jobs.families, []) : contains(["train", "silver", "gold", "features", "drift", "promote", "metadata"], family)]))
-    error_message = "Name at least one job family and only from train, silver, gold, features, drift, promote and metadata."
+    condition     = !var.broker_enabled || (var.broker_jobs != null && length(try(var.broker_jobs.families, [])) > 0 && alltrue([for family in try(var.broker_jobs.families, []) : contains(["train", "silver", "gold", "features", "drift", "promote", "metadata", "bronze"], family)]))
+    error_message = "Name at least one job family and only from train, silver, gold, features, drift, promote, metadata and bronze."
   }
 }
 

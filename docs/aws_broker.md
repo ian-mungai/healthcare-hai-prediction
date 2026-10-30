@@ -19,7 +19,7 @@ The job broker is the only path from an Airflow DAG to work on AWS. It keeps the
 
 The table `config/orchestration/ecs_broker_jobs.json` names the job of each DAG step. A step with no job (acquire, seal, release and the gates) answers at once. The first step of a job starts its task and the later steps join it, because the containers of one job share a workspace. A job passes only when every container exits 0 and every acceptance container appears in the task report. A job that runs past its deadline is stopped.
 
-The `train`, `silver`, `gold`, `features` and `promote` jobs have task definitions behind flags that default to false. The `promote` job uses the training task role and is set by `promote_enabled`. The `drift` job has its task definition behind `drift_enabled` in `infra/jobs` and its role behind `drift_prepared` in `infra/iam`. Both default to false. A job name stays out of `broker_job_families` until its task definition and role exist.
+The `train`, `bronze`, `silver`, `gold`, `features` and `promote` jobs have task definitions behind flags that default to false. The `promote` job uses the training task role and is set by `promote_enabled`. The `bronze` job is set by `bronze_job_enabled`. The `drift` job has its task definition behind `drift_enabled` in `infra/jobs` and its role behind `drift_prepared` in `infra/iam`. Both default to false. A job name stays out of `broker_job_families` until its task definition and role exist.
 
 The `metadata` job starts the on-demand OpenMetadata catalog task. Its task definition is set by `openmetadata_enabled` in `infra/jobs` and its role by `openmetadata_prepared` in `infra/iam` (see the OpenMetadata catalog document). The task ends by itself at its lifetime. The broker deadline in `config/orchestration/ecs_broker_jobs.json` is that lifetime plus 900 seconds, 8100 seconds for the default of 7200. Change both together, because an offline case compares them.
 
@@ -105,6 +105,55 @@ Gold needs the committed silver run as its input run and features needs the comm
 
 Pass `--overrides file://overrides.json` to the run-task call. For a real run, leave out `--dry-run`.
 
+## Bronze job
+
+The `bronze` job writes one new source capture into bronze. It is one Fargate task with the `init` step and the containers `fetch`, `pin`, `load` and `check`. Each runs one phase of `scripts/lakehouse/bronze_run.py` from the archive the run staged. The task role is the bronze writer role and only the `load` container receives the bronze catalog pair. The job is not part of the signed chain, because bronze comes first.
+
+Two values change from run to run, the tables and the target. Both come at dispatch from a file the run stages beside its code archive. Both are checked twice. The broker reads `bronze_request.json` before it starts the task. It refuses a table outside the table map, a repeated table, a target other than `real` or `qualify`, a qualification run that spans two collections and any key beyond the three below. The `pin` phase checks the same values against the table map of the unpacked code. The `load` and `check` phases refuse values that differ from the pin.
+
+```json
+{"tables": ["<TABLE_A>", "<TABLE_B>"], "target": "qualify", "dry_run": true}
+```
+
+| Target | Writes |
+| --- | --- |
+| `real` | `bronze` and `bronze_dictionary` |
+| `qualify` | `bronze_e2e` and `bronze_dictionary_e2e`, for the tables of one collection |
+
+The `load` phase runs the existing bronze loader. It lists the versioned manifests of the collection, reads each object by its recorded version, checks its SHA-256 and size, replaces the rows of each object in place and publishes one metadata generation. A retry of one run therefore writes the same rows and no second generation. The broker also starts no second task for the same run and attempt. The `check` phase accepts the loader report only when there is exactly one report, it passed and it names the requested tables and no others. A failed phase fails the task.
+
+A dry run (`"dry_run": true` or `BRONZE_DRY_RUN=1` on every container of a hand-started task) runs `pin`, then reads the manifests and every object version, checks each hash and size and prints the plan. It starts no loader and needs no catalog, so it writes nothing to the catalog or the bucket. Read the plan in the jobs log group, stream `bronze/load/<task id>`. The line that starts with `DRY_RUN_PLAN` and a space holds the plan as JSON.
+
+Apply the bronze job in this order. Each apply is the owner's.
+
+1. `infra/iam` (administrator profile): add `bronze` to `broker_job_families`, then plan and apply. The broker role gains the bronze task definition, the pass grant for the bronze writer role and the read of `bronze_request.json`. The bronze writer role gains the object prefixes of its two test twins.
+2. Catalog (owner): the bronze writer principal needs create and load rights on the namespaces `bronze_e2e` and `bronze_dictionary_e2e` before a qualification run. The production namespaces keep their rights.
+3. `infra/jobs`: set `bronze_job_enabled = true` with the Spark image digest, the execution and bronze writer role ARNs, `writer_parameter_names.write_bronze_task` and the jobs log group. The output `bronze_run_task` lists the variables of each container.
+4. `infra/services`: add `bronze` to `broker_jobs.families` and apply, so the broker restarts with the family.
+5. Stage the run as for the layer jobs and add the request beside the code archive:
+
+   ```sh
+   aws s3 cp /tmp/bronze_request.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/bronze_request.json --profile <PROJECT_PROFILE>
+   ```
+
+6. Submit the run on the host. The step name is `bronze_load` and the run ID is the one of the staged folder:
+
+   ```sh
+   curl -s -H "Authorization: Bearer $BROKER_TOKEN" -d '{"request_version": 2, "template": "bronze_load", "run_id": "<RUN_ID>", "mode": "real", "attempt": 1, "dag_id": "manual_bronze", "task_id": "bronze_load", "dag_run_id": "manual__<RUN_ID>"}' http://127.0.0.1:18790/v1/submit
+   ```
+
+   Poll `/v1/status` with `{"submission_id": "<RUN_ID>:bronze_load:real:1"}` until it is `succeeded` or `failed`. A second submit of the same run and attempt returns the same handle. A new attempt number starts a new task that repeats the same rows.
+
+When a `real` run passes, the `check` log line prints the command that starts the chain by hand:
+
+```sh
+airflow dags trigger bronze_chain_dag --conf '{"run_id": "<BRONZE_RUN_ID>", "mode": "real"}'
+```
+
+A `qualify` run never prints it, because the chain reads production bronze.
+
+The qualification tables stay in the test twins until the owner drops them from the catalog. No job removes them.
+
 ## Sign the first publishes
 
 The chain stays closed until the first silver and gold publishes pass by hand and both reports are signed. The broker then needs a record of the two runs. Put it once, after the second signature (administrator profile):
@@ -147,6 +196,7 @@ aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUS
 - Whether `RunTask` returns the same task for a repeated client token after that task stopped.
 - Whether the Airflow trigger operator renders the run ID templates as the offline Jinja check does.
 - The `promote` task and phase against a real MLflow server: the offline cases use a file based registry stand-in.
+- The bronze job on AWS. The driver ran only against stand-ins of the bucket and the loader. Whether the Spark image carries the driver's imports and `boto3`. Whether the bronze writer principal holds the catalog rights for the test twins.
 - Any layer job on AWS. The driver ran only against stand-ins of the Spark, analytics, quality and Feast modules. The read-only plan module `publish_plan.py` never ran.
 - Whether the rebuilt analytics image loads its DuckDB extensions as the layer user. After the owner rebuilds the image, run `docker run --rm --user 10001:10001 -e HOME=/tmp --read-only --tmpfs /tmp <ANALYTICS_IMAGE> duckdb -c "SET extension_directory='/opt/duckdb/extensions'; SET autoinstall_known_extensions=false; LOAD iceberg; LOAD httpfs; LOAD aws; LOAD avro; SELECT extension_name, loaded FROM duckdb_extensions() WHERE loaded"`. All four must show as loaded.
 - Whether the Spark image carries boto3 for the fetch phase. Whether the quality and analytics images can run the driver's imports.

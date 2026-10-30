@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Protocol
@@ -39,18 +40,23 @@ from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, Task
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.training_approvals import PROMOTION_KEYS
 from orchestration.training_contract import JOB_LANES, parameters_for, training_run_id
+from scripts.lakehouse.bronze_dispatch import DispatchError, check_dispatch
 from scripts.orchestration.ledger import Ledger, schema_validator
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
 OPERATIONS = ("health", "submit", "status", "cancel", "logs", "record")
 MAX_BODY_BYTES = 4096
+BRONZE_REQUEST_BYTES = 4096
+BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run"}
+TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 HANDLER_TIMEOUT_SECONDS = 15.0
 CONTENT_LENGTH = re.compile(r"[0-9]{1,18}")
 SUBMISSION = re.compile(
     r"^([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}):([a-z][a-z0-9_]{1,40}):(fixture|publish_fixture|real):([0-9]{1,2})(?::([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}))?$"
 )
 DIGEST = re.compile(r"[a-f0-9]{64}")
+BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 GATE = "@gate"
 CHAIN_LAYERS = ("silver", "gold", "features", "drift")
@@ -140,6 +146,43 @@ def s3_object_reader(s3: S3Reader, bucket: str, name: str) -> Callable[[str], st
     return read
 
 
+def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, str]) -> Callable[[str], dict[str, str]]:
+    """Read and check the run's staged ``bronze_request.json`` and return the values of the bronze containers.
+
+    The file holds exactly ``tables`` (a list of table names), ``target`` (``real`` or ``qualify``) and ``dry_run`` (true or false). The tables must be
+    in the table map (``collections`` maps each table to its collection) and a qualification run takes the tables of one collection. A file that is not
+    staged yet is retryable, a file that fails a check is refused.
+    """
+
+    def read(run_id: str) -> dict[str, str]:
+        try:
+            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/bronze_request.json")["Body"].read(BRONZE_REQUEST_BYTES + 1)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
+                raise TaskUnavailable("bronze_request_not_staged") from None
+            raise TaskUnavailable("bronze_request_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("bronze_request_unreadable") from None
+        if len(body) > BRONZE_REQUEST_BYTES:
+            raise TaskRefused("bronze_request_too_large")
+        try:
+            document = json.loads(body)
+        except ValueError:
+            raise TaskRefused("bronze_request_malformed") from None
+        if not isinstance(document, dict) or set(document) != BRONZE_REQUEST_KEYS:
+            raise TaskRefused("bronze_request_needs_exactly_tables_target_and_dry_run")
+        tables, target, dry_run = document["tables"], document["target"], document["dry_run"]
+        if not isinstance(tables, list) or not all(isinstance(name, str) for name in tables) or not isinstance(target, str) or type(dry_run) is not bool:
+            raise TaskRefused("bronze_request_has_wrong_types")
+        try:
+            names = check_dispatch(tables, target, collections)
+        except DispatchError as error:
+            raise TaskRefused(f"bronze_request_refused: {error}") from None
+        return {"BRONZE_TABLES": ",".join(names), "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
+
+    return read
+
+
 def derived_run_id(parent_run: str, layer: str) -> str:
     """The run ID of a chain layer: the parent's time stamp and eight hex digits of a hash. ``dags/bronze_chain_dag.py`` derives the same IDs."""
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
@@ -195,6 +238,7 @@ class EcsBroker:
         signed_reader: Callable[[], str | None],
         approval_reader: Callable[[str], str | None],
         clock: Callable[[], float],
+        bronze_request: Callable[[str], dict[str, str]] | None = None,
     ) -> None:
         self.ledger = Ledger(state, "ecs_ledger_line.schema.json")
         self.requests = schema_validator("submission_request.schema.json")
@@ -206,6 +250,7 @@ class EcsBroker:
         self.signed_reader = signed_reader
         self.approval_reader = approval_reader
         self.clock = clock
+        self.bronze_request = bronze_request
         self.secrets: set[str] = set()
 
     def redact(self, text: str) -> str:
@@ -239,6 +284,13 @@ class EcsBroker:
                 raise SubmissionRefused(str(error)) from None
         if self.jobs[job].get("approval") == "promotion":
             self.require_promotion_approval(request)
+        if self.jobs[job].get("needs_bronze_request"):
+            try:
+                self.bronze_values(request.run_id)
+            except TaskUnavailable as error:
+                raise Unavailable(str(error)) from None
+            except TaskRefused as error:
+                raise SubmissionRefused(str(error)) from None
         return job
 
     def require_promotion_approval(self, request: SubmissionRequest) -> None:
@@ -272,6 +324,12 @@ class EcsBroker:
                 problem = "the approval date is invalid or in the future"
         if problem is not None:
             raise SubmissionRefused(problem)
+
+    def bronze_values(self, run_id: str) -> dict[str, str]:
+        """The checked dispatch values of a bronze run, read from the file the run staged."""
+        if self.bronze_request is None:
+            raise TaskRefused("bronze_request_not_configured")
+        return self.bronze_request(run_id)
 
     def require_signed(self) -> None:
         """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
@@ -327,6 +385,7 @@ class EcsBroker:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: input_run or "latest",
+            **{name: partial(self.bronze_value, request.run_id, name) for name in BRONZE_VARIABLES},
         }
         return {name: values[name]() for name in names}
 
@@ -362,6 +421,9 @@ class EcsBroker:
         temporary = target.with_suffix(".tmp")
         temporary.write_text(text)
         os.replace(temporary, target)
+
+    def bronze_value(self, run_id: str, name: str) -> str:
+        return self.bronze_values(run_id)[name]
 
     def append(self, line: dict[str, Any]) -> dict[str, Any]:
         return self.ledger.append(line)
@@ -775,6 +837,8 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     digest = s3_digest_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
     signed = ssm_signed_reader(session.client("ssm", config=config), required(env, "BROKER_SIGNED_PARAMETER"))
     approvals = s3_object_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), "promotion_approval.json")
+    collections = {entry["table"]: entry["collection"] for entry in json.loads((root / TABLE_MAP_FILE).read_text())["tables"]}
+    bronze_request = bronze_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), collections)
     broker = EcsBroker(
         Path(env.get("BROKER_STATE", "/var/lib/hai/broker")),
         jobs,
@@ -784,6 +848,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
         signed,
         approvals,
         lambda: datetime.now(UTC).timestamp(),
+        bronze_request,
     )
     listener = Listener(broker, "127.0.0.1", int(env.get("BROKER_PORT", "18790")), token)
     stopping = threading.Event()
