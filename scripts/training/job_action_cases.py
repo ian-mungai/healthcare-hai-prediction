@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
 import hashlib
@@ -26,7 +27,7 @@ from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
-from scripts.training.models.common import SLOTS
+from scripts.training.models.common import REGISTRABLE, SLOTS
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
@@ -279,6 +280,7 @@ def standins(fixture: Fixture) -> Iterator[None]:
         mock.patch.object(guards, "check", return_value=GUARD),
         mock.patch.object(bundle, "write_table", write_parquet),
         mock.patch.object(bundle, "save_model", save_model_standin),
+        mock.patch.object(bundle, "SAFE_MODULES", (*bundle.SAFE_MODULES, "scripts.training.model_test_support")),
         mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
         mock.patch.dict(
             os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100", "DVC_REMOTE_URL": str(fixture.folder / "dvc_remote"), "DVC_NO_ANALYTICS": "1"}
@@ -665,7 +667,48 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require(code == job.EXIT_FAILED and failure_of(error) == "input_missing", f"{code} {error}")
         require(listing(fixture.out) == [], "a failed type left partial output")
 
+    def trust_list_covers_candidates() -> None:
+        fixture = Fixture(folder / "trust_list")
+        seen: list[Any] = []
+        build = bundle.build
+
+        def spy(model_suite: Any, *rest: Any) -> Any:
+            seen.append(model_suite)
+            return build(model_suite, *rest)
+
+        with mock.patch.object(bundle, "build", side_effect=spy):
+            code, _, error = run_action(fixture, "fit")
+        require(code == 0 and seen, f"fit failed: {error}")
+        held = {
+            name
+            for slot in REGISTRABLE
+            if seen[0].slots[slot].status == "fitted"
+            for name in bundle.pipeline_types(seen[0].slots[slot].pipeline)
+            if name.startswith("scripts.training.models.")
+        }
+        contract = json.loads((REAL / "data_contracts/training/model_contract.json").read_text())
+        listed = {name for name in contract["serialization"]["trusted_types"] if name.startswith("scripts.")}
+        require(
+            listed == held, f"trust list differs from the project types the candidates hold: missing {sorted(held - listed)}, extra {sorted(listed - held)}"
+        )
+        for name in listed:
+            module, _, attribute = name.rpartition(".")
+            tree = ast.parse((REAL / f"{module.replace('.', '/')}.py").read_text())
+            require(any(isinstance(node, ast.ClassDef) and node.name == attribute for node in tree.body), f"trusted type {name} is not defined")
+
+    def untrusted_type_refused() -> None:
+        fixture = Fixture(folder / "untrusted")
+        path = fixture.root / "data_contracts/training/model_contract.json"
+        contract = json.loads(path.read_text())
+        contract["serialization"]["trusted_types"] = [name for name in contract["serialization"]["trusted_types"] if not name.endswith(".FoldPreprocessor")]
+        path.write_text(json.dumps(contract) + "\n")
+        code, _, error = run_action(fixture, "fit")
+        require(code == job.EXIT_FAILED and failure_of(error) == "untrusted_model_type" and "FoldPreprocessor" in error, f"{code} {error}")
+        require(listing(fixture.out) == [], "a fit with an untrusted candidate wrote output")
+
     cases.check("job_fit_writes_results_and_done", fitted)
+    cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
+    cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)
     cases.check("job_fit_result_is_reproducible", reproducible)
     cases.check("job_fit_retry_resumes_completed", retried)
     cases.check("job_fit_retry_after_interrupt", interrupted)

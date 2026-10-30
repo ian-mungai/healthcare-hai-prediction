@@ -16,10 +16,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from scripts.training.job_failure import JobFailure
 from scripts.training.models.common import SLOTS, Feature
 from scripts.training.models.suite import ModelSuite
 
 PARQUET_TYPES = {"varchar": "string", "double": "float64"}
+SAFE_MODULES = ("builtins", "collections", "numpy", "sklearn")
 
 
 def prefix(hai_type: str) -> str:
@@ -38,6 +40,35 @@ def write_table(path: Path, rows: Sequence[Mapping[str, Any]], columns: Mapping[
     parquet = importlib.import_module("pyarrow.parquet")
     schema = arrow.schema([(name, getattr(arrow, PARQUET_TYPES[columns[name]])()) for name in sorted(columns)])
     parquet.write_table(arrow.Table.from_pylist([dict(row) for row in rows], schema=schema), path, compression="zstd", version="2.6", use_dictionary=False)
+
+
+def pipeline_types(pipeline: Any) -> set[str]:
+    """Return the ``module.name`` of every class an object graph holds, as the skops loader sees them."""
+    found: set[str] = set()
+    pending, visited = [pipeline], set()
+    while pending:
+        item = pending.pop()
+        if id(item) in visited:
+            continue
+        visited.add(id(item))
+        kind = type(item)
+        found.add(f"{kind.__module__}.{kind.__qualname__}")
+        if kind.__module__ == "numpy" or hasattr(item, "dtype"):
+            continue
+        if isinstance(item, Mapping):
+            pending.extend([*item.keys(), *item.values()])
+        elif isinstance(item, tuple | list | set | frozenset):
+            pending.extend(item)
+        elif hasattr(item, "__dict__"):
+            pending.extend(vars(item).values())
+    return found
+
+
+def check_trusted(pipeline: Any, trusted: Sequence[str]) -> None:
+    """Refuse a candidate that holds a class outside the library defaults and the contract's trust list, before the save would fail on it."""
+    untrusted = sorted(name for name in pipeline_types(pipeline) if not name.startswith(SAFE_MODULES) and name not in set(trusted))
+    if untrusted:
+        raise JobFailure("untrusted_model_type", f"the candidate holds classes that are not on the model contract's trusted types: {', '.join(untrusted)}")
 
 
 def save_model(pipeline: Any, folder: Path, features: Sequence[Feature], contract: Mapping[str, Any], code_root: Path) -> None:
@@ -122,6 +153,7 @@ def build(
         files[f"{base}/holdout_predictions.parquet"] = table.read_bytes()
         if candidate is not None:
             model = Path(scratch) / "model"
+            check_trusted(suite.slots[candidate].pipeline, contract["serialization"]["trusted_types"])
             save_model(suite.slots[candidate].pipeline, model, features, contract, code_root)
             for path in sorted(model.rglob("*")):
                 if path.is_file():
