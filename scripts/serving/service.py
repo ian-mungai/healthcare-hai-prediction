@@ -22,7 +22,7 @@ from scripts.serving.keys import KeyRing
 from scripts.serving.limiter import RateLimiter
 from scripts.serving.manifests import ManifestStore
 from scripts.serving.metrics import Metrics
-from scripts.serving.predictions import PredictionBuffer
+from scripts.serving.predictions import RETRY_AFTER_SECONDS, BufferFull, PredictionBuffer
 
 LOG = logging.getLogger(__name__)
 SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
@@ -182,12 +182,29 @@ class ModelService:
         if isinstance(parsed, Reply):
             return parsed
         hai_type, ccn, window_year = parsed
+        try:
+            self.buffer.reserve()
+        except BufferFull:
+            return Reply(503, {"error": "predictions_backlog"}, {"Retry-After": str(RETRY_AFTER_SECONDS)})
+        try:
+            reply, row = self._serve(key_id, request_id, hai_type, ccn, window_year)
+        except BaseException:
+            self.buffer.release()
+            raise
+        if row is None:
+            self.buffer.release()
+        else:
+            self.buffer.add(row)
+        return reply
+
+    def _serve(self, key_id: str, request_id: str | None, hai_type: str, ccn: str, window_year: int) -> tuple[Reply, dict[str, Any] | None]:
+        """Route, read the features and predict. The row is returned with a 200 reply and is None for every other reply."""
         rid = request_id if request_id is not None and SAFE_REQUEST_ID.fullmatch(request_id) else self._new_id()
         if self._clock() >= self._next_refresh:
             self.refresh()
         active = self._active.get(hai_type)
         if active is None:
-            return refusal(503, "no_deployment", request_id=rid)
+            return refusal(503, "no_deployment", request_id=rid), None
         routed = canary.route(active.deployment, ccn, window_year)
         slot, fallback = active.stable, False
         if routed == "canary":
@@ -201,33 +218,31 @@ class ModelService:
                 slot, fallback = active.stable, True
                 answered = self._answer(slot, ccn, window_year)
         except contract.NotFound:
-            return refusal(404, "hospital_window_not_found", request_id=rid)
+            return refusal(404, "hospital_window_not_found", request_id=rid), None
         except contract.ServingError:
-            return refusal(503, "features_unavailable", request_id=rid)
+            return refusal(503, "features_unavailable", request_id=rid), None
         if answered is None:
-            return refusal(503, "model_unavailable", request_id=rid)
+            return refusal(503, "model_unavailable", request_id=rid), None
         value, served = answered
         candidate_version = active.candidate.version if active.candidate is not None else None
         routed_version = candidate_version if routed == "canary" and candidate_version is not None else active.stable.version
         served_by = "canary" if slot is active.candidate else "stable"
-        self.buffer.add(
-            {
-                "request_id": rid,
-                "predicted_at": datetime.now(UTC),
-                "hai_type": hai_type,
-                "ccn": ccn,
-                "window_year": window_year,
-                "prediction": value,
-                "model_version": slot.version,
-                "routed_version": routed_version,
-                "served_by": served_by,
-                "fallback": fallback,
-                "deployment_id": active.deployment.deployment_id,
-                "api_key_id": key_id,
-                "feature_schema_sha256": served.feature_schema_hash,
-                "features_as_of": date.fromisoformat(served.features_as_of),
-            }
-        )
+        row = {
+            "request_id": rid,
+            "predicted_at": datetime.now(UTC),
+            "hai_type": hai_type,
+            "ccn": ccn,
+            "window_year": window_year,
+            "prediction": value,
+            "model_version": slot.version,
+            "routed_version": routed_version,
+            "served_by": served_by,
+            "fallback": fallback,
+            "deployment_id": active.deployment.deployment_id,
+            "api_key_id": key_id,
+            "feature_schema_sha256": served.feature_schema_hash,
+            "features_as_of": date.fromisoformat(served.features_as_of),
+        }
         LOG.info("request %s answered by %s version %s for key %s", rid, served_by, slot.version, key_id)
         body = {
             "request_id": rid,
@@ -241,7 +256,7 @@ class ModelService:
             "features_as_of": served.features_as_of,
             "feature_schema_sha256": served.feature_schema_hash,
         }
-        return Reply(200, body, {"X-Request-ID": rid})
+        return Reply(200, body, {"X-Request-ID": rid}), row
 
     def _answer(self, slot: Slot, ccn: str, window_year: int) -> tuple[float, contract.Served] | None:
         """Read the features for the slot's model and predict. None when the slot cannot predict. Feature store errors propagate as serving errors."""

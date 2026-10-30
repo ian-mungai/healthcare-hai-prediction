@@ -599,19 +599,38 @@ def refused(call: Callable[[], object]) -> bool:
 
 
 def case_predictions(c: Checker) -> None:
-    """The prediction append never fails a request, retries without duplicates, is bounded and carries a deadline."""
+    """The append never fails a request, retries without duplicates and has a deadline. A full buffer refuses new requests and drops no acknowledged row."""
     with world(capacity=5) as w:
         w.sink.fail = True
         replies = [ask(w, key) for key in list(online_cases.KEYS) * 2]
-        c.check("a failing sink does not fail a request", all(r.status == 200 for r in replies))
+        accepted = [reply for reply in replies if reply.status == 200]
+        refused_ = [reply for reply in replies if reply.status == 503]
+        c.check("a failing sink does not fail a request that has room", len(accepted) == 5)
+        c.check(
+            "the three requests over the capacity are refused with 503 and a retry time",
+            len(refused_) == 3 and all(int(r.headers.get("Retry-After", "0")) >= 1 for r in refused_),
+        )
+        c.check("a refused request names the backlog", all(r.body.get("error") == "predictions_backlog" for r in refused_))
+        calls, reads = w.loader.calls, len(w.reads)
+        ask(w)
+        c.check("a refused request reads no feature and asks no model", w.loader.calls == calls and len(w.reads) == reads)
         w.api.buffer.flush()
-        c.check("the failed flush kept the rows, within the capacity", w.api.buffer.pending() == 5 and w.api.buffer.dropped == 3)
+        c.check("the failed flush kept every acknowledged row", w.api.buffer.pending() == 5)
         c.check("the flush passed its deadline to the sink", w.sink.timeouts == [5.0])
         w.sink.fail = False
         w.api.buffer.flush()
-        c.check("the next flush appends each kept row once", len(w.sink.rows) == 5 and len({row["request_id"] for row in w.sink.rows}) == 5)
+        sent = {row["request_id"] for row in w.sink.rows}
+        c.check("the next flush appends each acknowledged row once", len(w.sink.rows) == 5 and sent == {r.body["request_id"] for r in accepted})
         w.api.buffer.flush()
         c.check("a flush with nothing pending appends nothing", len(w.sink.rows) == 5)
+        c.check("the room is back after the flush", ask(w).status == 200)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("the refusals are counted as 503 answers", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="503") == [4.0])
+    with world(capacity=2) as w:
+        for _ in range(5):
+            ask(w, "ZZZ999:2022")
+            ask(w, "AAA:2022")
+        c.check("requests that end without a row give their room back", ask(w).status == 200 and ask(w).status == 200 and ask(w).status == 503)
     c.check("a row with another column set is refused before it reaches the sink", refused_row())
 
 
