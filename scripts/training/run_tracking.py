@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import math
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ RUN_TAG = "run_id"
 STEP_TAG = "step_key"
 PARENT_STEP = "parent"
 PARENT_LINK = "mlflow.parentRunId"
+PENDING = "pending_create."
+ALL_RUNS = 3
 COMPLETE_TAG = "bundle_sha256"
 UNSAFE = re.compile(r"[^A-Za-z0-9_\-. /]")
 NAME_LIMIT = 250
@@ -43,7 +46,13 @@ class TrackingStore(Protocol):
 
     def create_experiment(self, name: str) -> str: ...
 
-    def search_runs(self, experiment_ids: list[str], filter_string: str = "", max_results: int = 1000) -> Sequence[Any]: ...
+    def get_experiment(self, experiment_id: str) -> Any: ...
+
+    def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None: ...
+
+    def delete_experiment_tag(self, experiment_id: str, key: str) -> None: ...
+
+    def search_runs(self, experiment_ids: list[str], filter_string: str = "", run_view_type: int = 1, max_results: int = 1000) -> Sequence[Any]: ...
 
     def create_run(self, experiment_id: str, tags: dict[str, str] | None = None, run_name: str | None = None) -> Any: ...
 
@@ -132,10 +141,31 @@ def populate(store: TrackingStore, run_id: str, spec: RunSpec) -> None:
         store.log_artifacts(run_id, str(path), folder)
 
 
+def resolve_markers(store: TrackingStore, experiment_id: str, run: str) -> None:
+    """Settle every pending marker of this training run: a marker whose create left a run is cleared, one whose create left nothing stops the step."""
+    for key, value in sorted(dict(store.get_experiment(experiment_id).tags).items()):
+        if not key.startswith(PENDING) or not value.startswith(f"{run}:"):
+            continue
+        identity = key.removeprefix(PENDING)
+        if not store.search_runs([experiment_id], f"tags.create_identity = '{identity}'", run_view_type=ALL_RUNS, max_results=2):
+            raise TrackingError("pending_create", f"an earlier create of {value} left no run (identity {identity}), so nothing was created")
+        store.delete_experiment_tag(experiment_id, key)
+
+
+def create_run_once(store: TrackingStore, experiment_id: str, run: str, step_key: str, tags: Mapping[str, str], name: str) -> str:
+    """Send one create under a pending marker, so a lost response never leads to a blind second create; return the run ID."""
+    identity = uuid.uuid4().hex
+    store.set_experiment_tag(experiment_id, PENDING + identity, f"{run}:{step_key}")
+    created = store.create_run(experiment_id, tags={**tags, "create_identity": identity}, run_name=name)
+    store.delete_experiment_tag(experiment_id, PENDING + identity)
+    return str(created.info.run_id)
+
+
 def log_type(store: TrackingStore, plan: TypePlan, run: str) -> str:
     """Log one type's parent and child runs unless a complete parent exists; return the parent run ID."""
     found = store.get_experiment_by_name(plan.experiment)
     experiment_id = str(found.experiment_id) if found is not None else store.create_experiment(plan.experiment)
+    resolve_markers(store, experiment_id, run)
     existing = list(store.search_runs([experiment_id], f"tags.{RUN_TAG} = '{run}'", max_results=1000))
     parents = [item for item in existing if item.data.tags.get(STEP_TAG) == PARENT_STEP]
     finished = [item for item in parents if COMPLETE_TAG in item.data.tags]
@@ -147,10 +177,10 @@ def log_type(store: TrackingStore, plan: TypePlan, run: str) -> str:
         return str(finished[0].info.run_id)
     for item in existing:
         store.delete_run(str(item.info.run_id))
-    parent_id = str(store.create_run(experiment_id, tags=dict(plan.parent.tags), run_name=f"{run}_{plan.parent.tags['population']}").info.run_id)
+    parent_id = create_run_once(store, experiment_id, run, plan.parent.step_key, plan.parent.tags, f"{run}_{plan.parent.tags['population']}")
     populate(store, parent_id, plan.parent)
     for child in plan.children:
-        child_id = str(store.create_run(experiment_id, tags={**child.tags, PARENT_LINK: parent_id}, run_name=child.step_key).info.run_id)
+        child_id = create_run_once(store, experiment_id, run, child.step_key, {**child.tags, PARENT_LINK: parent_id}, child.step_key)
         populate(store, child_id, child)
         store.set_terminated(child_id, "FINISHED")
     dvc_baseline.log_baseline(plan.metafile, plan.matrix_path, dvc_baseline.Run(store, parent_id), plan.snapshots)
@@ -170,6 +200,7 @@ def log_child(store: TrackingStore, experiment: str, parent_id: str, spec: RunSp
     if found is None:
         raise TrackingError("mlflow_experiment_missing", f"the experiment {experiment} does not exist")
     experiment_id = str(found.experiment_id)
+    resolve_markers(store, experiment_id, run)
     existing = list(store.search_runs([experiment_id], f"tags.{RUN_TAG} = '{run}' and tags.{STEP_TAG} = '{spec.step_key}'", max_results=1000))
     complete = [item for item in existing if item.data.tags.get(COMPLETE_TAG) == bundle_sha256]
     if len(complete) > 1:
@@ -178,7 +209,7 @@ def log_child(store: TrackingStore, experiment: str, parent_id: str, spec: RunSp
         return str(complete[0].info.run_id)
     for item in existing:
         store.delete_run(str(item.info.run_id))
-    child_id = str(store.create_run(experiment_id, tags={**spec.tags, PARENT_LINK: parent_id}, run_name=spec.step_key).info.run_id)
+    child_id = create_run_once(store, experiment_id, run, spec.step_key, {**spec.tags, PARENT_LINK: parent_id}, spec.step_key)
     populate(store, child_id, spec)
     store.set_terminated(child_id, "FINISHED")
     store.set_tag(child_id, COMPLETE_TAG, bundle_sha256)

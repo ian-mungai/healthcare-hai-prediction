@@ -49,6 +49,8 @@ def champion_predictions(
     try:
         listing = store.download_artifacts(version.run_id, "bundle/feature_list.json", str(scratch))
         columns = set(job_inputs.read_json(Path(listing), "champion_features")["columns"])
+    except JobFailure:
+        raise
     except Exception as error:
         raise JobFailure("champion_features", f"the champion's feature list cannot be read: {type(error).__name__}: {error}") from None
     if not columns <= set(manifest["columns"]):
@@ -58,6 +60,8 @@ def champion_predictions(
         raise JobFailure("holdout_leak", f"the champion's newest window is {window or 'unknown'}, so its training years may include the holdout year {year}")
     try:
         pipeline = load_pipeline(f"models:/{name}@{registry.CHAMPION_ALIAS}")
+    except JobFailure:
+        raise
     except Exception as error:
         raise JobFailure("champion_unloadable", f"{type(error).__name__}: {error}") from None
     return predict(pipeline, rows)

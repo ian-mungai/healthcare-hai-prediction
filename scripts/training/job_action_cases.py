@@ -301,6 +301,7 @@ class FileTracking:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.experiments: dict[str, str] = {}
+        self.experiment_tags: dict[str, dict[str, str]] = {}
         self.runs: dict[str, dict[str, Any]] = {}
         self.calls: list[str] = []
         self.fail_on: str | None = None
@@ -321,7 +322,20 @@ class FileTracking:
     def create_experiment(self, name: str) -> str:
         self.enter("create_experiment")
         self.experiments[name] = str(len(self.experiments))
+        self.experiment_tags[self.experiments[name]] = {}
         return self.experiments[name]
+
+    def get_experiment(self, experiment_id: str) -> SimpleNamespace:
+        self.enter("get_experiment")
+        return SimpleNamespace(experiment_id=experiment_id, tags=dict(self.experiment_tags[experiment_id]))
+
+    def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+        self.enter("set_experiment_tag")
+        self.experiment_tags[experiment_id][key] = value
+
+    def delete_experiment_tag(self, experiment_id: str, key: str) -> None:
+        self.enter("delete_experiment_tag")
+        self.experiment_tags[experiment_id].pop(key, None)
 
     def create_run(self, experiment_id: str, tags: dict[str, str] | None = None, run_name: str | None = None) -> SimpleNamespace:
         self.enter("create_run")
@@ -337,13 +351,15 @@ class FileTracking:
         }
         return SimpleNamespace(info=SimpleNamespace(run_id=run_id))
 
-    def search_runs(self, experiment_ids: list[str], filter_string: str = "", max_results: int = 1000) -> list[SimpleNamespace]:
+    def search_runs(self, experiment_ids: list[str], filter_string: str = "", run_view_type: int = 1, max_results: int = 1000) -> list[SimpleNamespace]:
         self.enter("search_runs")
         wanted = dict(re.findall(r"tags\.(\w+) = '([^']*)'", filter_string))
         found = [
             run_id
             for run_id, run in self.runs.items()
-            if run["experiment"] in experiment_ids and not run["deleted"] and all(run["tags"].get(key) == value for key, value in wanted.items())
+            if run["experiment"] in experiment_ids
+            and (run_view_type == 3 or not run["deleted"])
+            and all(run["tags"].get(key) == value for key, value in wanted.items())
         ]
         return [self.get_run(run_id) for run_id in found[:max_results]]
 
@@ -1125,6 +1141,21 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             code, _, error = run_promotion(fixture)
         require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
 
+    def champion_deadline() -> None:
+        fixture = promoted(folder / "champion_deadline", Predictor(LABEL, constant=3.0))
+
+        def slow_champion(uri: str) -> Any:
+            if uri.startswith("models:/"):
+                time.sleep(5)
+            return SAVED[(Path(uri) / "model.bin").read_text()]
+
+        with mock.patch.object(job, "budget", return_value=2.0), mock.patch.object(promotion_check, "load_pipeline", side_effect=slow_champion):
+            code, _, error = run_action(fixture, "promotion_check")
+        require(
+            code == job.EXIT_DEADLINE and failure_of(error) == "deadline",
+            f"a deadline during the champion load was reported as another failure: {code} {error}",
+        )
+
     def no_uri() -> None:
         fixture = promoted(folder / "no_uri")
         with standins(fixture), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": ""}):
@@ -1148,6 +1179,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_refuses_changed_log_run", changed_log_run)
     cases.check("job_promotion_check_refuses_verdict_mismatch_on_written_file", mismatch)
     cases.check("job_promotion_check_deadline_named", deadline)
+    cases.check("job_promotion_check_champion_load_deadline_named", champion_deadline)
     cases.check("job_promotion_check_needs_tracking_uri", no_uri)
 
 
@@ -1260,6 +1292,34 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_bundle_conflict", f"{code} {error}")
         require(len(fixture.tracking.active()) == 1 + len(CHILDREN), "a conflicting run was deleted")
 
+    def markers_cleaned() -> None:
+        fixture = staged(folder / "markers")
+        require(run_action(fixture, "log_run")[0] == 0, "log_run failed")
+        require(fixture.tracking.experiment_tags == {"0": {}}, f"a pending marker was left behind: {fixture.tracking.experiment_tags}")
+        require(all("create_identity" in run["tags"] for run in fixture.tracking.active().values()), "a run was created without its create identity")
+
+    def unresolved_marker() -> None:
+        fixture = staged(folder / "unresolved")
+        fixture.tracking.create_experiment(f"hai_training_{HAI_TYPE}")
+        fixture.tracking.experiment_tags["0"]["pending_create." + "a" * 32] = f"{RUN}:parent"
+        fixture.tracking.calls.clear()
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "pending_create" and "create_run" not in fixture.tracking.calls, f"{code} {error}")
+        require(listing(fixture.out) == [], "a refused log_run wrote output")
+
+    def adopted_marker() -> None:
+        fixture = staged(folder / "adopted")
+        store = fixture.tracking
+        store.create_experiment(f"hai_training_{HAI_TYPE}")
+        late = store.create_run("0", tags={"run_id": RUN, "step_key": "parent", "create_identity": "b" * 32}).info.run_id
+        store.experiment_tags["0"]["pending_create." + "b" * 32] = f"{RUN}:parent"
+        code, _, error = run_action(fixture, "log_run")
+        require(code == 0, f"the late run was not resolved: {error}")
+        require(
+            store.runs[late]["deleted"] and len(store.parents()) == 1 and store.experiment_tags == {"0": {}},
+            "the late incomplete run was kept or the marker remained",
+        )
+
     def no_uri() -> None:
         fixture = staged(folder / "no_uri")
         with standins(fixture), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": ""}):
@@ -1317,6 +1377,9 @@ def log_run_cases(cases: Any, folder: Path) -> None:
     cases.check("job_log_run_redoes_unfinished_runs", unfinished)
     cases.check("job_log_run_refuses_duplicate_parents", duplicate_parents)
     cases.check("job_log_run_refuses_other_bundle_hash", bundle_conflict)
+    cases.check("job_log_run_leaves_no_pending_marker", markers_cleaned)
+    cases.check("job_log_run_refuses_unresolved_pending_create", unresolved_marker)
+    cases.check("job_log_run_resolves_late_run_of_pending_create", adopted_marker)
     cases.check("job_log_run_needs_tracking_uri", no_uri)
     cases.check("job_log_run_tracking_failure_named", tracking_down)
     cases.check("job_log_run_refuses_changed_fit_output", changed_fit)
