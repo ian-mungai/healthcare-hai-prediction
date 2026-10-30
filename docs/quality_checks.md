@@ -516,7 +516,8 @@ finding, so the list cannot rot.
 - **trivy config:** `static_checks.py` uses the release-binary trivy in `.tools/bin` (pin `trivy`, 0.74.0). The `trivy-config` hook uses the Homebrew binary (pin
   `trivy-config`, 0.76.1). Both read the same embedded checks, so bring the two pins to one version when the release-binary pin is next updated.
 - **OSV-Scanner:** it queries osv.dev, so it needs the network and runs at the pre-push stage:
-  `.venv/bin/pre-commit run osv-scanner --hook-stage pre-push --all-files`. The constraints file is scanned as a requirements file without dependency
+  `.venv/bin/pre-commit run osv-scanner --hook-stage pre-push --all-files`. The push gate runs the hook as its own step, `osv_scanner`, over the pushed range
+  in every scope and also for a small change, because hosted CI does not run it. It skips itself when the range changes no requirements file. The constraints file is scanned as a requirements file without dependency
   resolution. Every pinned version with known vulnerabilities is allowlisted today with the reason that a pin change needs its own E2E and the owner's decision.
   Remove an entry when the pin moves; the check then fails on any new vulnerability for that package.
 - **zizmor:** the only finding today is the style suggestion `self-repository` (write the local setup action as `$/.github/actions/setup`), allowlisted until
@@ -573,7 +574,7 @@ One commit per reviewed change stays the rule.
   `config/quality/mypy_runtimes.json`), SQLFluff on the changed dbt SQL files, the Docker-call guard and the check group file guard. A failed check stops the gate before the long
   groups start and names itself; each check has the deadline `pre_push.changed_file_seconds`. It then runs the commit-message and removed-name checks
   of the hosted hooks job, `CI_SCOPE=range RANGE_START=<base> RANGE_END=<head> bash scripts/run_ci.sh` and the three
-  hosted hook partitions over the same range. The steps run in parallel, except the acquisition hook and the three hook
+  hosted hook partitions over the same range. The steps run in parallel, except the acquisition hook, the OSV-Scanner hook and the three hook
   partitions: they run one after the other in one worker (the partitions take about 3 minutes together), because
   pre-commit takes the worktree's index lock and two pre-commit runs at once fail with `index.lock: File exists`. These partitions run the hooks that left the commit
   stage (`unused-code`, `unused-dependencies`, `orphan-files`, `terraform-unused`, `sqlfluff`, `build-contexts`,

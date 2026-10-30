@@ -8,13 +8,15 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
 - ``full`` scope: ``scripts/run_ci.sh`` with ``CI_SCOPE=full`` (it holds the hook partitions and the acquisition suite) when the range changes a path in
   ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
+- Every scope also runs the ``osv-scanner`` hook (``pre-commit run osv-scanner --hook-stage pre-push``) over the range, or over all files when there is no
+  range. Hosted CI does not run it, so a small change runs it too. The hook skips itself unless the range changes a pinned requirements file or its allowlist.
 - A ``range`` of a small change (``pre_push.small_change``: at most ``max_files`` files and ``max_changed_lines`` changed lines, none on the ``not_paths``
   list, none a CI file) leaves out the acquisition hook and the three hook partitions. Hosted CI runs them.
 
 Before any of these steps the changed-file checks run (scripts/quality/ci_changed_files.py: Ruff, mypy, SQLFluff, the Docker-call guard and the guard of the
 check group files). A failed check stops the run before the long groups.
 
-The steps run at once, except the acquisition hook and the hook partitions: pre-commit takes the worktree's index lock,
+The steps run at once, except the acquisition hook, the OSV-Scanner hook and the hook partitions: pre-commit takes the worktree's index lock,
 so they run one after the other in one worker.
 Every step has a deadline from ``pre_push.timeout_seconds`` and fails visibly with its name when it expires. The run and every step start without the variables
 that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKIP`` included) and without the Git repository variables of the caller.
@@ -259,6 +261,8 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
             ]
     else:
         steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE, **NO_REUSE}})
+    scan_files = ["--from-ref", start, "--to-ref", end] if start and end else ["--all-files"]
+    steps.append({"name": "osv_scanner", "kind": "pre_commit", "arguments": ["run", "osv-scanner", "--hook-stage", "pre-push", *scan_files], "env": {}})
     first = (
         {"name": "changed_file_checks", "kind": "changed_files", "arguments": ["--root", str(root), "--from", start, "--to", end], "env": {}}
         if start and end

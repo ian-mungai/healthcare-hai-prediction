@@ -3661,6 +3661,7 @@ def pre_push_repo(
     (root / "scripts/quality/ci_changed_files.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "changed_files", "CHANGED_FILES"))
     (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
+    (root / "scripts/quality/lint_tools.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "osv_scanner", "OSV_SCANNER"))
     for package in ("scripts", "scripts/quality", "orchestration"):
         (root / package / "__init__.py").write_text("")
     (root / "orchestration/launcher.py").write_text(STUB_LAUNCHER % INHERITED_PATTERN)
@@ -4284,10 +4285,41 @@ def changed_file_check_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+def osv_scanner_case(
+    scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_run: bool, mutate: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """The OSV-Scanner hook runs over the pushed range in its own step, also for a small change, and skips a range without a requirements file."""
+    root = pre_push_repo(scratch, f"gate_osv_{name}", changed, small=small, mutate=mutate)
+    plan = pre_push_plan(root)
+    step = next((step for step in plan["steps"] if step["name"] == "osv_scanner"), {})
+    base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = [call for call in pre_push_calls(root) if call["stub"] == "osv_scanner"]
+    passed = (
+        code == 0
+        and step.get("argv", [])[-6:] == ["--hook-stage", "pre-push", "--from-ref", base, "--to-ref", head]
+        and len(calls) == (1 if want_run else 0)
+        and (not want_run or calls[0]["argv"] == ["osv-scanner"])
+    )
+    return {
+        "case": f"pre_push_osv_scanner_{name}",
+        "passed": passed,
+        "exit": code,
+        "calls": len(calls),
+        "step": step.get("argv", []),
+        "output": (out + error)[-300:],
+    }
+
+
 def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The changed-file checks and the small-change rule of the pre-push run."""
+    """The changed-file checks, the OSV-Scanner step and the small-change rule of the pre-push run."""
     results = [changed_files_first_case(scratch), changed_files_failure_case(scratch), changed_files_without_a_range_case(scratch)]
     results += changed_file_check_cases(scratch)
+    results += [
+        osv_scanner_case(scratch, "runs_for_a_requirements_change", ("requirements.txt",), None, True),
+        osv_scanner_case(scratch, "runs_for_a_small_change", ("requirements.txt",), SMALL, True),
+        osv_scanner_case(scratch, "skips_a_range_without_requirements", ("README.md",), None, False),
+    ]
     results += [
         small_case(scratch, "runs_only_checks_and_groups", ("features/example.py", "README.md"), SMALL, True),
         small_case(scratch, "too_many_files_runs_everything", tuple(f"features/example_{index}.py" for index in range(7)), SMALL, False),
@@ -4298,6 +4330,16 @@ def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
     ]
     results += [
         planted_case("changed_file_checks_last", changed_files_first_case, scratch, mutate=source_edit('    first = chosen["first"]\n', "    first = None\n")),
+        planted_case(
+            "osv_scanner_step_left_out",
+            osv_scanner_case,
+            scratch,
+            name="runs_for_a_requirements_change",
+            changed=("requirements.txt",),
+            small=None,
+            want_run=True,
+            mutate=source_edit('steps.append({"name": "osv_scanner"', '[].append({"name": "osv_scanner"'),
+        ),
         planted_case("changed_file_failure_ignored", changed_files_failure_case, scratch, mutate=source_edit('if first_result["exit"] != 0:', "if False:")),
         planted_case(
             "every_change_small",
