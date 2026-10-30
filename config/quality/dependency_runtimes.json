@@ -73,8 +73,8 @@
       "code": []
     },
     "drift": {
-      "reason": "The drift check runs in the drift image (services/drift) with Evidently, DuckDB and jsonschema. Until the hash-pinned lock requirements.txt exists, the approved versions in requirements.in are the runtime's requirements; switch to the lock at lock review.",
-      "requirements": ["services/drift/requirements.in"],
+      "reason": "The drift check runs in the drift image (services/drift) with Evidently, DuckDB and jsonschema, installed from the hash-pinned lock.",
+      "requirements": ["services/drift/requirements.txt"],
       "code": ["monitoring/drift_check.py", "monitoring/drift_config.py", "monitoring/evidently_report.py"]
     }
   }
