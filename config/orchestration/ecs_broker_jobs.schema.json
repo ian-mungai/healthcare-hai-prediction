@@ -5,25 +5,74 @@
   "description": "The closed table of the lean ECS broker. A step names its job, or null when the broker answers it without a task. A job names its deadline, the container whose log the logs route shows and the variables each container receives.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "jobs", "steps"],
+  "required": [
+    "version",
+    "jobs",
+    "steps"
+  ],
   "properties": {
-    "version": {"const": 1},
+    "version": {
+      "const": 1
+    },
     "jobs": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,30}$"},
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{1,30}$"
+      },
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["deadline_seconds", "log_container", "containers"],
+        "required": [
+          "deadline_seconds",
+          "log_container",
+          "containers"
+        ],
         "properties": {
-          "deadline_seconds": {"type": "integer", "minimum": 60, "maximum": 86400},
-          "log_container": {"type": "string"},
-          "needs_training_parameters": {"const": true},
+          "deadline_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400
+          },
+          "log_container": {
+            "type": "string"
+          },
+          "needs_training_parameters": {
+            "const": true
+          },
           "containers": {
             "type": "object",
             "minProperties": 1,
-            "additionalProperties": {"type": "array", "uniqueItems": true, "items": {"enum": ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "POLARIS_URI", "MLFLOW_TRACKING_URI", "INPUT_RUN_ID"]}}
+            "additionalProperties": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "RUN_ID",
+                  "CODE_SHA256",
+                  "TRAINING_PARAMETERS",
+                  "POLARIS_URI",
+                  "MLFLOW_TRACKING_URI",
+                  "INPUT_RUN_ID"
+                ]
+              }
+            }
+          },
+          "chain": {
+            "const": true,
+            "description": "The job belongs to the bronze-triggered chain and runs only after the first silver and gold publishes are signed"
+          },
+          "after": {
+            "type": "string",
+            "description": "The job whose succeeded run the request's input_run_id must name"
+          },
+          "acceptance": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            },
+            "description": "Containers that hold the acceptance checks. Each must be in the task's report and exit 0"
           }
         }
       }
@@ -31,8 +80,15 @@
     "steps": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,40}$"},
-      "additionalProperties": {"type": ["string", "null"]}
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{1,40}$"
+      },
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
     }
   }
 }

@@ -275,6 +275,17 @@ variable "broker_token_name" {
   }
 }
 
+variable "broker_signed_parameter_name" {
+  description = "Parameter Store name of the record of the first signed silver and gold publishes: a JSON object with the keys silver and gold, each a run ID. The owner puts it after signing both reports. Until it exists and is valid, the broker refuses every chain job."
+  type        = string
+  default     = "/healthcare_hai_prediction/first_publishes_signed"
+
+  validation {
+    condition     = length(var.broker_signed_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.broker_signed_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.broker_signed_parameter_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "broker_jobs" {
   description = "Where the broker starts job tasks: the closed job subnet and security group, the jobs log group, the data bucket that holds the staged code digest, the private address of the host and the job families to enable. Required when broker_enabled is true."
   type = object({

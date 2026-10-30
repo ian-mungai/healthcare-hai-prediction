@@ -29,6 +29,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SESSION_KEY = "stand-in-session-token-0123456789"
 RUN = "20261030T100000Z-abcdef01"
 SILVER_RUN = "20261030T100000Z-0badcafe"
+GOLD_RUN = "20261030T100000Z-90d0c0de"
+FEATURES_RUN = "20261030T100000Z-feed5eed"
+SIGNED = json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN})
 DIGEST = "ab" * 32
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
 JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift"})
@@ -37,11 +40,13 @@ JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift"})
 class Rig:
     """One broker with its listener, a client and the fakes behind it."""
 
-    def __init__(self, folder: Path, families: frozenset[str] = JOB_FAMILIES) -> None:
+    def __init__(self, folder: Path, families: frozenset[str] = JOB_FAMILIES, signed: str | None = SIGNED) -> None:
         self.folder = folder
+        self.signed = signed
         self.ecs, self.logs, self.s3 = FakeEcs(), FakeLogs(), FakeS3()
         self.s3.objects[f"lakehouse/run_stage/{RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
-        self.s3.objects[f"lakehouse/run_stage/{SILVER_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
+        for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN):
+            self.s3.objects[f"lakehouse/run_stage/{run}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         self.clock = [1_800_000_000.0]
         self.families = families
         self.broker = self.new_broker()
@@ -53,16 +58,24 @@ class Rig:
         settings = dataclasses.replace(SETTINGS, families=self.families)
         settings_broker = BrokerSettings(polaris_uri="http://10.0.0.5:8181/api/catalog", mlflow_uri="http://10.0.0.5:5100")
         digest = s3_digest_reader(self.s3, "example-bucket")
-        return EcsBroker(self.folder / "state", load_jobs(ROOT), EcsAdapter(self.ecs, self.logs, settings), settings_broker, digest, lambda: self.clock[0])
+        return EcsBroker(
+            self.folder / "state",
+            load_jobs(ROOT),
+            EcsAdapter(self.ecs, self.logs, settings),
+            settings_broker,
+            digest,
+            lambda: self.signed,
+            lambda: self.clock[0],
+        )
 
     def close(self) -> None:
         self.listener.stop()
 
 
 @contextmanager
-def rig(families: frozenset[str] = JOB_FAMILIES) -> Iterator[Rig]:
+def rig(families: frozenset[str] = JOB_FAMILIES, signed: str | None = SIGNED) -> Iterator[Rig]:
     with tempfile.TemporaryDirectory(prefix="ecs_broker_") as folder:
-        current = Rig(Path(folder), families)
+        current = Rig(Path(folder), families, signed)
         try:
             yield current
         finally:
@@ -279,12 +292,70 @@ def silver_job_runs_its_family() -> None:
         require(len(current.ecs.tasks) == 1, "silver steps started more than one task")
 
 
+def silver_request(run: str = SILVER_RUN) -> SubmissionRequest:
+    return request("pin_bronze", run=run, dag="silver_transform_dag")
+
+
+def gold_request(input_run: str | None = SILVER_RUN, run: str = GOLD_RUN) -> SubmissionRequest:
+    return request("pin_silver", run=run, dag="gold_transform_dag", input_run=input_run)
+
+
 def gold_job_gets_its_input_run() -> None:
     with rig() as current:
-        wait_for(current, current.client.submit(request("pin_silver", run=SILVER_RUN, dag="gold_transform_dag", input_run=RUN)))
-        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+        wait_for(current, current.client.submit(silver_request()))
+        wait_for(current, current.client.submit(gold_request()))
+        sent = [arguments for name, arguments in current.ecs.calls if name == "run_task"][1]
         values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
-        require(sent["taskDefinition"] == "example_dev_job_gold" and values["pin"]["INPUT_RUN_ID"] == RUN, "the gold job did not receive its silver run")
+        require(sent["taskDefinition"] == "example_dev_job_gold" and values["pin"]["INPUT_RUN_ID"] == SILVER_RUN, "the gold job did not receive its silver run")
+
+
+def chain_is_closed_until_the_first_publishes_are_signed() -> None:
+    with rig(signed=None) as current:
+        gate = request("chain_gate", run=SILVER_RUN, dag="bronze_chain_dag")
+        for closed in (gate, silver_request(), gold_request(), request("pin_gold", run=FEATURES_RUN, dag="features_transform_dag", input_run=GOLD_RUN)):
+            raises(SubmissionRefused, lambda closed=closed: current.client.submit(closed))
+        require(not current.ecs.calls, "a chain job reached the cloud before the first publishes were signed")
+        require(wait_for(current, current.client.submit(request("guard"))).state == State.SUCCEEDED, "training must not wait for the chain record")
+        for raw in (
+            "not json",
+            json.dumps({"silver": SILVER_RUN}),
+            json.dumps({"silver": SILVER_RUN, "gold": "latest"}),
+            json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN, "x": 1}),
+        ):
+            current.signed = raw
+            raises(SubmissionRefused, lambda: current.client.submit(gate))
+        current.signed = SIGNED
+        require(wait_for(current, current.client.submit(gate)).state == State.SUCCEEDED, "a signed record did not open the chain gate")
+        require(wait_for(current, current.client.submit(silver_request())).state == State.SUCCEEDED, "a signed record did not open the silver job")
+
+
+def acceptance_check_failure_stops_the_chain() -> None:
+    with rig() as current:
+        current.ecs.plan = {"validate": 1}
+        status = wait_for(current, current.client.submit(silver_request()))
+        require(status.state == State.FAILED and status.exit_code == 1, f"a failed acceptance check did not fail silver: {status}")
+        raises(SubmissionRefused, lambda: current.client.submit(gold_request()))
+        require(len(current.ecs.tasks) == 1, "gold started after silver failed its acceptance check")
+
+
+def missing_acceptance_check_fails_the_job() -> None:
+    with rig() as current:
+        current.ecs.omit = {"verify"}
+        status = wait_for(current, current.client.submit(silver_request()))
+        require(status.state == State.FAILED and status.exit_code == 125, f"a task without its acceptance container passed: {status}")
+        require("verify" in current.client.record(current.client.submit(silver_request()))["reason"], "the record does not name the missing check")
+
+
+def each_chain_step_needs_the_one_before_to_have_passed() -> None:
+    with rig() as current:
+        for bad in (gold_request(None), gold_request(RUN)):
+            raises(SubmissionRefused, lambda bad=bad: current.client.submit(bad))
+        wait_for(current, current.client.submit(silver_request()))
+        current.ecs.plan = {"validate": 1}
+        require(wait_for(current, current.client.submit(gold_request())).state == State.FAILED, "gold did not fail its acceptance check")
+        features = request("pin_gold", run=FEATURES_RUN, dag="features_transform_dag", input_run=GOLD_RUN)
+        raises(SubmissionRefused, lambda: current.client.submit(features))
+        require(len(current.ecs.tasks) == 2, "features started after gold failed")
 
 
 def logs_hide_the_token() -> None:
@@ -311,5 +382,9 @@ CASES: dict[str, Callable[[], None]] = {
     "missing_code_digest_is_retryable": missing_code_digest_is_retryable,
     "silver_job_runs_its_family": silver_job_runs_its_family,
     "gold_job_gets_its_input_run": gold_job_gets_its_input_run,
+    "chain_is_closed_until_the_first_publishes_are_signed": chain_is_closed_until_the_first_publishes_are_signed,
+    "acceptance_check_failure_stops_the_chain": acceptance_check_failure_stops_the_chain,
+    "missing_acceptance_check_fails_the_job": missing_acceptance_check_fails_the_job,
+    "each_chain_step_needs_the_one_before_to_have_passed": each_chain_step_needs_the_one_before_to_have_passed,
     "logs_hide_the_token": logs_hide_the_token,
 }
