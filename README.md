@@ -162,7 +162,7 @@ Each run writes its report under `data/e2e/`. The configuration E2E writes under
 - `docs/quality_checks.md`: how the checks run and what each one blocks.
 - `docs/lakehouse_usage.md`: the lakehouse commands.
 - `docs/aws_control_plane.md`: the AWS catalog setup (`scripts.lakehouse.aws_catalog_setup` with `catalog`, `principal`, `check` and `inspect`).
-- `docs/install_details.md`: the resource limits, the pinned tools and the manual set-up steps behind Install.
+- `docs/install_details.md`: the resource limits, the pinned tools and the manual setup steps behind Install.
 - `docs/infrastructure_controls.md`: the environments, the AWS stacks and project policies, the bucket lifecycle rules and the deferred controls.
 - `docs/architecture_rendering.md`: how to render the architecture diagram.
 - `docs/ecs_target_contract.md`: the proposed ECS read target contract.
