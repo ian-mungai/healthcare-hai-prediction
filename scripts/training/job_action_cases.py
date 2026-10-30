@@ -925,7 +925,7 @@ def hac_cases(cases: Any, folder: Path) -> None:
         stage(fixture, "fit")
         require(run_action(fixture, "hac_validate")[0] == 0, "hac_validate failed")
         result = output_of(fixture, f"hac_{HAI_TYPE}.json")
-        require(result["hospitals_one_window"] == 1 and result["matched_hospitals"] == 48 and result["prediction_rows"] == 95, f"counts: {result}")
+        require(result["hospitals_one_window"] == 1 and result["matched_hospitals"] == 47 and result["prediction_rows"] == 95, f"counts: {result}")
 
     def one_year_period() -> None:
         fixture = Fixture(folder / "one_year", years=range(2018, 2023), period_years=1, adjust=averaging_rows, flags=flagged)
@@ -1091,7 +1091,7 @@ def hac_cases(cases: Any, folder: Path) -> None:
 
     cases.check("job_hac_writes_result_and_done", written)
     cases.check("job_hac_averages_the_windows_of_the_period", averaged)
-    cases.check("job_hac_averages_a_one_window_hospital_and_reports_it", one_window_hospital)
+    cases.check("job_hac_drops_a_one_window_hospital_and_reports_it", one_window_hospital)
     cases.check("job_hac_one_year_period_compares_only_its_year", one_year_period)
     cases.check("job_hac_reports_missing_flags", missing_flags)
     cases.check("job_hac_retry_resumes_completed", retried)

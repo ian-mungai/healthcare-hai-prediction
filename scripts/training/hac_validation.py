@@ -145,7 +145,8 @@ def validate_hac(predictions: Sequence[Mapping[str, Any]], hac_rows: Sequence[Ma
     for window in plan.windows:
         if not any(window in scores for scores in by_hospital.values()):
             raise ModelError(f"HAC validation has no predictions for window {window}")
-    scores = {ccn: sum(values.values()) / len(values) for ccn, values in by_hospital.items()}
+    # A hospital with a row in only some years of the period is dropped and counted: its score would not cover what its flag covers.
+    scores = {ccn: sum(values.values()) / len(values) for ccn, values in by_hospital.items() if len(values) == len(plan.windows)}
     facts = {
         "outcome_year": plan.outcome_year,
         "program_year": plan.program_year,
