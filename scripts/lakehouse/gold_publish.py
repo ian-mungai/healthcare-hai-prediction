@@ -657,22 +657,32 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
 
 
 def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, config: Any = None) -> dict[str, Any]:
-    """Register the committed tables that the Athena mirror config lists in Glue. The publish is already committed, so this never raises and never undoes it.
+    """Register the newest committed gold snapshot set in Glue. The publish is already committed, so this never raises and never undoes it.
 
-    The report goes to ``mirror.json`` in the publish folder, to standard error when it failed, and into the step's JSON line. Skipped runs write nothing.
+    The set comes from the newest ``publish_runs`` row, not from this run and not from the live main: a retry of an old committed run, or a later
+    publish that failed halfway, cannot move the mirror to a set that was not committed. The report goes to ``mirror.json`` in the publish folder, to
+    standard error when it failed, and into the step's JSON line. Skipped runs write nothing.
     """
     try:
         config = config or glue_mirror.load_config()
-        wanted, reason = glue_mirror.tables_to_mirror(config, ctx.plan.namespaces["real"], ctx.mode, list(ctx.plan.tables))
+        layer = ctx.plan.namespaces["real"]
+        wanted, reason = glue_mirror.tables_to_mirror(config, layer, ctx.mode, list(ctx.plan.tables))
         if not wanted:
             return {"status": "skipped", "reason": reason, "tables": {}}
+        head = published_head(ctx)
+        if head is None:
+            raise glue_mirror.MirrorError("no committed snapshot set exists")
         if source is None:
             source = glue_mirror.SparkSource(ctx.spark, CATALOG, ctx.namespace)
-        if glue is None:
-            import boto3
-
-            glue = boto3.Session(region_name=os.environ["AWS_REGION"]).client("glue")
-        report = glue_mirror.mirror(config, ctx.plan.namespaces["real"], ctx.mode, list(ctx.plan.tables), source, glue)
+        report = glue_mirror.mirror(
+            config,
+            layer,
+            ctx.mode,
+            {name: int(snapshot) for name, snapshot in dict(head["snapshot_set"]).items()},
+            source,
+            glue or glue_mirror.glue_client(),
+            str(head["run_id"]),
+        )
     except Exception as error:
         report = {"status": "failed", "reason": glue_mirror.explain(error), "tables": {}}
     try:
@@ -680,7 +690,10 @@ def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, conf
     except OSError as error:
         report["record"] = f"mirror.json was not written: {error.__class__.__name__}"
     if report["status"] == "failed":
-        sys.stderr.write(f"gold publish: the Glue mirror FAILED and the publish stays committed: {report['reason']}. Rerun this step to retry the mirror.\n")
+        with contextlib.suppress(OSError):
+            sys.stderr.write(
+                f"gold publish: the Glue mirror FAILED and the publish stays committed: {report['reason']}. Rerun this step to retry the mirror.\n"
+            )
     return report
 
 
