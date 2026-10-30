@@ -60,7 +60,7 @@
       "Action": [
         "ssm:StartSession"
       ],
-      "Resource": "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSessionToRemoteHost"
+      "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_catalog_forward_${ENVIRONMENT}"
     },
     {
       "Sid": "EndOwnSessions",
