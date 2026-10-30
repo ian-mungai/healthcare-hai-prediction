@@ -148,3 +148,33 @@ def test_phone_number_variants_fail_the_check(layout: str, built: dict[str, Any]
         any("personal data" in problem and "CMS_OWNERS" in problem for problem in log_module.check_log(broken, inputs)),
         "any('personal data' in problem and 'CMS_OWNERS' in problem for pro",
     )
+
+
+def drop_collection_from_layout(inputs: dict[str, Any], source_id: str) -> tuple[dict[str, Any], str]:
+    planted = copy.deepcopy(inputs)
+    _, collection = log_module.collections_by_source(planted["layout"])[source_id]
+    planted["layout"]["groups"] = [group for group in planted["layout"]["groups"] if source_id not in group["source_ids"]]
+    return planted, collection
+
+
+def test_bronze_collection_missing_from_the_layout_fails_the_check(built: dict[str, Any], inputs: dict[str, Any]) -> None:
+    planted, collection = drop_collection_from_layout(inputs, "SVI")
+    check(collection in log_module.bronze_groups(planted["bronze"]), "collection in log_module.bronze_groups(planted['bronze'])")
+    problems = log_module.check_log(built, planted)
+    check(
+        any("bronze collection" in problem and collection in problem and "layout" in problem for problem in problems),
+        "any('bronze collection' in problem and collection in problem and 'l",
+    )
+    with pytest.raises(log_module.RegistryError, match="layout"):
+        log_module.build_log(planted)
+
+
+def test_layout_collection_without_a_registry_source_fails_the_check(built: dict[str, Any], inputs: dict[str, Any]) -> None:
+    planted = copy.deepcopy(inputs)
+    gone = next(source for source in planted["registry"]["sources"] if source["source_id"] == "SVI")
+    planted["registry"]["sources"].remove(gone)
+    problems = log_module.check_log(built, planted)
+    check(
+        any("bronze collection" in problem and "registry" in problem for problem in problems),
+        "any('bronze collection' in problem and 'registry' in problem for pro",
+    )

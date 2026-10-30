@@ -141,6 +141,24 @@ def bronze_groups(bronze: dict[str, Any]) -> dict[str, set[str]]:
     return groups
 
 
+def unresolved_bronze_collections(inputs: dict[str, Any]) -> list[str]:
+    """Return a problem for each bronze collection without a collection layout entry and for each layout source the registry does not hold."""
+    by_collection: dict[str, list[str]] = {}
+    for source, (_, collection) in collections_by_source(inputs["layout"]).items():
+        by_collection.setdefault(collection, []).append(source)
+    registry_ids = {source["source_id"] for source in inputs["registry"]["sources"]}
+    problems = []
+    for collection in sorted(bronze_groups(inputs["bronze"])):
+        sources = by_collection.get(collection)
+        if not sources:
+            problems.append(f"bronze collection {collection} has no entry in the collection layout")
+            continue
+        problems.extend(
+            f"bronze collection {collection} names layout source {source}, which the registry does not hold" for source in sorted(set(sources) - registry_ids)
+        )
+    return problems
+
+
 def bronze_source_ids(inputs: dict[str, Any]) -> list[str]:
     """Return the registry sources whose collection the bronze table map loads, in sorted order."""
     groups = bronze_groups(inputs["bronze"])
@@ -264,6 +282,8 @@ def not_recorded_fields(row: dict[str, Any]) -> list[str]:
 
 def build_log(inputs: dict[str, Any]) -> dict[str, Any]:
     """Build the whole log: one row per logged source, sorted by dataset ID, plus a question for every fact marked not recorded."""
+    unresolved = unresolved_bronze_collections(inputs)
+    require(not unresolved, "; ".join(unresolved))
     sources = {source["source_id"]: source for source in inputs["registry"]["sources"]}
     groups = bronze_groups(inputs["bronze"])
     dates = dated_decisions(inputs)
@@ -329,6 +349,8 @@ def check_log(log: dict[str, Any], inputs: dict[str, Any]) -> list[str]:
         problems.append("stale evidence: generated_from.registry_sha256 no longer matches the registry lock")
     if personal_data_in(inputs["allowlist"]):
         problems.append(f"personal data (email address or phone number) in {ALLOWLIST_PATH.name}")
+    unresolved = unresolved_bronze_collections(inputs)
+    problems.extend(unresolved)
     rows = log.get("rows", [])
     seen = [row.get("dataset_id") for row in rows]
     problems.extend(f"duplicate row for {name}" for name in sorted({name for name in seen if seen.count(name) > 1}))
@@ -339,7 +361,7 @@ def check_log(log: dict[str, Any], inputs: dict[str, Any]) -> list[str]:
     question_fields = {question["field"] for question in log.get("questions", [])}
     for row in rows:
         problems.extend(check_row(row, records.get(row.get("dataset_id")), question_fields, inputs["allowlist"]))
-    if log != build_log(inputs):
+    if not unresolved and log != build_log(inputs):
         problems.append("the log differs from a fresh build; run python -m scripts.acquisition.source_verification_log")
     return problems
 
