@@ -14,13 +14,14 @@ It does not run PromQL and it does not prove that Airflow sends an event the map
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
+yaml = importlib.import_module("yaml")
 
 ROOT = Path(__file__).resolve().parents[2]
 MONITORING = "monitoring"
@@ -335,11 +336,9 @@ def terraform_problems(root: Path, scrape: Any, datasource: Any, provider: Any) 
                     if port not in ports:
                         problems.append(f"{SCRAPE}: job {job['job_name']} scrapes port {port}, which {TERRAFORM} does not publish")
     for source in (datasource or {}).get("datasources", []):
-        port = re.search(r":([0-9]+)$", str(source.get("url", "")))
-        if port is None or int(port.group(1)) not in ports:
-            problems.append(
-                f"{DATASOURCE}: the URL {source.get('url')} does not name a port that {TERRAFORM} publishes (port {port.group(1) if port else 'missing'})"
-            )
+        found = re.search(r":([0-9]+)$", str(source.get("url", "")))
+        if found is None or int(found.group(1)) not in ports:
+            problems.append(f"{DATASOURCE}: the URL {source.get('url')} does not name a port that {TERRAFORM} publishes")
     dashboards_path = mounted.get("code_monitoring_grafana_dashboards")
     for entry in (provider or {}).get("providers", []):
         if entry.get("options", {}).get("path") != dashboards_path:

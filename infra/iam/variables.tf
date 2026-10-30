@@ -302,6 +302,17 @@ variable "mlflow_admin_password_name" {
   }
 }
 
+variable "grafana_admin_password_name" {
+  description = "Parameter Store SecureString name of the Grafana administrator password; the project may read, create and put it, and the task execution role injects it into the Grafana container."
+  type        = string
+  default     = "/healthcare_hai_prediction/grafana_admin_password"
+
+  validation {
+    condition     = length(var.grafana_admin_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.grafana_admin_password_name)) && !can(regex("^/(?i:aws|ssm)", var.grafana_admin_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "lakehouse_reader_role_name" {
   description = "IAM role name of the lakehouse reader; only the project user may assume it, and the launcher asks for a short session of it for a read job."
   type        = string
