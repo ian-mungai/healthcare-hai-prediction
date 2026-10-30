@@ -5704,6 +5704,26 @@
           }
         }
       }
+    },
+    "drift_run": {
+      "purpose": "Run the drift task on AWS: fetch the Production baselines and the current windows, run the drift check and publish the records to the data bucket (project decision 21)",
+      "modes": {
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "drift_job",
+            "args": [],
+            "params": {},
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
     }
   }
 }

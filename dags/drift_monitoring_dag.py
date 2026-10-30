@@ -25,10 +25,10 @@ MARKER = "_complete.json"
 
 
 def s3_client() -> Any:
-    """The S3 client of the Airflow service, made on first use so that the DAG file parses without boto3."""
-    import boto3
+    """The S3 client of Airflow's own Amazon hook, made on first use. It signs with the credentials of the service's task role."""
+    from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
-    return boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
+    return S3Hook().get_conn()
 
 
 def training_run_id(drift_run: str) -> str:

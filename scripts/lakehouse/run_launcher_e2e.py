@@ -6608,8 +6608,17 @@ def render_templates(env: Env) -> dict[str, bool]:
     out["a recording render reads no secret and names the one the service needs"] = len(env.stand_in.requests()) == requests_before and asked == {
         launcher.COMPOSE_SECRETS["POSTGRES_PASSWORD"]
     }
+    # A template that only an AWS task runs has no container on this route: the render refuses it by name, and that refusal is what the case checks.
+    aws_only = {"drift_job": "the drift job runs only as the AWS drift task (infra/jobs/drift.tf); the Docker route has no container for it"}
+    for template in aws_only:
+        code = ""
+        try:
+            render(template, ["run"], {})
+        except launcher.LauncherError as refused:
+            code = refused.code
+        out[f"{template} is refused on this route as AWS only"] = code == "aws_only" and template not in rendered_templates
     out["every template of the table was rendered"] = (
-        set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"} <= rendered_templates
+        set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"} - aws_only.keys() <= rendered_templates
     )
     return out
 

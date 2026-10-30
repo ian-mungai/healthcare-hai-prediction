@@ -1288,6 +1288,7 @@ TEMPLATES: dict[str, Template] = {
             run_domains=("transform",),
             run_modes=("fixture", "real"),
         ),
+        Template("drift_job", "drift", True, ("run",), default_seconds=3600, max_seconds=3600, run_domains=("transform",), run_modes=("real",)),
         Template("mlflow_service", None, False, ("stack",)),
         *(
             Template(f"pipeline_validate_{layer}", "quality", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real"))
@@ -1723,6 +1724,7 @@ class Renderer:
             "training_job": self.render_training,
             "training_mlflow": self.render_training,
             "training_extract": self.render_training,
+            "drift_job": self.render_drift_job,
             "gold_export": self.render_gold_export,
             "gold_publish": self.render_gold_publish,
             "probe": self.render_probe,
@@ -2754,6 +2756,10 @@ class Renderer:
             self.network_name(registry_id),
             workdir="/workspace",
         )
+
+    def render_drift_job(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """The drift job is one AWS task with its own images (the drift task definition). The Docker route has none and says so."""
+        raise LauncherError("the drift job runs only as the AWS drift task; this route has no container for it", "aws_only")
 
     def render_probe(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """The fixed probe container: analytics image, entrypoint ``true``, no mounts, no network (D1 section 2 item 6)."""

@@ -317,7 +317,7 @@
       "dependencies": {
         "orchestration/catalog_authority.py": "sha256:d95f4d288a2e775fda4a1514ba91cf01db12950df93e3f601a6485dcfc066bf4",
         "orchestration/catalog_transport.py": "sha256:33d043e4a3e526824b73108c290429958fc2fc016bde30ca82a7640fa2ce98f8",
-        "orchestration/launcher.py": "sha256:eda52bcb5dcc731b6340dcbfafdc113dfde58c9884b965961846818e2e5be1e0",
+        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/infrastructure/secret_store.py": "sha256:993497409e6f8c043636bcd14ddcacaec73989f8238181ab4b95590c5d86ae77",
@@ -329,7 +329,7 @@
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
         "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:17c2671f748b729688fa72f3f330287ee3537b4976301373c9d7ce4d95c4fb32",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:b69dd9dab96e77483b8dfec8399a11028ed65c579e56abf50fac0eb1045b9e66",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
@@ -342,7 +342,7 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:eda52bcb5dcc731b6340dcbfafdc113dfde58c9884b965961846818e2e5be1e0",
+        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
         "scripts/infrastructure/secret_store.py": "sha256:993497409e6f8c043636bcd14ddcacaec73989f8238181ab4b95590c5d86ae77",
         "scripts/lakehouse/bronze.py": "sha256:1a529185a3d0c753de78dc1281342d21a5157746d24f2449c8409d6db15cdea7",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -363,7 +363,7 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:eda52bcb5dcc731b6340dcbfafdc113dfde58c9884b965961846818e2e5be1e0",
+        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
         "scripts/infrastructure/secret_store.py": "sha256:993497409e6f8c043636bcd14ddcacaec73989f8238181ab4b95590c5d86ae77",
         "scripts/lakehouse/bronze.py": "sha256:1a529185a3d0c753de78dc1281342d21a5157746d24f2449c8409d6db15cdea7",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -384,7 +384,7 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:eda52bcb5dcc731b6340dcbfafdc113dfde58c9884b965961846818e2e5be1e0",
+        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
         "scripts/infrastructure/secret_store.py": "sha256:993497409e6f8c043636bcd14ddcacaec73989f8238181ab4b95590c5d86ae77",
         "scripts/lakehouse/bronze.py": "sha256:1a529185a3d0c753de78dc1281342d21a5157746d24f2449c8409d6db15cdea7",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -403,10 +403,10 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b69dd9dab96e77483b8dfec8399a11028ed65c579e56abf50fac0eb1045b9e66",
+      "file_sha256": "0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
-        "orchestration/launcher.py": "sha256:eda52bcb5dcc731b6340dcbfafdc113dfde58c9884b965961846818e2e5be1e0",
+        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
         "orchestration/mlflow_service.py": "sha256:56c24c4f1bbb4c9679f6cede9e7648a910bd7e7223dbe14df3f6435aa8dee368",
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
@@ -445,8 +445,8 @@
       "occurrences": 1,
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:eda52bcb5dcc731b6340dcbfafdc113dfde58c9884b965961846818e2e5be1e0",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:b69dd9dab96e77483b8dfec8399a11028ed65c579e56abf50fac0eb1045b9e66",
+        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
