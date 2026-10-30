@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from scripts.acquisition import transport
+from scripts.acquisition.s3_store import AwsCli
+from tests.support import check
+
+SIGNED_SOURCE = next(iter(transport.SIGNED_REDIRECT_ROUTES))
+
+
+def hosts_file(folder: Path, hosts: list[str]) -> Path:
+    path = folder / "publisher_hosts.json"
+    path.write_text(json.dumps({"hosts": sorted(hosts), "hosts_sha256": transport.hosts_digest(sorted(hosts))}))
+    return path
+
+
+class Request:
+    full_url = "https://data.example.gov/file.csv"
+
+    def get_method(self) -> str:
+        return "GET"
+
+
+def test_without_a_hosts_file_requests_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(transport.APPROVED_HOSTS_VARIABLE, raising=False)
+    transport.HttpsRequest("https://data.example.gov/file.csv")
+
+
+def test_a_request_to_a_host_off_the_file_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(transport.APPROVED_HOSTS_VARIABLE, str(hosts_file(tmp_path, ["data.example.gov"])))
+    transport.HttpsRequest("https://data.example.gov/file.csv")
+    with pytest.raises(transport.CaptureError, match="approved hosts"):
+        transport.HttpsRequest("https://elsewhere.example.org/file.csv")
+
+
+def test_a_redirect_to_a_host_off_the_file_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(transport.APPROVED_HOSTS_VARIABLE, str(hosts_file(tmp_path, ["data.example.gov"])))
+    handler = transport.ReviewedRedirects({"data.example.gov"}, source_url="https://data.example.gov/file.csv")
+    with pytest.raises(transport.CaptureError, match="approved hosts"):
+        handler.redirect_request(Request(), None, 302, "Found", {}, "https://elsewhere.example.org/file.csv")
+
+
+def test_a_redirect_to_a_listed_host_other_than_the_request_host_is_still_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(transport.APPROVED_HOSTS_VARIABLE, str(hosts_file(tmp_path, ["data.example.gov", "other.example.gov"])))
+    handler = transport.ReviewedRedirects({"data.example.gov"}, source_url="https://data.example.gov/file.csv")
+    with pytest.raises(transport.CaptureError, match="not been reviewed"):
+        handler.redirect_request(Request(), None, 302, "Found", {}, "https://other.example.gov/file.csv")
+
+
+def test_the_signed_redirect_host_must_be_on_the_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(transport.APPROVED_HOSTS_VARIABLE, str(hosts_file(tmp_path, ["data.chhs.ca.gov"])))
+    handler = transport.ReviewedRedirects({"data.chhs.ca.gov"}, source_url=SIGNED_SOURCE)
+    target = transport.SIGNED_REDIRECT_ROUTES[SIGNED_SOURCE]
+    with pytest.raises(transport.CaptureError, match="approved hosts"):
+        handler.redirect_request(Request(), None, 302, "Found", {}, target + "?X-Amz-Algorithm=AWS4-HMAC-SHA256")
+
+
+@pytest.mark.parametrize("damage", ["missing", "not json", "wrong digest", "empty list"])
+def test_an_unusable_hosts_file_refuses_every_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, damage: str) -> None:
+    path = tmp_path / "publisher_hosts.json"
+    if damage == "not json":
+        path.write_text("{")
+    elif damage == "wrong digest":
+        path.write_text(json.dumps({"hosts": ["data.example.gov"], "hosts_sha256": "0" * 64}))
+    elif damage == "empty list":
+        path.write_text(json.dumps({"hosts": [], "hosts_sha256": transport.hosts_digest([])}))
+    monkeypatch.setenv(transport.APPROVED_HOSTS_VARIABLE, str(path))
+    with pytest.raises(transport.CaptureError, match="hosts file"):
+        transport.HttpsRequest("https://data.example.gov/file.csv")
+    check(True, "refused")
+
+
+def test_the_bls_request_is_refused_before_any_secret_read_when_its_host_is_off_the_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts.acquisition import bls_api_transport
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+            self.calls.append(operation)
+            return {}
+
+    monkeypatch.setenv(transport.APPROVED_HOSTS_VARIABLE, str(hosts_file(tmp_path, ["data.example.gov"])))
+    client = Client()
+    with pytest.raises(transport.CaptureError, match="approved hosts"):
+        bls_api_transport.request_live({"endpoint": "https://api.bls.gov/publicAPI/v2/timeseries/data/"}, {}, cast(AwsCli, client))
+    check(client.calls == [], "no identity or secret call was made")

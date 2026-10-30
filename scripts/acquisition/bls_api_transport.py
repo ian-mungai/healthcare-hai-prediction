@@ -16,6 +16,7 @@ from scripts.acquisition.bls_api_contract import digest, request_for
 from scripts.acquisition.collector_state import CollectorState, QuotaExceeded, StateFile
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, read_json, require
+from scripts.acquisition.transport import require_approved
 
 
 class QuotaPause(ValueError):
@@ -66,6 +67,7 @@ def reserve(root: Path, identity: str, limit: int, now: datetime, *, state_backe
 
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     """Read the key from Secrets Manager only inside this runtime boundary, after the identity check; return public data bytes."""
+    require_approved(plan["endpoint"])
     identity = client.call("sts", "get-caller-identity")
     settings = client.configuration
     expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"

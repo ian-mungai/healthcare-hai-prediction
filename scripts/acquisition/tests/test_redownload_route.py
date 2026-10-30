@@ -11,8 +11,8 @@ from scripts.acquisition.s3_store import encoded_json
 from tests.support import check
 
 
-def unit(snapshot: str, disposition: str = "direct_download") -> dict:
-    return {"snapshot_id": snapshot, "disposition": disposition}
+def unit(snapshot: str, disposition: str = "direct_download", host: str = "data.example.gov") -> dict:
+    return {"snapshot_id": snapshot, "disposition": disposition, "url": f"https://{host}/{snapshot}.csv"}
 
 
 def write_state(folder: Path, units: list[dict], removed: list[str]) -> dict[str, Path]:
@@ -29,11 +29,15 @@ def write_state(folder: Path, units: list[dict], removed: list[str]) -> dict[str
     approval.write_text(json.dumps({"plan_sha256": plan_sha, "approved_by": "owner"}))
     record = folder / "removal_record.json"
     record.write_bytes(encoded_json({"plan_sha256": plan_sha, "items": []}))
-    return {"queue": queue, "plan": plan, "approval": approval, "record": record}
+    hosts = folder / "publisher_hosts.json"
+    route.derive_hosts(queue, hosts)
+    hosts_approval = folder / "hosts_approval.json"
+    hosts_approval.write_text(json.dumps({"hosts_sha256": json.loads(hosts.read_text())["hosts_sha256"], "approved_by": "owner"}))
+    return {"queue": queue, "plan": plan, "approval": approval, "record": record, "hosts": hosts, "hosts_approval": hosts_approval}
 
 
 def problems(paths: dict[str, Path], root: str = "raw/") -> list[str]:
-    return route.check(paths["queue"], paths["plan"], paths["approval"], paths["record"], root)
+    return route.check(paths["queue"], paths["plan"], paths["approval"], paths["record"], root, paths["hosts"], paths["hosts_approval"])
 
 
 def test_a_ready_route_has_no_problem(tmp_path: Path) -> None:
@@ -72,7 +76,53 @@ def test_a_queue_that_differs_from_its_lock_blocks_run_3(tmp_path: Path) -> None
 def test_the_command_exits_with_the_problems(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     paths = write_state(tmp_path, [unit("S__1")], [])
     paths["record"].unlink()
-    arguments = ["--queue", str(paths["queue"]), "--plan", str(paths["plan"]), "--approval", str(paths["approval"]), "--record", str(paths["record"])]
+    arguments = ["check"]
+    for name in ("queue", "plan", "approval", "record", "hosts", "hosts_approval"):
+        arguments += [f"--{name.replace('_', '-')}", str(paths[name])]
     with pytest.raises(SystemExit):
         route.main(arguments, root="raw/")
     check("removal record" in capsys.readouterr().err, "problem is printed")
+
+
+def test_the_hosts_file_lists_every_active_queue_host_and_the_signed_redirect_host(tmp_path: Path) -> None:
+    redirect_source = next(iter(route.SIGNED_REDIRECT_ROUTES))
+    units = [unit("S__1", host="a.example.gov"), unit("S__2", host="b.example.gov"), unit("S__3", "not_used_by_bronze", host="skipped.example.gov")]
+    units.append({"snapshot_id": "S__4", "disposition": "api", "url": redirect_source})
+    paths = write_state(tmp_path, units, [])
+    hosts = json.loads(paths["hosts"].read_text())["hosts"]
+    check("skipped.example.gov" not in hosts, "an inactive unit adds no host")
+    check({"a.example.gov", "b.example.gov", "s3.amazonaws.com"} <= set(hosts), "queue hosts and the signed redirect host are listed")
+
+
+def test_a_queue_host_missing_from_the_approved_file_blocks_run_3(tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1", host="a.example.gov")], [])
+    document = json.loads(paths["hosts"].read_text())
+    document["hosts"] = ["other.example.gov"]
+    document["hosts_sha256"] = route.hosts_digest(document["hosts"])
+    paths["hosts"].write_text(json.dumps(document))
+    paths["hosts_approval"].write_text(json.dumps({"hosts_sha256": document["hosts_sha256"], "approved_by": "owner"}))
+    check(any("a.example.gov" in item and "approved hosts" in item for item in problems(paths)), "a host off the file blocks run 3")
+
+
+@pytest.mark.parametrize("damage", ["not json", "missing hosts", "changed list", "no approval", "other approval"])
+def test_a_damaged_hosts_file_or_approval_blocks_run_3(tmp_path: Path, damage: str) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], [])
+    document = json.loads(paths["hosts"].read_text())
+    if damage == "not json":
+        paths["hosts"].write_text("{")
+    elif damage == "missing hosts":
+        paths["hosts"].write_text(json.dumps({"queue_sha256": document["queue_sha256"]}))
+    elif damage == "changed list":
+        paths["hosts"].write_text(json.dumps({**document, "hosts": [*document["hosts"], "new.example.gov"]}))
+    elif damage == "no approval":
+        paths["hosts_approval"].unlink()
+    else:
+        paths["hosts_approval"].write_text(json.dumps({"hosts_sha256": "0" * 64, "approved_by": "owner"}))
+    check(any("hosts" in item for item in problems(paths)), f"{damage} blocks run 3")
+
+
+def test_a_hosts_file_made_for_another_queue_blocks_run_3(tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], [])
+    document = json.loads(paths["hosts"].read_text())
+    paths["hosts"].write_text(json.dumps({**document, "queue_sha256": "0" * 64}))
+    check(any("another queue" in item for item in problems(paths)), "a hosts file of another queue blocks run 3")

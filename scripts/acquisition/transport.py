@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import os
 import re
 import time
 import urllib.error
@@ -24,6 +25,9 @@ from scripts.acquisition.source_registry import reject_constant, unique_object
 SIGNED_REDIRECT_ROUTES = {
     "https://data.chhs.ca.gov/dataset/9c594ceb-fe46-4e6d-9553-c138a868bdc5/resource/e887fd1f-331c-45ea-ab9f-332ab21224bd/download/49hospitaldata.xlsx": "https://s3.amazonaws.com/og-production-open-data-chelseama-892364687672/resources/e887fd1f-331c-45ea-ab9f-332ab21224bd/49hospitaldata.xlsx"
 }
+
+
+APPROVED_HOSTS_VARIABLE = "HAI_APPROVED_HOSTS"
 
 
 class CaptureError(ValueError):
@@ -92,12 +96,45 @@ def safe_url(url: str) -> str:
     return url
 
 
+def hosts_digest(hosts: list[str]) -> str:
+    """Return the SHA-256 of a sorted host list, as the approved hosts file records it."""
+    return hashlib.sha256(json.dumps(sorted(hosts), separators=(",", ":")).encode()).hexdigest()
+
+
+def approved_hosts() -> frozenset[str] | None:
+    """Return the owner approved publisher hosts when a hosts file is set, or None when none is set. An unusable file refuses the run."""
+    path = os.environ.get(APPROVED_HOSTS_VARIABLE)
+    if not path:
+        return None
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        hosts = document["hosts"]
+        if (
+            not isinstance(hosts, list)
+            or not hosts
+            or not all(isinstance(host, str) and host for host in hosts)
+            or document["hosts_sha256"] != hosts_digest(hosts)
+        ):
+            raise ValueError("hosts list differs from its digest")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise CaptureError("The approved hosts file is unusable, so the run is refused.") from error
+    return frozenset(hosts)
+
+
+def require_approved(url: str) -> None:
+    """Refuse a URL whose host is not on the approved hosts file; no file set means no extra limit."""
+    approved = approved_hosts()
+    if approved is not None and urllib.parse.urlsplit(url).hostname not in approved:
+        raise CaptureError("The host is not on the approved hosts file.")
+
+
 class HttpsRequest(urllib.request.Request):
     """Construct only public HTTPS requests, retaining already-reviewed signed query strings."""
 
     def __init__(self, url: str, data: bytes | None = None, headers: dict[str, str] | None = None, method: str | None = None) -> None:
         unsigned = urllib.parse.urlunsplit(urllib.parse.urlsplit(url)._replace(query=""))
         safe_url(unsigned)
+        require_approved(unsigned)
         super().__init__(url, data=data, headers=headers or {}, method=method)
 
 
@@ -124,6 +161,7 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         """Permit only a reviewed HTTPS redirect without forwarding sensitive headers across hosts."""
         if self.signed_destination is not None:
             raise CaptureError("Additional redirects after a signed download are not approved.")
+        require_approved(newurl)
         target = SIGNED_REDIRECT_ROUTES.get(self.source_url or "")
         if target is not None:
             parsed = urllib.parse.urlsplit(newurl)

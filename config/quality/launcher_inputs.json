@@ -1272,6 +1272,7 @@
     "scripts/acquisition/store_wonder_export.py",
     "scripts/acquisition/tests/aws_stand_in.py",
     "scripts/acquisition/tests/conftest.py",
+    "scripts/acquisition/tests/test_approved_hosts.py",
     "scripts/acquisition/tests/test_batch_inventory.py",
     "scripts/acquisition/tests/test_capture.py",
     "scripts/acquisition/tests/test_collection_layout.py",
