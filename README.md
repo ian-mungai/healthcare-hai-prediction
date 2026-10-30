@@ -163,6 +163,7 @@ Each run writes its report under `data/e2e/`. The configuration E2E writes under
 - `docs/lakehouse_usage.md`: the lakehouse commands.
 - `docs/aws_control_plane.md`: the AWS catalog setup (`scripts.lakehouse.aws_catalog_setup` with `catalog`, `principal`, `check` and `inspect`).
 - `docs/install_details.md`: the resource limits, the pinned tools and the manual setup steps behind Install.
+- `docs/aws_training_run.md`: how the owner applies the training pieces on AWS, starts one training run and stops the MLflow service.
 - `docs/infrastructure_controls.md`: the environments, the AWS stacks and project policies, the bucket lifecycle rules and the deferred controls.
 - `docs/architecture_rendering.md`: how to render the architecture diagram.
 - `docs/ecs_target_contract.md`: the proposed ECS read target contract.

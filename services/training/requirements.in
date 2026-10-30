@@ -1,0 +1,19 @@
+# Training image: the libraries that scripts/training imports (config/training/models.json, data_contracts/training/model_contract.json) and the MLflow client of
+# the server version (3.17.0). No project file pins the model libraries yet, so the first lock compile chooses their versions. Review that diff against
+# docs/analysis_plan.md before the first real run, then the committed lock fixes them. DVC is not here: it has its own hash-pinned environment
+# (scripts/quality/dvc/requirements.txt), installed by the Dockerfile at /opt/dvc.
+mlflow==3.17.0
+boto3
+jsonschema
+numpy==2.5.3
+scipy
+pandas
+pyarrow
+scikit-learn
+statsmodels
+xgboost
+shap
+skops
+spreg
+linearmodels
+duckdb==1.5.6
