@@ -775,9 +775,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         ),
         path_case("layer_feature_schema_selects_features_only", "data_contracts/features/feature_schema.json", ["lakehouse_features"]),
         path_case(
-            "layer_features_publication_contract_selects_features_and_launcher_checks",
+            "layer_features_publication_contract_read_by_bronze_selects_every_layer",
             "data_contracts/lakehouse/features_publish.json",
-            ["lakehouse_features", "orchestration_checks"],
+            [*LAYERS, "orchestration_checks"],
         ),
         path_case("layer_feast_image_folder_selects_features_only", "services/feature_store/requirements.in", ["lakehouse_features"]),
         path_case(
