@@ -1410,6 +1410,7 @@
     "scripts/training/models/spatial.py",
     "scripts/training/models/suite.py",
     "scripts/training/models/trees.py",
+    "scripts/training/promote.py",
     "scripts/training/promotion.py",
     "scripts/training/promotion_check.py",
     "scripts/training/registry.py",

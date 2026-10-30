@@ -577,3 +577,90 @@ def scenarios(cases: Any, folder: Path) -> None:
     extract_cases(cases, folder / "extract")
     fetch_cases(cases, folder / "fetch")
     start_cases(cases, folder / "start")
+    promote_cases(cases, folder / "promote")
+
+
+PROMOTION = {"hai_type": HAI_TYPE, "model_version": "2", "promotion_mode": "promote", "mlflow": "aws"}
+MODEL = f"hai_model_{HAI_TYPE}"
+
+
+def registry_fixture(folder: Path) -> Fixture:
+    """A registry with version 1 in production after an earlier promotion and version 2 as a passed challenger."""
+    fixture = Fixture(folder)
+    store = fixture.tracking
+    store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
+    for tags in (
+        {"promotion_verdict": "pass", "promoted_run": "20250101T000000Z-aaaaaaaa"},
+        {"promotion_verdict": "pass"},
+        {"promotion_verdict": "fail:fairness"},
+    ):
+        store.create_model_version(MODEL, "runs:/x/model", run_id="x", tags=tags)
+    store.set_registered_model_alias(MODEL, "production", "1")
+    store.set_registered_model_alias(MODEL, "challenger", "2")
+    store.calls.clear()
+    return fixture
+
+
+def promote_call(fixture: Fixture, work: Path, parameters: Any = PROMOTION, **changes: str | None) -> tuple[int, str, str]:
+    """Run the promote phase in a work folder that holds the unpacked code of the run."""
+    work.mkdir(parents=True, exist_ok=True)
+    if not (work / "code.tar.gz").exists():
+        code_archive(work)
+    sha = hashlib.sha256((work / "code.tar.gz").read_bytes()).hexdigest()
+    with standins(fixture), environment(CODE_SHA256=sha, TRAINING_PARAMETERS=json.dumps(parameters), **changes):
+        return call("promote", "--run", RUN, "--mode", "real", "--work", str(work))
+
+
+def promote_cases(cases: Any, folder: Path) -> None:
+    """The promote phase moves the production alias for an approved, passed version and refuses everything else without a registry change."""
+
+    def alias(fixture: Fixture) -> str:
+        return str(fixture.tracking.models[MODEL]["aliases"]["production"])
+
+    def moved() -> None:
+        fixture = registry_fixture(folder / "moved")
+        code, out, error = promote_call(fixture, folder / "moved_work")
+        require(code == 0, f"promote failed: {error}")
+        require(alias(fixture) == "2", "production did not move to version 2")
+        require(fixture.tracking.find_version(MODEL, "2")["tags"].get("promoted_run") == RUN, "the version does not record the promotion run")
+        record = json.loads((folder / "moved_work/in/promote/promote.json").read_text())
+        require(record["previous_version"] == "1" and record["version"] == "2" and record["mode"] == "promote", f"record: {record}")
+        require([item["step"] for item in lines_of(out) if "step" in item] == ["promote"], f"steps: {out}")
+        require(LOGIN not in out + error, "the MLflow login reached the output")
+
+    def rerun_changes_nothing() -> None:
+        fixture = registry_fixture(folder / "again")
+        work = folder / "again_work"
+        require(promote_call(fixture, work)[0] == 0, "the first promote failed")
+        calls = len(fixture.tracking.calls)
+        code, out, error = promote_call(fixture, work)
+        require(code == 0 and all(item.get("resumed") for item in lines_of(out) if "step" in item), f"the rerun did not resume: {out} {error}")
+        require(len(fixture.tracking.calls) == calls, "a completed promotion called the registry again")
+        require(promote_call(fixture, folder / "again_new_task")[0] == 0 and alias(fixture) == "2", "a promotion in a new task changed the registry")
+
+    def rolled_back() -> None:
+        fixture = registry_fixture(folder / "rollback")
+        require(promote_call(fixture, folder / "rollback_first")[0] == 0 and alias(fixture) == "2", "the forward promotion failed")
+        code, _, error = promote_call(fixture, folder / "rollback_work", {**PROMOTION, "model_version": "1", "promotion_mode": "rollback"})
+        require(code == 0 and alias(fixture) == "1", f"the rollback did not restore version 1: {error}")
+
+    def refuses(name: str, parameters: Any = PROMOTION, **changes: str | None) -> None:
+        def case() -> None:
+            fixture = registry_fixture(folder / name)
+            code, _, error = promote_call(fixture, folder / f"{name}_work", parameters, **changes)
+            require(code != 0 and error.strip(), f"{name} did not fail")
+            require(alias(fixture) == "1", f"{name} moved production")
+            require("set_registered_model_alias" not in fixture.tracking.calls, f"{name} wrote to the registry")
+
+        cases.check(name, case)
+
+    cases.check("promote_moves_production", moved)
+    cases.check("promote_rerun_changes_nothing", rerun_changes_nothing)
+    cases.check("promote_rolls_back_to_an_earlier_production_version", rolled_back)
+    refuses("promote_refuses_a_failed_version", {**PROMOTION, "model_version": "3"})
+    refuses("promote_refuses_a_missing_version", {**PROMOTION, "model_version": "9"})
+    refuses("promote_refuses_a_rollback_to_a_never_promoted_version", {**PROMOTION, "model_version": "2", "promotion_mode": "rollback"})
+    refuses("promote_refuses_a_training_parameter_set", PARAMETERS)
+    refuses("promote_refuses_the_local_lane", {**PROMOTION, "mlflow": "local"})
+    refuses("promote_refuses_an_unsafe_tracking_address", MLFLOW_TRACKING_URI="http://203.0.113.9:5100")
+    refuses("promote_refuses_a_missing_login", MLFLOW_TRACKING_PASSWORD=None)
