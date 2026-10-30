@@ -26,6 +26,10 @@ PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_co
 PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
 # Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
 OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared", "athena_mirror_prepared")
+# Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
+OPTIONAL_PREPARATION_TEXT = ("athena_owner_user",)
+OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT})
+OWNER_USER = re.compile(r"[A-Za-z0-9_+=,.@-]{1,64}")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
@@ -103,13 +107,17 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
         document = None
     if not isinstance(document, dict):
         raise ConfigurationError("The IAM preparation file must be one JSON object with unique keys.")
-    if not document.keys() >= PREPARATION_NAMES or document.keys() - PREPARATION_NAMES - set(OPTIONAL_PREPARATION_FLAGS):
+    if not document.keys() >= PREPARATION_NAMES or document.keys() - PREPARATION_NAMES - OPTIONAL_PREPARATION_NAMES:
         raise ConfigurationError(
-            f"The IAM preparation file must hold the four inputs {', '.join(sorted(PREPARATION_NAMES))} and may hold {', '.join(OPTIONAL_PREPARATION_FLAGS)}."
+            f"The IAM preparation file must hold the four inputs {', '.join(sorted(PREPARATION_NAMES))} "
+            f"and may hold {', '.join(sorted(OPTIONAL_PREPARATION_NAMES))}."
         )
     for name in (*PREPARATION_FLAGS, *(flag for flag in OPTIONAL_PREPARATION_FLAGS if flag in document)):
         if not isinstance(document[name], bool):
             raise ConfigurationError(f"Set {name} to true or false in the IAM preparation file.")
+    owner = document.get("athena_owner_user", "")
+    if not isinstance(owner, str) or (owner and not OWNER_USER.fullmatch(owner)):
+        raise ConfigurationError("Set athena_owner_user to empty or one IAM user name in the IAM preparation file.")
     collection = document["bronze_qualification_collection"]
     if not isinstance(collection, str) or (collection and not COLLECTION_PATTERN.fullmatch(collection)):
         raise ConfigurationError("Set bronze_qualification_collection to empty or a publisher/collection name in the IAM preparation file.")
