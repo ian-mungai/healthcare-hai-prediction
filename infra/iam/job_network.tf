@@ -133,3 +133,21 @@ resource "aws_vpc_security_group_ingress_rule" "host_from_job_catalog" {
   to_port                      = 8181
   referenced_security_group_id = aws_security_group.job["lakehouse"].id
 }
+
+resource "aws_vpc_security_group_egress_rule" "job_redis" {
+  security_group_id            = aws_security_group.job["lakehouse"].id
+  description                  = "Lakehouse jobs to the host Redis that the features job applies Feast to"
+  ip_protocol                  = "tcp"
+  from_port                    = 6379
+  to_port                      = 6379
+  referenced_security_group_id = aws_security_group.host.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "host_from_job_redis" {
+  security_group_id            = aws_security_group.host.id
+  description                  = "Host Redis from lakehouse jobs only"
+  ip_protocol                  = "tcp"
+  from_port                    = 6379
+  to_port                      = 6379
+  referenced_security_group_id = aws_security_group.job["lakehouse"].id
+}
