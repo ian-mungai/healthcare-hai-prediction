@@ -108,6 +108,17 @@
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${LAKEHOUSE_READER_ROLE_NAME}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${LAKEHOUSE_WRITER_ROLE_NAME}"
       ]
+    },
+    {
+      "Sid": "PassCatalogTaskRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_openmetadata_task_${ENVIRONMENT}",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
     }
   ]
 }

@@ -55,6 +55,14 @@
       "Resource": "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSession"
     },
     {
+      "Sid": "PortForwardToCatalogTaskDocumentOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartSession"
+      ],
+      "Resource": "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSessionToRemoteHost"
+    },
+    {
       "Sid": "EndOwnSessions",
       "Effect": "Allow",
       "Action": [

@@ -12,6 +12,7 @@ import copy
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -609,7 +610,39 @@ def images_file_names_exactly_the_images_the_task_definition_takes() -> None:
         require(entry["upstream"] and "@sha256:" not in entry["upstream"] and entry["push_by"] == "digest", entry)
 
 
+def project_policies_pass_the_catalog_role_and_the_remote_host_document() -> None:
+    from infra.iam.scripts.render_policy import render_template, terraform_names
+    from scripts.infrastructure.policy_evaluator import Request, decide
+
+    values = {
+        "AWS_REGION": "us-west-2",
+        "AWS_ACCOUNT_ID": "111111111111",
+        "PROJECT_NAME": "example_project",
+        "ENVIRONMENT": "dev",
+        "DATA_BUCKET_NAME": "example-project-data-dev",
+    }
+    folder = Path(os.environ.get("OM_POLICY_DIRECTORY", str(REPO / "infra" / "iam" / "policies")))
+    texts = [path.read_text() for path in sorted(folder.glob("*.json")) if path.name.endswith(("_iam_policy.json", "_ssm_policy.json"))]
+    spare = {name: "/example_project/spare" for text in texts for name in re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", text) if name not in values}
+    documents = [render_template(text, values, {**terraform_names(), **spare}) for text in texts]
+    role = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
+    forward = "arn:aws:ssm:us-west-2::document/AWS-StartPortForwardingSessionToRemoteHost"
+    tasks = {"iam:PassedToService": ("ecs-tasks.amazonaws.com",)}
+    require(
+        any(decide([document], Request("iam:PassRole", role, tasks)).allowed for document in documents),
+        "the project user must pass the catalog task role to ECS tasks",
+    )
+    require(
+        not any(decide([document], Request("iam:PassRole", role, {"iam:PassedToService": ("ec2.amazonaws.com",)})).allowed for document in documents),
+        "only ECS tasks may receive it",
+    )
+    require(any(decide([document], Request("ssm:StartSession", forward)).allowed for document in documents), "the remote-host forward document must be allowed")
+    other = "arn:aws:ssm:us-west-2::document/AWS-StartInteractiveCommand"
+    require(not any(decide([document], Request("ssm:StartSession", other)).allowed for document in documents), "no other session document may be added")
+
+
 CASES: list[Callable[[], None]] = [
+    project_policies_pass_the_catalog_role_and_the_remote_host_document,
     images_file_names_exactly_the_images_the_task_definition_takes,
     real_configs_have_no_profiler_or_sampling,
     every_profiler_or_sampling_mutant_is_refused,
