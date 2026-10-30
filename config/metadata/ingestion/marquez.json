@@ -1,0 +1,6 @@
+{
+  "service": "polaris",
+  "database": "hai_lakehouse",
+  "dataset_pattern": "^(?P<schema>bronze|silver|gold|features)/(?P<table>[a-z0-9_]+)$",
+  "fqn_template": "{service}.{database}.{schema}.{table}"
+}

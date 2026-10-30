@@ -1,0 +1,43 @@
+{
+  "source": {
+    "type": "iceberg",
+    "serviceName": "polaris",
+    "serviceConnection": {
+      "config": {
+        "type": "Iceberg",
+        "catalog": {
+          "name": "hai_lakehouse",
+          "connection": {
+            "uri": "${POLARIS_URI}",
+            "credential": {
+              "clientId": "${POLARIS_CLIENT_ID}",
+              "clientSecret": "${POLARIS_CLIENT_SECRET}"
+            }
+          },
+          "warehouseLocation": "hai_lakehouse"
+        }
+      }
+    },
+    "sourceConfig": {
+      "config": {
+        "type": "DatabaseMetadata",
+        "includeTables": true,
+        "includeViews": false
+      }
+    }
+  },
+  "sink": {
+    "type": "metadata-rest",
+    "config": {}
+  },
+  "workflowConfig": {
+    "loggerLevel": "INFO",
+    "openMetadataServerConfig": {
+      "hostPort": "http://127.0.0.1:8585/api",
+      "authProvider": "openmetadata",
+      "securityConfig": {
+        "jwtToken": "${OM_INGESTION_TOKEN}"
+      }
+    }
+  }
+}
