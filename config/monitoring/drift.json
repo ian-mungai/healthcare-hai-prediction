@@ -1,0 +1,13 @@
+{
+  "categorical_test": "chisquare",
+  "deadline_seconds": 600,
+  "drift_share": 0.5,
+  "minimum_current_rows": 30,
+  "numeric_test": "ks",
+  "schema_version": 1,
+  "share_boundary_inclusive": true,
+  "test_threshold": 0.05,
+  "trigger_populations": [
+    "primary"
+  ]
+}

@@ -65,6 +65,12 @@
       ]
     },
     {
+      "schema": "data_contracts/monitoring/drift.schema.json",
+      "files": [
+        "config/monitoring/drift.json"
+      ]
+    },
+    {
       "schema": "data_contracts/training/targets.schema.json",
       "files": [
         "config/training/targets.json"
