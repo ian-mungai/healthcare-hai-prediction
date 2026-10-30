@@ -33,8 +33,8 @@ output "one_shot_run_task" {
 }
 
 output "host_ports_reachable_from_jobs" {
-  description = "Host ports the foundation security group opens to the job tasks: Polaris REST (8181) and Redis (6379). Every other port is loopback or closed."
-  value       = { polaris = 8181, redis = 6379 }
+  description = "Host ports the foundation security group opens to the job tasks: Polaris REST (8181), Redis (6379) and, while mlflow_enabled is true, MLflow (5100). Every other port is loopback or closed."
+  value       = merge({ polaris = 8181, redis = 6379 }, var.mlflow_enabled ? { mlflow = 5100 } : {})
 }
 
 output "reserved_memory_mib" {

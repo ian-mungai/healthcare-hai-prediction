@@ -277,8 +277,9 @@ versions or delete markers. One exception covers only `lakehouse/`, where
 Iceberg replaces and deletes its own table files: replaced versions there expire
 30 days after they are replaced and orphaned delete markers are removed. Current
 lakehouse files never expire. A second rule, `expire_replaced_dvc_versions`, covers only `dvc/`, the prefix of the DVC remote for the training
-baseline. Replaced versions there expire after 30 days and orphaned delete markers are removed. Current DVC objects never expire. Everything
-outside `lakehouse/` and `dvc/` never expires. The storage stack and its mock-plan test hold the DVC rule. The owner applies it and it is not applied yet. Local mock-plan tests, source-shape checks and live
+baseline. Replaced versions there expire after 30 days and orphaned delete markers are removed. Current DVC objects never expire. A third rule,
+`expire_replaced_mlflow_versions`, treats `mlflow/` the same way: it is the artifact prefix of the MLflow service. Everything
+outside `lakehouse/`, `dvc/` and `mlflow/` never expires. The storage stack and its mock-plan test hold the DVC and MLflow rules. The owner applies them and they are not applied yet. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
