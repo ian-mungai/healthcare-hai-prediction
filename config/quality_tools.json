@@ -139,6 +139,12 @@
           "max_archive_bytes": 21294383
         }
       }
+    },
+    "trivy-config": {
+      "version": "0.76.1",
+      "installer": "homebrew",
+      "formula": "trivy",
+      "executable": "/opt/homebrew/bin/trivy"
     }
   }
 }

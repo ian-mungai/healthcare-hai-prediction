@@ -184,6 +184,14 @@ repos:
         pass_filenames: false
         files: ^(infra/.*\.(tf|hcl)|\.tflint\.hcl|\.linter_allowlist|config/quality_tools\.json)$
         stages: [pre-commit]
+      - id: trivy-config
+        # Homebrew trivy at the pinned version, embedded checks only (no network); *.tfvars, *.tfvars.json and terraform.tfstate* are skipped by name and never read.
+        name: Terraform has no trivy config misconfigurations
+        entry: .venv/bin/python -m scripts.quality.lint_tools trivy-config
+        language: system
+        pass_filenames: false
+        files: ^(infra/.*\.tf|\.linter_allowlist|config/quality_tools\.json)$
+        stages: [pre-commit]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata
