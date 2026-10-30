@@ -117,6 +117,9 @@ jobs:
             timeout: 30
           - group: code
             timeout: 40
+          # test-checks alone: about 10 minutes on a hosted runner (Oct 30 2026), 13 on a slow one.
+          - group: samples
+            timeout: 20
     steps:
       - name: Record hook job start
         run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
