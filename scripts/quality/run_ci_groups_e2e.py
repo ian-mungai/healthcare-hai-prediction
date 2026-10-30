@@ -2326,7 +2326,14 @@ def hook_partition_cases(scratch: Path) -> list[dict[str, Any]]:
 def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
     """Dry-run the real dispatcher using print-only commands in a minimal tree, without checking out data or running gates."""
     base = scratch / "parallel_plan_base"
-    names = ["scripts/run_ci.sh", "scripts/process.py", "scripts/quality/ci_groups.py", "config/quality/ci_groups.json", *BODY_FILES]
+    names = [
+        "scripts/run_ci.sh",
+        "scripts/process.py",
+        "scripts/quality/ci_groups.py",
+        "config/quality/ci_groups.json",
+        "config/quality/launcher_inputs.json",
+        *BODY_FILES,
+    ]
     names += [path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/infrastructure").glob("*.sh")]
     for name in names:
         target = base / name
