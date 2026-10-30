@@ -1,0 +1,2385 @@
+{
+  "log_version": 1,
+  "generated_by": "scripts/acquisition/source_verification_log.py",
+  "generated_from": {
+    "registry_sha256": "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25",
+    "closeout_inventory_sha256": "7e97031448c9baf763d5b68f34a9a19c6c060a537e3bfea16f58dd46e89ba54a"
+  },
+  "questions": [
+    {
+      "field": "deferral_trigger",
+      "question": "What event ends the deferral of the state sources (group E)? Project fact 10 names no trigger."
+    },
+    {
+      "field": "evidence.capture_candidates",
+      "question": "Where is the capture count for this source recorded? The collection closeout record does not list it."
+    },
+    {
+      "field": "evidence.object_version",
+      "question": "Which committed file should hold each source's S3 object version? The registry holds none and the readback stays local."
+    },
+    {
+      "field": "evidence.receipt_path",
+      "question": "Which receipt path should the log name per source? The registry records none and receipts stay under local data."
+    },
+    {
+      "field": "evidence.receipt_sha256",
+      "question": "Which committed file should hold each source's receipt hash? The registry holds none and receipts stay under local data."
+    },
+    {
+      "field": "evidence.unique_snapshot_ids",
+      "question": "Where is the unique snapshot count for this source recorded? The collection closeout record does not list it."
+    },
+    {
+      "field": "publisher",
+      "question": "Which publisher name does the project guide give for this source? The layout folder has no guide name."
+    },
+    {
+      "field": "route_class",
+      "question": "Which route (API, download URL or manual) delivered this source? The registry records only an access hold."
+    },
+    {
+      "field": "status",
+      "question": "What evidence verifies this source? Neither the closeout record nor the project guide lists it."
+    },
+    {
+      "field": "verification.date",
+      "question": "On what date was this source verified? Neither the registry nor the committed records give a date for it."
+    }
+  ],
+  "rows": [
+    {
+      "dataset_id": "ACS",
+      "title": "American Community Survey five-year estimates",
+      "publisher": "Census Bureau",
+      "collection": "census/acs",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "59a045fea2bce6ce0c8f9eb174cab0044b868806df1c2b3de25e6142ed7f978d",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/34",
+        "capture_candidates": 439,
+        "unique_snapshot_ids": 439,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 439 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "ADJ",
+      "title": "Census county adjacency",
+      "publisher": "Census Bureau",
+      "collection": "census/county_adjacency",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "98f7f849086db1e62b1e835147c684dc41ed6c4f4c51c6844f3628063298f80c",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/42",
+        "capture_candidates": 5,
+        "unique_snapshot_ids": 5,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 5 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "AHRF",
+      "title": "HRSA Area Health Resources Files",
+      "publisher": "Health Resources and Services Administration (HRSA)",
+      "collection": "hrsa/area_health_resources",
+      "route": "file_download",
+      "route_class": "not used (rejected)",
+      "access_and_terms": {
+        "text": "Free, public, annual, county-level, no DUA",
+        "source": "project guide section 8"
+      },
+      "data_class": "Not stored",
+      "data_class_basis": "project guide section 8",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "a4b1fcef9fc231fb905fda744aaf18c0be63ced401222d61aed7429ba88a8705",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/45",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "rejected",
+      "status_reason": "Excluded: not a predictor source, because its license limits sharing. The project stores no AHRF data (goal card; project guide section 8)",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "BLS",
+      "title": "BLS Local Area Unemployment Statistics",
+      "publisher": "BLS",
+      "collection": "bls/local_area_unemployment",
+      "route": "api_fallback",
+      "route_class": "API",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "bfc651a053fd401376272a88799f4ee09051eed5472630891db8b72e8d10dccd",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/35",
+        "capture_candidates": 520,
+        "unique_snapshot_ids": 520,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 520 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CA",
+      "title": "California HCAI financial staffing data",
+      "publisher": "Department of Health Care Access and Information (HCAI)",
+      "collection": "california_hcai/hospital_finance",
+      "route": "web_export",
+      "route_class": "manual export (permitted web export)",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "f2b79384daf280084da1f02338063a66c4a3f158d092a0a98d400d304b86a0ac",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/32",
+        "capture_candidates": 181,
+        "unique_snapshot_ids": 181,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CCW-ALGORITHMS",
+      "title": "CCW common and other-condition algorithms",
+      "publisher": "CMS",
+      "collection": "cms/chronic_conditions",
+      "route": "documentation_only",
+      "route_class": "reference documents only",
+      "access_and_terms": {
+        "text": "Public documentation; CMS catalog links US government works. Separate CCW redistribution terms not independently verified.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "84385a1da146a155cad951889d5b3cff583523c95732fc6a1de5a7088c7bf7e6",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/18",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 1 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CDPH",
+      "title": "California IPC program plans",
+      "publisher": "not recorded",
+      "collection": "california_cdph/infection_prevention",
+      "route": "access_hold",
+      "route_class": "not recorded",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "6613d72463eaad0e2a0d3350f523fc975c2ae31af3d721ed0ef9c8bc6f6dcfca",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/70",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "publisher",
+        "route_class",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CHIA",
+      "title": "Massachusetts CHIA",
+      "publisher": "not recorded",
+      "collection": "massachusetts_chia/healthcare_workforce",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "2863a9b01878690a0d3e46d07127c013e48dc4b82079b0ac94141712687b4b28",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/63",
+        "capture_candidates": 5,
+        "unique_snapshot_ids": 5,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS-MUP-DICTIONARIES",
+      "title": "CMS inpatient definitions and revision methodology",
+      "publisher": "CMS",
+      "collection": "cms/medicare_inpatient",
+      "route": "documentation_only",
+      "route_class": "reference documents only",
+      "access_and_terms": {
+        "text": "Public documentation; CMS catalog links US government works. Separate CCW redistribution terms not independently verified.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "ab1a092c9e60861ef6352e19d7f8c9c4487bdd681ea4910ee63cad41733e740a",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/17",
+        "capture_candidates": 3,
+        "unique_snapshot_ids": 3,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 3 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS-MUP-DRG",
+      "title": "Medicare Inpatient Hospitals - by Provider and Service",
+      "publisher": "CMS",
+      "collection": "cms/medicare_inpatient",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "https://www.usa.gov/government-works",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "59ccbe13f12a8f260dbf42c135aeda42c6500dd41fc6b9127cdf86ee57cae145",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/16",
+        "capture_candidates": 12,
+        "unique_snapshot_ids": 12,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 12 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS-MUP-PROVIDER",
+      "title": "Medicare Inpatient Hospitals - by Provider",
+      "publisher": "CMS",
+      "collection": "cms/medicare_inpatient",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "https://www.usa.gov/government-works",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "9dcbac06808b0cd3ca42980eca733b25c5562cd410b1fc57804ef8f753185163",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/15",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_CHOW",
+      "title": "CMS Hospital Change of Ownership",
+      "publisher": "CMS",
+      "collection": "cms/hospital_ownership",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "712e1b1342df1f44f48311175a0e255b727c27b0cfe89e97577ae36dd192f806",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/13",
+        "capture_candidates": 20,
+        "unique_snapshot_ids": 20,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 20 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_GV",
+      "title": "CMS Medicare Geographic Variation",
+      "publisher": "CMS",
+      "collection": "cms/geographic_variation",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "ec49e7dfec60e86f84392c64eca79c39920080ed036f9e9ca7f42c8f9af40c62",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/20",
+        "capture_candidates": 3,
+        "unique_snapshot_ids": 3,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 3 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_HCRIS_PUF",
+      "title": "CMS Hospital Provider Cost Report",
+      "publisher": "CMS",
+      "collection": "cms/hospital_cost_reports",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, quarterly, no DUA",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "86f1c12bbfc1d232a777be09c84a8a3c7819abb63789632617333a6225e65a6e",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/10",
+        "capture_candidates": 14,
+        "unique_snapshot_ids": 14,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 14 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_IPPS",
+      "title": "CMS IPPS final rule impact files, non-CMI fields",
+      "publisher": "CMS",
+      "collection": "cms/ipps",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "d4efe4f11e386c509518e43a75045952d077af272859feb640717c97111faed8",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/24",
+        "capture_candidates": 62,
+        "unique_snapshot_ids": 62,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 62 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_MEDICARE_PROVIDER",
+      "title": "CMS Medicare Inpatient Hospitals by Provider",
+      "publisher": "CMS",
+      "collection": "cms/medicare_inpatient",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "32523d197dc3feb8f244d3538875b2fb7aeb207881a25ee58d5728e9710b1711",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/14",
+        "capture_candidates": 12,
+        "unique_snapshot_ids": 12,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 12 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_OCCMIX",
+      "title": "CMS FY2026 occupational mix RN wage file",
+      "publisher": "CMS",
+      "collection": "cms/occupational_mix",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "77978e8797dacce01ae9597f6797d07e77065dc48fea445bc23238e0d60c6c74",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/25",
+        "capture_candidates": 23,
+        "unique_snapshot_ids": 23,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 23 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_OWNERS",
+      "title": "CMS Hospital All Owners and Hospital Enrollments",
+      "publisher": "CMS",
+      "collection": "cms/hospital_ownership",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "39c3bda489d910907622356fd12c3f80b76c56c9196b5237786215c48328fc7d",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/12",
+        "capture_candidates": 47,
+        "unique_snapshot_ids": 47,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 47 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "CMS_POS",
+      "title": "CMS QIES Provider of Services",
+      "publisher": "CMS",
+      "collection": "cms/provider_of_services",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "a808992a07388cfdd7341dd8a0adf4b118befb8a4f1800dbbe5d2a09de62fddf",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/11",
+        "capture_candidates": 39,
+        "unique_snapshot_ids": 39,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 39 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "ENROLL",
+      "title": "CMS Hospital Enrollments",
+      "publisher": "CMS",
+      "collection": "cms/hospital_ownership",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "3e629695c6cdeddeb712c94926499b4c46cdc3426ec60819ff29f44864768225",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/22",
+        "capture_candidates": 45,
+        "unique_snapshot_ids": 45,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 45 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HCAI_FINANCE",
+      "title": "California complete annual hospital financial disclosure",
+      "publisher": "Department of Health Care Access and Information (HCAI)",
+      "collection": "california_hcai/hospital_finance",
+      "route": "web_export",
+      "route_class": "manual export (permitted web export)",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "9f12847e186522f38b77521a29412f61b9431ff20defdd915ec4d3b0c6fd67a2",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/28",
+        "capture_candidates": 25,
+        "unique_snapshot_ids": 25,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HCAI_UTIL",
+      "title": "California annual hospital utilization",
+      "publisher": "Department of Health Care Access and Information (HCAI)",
+      "collection": "california_hcai/hospital_utilization",
+      "route": "access_hold",
+      "route_class": "not recorded",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "2026-10-02",
+        "basis": "access release record access_releases_20261002.json"
+      },
+      "evidence": {
+        "registry_record_sha256": "d1a11653b368001b13fbed6d35e94223fba0f9d17b751d55a8a491d47c02e7f2",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/29",
+        "capture_candidates": 8,
+        "unique_snapshot_ids": 8,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "route_class"
+      ]
+    },
+    {
+      "dataset_id": "HHS",
+      "title": "HHS hospital COVID/influenza capacity weekly PUF",
+      "publisher": "HHS",
+      "collection": "hhs/hospital_capacity",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "135a83d357c40aeefe2a0fb84ca1fe4132c8d1916821cd770d1abe77ba839d9d",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/74",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 1 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HHS_CAPACITY",
+      "title": "HHS corrected weekly facility hospital capacity",
+      "publisher": "HHS",
+      "collection": "hhs/hospital_capacity",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "553641cd6cb9d4fc94ff0c2df2c4fabbaf8656b466cd7fe4bbcaf3edbe68cbee",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/75",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HPSA",
+      "title": "HRSA primary-care shortage designations",
+      "publisher": "HRSA",
+      "collection": "hrsa/shortage_areas",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "ed1aa48e5dc557afbb2b5d62c0faefa0516458f40ad5d4670ae294e1f9bda8c7",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/46",
+        "capture_candidates": 5,
+        "unique_snapshot_ids": 5,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 5 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HRSA",
+      "title": "HRSA NSSRN",
+      "publisher": "HRSA",
+      "collection": "hrsa/nursing_workforce",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "26284e032ab5defe0cd1fdd8c65cdf524d344f637722e2e2035e77179867843b",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/55",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 1 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HSA",
+      "title": "CMS Hospital Service Area",
+      "publisher": "CMS",
+      "collection": "cms/hospital_service_area",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "d9e8accb2c3e6ad23c32b88b91701854adea124b6d28a4d93385f1989eb161db",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/21",
+        "capture_candidates": 12,
+        "unique_snapshot_ids": 12,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 12 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "HUD",
+      "title": "HUD USPS crosswalk",
+      "publisher": "HUD",
+      "collection": "hud/usps_crosswalk",
+      "route": "access_hold",
+      "route_class": "not recorded",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "2026-09-28",
+        "basis": "owner terms acceptance record terms_acceptance_20260928.json"
+      },
+      "evidence": {
+        "registry_record_sha256": "0bcc4f29c813ce4f3825c0d284258de6cc6a45301861cf0ea062b688b5db8dde",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/40",
+        "capture_candidates": 64,
+        "unique_snapshot_ids": 64,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 64 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "route_class"
+      ]
+    },
+    {
+      "dataset_id": "IL",
+      "title": "Illinois Hospital Report Card",
+      "publisher": "not recorded",
+      "collection": "illinois/hospital_report_card",
+      "route": "file_plus_api_fallback",
+      "route_class": "download URL with API fallback",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "222ed69eac3f5465a0e3fc0be910b53106520cd1e46908da16bea1c33354a63f",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/51",
+        "capture_candidates": 262,
+        "unique_snapshot_ids": 262,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "IROQ",
+      "title": "Iroquois Healthcare Alliance",
+      "publisher": "not recorded",
+      "collection": "iroquois_healthcare/workforce",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "6827cb69725e876ad6d92d5ed196c9c48a829aee2a3083ce6c13c02e91a8e3e6",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/67",
+        "capture_candidates": 4,
+        "unique_snapshot_ids": 4,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "MA",
+      "title": "Massachusetts MHA/ONL PatientCareLink",
+      "publisher": "not recorded",
+      "collection": "patientcarelink/nursing_workforce",
+      "route": "web_export",
+      "route_class": "manual export (permitted web export)",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "ddf72385a2e58ba7087b0da579656d74fd85ef455a8fee1707c2c594220a0d6e",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/53",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "MARY",
+      "title": "Maryland NSP I",
+      "publisher": "not recorded",
+      "collection": "maryland/nurse_support",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "e59f8410d71b570b180bdee6e929d639dea0b4f4ef90083dd50ea44b3b626556",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/66",
+        "capture_candidates": 8,
+        "unique_snapshot_ids": 8,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "MISS",
+      "title": "Mississippi Hospital Association",
+      "publisher": "not recorded",
+      "collection": "mississippi_hospitals/workforce",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "0980a344e610549f77eff3d65f5cf8d4e935992d223835d6fe2685137b3940d5",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/64",
+        "capture_candidates": 2,
+        "unique_snapshot_ids": 2,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "MMD",
+      "title": "CMS Mapping Medicare Disparities and CCW algorithms",
+      "publisher": "CMS",
+      "collection": "cms/mapping_medicare_disparities",
+      "route": "web_export",
+      "route_class": "manual export (permitted web export)",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "63d8c9d1248771733c575b1527913619c4439077785c9953575901b1de49c1fc",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/48",
+        "capture_candidates": 845,
+        "unique_snapshot_ids": 845,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 845 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "MUA",
+      "title": "HRSA medically underserved areas",
+      "publisher": "HRSA",
+      "collection": "hrsa/shortage_areas",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "df72c8760937a4bacba9d12a5685593e6da625d49e8e0e424f25c46ab4c538be",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/47",
+        "capture_candidates": 2,
+        "unique_snapshot_ids": 2,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 2 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "NHSN",
+      "title": "CDC NHSN hospital survey and access",
+      "publisher": "CDC",
+      "collection": "cdc/nhsn",
+      "route": "access_hold",
+      "route_class": "not used (rejected)",
+      "access_and_terms": {
+        "text": "Requires a formal Data Use Agreement",
+        "source": "project guide section 8"
+      },
+      "data_class": "Not collected",
+      "data_class_basis": "project guide section 8",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "baf46ed9c5cbe965770950fca294f7855cf014d63cd2c364c07e4b4dae708de7",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/58",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "rejected",
+      "status_reason": "Excluded: National Healthcare Safety Network facility-level data needs a formal Data Use Agreement; rejected (goal card; guide section 8)",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "NSI",
+      "title": "NSI Retention and RN Staffing Report",
+      "publisher": "not recorded",
+      "collection": "nsi/retention_and_staffing",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "112742b008baf6b8dfff391ff1677f05d8ff13b716850aec174e12fef62d3127",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/56",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 1 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "NY",
+      "title": "NYSDOH infection prevention resources",
+      "publisher": "not recorded",
+      "collection": "new_york_health/hospital_infections",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "295b46db6a78df224c3aae94972eb124dff467709b069fe0c8124fdb4b381bef",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/57",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "OM",
+      "title": "CMS Occupational Mix public-use files",
+      "publisher": "CMS",
+      "collection": "cms/occupational_mix",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "905eb30b36bb473491349716cb5ca4f02e8fb7bc1961007479071cb78e48c7ba",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/31",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "ONC_PI",
+      "title": "ONC hospital PI to certified-product linkage",
+      "publisher": "ONC",
+      "collection": "onc/promoting_interoperability",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Confidential",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "c8eae2c3ab400b5e343cd41ad41bc93d8949da05889c53c5b3097b14f09c3bdb",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/30",
+        "capture_candidates": 2,
+        "unique_snapshot_ids": 2,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 2 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "PLACES",
+      "title": "CDC PLACES county estimates",
+      "publisher": "CDC",
+      "collection": "cdc/places",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "c2b73be019a996a716bbd69cd844fb719a490c169989f009ca080766fd3f3b6c",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/44",
+        "capture_candidates": 6,
+        "unique_snapshot_ids": 6,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 6 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "POS",
+      "title": "CMS Provider of Services QIES",
+      "publisher": "CMS",
+      "collection": "cms/provider_of_services",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "5cfeacd6804d64495ce8fab9e00c1616b17af44d0d55442c70850cd56cf1dc06",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/23",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "PSI13",
+      "title": "AHRQ PSI13",
+      "publisher": "AHRQ",
+      "collection": "ahrq/patient_safety_indicators",
+      "route": "documentation_only",
+      "route_class": "reference documents only",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "9bb4614a6155411375c4ee674472c3a45fceaf17ce19f66fc9b76c5a9bea9813",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/72",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 1 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "PSI90",
+      "title": "AHRQ PSI90",
+      "publisher": "AHRQ",
+      "collection": "ahrq/patient_safety_indicators",
+      "route": "documentation_only",
+      "route_class": "reference documents only",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "86575b7f20a8f3c550b4a1dcd13e8839be47acb01bddaea7eaf1d606be68d639",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/71",
+        "capture_candidates": 1,
+        "unique_snapshot_ids": 1,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 1 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "RUCA",
+      "title": "USDA Rural-Urban Commuting Area Codes",
+      "publisher": "USDA",
+      "collection": "usda/rural_urban_commuting",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "973d2e44752dc79acb8e3a68ab0257126cfebfe50d6d6998e66613f0cf5d3122",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/37",
+        "capture_candidates": 11,
+        "unique_snapshot_ids": 11,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 11 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "RUCC",
+      "title": "USDA Rural-Urban Continuum Codes",
+      "publisher": "USDA",
+      "collection": "usda/rural_urban_continuum",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "42ce3c8ff6cb11c23bc3e08d51df9a1fa4c1213a5268bd0c34c8ec2407fbb5ec",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/36",
+        "capture_candidates": 9,
+        "unique_snapshot_ids": 9,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 9 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "SAHIE",
+      "title": "Census Small Area Health Insurance Estimates",
+      "publisher": "Census Bureau",
+      "collection": "census/sahie",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "763379830d28e9ad364f982c3a01f645916c714405699ef7dd8b757f9e3e9e21",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/39",
+        "capture_candidates": 21,
+        "unique_snapshot_ids": 21,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 21 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "SAIPE",
+      "title": "Census Small Area Income and Poverty Estimates",
+      "publisher": "Census Bureau",
+      "collection": "census/saipe",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "a80f8c1c3560786cc16f5ede7b84c69e1de23ed0a5a73509549b7cd6e653d29a",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/38",
+        "capture_candidates": 32,
+        "unique_snapshot_ids": 32,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 32 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "SVI",
+      "title": "CDC/ATSDR Social Vulnerability Index",
+      "publisher": "CDC and the Agency for Toxic Substances and Disease Registry (ATSDR)",
+      "collection": "cdc/social_vulnerability",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, county and tract level, no DUA",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "4bfcff00de2a77c1f656f0b0f98710c82a0741cbfb31742c006abdcafe599309",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/43",
+        "capture_candidates": 7,
+        "unique_snapshot_ids": 7,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 7 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "TX",
+      "title": "Texas Hospital Nurse Staffing Study",
+      "publisher": "not recorded",
+      "collection": "texas_dshs/hospital_nurse_staffing",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public aggregate reports; deidentified responses by request, no request made.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "e7dff1861a9abfdb1c8bfdf7bb3af71077d1b7285419e553641f02d07881c2b1",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/52",
+        "capture_candidates": 55,
+        "unique_snapshot_ids": 55,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "VT",
+      "title": "Vermont public hospital staffing and budget reports",
+      "publisher": "not recorded",
+      "collection": "vermont_health/hospital_reports",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Public source; no account, purchase or private access used.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "16b76b27162a3a06bacbcbe3706e4ead5b134df10cb74946e81e4f21b773d591",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/59",
+        "capture_candidates": 77,
+        "unique_snapshot_ids": 77,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "deferred",
+      "status_reason": "State source (group E), deferred by project fact 10",
+      "deferral_trigger": "not recorded",
+      "not_recorded": [
+        "deferral_trigger",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "publisher",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "WONDER",
+      "title": "CDC WONDER age-adjusted mortality",
+      "publisher": "CDC",
+      "collection": "cdc/wonder_mortality",
+      "route": "web_export",
+      "route_class": "manual export (permitted web export)",
+      "access_and_terms": {
+        "text": "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "2026-09-28",
+        "basis": "owner terms acceptance record terms_acceptance_20260928.json"
+      },
+      "evidence": {
+        "registry_record_sha256": "3cbc1e3ef72a48cf562c985fd5881d8c159f8befea2746cdf7713c72cd92c973",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/49",
+        "capture_candidates": 6,
+        "unique_snapshot_ids": 6,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 6 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256"
+      ]
+    },
+    {
+      "dataset_id": "care-deaths-cms",
+      "title": "Complications and deaths",
+      "publisher": "CMS",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "CMS archive API marks entries public; unauthenticated requests succeeded. No patient-level records. Additional license text not separately reviewed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "5c80505deef6066d18115a7bac670c4946a82c00c765fceb702650f2f4db8ae3",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/5",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-general-cms",
+      "title": "Hospital overall quality rating",
+      "publisher": "CMS Care Compare",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, no Data Use Agreement (DUA)",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "45c4f7bf37e8a00f7b9cd92921f178a8b6a77c2f8373b6b29c3c5f554ab677b2",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/7",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Project guide section 8: built in bronze and silver",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-hac-cms",
+      "title": "Hospital-Acquired Condition Reduction Program",
+      "publisher": "CMS",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, no DUA",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "5d7af3058821271c0dac9fbc601f5f395f82c459d6e7a62c80c5a25b4edeab2c",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/6",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "validation-only",
+      "status_reason": "External validation check only, not a predictor: circular with PSI-90 and HAI (goal card)",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-hcahps-cms",
+      "title": "Hospital patient experience (HCAHPS)",
+      "publisher": "CMS Care Compare",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, no Data Use Agreement (DUA)",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "285229f64f7429421fd7a87207233237726a68a4ad62ff432a79a974f37e3e60",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/0",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Project guide section 8: built in bronze and silver",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-hrrp-cms",
+      "title": "Hospital Readmissions Reduction Program",
+      "publisher": "CMS",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "CMS archive API marks entries public; unauthenticated requests succeeded. No patient-level records. Additional license text not separately reviewed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "15a61dfbb4f1f9081e2f5bc7ff011924819bc3452e895f87da5d89b9cd11de64",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/3",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-maternal-cms",
+      "title": "Hospital maternal health",
+      "publisher": "CMS",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "CMS archive API marks entries public; unauthenticated requests succeeded. No patient-level records. Additional license text not separately reviewed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "3942b3b2d79a153b571b38825b2fadee60736d500868995d94c1214c5dcdd557",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/2",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-timely-cms",
+      "title": "Hospital timely and effective care",
+      "publisher": "CMS Care Compare",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, no Data Use Agreement (DUA)",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "f4736d8e58ad56bb0c244ba79c36a78c3653f85457c40c04944c61bf15983f99",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/1",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Project guide section 8: built in bronze and silver",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-vbp-cms",
+      "title": "Hospital Value-Based Purchasing safety and total performance",
+      "publisher": "CMS",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "CMS archive API marks entries public; unauthenticated requests succeeded. No patient-level records. Additional license text not separately reviewed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "e1f8d94134b3c73121f74099330a1dbf1d837d4edf14750e2dbc19e217ecfa7c",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/8",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "care-visits-cms",
+      "title": "Unplanned hospital visits",
+      "publisher": "CMS",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "CMS archive API marks entries public; unauthenticated requests succeeded. No patient-level records. Additional license text not separately reviewed.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "86703f93d468a9f79760c83687032262602590fb375414384aa5a75cc4282427",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/4",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "status",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "main-cmi-ipps",
+      "title": "CMS IPPS source-specific non-transfer-adjusted Case Mix Index",
+      "publisher": "CMS",
+      "collection": "cms/ipps",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, annual, no DUA",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "5eaa604e48638601c3697165ba16571b35dea8de3afe79d71026f50088ff8eb0",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/33",
+        "capture_candidates": 56,
+        "unique_snapshot_ids": 56,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 56 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    },
+    {
+      "dataset_id": "main-hai-pdc",
+      "title": "CMS hospital HAI SIRs and separate historical-SIR candidates",
+      "publisher": "CMS Care Compare",
+      "collection": "cms/hospitals",
+      "route": "file_download",
+      "route_class": "download URL",
+      "access_and_terms": {
+        "text": "Free, public, no Data Use Agreement (DUA)",
+        "source": "project guide section 8"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "not recorded",
+        "basis": "no dated record names this source"
+      },
+      "evidence": {
+        "registry_record_sha256": "f694f992c98972375af36433c51d71f5f655d15a1b1285498995b036e1db68b7",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/9",
+        "capture_candidates": 33,
+        "unique_snapshot_ids": 33,
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "verified",
+      "status_reason": "Collection closeout records 33 capture candidates, each with its own snapshot",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "verification.date"
+      ]
+    }
+  ]
+}
