@@ -667,7 +667,7 @@ local file and nothing to S3.
    When identical bytes sit under more than one key, the index names the copy stored first and the report lists every
    other copy under `aliases`. Read that list before you switch the setting on.
 2. If the builder refuses, it writes nothing and lists each reason with a count and examples. The reasons and their
-   fixes are in [Single-Copy Starting Index](acquisition_design.md#single-copy-starting-index). Fix the cause and build
+   fixes are in [Single-copy starting index](acquisition_design.md#single-copy-starting-index). Fix the cause and build
    again into a new file name.
 3. The next command changes `config/acquisition/storage_policy.json`. Do not commit that file. The index is a local file, so a clone or a CI run cannot read it. Switch the setting on with the command the builder printed. It writes the file with
    the index path and its SHA-256.
