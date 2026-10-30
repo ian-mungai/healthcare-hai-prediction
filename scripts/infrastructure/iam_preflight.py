@@ -112,8 +112,7 @@ def run(table: dict[str, Any], settings: dict[str, str], client: AwsCli, call_se
             sys.stdout.write(f"PASS {label}\n")
             continue
         failures += 1
-        gap = f" (known gap: {row['pending_fix']})" if "pending_fix" in row else ""
-        sys.stdout.write(f"FAIL {label}: {message}{gap}\n")
+        sys.stdout.write(f"FAIL {label}: {message}\n")
     sys.stdout.write(f"{len(table['checks']) - failures} of {len(table['checks'])} checks passed\n")
     return 1 if failures else 0
 

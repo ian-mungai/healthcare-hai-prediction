@@ -59,7 +59,21 @@
       "layer": "silver",
       "policies": [
         "owner_policies/job_writer_layer_storage.json",
-        "owner_policies/job_stage_read.json"
+        "owner_policies/job_stage_read.json",
+        "owner_policies/job_writer_layer_input.json",
+        "owner_policies/job_writer_layer_upload.json"
+      ],
+      "attachments": [
+        {
+          "policy": "owner_policies/job_writer_layer_input.json",
+          "resource": "job_writer_layer_input",
+          "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_layer_upload.json",
+          "resource": "job_writer_layer_upload",
+          "flag": "job_layer_runs_prepared"
+        }
       ]
     },
     "write_gold": {
@@ -70,7 +84,21 @@
       "layer": "gold",
       "policies": [
         "owner_policies/job_writer_layer_storage.json",
-        "owner_policies/job_stage_read.json"
+        "owner_policies/job_stage_read.json",
+        "owner_policies/job_writer_layer_input.json",
+        "owner_policies/job_writer_layer_upload.json"
+      ],
+      "attachments": [
+        {
+          "policy": "owner_policies/job_writer_layer_input.json",
+          "resource": "job_writer_layer_input",
+          "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_layer_upload.json",
+          "resource": "job_writer_layer_upload",
+          "flag": "job_layer_runs_prepared"
+        }
       ]
     },
     "write_features": {
@@ -81,7 +109,27 @@
       "layer": "features",
       "policies": [
         "owner_policies/job_writer_layer_storage.json",
-        "owner_policies/job_stage_read.json"
+        "owner_policies/job_stage_read.json",
+        "owner_policies/job_writer_layer_input.json",
+        "owner_policies/job_writer_layer_upload.json",
+        "owner_policies/job_writer_features_feast.json"
+      ],
+      "attachments": [
+        {
+          "policy": "owner_policies/job_writer_layer_input.json",
+          "resource": "job_writer_layer_input",
+          "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_layer_upload.json",
+          "resource": "job_writer_layer_state",
+          "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_features_feast.json",
+          "resource": "job_writer_features_feast",
+          "flag": "job_layer_runs_prepared"
+        }
       ]
     },
     "broker": {
@@ -104,6 +152,40 @@
         "owner_policies/job_features_read.json",
         "owner_policies/job_dvc_baseline.json"
       ]
+    },
+    "drift": {
+      "name": "${PROJECT_NAME}_job_drift_task_${ENVIRONMENT}",
+      "terraform": [
+        "drift.tf"
+      ],
+      "policies": [
+        "owner_policies/job_stage_read.json",
+        "owner_policies/job_features_read.json",
+        "owner_policies/job_dvc_baseline_read.json",
+        "owner_policies/drift_records.json"
+      ],
+      "attachments": [
+        {
+          "policy": "owner_policies/job_stage_read.json",
+          "resource": "drift_task",
+          "flag": "drift_prepared"
+        },
+        {
+          "policy": "owner_policies/job_features_read.json",
+          "resource": "drift_task",
+          "flag": "drift_prepared"
+        },
+        {
+          "policy": "owner_policies/job_dvc_baseline_read.json",
+          "resource": "drift_task",
+          "flag": "drift_prepared"
+        },
+        {
+          "policy": "owner_policies/drift_records.json",
+          "resource": "drift_task",
+          "flag": "drift_prepared"
+        }
+      ]
     }
   },
   "checks": [
@@ -125,8 +207,7 @@
     {
       "role": "reader",
       "action": "s3:GetObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_dictionary/table/metadata/v1.metadata.json",
-      "pending_fix": "The reader role policy lists no lakehouse/bronze_dictionary/ prefix. Add it to lakehouse_read_prefixes in infra/iam/roles.tf, then remove this field."
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_dictionary/table/metadata/v1.metadata.json"
     },
     {
       "role": "reader",
@@ -158,8 +239,7 @@
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
       "context": {
         "s3:prefix": "lakehouse/bronze_dictionary/table/"
-      },
-      "pending_fix": "The reader role policy lists no lakehouse/bronze_dictionary/ prefix. Add it to lakehouse_read_prefixes in infra/iam/roles.tf, then remove this field."
+      }
     },
     {
       "role": "reader",
@@ -484,6 +564,160 @@
       "context": {
         "s3:prefix": "dvc/files/"
       }
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/bronze/table/"
+      }
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/bronze/table/"
+      }
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/state/pinned.json"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/export/manifest.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/silver/table/"
+      }
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/silver/table/"
+      }
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/example_run/state/pinned.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/example_run/export/manifest.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/gold/table/"
+      }
+    },
+    {
+      "role": "write_features",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/gold/table/"
+      }
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/state/pinned.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/feast/registry.pb"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/feast/registry.pb"
+    },
+    {
+      "role": "write_features",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${REDIS_PASSWORD_NAME}"
+    },
+    {
+      "role": "drift",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
+    },
+    {
+      "role": "drift",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/v1.metadata.json"
+    },
+    {
+      "role": "drift",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/features/table/"
+      }
+    },
+    {
+      "role": "drift",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/dvc/files/md5/example"
+    },
+    {
+      "role": "drift",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "dvc/files/"
+      }
+    },
+    {
+      "role": "drift",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/drift/example_run/records/drift_HAI_1.json"
     }
   ]
 }
