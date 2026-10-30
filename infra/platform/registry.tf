@@ -3,7 +3,7 @@
 #trivy:ignore:AWS-0033
 resource "aws_ecr_repository" "image" {
   #checkov:skip=CKV_AWS_136:AES256 encryption; a KMS key adds cost and grant permissions for images that hold no data.
-  for_each = var.ecr_repositories
+  for_each = local.ecr_repositories
 
   name                 = format(local.name, each.key)
   image_tag_mutability = "IMMUTABLE"

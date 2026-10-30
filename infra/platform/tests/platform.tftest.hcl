@@ -115,7 +115,7 @@ run "image_repositories" {
   assert {
     condition = (
       toset(keys(aws_ecr_repository.image)) == toset([
-        "airflow", "analytics", "egress_proxy", "grafana", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "prometheus", "quality", "redis", "spark", "statsd_exporter"
+        "airflow", "analytics", "egress_proxy", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
       ]) &&
       alltrue([
         for name, repository in aws_ecr_repository.image :
@@ -137,6 +137,24 @@ run "image_repositories" {
       length(jsondecode(policy.policy).rules) == 2
     ])
     error_message = "Repositories keep the last five images and expire untagged images after a day."
+  }
+}
+
+# The flag adds only the monitoring repositories and log group, so a false flag leaves the stack as it was.
+run "monitoring_flag_adds_its_foundation" {
+  command = plan
+
+  variables {
+    monitoring_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(setintersection(toset(["prometheus", "grafana", "statsd_exporter"]), toset(keys(aws_ecr_repository.image)))) == 3 &&
+      contains(keys(output.log_group_names), "monitoring") &&
+      length(aws_ecr_repository.image) == 14 && length(aws_cloudwatch_log_group.platform) == 7
+    )
+    error_message = "The monitoring flag adds three repositories and one log group, and nothing else."
   }
 }
 
@@ -201,7 +219,7 @@ run "logs_and_alert_topic" {
 
   assert {
     condition = (
-      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "marquez", "monitoring", "jobs"]) &&
+      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "marquez", "jobs"]) &&
       output.log_group_names["polaris"] == "example_project_polaris_dev" &&
       alltrue([for group in aws_cloudwatch_log_group.platform : group.retention_in_days == 7])
     )
@@ -237,7 +255,7 @@ run "role_names_match_the_iam_stack" {
       output.cluster_name == "example_project_cluster_dev" &&
       output.ec2_capacity_provider_name == "example_project_host_dev" &&
       output.data_mount_path == "/data" &&
-      length(setsubtract(toset(["postgres", "redis", "polaris", "airflow", "marquez", "marquez_web", "spark", "analytics", "quality", "polaris_admin", "egress_proxy", "prometheus", "grafana", "statsd_exporter"]), toset(keys(output.ecr_repository_urls)))) == 0
+      length(setsubtract(toset(["postgres", "redis", "polaris", "airflow", "marquez", "marquez_web", "spark", "analytics", "quality", "polaris_admin", "egress_proxy"]), toset(keys(output.ecr_repository_urls)))) == 0
     )
     error_message = "The outputs the control-plane stack reads must keep their names and values."
   }
