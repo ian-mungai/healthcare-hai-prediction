@@ -162,8 +162,16 @@ def build(
     return files
 
 
+IDENTITY_FILES = ("result.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")
+
+
 def sha256_of(files: Mapping[str, str], hai_type: str) -> str:
-    """Return the bundle hash of a type from the SHA-256 of each of its files, as the fit completion record lists them."""
+    """Return the bundle hash of a type from the SHA-256 of its identity files, as the fit completion record lists them.
+
+    The hash is the mark that a later task compares to resume the run it already logged. It covers only the files that the seeds fix: the result, the
+    holdout predictions, the feature list and the SHAP values. ``provenance.json`` holds the elapsed fit time and the saved model holds a creation time and a
+    model ID, so a refit of the same inputs writes other bytes there. The fit completion record still lists and verifies every file of one task.
+    """
     base = prefix(hai_type) + "/"
-    chosen = {name.removeprefix(base): digest for name, digest in sorted(files.items()) if name.startswith(base)}
+    chosen = {name.removeprefix(base): digest for name, digest in sorted(files.items()) if name.startswith(base) and name.removeprefix(base) in IDENTITY_FILES}
     return hashlib.sha256(json.dumps(chosen, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
