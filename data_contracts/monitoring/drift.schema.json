@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "categorical_test": {
+      "const": "chisquare"
+    },
+    "deadline_seconds": {
+      "maximum": 3600,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "drift_share": {
+      "const": 0.5
+    },
+    "minimum_current_rows": {
+      "minimum": 2,
+      "type": "integer"
+    },
+    "numeric_test": {
+      "const": "ks"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "share_boundary_inclusive": {
+      "const": true
+    },
+    "test_threshold": {
+      "const": 0.05
+    },
+    "trigger_populations": {
+      "const": [
+        "primary"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "drift_share",
+    "share_boundary_inclusive",
+    "numeric_test",
+    "categorical_test",
+    "test_threshold",
+    "minimum_current_rows",
+    "trigger_populations",
+    "deadline_seconds"
+  ],
+  "type": "object"
+}

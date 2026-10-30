@@ -150,6 +150,7 @@ The E2E runners can also run on their own. Each runner that takes an output dire
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 .venv/bin/python -m scripts.quality.run_dvc_e2e
 .venv/bin/python -m scripts.training.run_dvc_baseline_e2e
+.venv/bin/python -m monitoring.run_drift_e2e
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 .venv/bin/python -m scripts.infrastructure.run_host_session_e2e
 .venv/bin/python -m scripts.infrastructure.run_aws_tasks_e2e
