@@ -9,6 +9,7 @@ the stable model, and the row records both versions.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -22,7 +23,7 @@ from scripts.serving.keys import KeyRing
 from scripts.serving.limiter import RateLimiter
 from scripts.serving.manifests import ManifestStore
 from scripts.serving.metrics import Metrics
-from scripts.serving.predictions import PredictionBuffer
+from scripts.serving.predictions import RETRY_AFTER_SECONDS, BufferFull, PredictionBuffer
 
 LOG = logging.getLogger(__name__)
 SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
@@ -49,6 +50,14 @@ class Reply:
     status: int
     body: dict[str, Any]
     headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Admitted:
+    """A request whose key was accepted and whose rate limit was taken. It carries the key identifier and the time the request started."""
+
+    key_id: str
+    started: float
 
 
 @dataclass
@@ -160,34 +169,71 @@ class ModelService:
         ready = all(self._active.get(h) is not None and self._active[h].stable.state == "loaded" for h in self._hai_types)
         return Reply(200 if ready else 503, body)
 
-    def predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
-        """Answer one request and count it with its duration. A failure no rule expected is counted as 500 and raised."""
+    def admit(self, api_key: str | None) -> Admitted | Reply:
+        """Check the key and take one token of its rate limit, before the body is read. A refusal is counted and returned as the reply."""
         started = self._clock()
         try:
-            reply = self._predict(api_key, request_id, payload)
+            key_id = self.keys.identify(api_key)
+            if key_id is None:
+                return self._count(refusal(401, "unauthorized"), started)
+            wait = self.limiter.check(key_id)
         except BaseException:
             self.metrics.observe("/v1/predict", "POST", "500", self._clock() - started)
             raise
+        if wait is not None:
+            return self._count(Reply(429, {"error": "rate_limited"}, {"Retry-After": str(int(wait))}), started)
+        return Admitted(key_id, started)
+
+    def reject_body(self, admitted: Admitted, status: int, error: str) -> Reply:
+        """Answer a body the adapter refused to read (too large, too slow or malformed) and count the request."""
+        return self._count(refusal(status, error), admitted.started)
+
+    def finish(self, admitted: Admitted, request_id: str | None, payload: Any) -> Reply:
+        """Answer an admitted request and count it with its duration. A failure no rule expected is counted as 500 and raised."""
+        try:
+            reply = self._predict(admitted.key_id, request_id, payload)
+        except BaseException:
+            self.metrics.observe("/v1/predict", "POST", "500", self._clock() - admitted.started)
+            raise
+        return self._count(reply, admitted.started)
+
+    def predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
+        """Admit and finish one request whose body is already read."""
+        admitted = self.admit(api_key)
+        return admitted if isinstance(admitted, Reply) else self.finish(admitted, request_id, payload)
+
+    def _count(self, reply: Reply, started: float) -> Reply:
         self.metrics.observe("/v1/predict", "POST", str(reply.status), self._clock() - started)
         return reply
 
-    def _predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
-        key_id = self.keys.identify(api_key)
-        if key_id is None:
-            return refusal(401, "unauthorized")
-        wait = self.limiter.check(key_id)
-        if wait is not None:
-            return Reply(429, {"error": "rate_limited"}, {"Retry-After": str(int(wait))})
+    def _predict(self, key_id: str, request_id: str | None, payload: Any) -> Reply:
         parsed = self._parse(payload)
         if isinstance(parsed, Reply):
             return parsed
         hai_type, ccn, window_year = parsed
+        try:
+            self.buffer.reserve()
+        except BufferFull:
+            return Reply(503, {"error": "predictions_backlog"}, {"Retry-After": str(RETRY_AFTER_SECONDS)})
+        try:
+            reply, row = self._serve(key_id, request_id, hai_type, ccn, window_year)
+        except BaseException:
+            self.buffer.release()
+            raise
+        if row is None:
+            self.buffer.release()
+        else:
+            self.buffer.add(row)
+        return reply
+
+    def _serve(self, key_id: str, request_id: str | None, hai_type: str, ccn: str, window_year: int) -> tuple[Reply, dict[str, Any] | None]:
+        """Route, read the features and predict. The row is returned with a 200 reply and is None for every other reply."""
         rid = request_id if request_id is not None and SAFE_REQUEST_ID.fullmatch(request_id) else self._new_id()
         if self._clock() >= self._next_refresh:
             self.refresh()
         active = self._active.get(hai_type)
         if active is None:
-            return refusal(503, "no_deployment", request_id=rid)
+            return refusal(503, "no_deployment", request_id=rid), None
         routed = canary.route(active.deployment, ccn, window_year)
         slot, fallback = active.stable, False
         if routed == "canary":
@@ -201,33 +247,31 @@ class ModelService:
                 slot, fallback = active.stable, True
                 answered = self._answer(slot, ccn, window_year)
         except contract.NotFound:
-            return refusal(404, "hospital_window_not_found", request_id=rid)
+            return refusal(404, "hospital_window_not_found", request_id=rid), None
         except contract.ServingError:
-            return refusal(503, "features_unavailable", request_id=rid)
+            return refusal(503, "features_unavailable", request_id=rid), None
         if answered is None:
-            return refusal(503, "model_unavailable", request_id=rid)
+            return refusal(503, "model_unavailable", request_id=rid), None
         value, served = answered
         candidate_version = active.candidate.version if active.candidate is not None else None
         routed_version = candidate_version if routed == "canary" and candidate_version is not None else active.stable.version
         served_by = "canary" if slot is active.candidate else "stable"
-        self.buffer.add(
-            {
-                "request_id": rid,
-                "predicted_at": datetime.now(UTC),
-                "hai_type": hai_type,
-                "ccn": ccn,
-                "window_year": window_year,
-                "prediction": value,
-                "model_version": slot.version,
-                "routed_version": routed_version,
-                "served_by": served_by,
-                "fallback": fallback,
-                "deployment_id": active.deployment.deployment_id,
-                "api_key_id": key_id,
-                "feature_schema_sha256": served.feature_schema_hash,
-                "features_as_of": date.fromisoformat(served.features_as_of),
-            }
-        )
+        row = {
+            "request_id": rid,
+            "predicted_at": datetime.now(UTC),
+            "hai_type": hai_type,
+            "ccn": ccn,
+            "window_year": window_year,
+            "prediction": value,
+            "model_version": slot.version,
+            "routed_version": routed_version,
+            "served_by": served_by,
+            "fallback": fallback,
+            "deployment_id": active.deployment.deployment_id,
+            "api_key_id": key_id,
+            "feature_schema_sha256": served.feature_schema_hash,
+            "features_as_of": date.fromisoformat(served.features_as_of),
+        }
         LOG.info("request %s answered by %s version %s for key %s", rid, served_by, slot.version, key_id)
         body = {
             "request_id": rid,
@@ -241,17 +285,28 @@ class ModelService:
             "features_as_of": served.features_as_of,
             "feature_schema_sha256": served.feature_schema_hash,
         }
-        return Reply(200, body, {"X-Request-ID": rid})
+        return Reply(200, body, {"X-Request-ID": rid}), row
 
     def _answer(self, slot: Slot, ccn: str, window_year: int) -> tuple[float, contract.Served] | None:
-        """Read the features for the slot's model and predict. None when the slot cannot predict. Feature store errors propagate as serving errors."""
+        """Read the features for the slot's model and predict. None when the slot cannot predict.
+
+        Store errors propagate as serving errors. A feature error that belongs to a canary model counts as that model's failure.
+        """
         if slot.model is None or slot.state != "loaded":
             return None
-        served = contract.serve(
-            self._read_marker, self._read_features, references=slot.model.references, schema_hash=slot.model.schema_hash, ccn=ccn, window_year=window_year
-        )
+        try:
+            served = contract.serve(
+                self._read_marker, self._read_features, references=slot.model.references, schema_hash=slot.model.schema_hash, ccn=ccn, window_year=window_year
+            )
+        except contract.ModelMismatch as error:
+            self._failed(slot, error)
+            if self._is_stable(slot):
+                raise
+            return None
         try:
             value = float(slot.model.predict(served.values))
+            if not math.isfinite(value):
+                raise ValueError("the model returned a number that is not finite")
         except Exception as error:
             self._failed(slot, error)
             return None
@@ -263,14 +318,11 @@ class ModelService:
         with self._lock:
             slot.failures += 1
             LOG.warning("model version %s failed a prediction (%s), %d in a row", slot.version, type(error).__name__, slot.failures)
-            if slot.failures >= self._failure_limit and slot is not self._stable_slot(slot):
+            if slot.failures >= self._failure_limit and not self._is_stable(slot):
                 slot.state = "ejected"
 
-    def _stable_slot(self, slot: Slot) -> Slot | None:
-        for active in self._active.values():
-            if slot is active.stable:
-                return slot
-        return None
+    def _is_stable(self, slot: Slot) -> bool:
+        return any(slot is active.stable for active in self._active.values())
 
     def _parse(self, payload: Any) -> tuple[str, str, int] | Reply:
         if not isinstance(payload, dict) or set(payload) != FIELDS:

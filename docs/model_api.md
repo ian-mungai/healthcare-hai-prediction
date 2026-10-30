@@ -40,15 +40,17 @@ The key check comes first, then the rate limit, then validation. A refused reque
 
 ## API keys
 
-The service holds the SHA-256 hash of each key under a short identifier and never the key. The identifier names the caller in the rate limit and in each prediction row. No key reaches a log line, an answer, a row or a metric label. Create a key and its hash on the Mac without printing the key:
+The service holds the SHA-256 hash of each key under a short identifier and never the key. The identifier names the caller in the rate limit and in each prediction row. No key reaches a log line, an answer, a row or a metric label.
+
+Make a key with the project tool, not with a shell recipe. The tool writes the key to a file with no trailing newline and a mode only the owner can read. It prints the hash of exactly those bytes, which is what a caller presents. It never prints the key and never overwrites an existing key file:
 
 ```sh
 umask 077
-openssl rand -hex 24 > "$TMPDIR/api_key"
-printf '{"<KEY_ID>": "%s"}' "$(shasum -a 256 < "$TMPDIR/api_key" | cut -d ' ' -f 1)" > "$TMPDIR/key_hashes.json"
+mkdir "$TMPDIR/api_key_folder"
+.venv/bin/python -m scripts.serving.keys new --id <KEY_ID> --output "$TMPDIR/api_key_folder"
 ```
 
-Merge the entry into the JSON object in the Parameter Store parameter `model_api_key_hashes` and give the key file to its caller through a channel the owner chooses. Remove both files when done. To rotate a key, add the new entry, restart the service, then remove the old entry and restart again.
+Merge the printed entry into the JSON object in the Parameter Store parameter `model_api_key_hashes` and give the key file to its caller through a channel the owner chooses. Callers send the file's text as the `X-API-Key` header. Remove the folder when done. To rotate a key, add the new entry, restart the service, then remove the old entry and restart again.
 
 ## Rate limit
 
@@ -81,7 +83,7 @@ There are no real callers. The proof of the canary is replayed requests, not liv
 Run a replay through the port forward. The corpus is a text file with one `ccn,window_year` line for each hospital-window. The key comes from the environment and is never printed:
 
 ```sh
-MODEL_API_KEY="$(cat "$TMPDIR/api_key")" .venv/bin/python -m scripts.serving.replay \
+MODEL_API_KEY="$(cat "$TMPDIR/api_key_folder/api_key")" .venv/bin/python -m scripts.serving.replay \
   --url http://127.0.0.1:8000 --hai-type HAI_1 --corpus hospital_windows.csv --output replay_report.json
 ```
 

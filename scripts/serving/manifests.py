@@ -30,6 +30,8 @@ class Stored:
 class ManifestStore(Protocol):
     def read_active(self, hai_type: str) -> Stored | None: ...
 
+    def read_history(self, hai_type: str, deployment_id: str) -> bytes | None: ...
+
     def put_history(self, hai_type: str, deployment_id: str, body: bytes) -> None: ...
 
     def replace_active(self, hai_type: str, body: bytes, expected_token: str | None) -> None: ...
@@ -61,6 +63,10 @@ class FileManifestStore:
             return None
         body = path.read_bytes()
         return Stored(token_of(body), body)
+
+    def read_history(self, hai_type: str, deployment_id: str) -> bytes | None:
+        path = self.root / "history" / hai_type / f"{deployment_id}.json"
+        return path.read_bytes() if path.exists() else None
 
     def put_history(self, hai_type: str, deployment_id: str, body: bytes) -> None:
         path = self.root / "history" / hai_type / f"{deployment_id}.json"
@@ -99,6 +105,10 @@ class S3ManifestStore:
     def read_active(self, hai_type: str) -> Stored | None:
         found = self._get(self._key("active", f"{hai_type}.json"))
         return None if found is None else Stored(found[0], found[1])
+
+    def read_history(self, hai_type: str, deployment_id: str) -> bytes | None:
+        found = self._get(self._key("history", hai_type, f"{deployment_id}.json"))
+        return None if found is None else found[1]
 
     def put_history(self, hai_type: str, deployment_id: str, body: bytes) -> None:
         key = self._key("history", hai_type, f"{deployment_id}.json")

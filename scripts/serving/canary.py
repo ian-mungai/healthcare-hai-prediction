@@ -34,6 +34,7 @@ class Deployment:
     stable_version: str
     candidate_version: str | None
     percent: int
+    sequence: int = 1
 
     def __post_init__(self) -> None:
         if self.hai_type not in HAI_TYPES:
@@ -46,6 +47,8 @@ class Deployment:
             raise DeploymentInvalid("a deployment without a candidate has no percent")
         if self.candidate_version is not None and (isinstance(self.percent, bool) or not isinstance(self.percent, int) or not 1 <= self.percent <= MAX_PERCENT):
             raise DeploymentInvalid(f"the canary percent must be a whole number from 1 to {MAX_PERCENT}")
+        if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 1:
+            raise DeploymentInvalid("the sequence must be a positive whole number")
         if self.candidate_version == self.stable_version:
             raise DeploymentInvalid("the candidate is the stable version")
 
@@ -57,6 +60,7 @@ class Deployment:
             "stable_version": self.stable_version,
             "candidate_version": self.candidate_version,
             "percent": self.percent,
+            "sequence": self.sequence,
         }
         return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
@@ -66,10 +70,17 @@ class Deployment:
             document: Any = json.loads(raw)
         except ValueError:
             raise DeploymentInvalid("the deployment record is not JSON") from None
-        expected = {"version", "hai_type", "deployment_id", "stable_version", "candidate_version", "percent"}
+        expected = {"version", "hai_type", "deployment_id", "stable_version", "candidate_version", "percent", "sequence"}
         if not isinstance(document, dict) or set(document) != expected or document["version"] != 1:
             raise DeploymentInvalid("the deployment record has other fields than the format")
-        return cls(document["hai_type"], document["deployment_id"], document["stable_version"], document["candidate_version"], document["percent"])
+        return cls(
+            document["hai_type"],
+            document["deployment_id"],
+            document["stable_version"],
+            document["candidate_version"],
+            document["percent"],
+            document["sequence"],
+        )
 
 
 def bucket(deployment_id: str, hai_type: str, ccn: str, window_year: int) -> int:

@@ -29,6 +29,7 @@ FEATURE_REPO = ROOT / "feature_store"
 SETTINGS_FILE = FEATURE_REPO / "feature_store_aws.yaml"
 COLUMNS = json.loads((ROOT / "data_contracts/serving/predictions.json").read_text())["columns"]
 LOG = logging.getLogger(__name__)
+SINK_CLOSE_SECONDS = 5.0
 
 
 class SettingsInvalid(SystemExit):
@@ -97,11 +98,12 @@ def manifest_store(uri: str) -> manifests.ManifestStore:
     return manifests.S3ManifestStore(importlib.import_module("boto3").client("s3", config=config), bucket, prefix)
 
 
-def build(environ: Mapping[str, str], settings: Settings) -> service.ModelService:
+def build(environ: Mapping[str, str], settings: Settings) -> tuple[service.ModelService, IcebergSink]:
     store = importlib.import_module("feast").FeatureStore(repo_path=str(FEATURE_REPO), fs_yaml_file=SETTINGS_FILE)
     mutable = dict(environ)
-    buffer = predictions.PredictionBuffer(IcebergSink(environ), columns=COLUMNS, capacity=5000, batch=50, deadline_seconds=20.0, clock=time.monotonic)
-    return service.ModelService(
+    sink = IcebergSink(environ)
+    buffer = predictions.PredictionBuffer(sink, columns=COLUMNS, capacity=5000, batch=50, deadline_seconds=20.0, clock=time.monotonic)
+    api = service.ModelService(
         keys=keys.KeyRing.from_hashes(settings.key_hashes),
         limiter=limiter.RateLimiter(rate_per_minute=settings.rate_per_minute, burst=settings.burst, clock=time.monotonic),
         read_marker=contract.marker_reader(mutable),
@@ -115,12 +117,13 @@ def build(environ: Mapping[str, str], settings: Settings) -> service.ModelServic
         refresh_seconds=settings.refresh_seconds,
         failure_limit=3,
     )
+    return api, sink
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = settings_from(os.environ)
-    api = build(os.environ, settings)
+    api, sink = build(os.environ, settings)
     stop = threading.Event()
 
     def flusher() -> None:
@@ -146,6 +149,8 @@ def main() -> int:
         stop.set()
         thread.join(timeout=5)
         api.buffer.flush()
+        if not sink.close(SINK_CLOSE_SECONDS):
+            LOG.warning("the prediction append worker did not end within %g s, and it may still commit", SINK_CLOSE_SECONDS)
     return 0
 
 
