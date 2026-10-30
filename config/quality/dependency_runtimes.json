@@ -62,6 +62,11 @@
       "requirements": ["services/feature_store/requirements.in"],
       "code": ["feature_store/*.py"]
     },
+    "serving": {
+      "reason": "The model API runs in the image that services/model_api/Dockerfile builds. Until the owner compiles the hash-pinned lock requirements.txt with services/model_api/compile_lock.sh, the approved versions in requirements.in are the runtime's requirements.",
+      "requirements": ["services/model_api/requirements.in"],
+      "code": ["scripts/serving/api.py", "scripts/serving/api_image_cases.py", "scripts/serving/iceberg_sink.py", "scripts/serving/main.py", "scripts/serving/mlflow_loader.py"]
+    },
     "sqlfluff": {
       "reason": "A tool environment (.tools/sqlfluff) with no project code.",
       "requirements": ["scripts/quality/sqlfluff/requirements.txt"],
