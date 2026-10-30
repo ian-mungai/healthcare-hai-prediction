@@ -44,7 +44,14 @@ PREPARATION_PATH = "config/aws/iam_preparation.json"
 PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
 BRONZE_TABLES_PATH = "config/lakehouse/bronze_tables.json"
 # The IAM stack files that declare the preparation inputs.
-PREPARATION_VARIABLE_FILES = ("variables.tf", "bronze_writer_variables.tf", "job_variables.tf", "job_writer_variables.tf", "training_variables.tf")
+PREPARATION_VARIABLE_FILES = (
+    "variables.tf",
+    "bronze_writer_variables.tf",
+    "job_variables.tf",
+    "job_writer_variables.tf",
+    "training_variables.tf",
+    "athena_mirror_variables.tf",
+)
 # The resource types the platform stack (the project profile) may declare, and the ones the IAM stack (the administrator) must keep.
 PLATFORM_RESOURCE_TYPES = {
     "aws_cloudwatch_log_group",
@@ -603,11 +610,23 @@ PREPARATION_PLANTS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
     ),
     "duplicate_key_allowed": ([("if len({key for key, _ in pairs}) != len(pairs):", "if False:")], ["duplicate_key"]),
     "object_check_removed": ([("if not isinstance(document, dict):", "if False:")], ["not_json", "not_object"]),
+    "athena_owner_user_unchecked": (
+        [("(owner and not OWNER_USER.fullmatch(owner))", "False")],
+        ["owner_user_wildcard", "owner_user_with_path", "owner_user_too_long", "owner_user_space"],
+    ),
     "closed_schema_removed": (
-        [("if not document.keys() >= PREPARATION_NAMES or document.keys() - PREPARATION_NAMES - set(OPTIONAL_PREPARATION_FLAGS):", "if False:")],
+        [
+            (
+                "if not document.keys() >= PREPARATION_NAMES or document.keys() - PREPARATION_NAMES - OPTIONAL_PREPARATION_NAMES:",
+                "if False:",
+            )
+        ],
         ["missing_key", "extra_key"],
     ),
-    "bool_check_removed": ([("if not isinstance(document[name], bool):", "if document[name] is None:")], ["string_bool", "int_bool"]),
+    "bool_check_removed": (
+        [("if not isinstance(document[name], bool):", "if document[name] is None:")],
+        ["string_bool", "int_bool", "endpoints_string_bool", "training_string_bool", "athena_string_bool", "athena_int_bool"],
+    ),
     "pattern_check_removed": ([("(collection and not COLLECTION_PATTERN.fullmatch(collection))", "False")], ["collection_pattern", "collection_extra_part"]),
     "membership_check_removed": ([("if collection and collection not in mapped_collections(tables):", "if False:")], ["unmapped_collection"]),
     "table_map_errors_uncaught": ([("except (OSError, ValueError, KeyError, TypeError):", "except KeyError:")], ["tables_garbage"]),
@@ -693,6 +712,18 @@ def preparation_rejections() -> list[tuple[str, str | None, str, str | None, str
         ("endpoints_string_bool", text(job_endpoints_enabled="true"), "job_endpoints_enabled to true or false", None),
         ("training_string_bool", text(training_prepared="true"), "training_prepared to true or false", None),
         ("null_bool", text(bronze_writer_prepared=None), "bronze_writer_prepared to true or false", None),
+        ("athena_string_bool", text(athena_mirror_prepared="true"), "athena_mirror_prepared to true or false", None),
+        ("athena_int_bool", text(athena_mirror_prepared=1), "athena_mirror_prepared to true or false", None),
+        ("owner_user_not_string", text(athena_owner_user=5), "athena_owner_user to empty or one IAM user name", None),
+        ("owner_user_wildcard", text(athena_owner_user="*"), "athena_owner_user to empty or one IAM user name", None),
+        (
+            "owner_user_with_path",
+            text(athena_owner_user="team/example_owner_planted"),
+            "athena_owner_user to empty or one IAM user name",
+            "example_owner_planted",
+        ),
+        ("owner_user_too_long", text(athena_owner_user="u" * 65), "athena_owner_user to empty or one IAM user name", None),
+        ("owner_user_space", text(athena_owner_user="example owner"), "athena_owner_user to empty or one IAM user name", None),
         ("collection_type", text(bronze_qualification_collection=5), "empty or a publisher/collection", None),
         ("collection_pattern", text(bronze_qualification_collection="Example/Planted_Bad"), "empty or a publisher/collection", "Example/Planted_Bad"),
         ("collection_extra_part", text(bronze_qualification_collection=other + "/planted"), "empty or a publisher/collection", "/planted"),
@@ -761,15 +792,15 @@ def storage_ignores_file(evidence: Evidence, sources: dict[str, bytes], prefix: 
     return step, result.returncode == 0 and (workspace / "infra/deployment.auto.tfvars.json").is_file() and not (workspace / "infra/iam").exists()
 
 
-def render_written(evidence: Evidence, sources: dict[str, bytes], prefix: str) -> tuple[dict[str, Any], bool]:
+def render_written(evidence: Evidence, sources: dict[str, bytes], prefix: str, **changes: Any) -> tuple[dict[str, Any], bool]:
     """A prepared file must render to the exact owner-only output, leave no temporary file and pass the matching check."""
     workspace = copied_workspace(evidence.temporary, f"{prefix}_render", sources, FIXTURE)
-    write_preparation(workspace, prepared_document())
+    write_preparation(workspace, prepared_document(**changes))
     command = [sys.executable, "-m", RENDERER_MODULE, "--stack", "iam"]
     step, result = evidence.run(f"{prefix}_render_prepared", command, workspace)
     path = workspace / PREPARATION_OUTPUT
     written = result.returncode == 0 and not result.stderr and path.is_file()
-    exact = written and json.loads(path.read_text(encoding="utf-8")) == prepared_document() and stat.S_IMODE(path.stat().st_mode) == 0o600
+    exact = written and json.loads(path.read_text(encoding="utf-8")) == prepared_document(**changes) and stat.S_IMODE(path.stat().st_mode) == 0o600
     _, checked = evidence.run(f"{prefix}_check_prepared", [*command, "--check"], workspace)
     return step, exact and checked.returncode == 0 and not list(workspace.rglob(".config_*"))
 
@@ -801,6 +832,10 @@ def run_preparation_cases(evidence: Evidence, sources: dict[str, bytes], rendere
     evidence.check(step, "storage_render_ignores_the_file", ok)
     step, ok = render_written(evidence, sources, "prep")
     evidence.check(step, "prepared_file_rendered_exactly", ok)
+    step, ok = render_written(evidence, sources, "prep_athena", athena_mirror_prepared=True)
+    evidence.check(step, "file_with_the_athena_flag_rendered_exactly", ok)
+    step, ok = render_written(evidence, sources, "prep_athena_owner", athena_mirror_prepared=True, athena_owner_user="example_owner")
+    evidence.check(step, "file_with_the_athena_owner_user_rendered_exactly", ok)
     step, ok = stale_rejected(evidence, sources, "prep")
     evidence.check(step, "stale_output_rejected", ok)
     workspace = copied_workspace(evidence.temporary, "prep_defaults", sources, FIXTURE)
@@ -875,6 +910,8 @@ def run_preparation_plan_cases(evidence: Evidence, sources: dict[str, bytes], re
         "training_prepared": {**prepared, "training_prepared": True},
         "bronze_qualification_collection": {**prepared, "bronze_qualification_collection": collections[1]},
         "bronze_live_locations": {**prepared, "bronze_live_locations": {}},
+        "athena_mirror_prepared": {**prepared, "athena_mirror_prepared": True},
+        "athena_owner_user": {**prepared, "athena_owner_user": "example_owner"},
     }
     saved_prepared = plan("prep_plan_prepared", workspace, stack, terraform, prepared)
     step, result = check("prep_plan_prepared_accepted", workspace, saved_prepared)

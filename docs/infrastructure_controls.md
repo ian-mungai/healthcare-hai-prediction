@@ -53,7 +53,7 @@ The project profile runs the third.
 `bronze_qualification_collection` and `bronze_live_locations`. They are set only in the committed, reviewed file
 `config/aws/iam_preparation.json`, never in `.env` or on the command line. The defaults are `false`, `false`, `""` and `{}`.
 The coordinating agent changes a value after the evidence for it exists, so Git history records who prepared what and when. The renderer refuses
-a file that is not exactly those four keys with the right types. It also refuses a collection that is not mapped in
+a file that is not exactly those four keys, plus two optional inputs with the right types: `athena_mirror_prepared` (a boolean, `false` when absent) and `athena_owner_user` (one IAM user name, empty when absent). The user name belongs only in the owner's local copy of the file, never in a committed one. It also refuses a collection that is not mapped in
 `config/lakehouse/bronze_tables.json` and a location map that is neither empty nor exactly the bronze and bronze dictionary
 locations of the data bucket. It then writes the ignored `infra/iam/preparation.auto.tfvars.json`. Before an apply, the saved plan
 must carry exactly these values, so a file edited between plan and apply is refused. The Terraform preconditions still decide
@@ -74,7 +74,7 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 | Service | What the project profile can do | Scope |
 | --- | --- | --- |
 | `s3` | Read and write the bucket settings Terraform manages. Read, write and delete objects. Run multipart uploads | The project bucket only. The write-prefix denies and the conditional single-copy create stay. Delete only under `lakehouse/` |
-| `sts` | `AssumeRole` | The lakehouse reader and writer roles, plus the job try-writer role only with a `hai_try_*` session name |
+| `sts` | `AssumeRole` | The lakehouse reader and writer roles, the Athena reader role `<PROJECT_NAME>_athena_reader_<ENVIRONMENT>`, plus the job try-writer role only with a `hai_try_*` session name |
 | `ssm` | Read the 17 control-plane parameters, write the 16 managed ones (not the Airflow administrator password), read and write the ten AWS Polaris pair names (reader, e2e, bronze, silver and gold client ID and secret) for the AWS catalog setup, read AWS's public `/aws/service/ecs/*` parameters, start a Session Manager port-forwarding session to the project host, resume and end its own sessions | Exact parameter ARNs, taken from the defaults of the secret-name variables in `infra/iam/variables.tf` (the file lists none). No `DescribeParameters`, no path read |
 | `secretsmanager` | `GetSecretValue` and `DescribeSecret` | The four shared API keys only, named by the defaults of their variables in `infra/iam/variables.tf` |
 | `ecr` | Log in, push and pull images, create, delete, describe and set the lifecycle of repositories | `<PROJECT_NAME>_*_<ENVIRONMENT>` repositories |
@@ -278,10 +278,8 @@ versions or delete markers. One exception covers only `lakehouse/`, where
 Iceberg replaces and deletes its own table files: replaced versions there expire
 30 days after they are replaced and orphaned delete markers are removed. Current
 lakehouse files never expire. A second rule, `expire_replaced_dvc_versions`, covers only `dvc/`, the prefix of the DVC remote for the training
-baseline. Replaced versions there expire after 30 days and orphaned delete markers are removed. Current DVC objects never expire. A third rule,
-`expire_replaced_mlflow_versions`, treats `mlflow/` the same way: it is the artifact prefix of the MLflow service. It exists only when the
-owner plans and applies with `terraform.sh --mlflow-retention` (the `mlflow_retention_enabled` input). A default plan of the storage stack leaves the three
-other rules as they are and changes nothing live. Everything outside `lakehouse/`, `dvc/` and `mlflow/` never expires. The storage stack and its mock-plan test hold the DVC and MLflow rules. The owner applies them and the MLflow rule is not applied yet. Local mock-plan tests, source-shape checks and live
+baseline. Replaced versions there expire after 30 days and orphaned delete markers are removed. Current DVC objects never expire. A third rule, `expire_athena_results`, covers only `athena/results/`, where Athena writes query results that can hold Confidential rows. Current results expire after 7 days and replaced versions after 1 day. S3 allows either an expiry in days or the delete-marker cleanup in one rule, so the delete markers of expired results stay. The mock-plan test checks sample keys, so no other prefix matches this rule. A fourth rule, `expire_replaced_mlflow_versions`, treats `mlflow/` like `dvc/`. It is the artifact prefix of the MLflow service. It exists only when the owner plans and applies with `terraform.sh --mlflow-retention` (the `mlflow_retention_enabled` input). Everything
+outside `lakehouse/`, `dvc/`, `athena/results/` and `mlflow/` never expires. The storage stack and its mock-plan test hold the DVC, Athena and MLflow rules. The owner applies them. The Athena and MLflow rules are not applied yet. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
