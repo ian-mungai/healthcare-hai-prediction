@@ -932,7 +932,7 @@ def case_dag(c: Checker) -> None:
     )
 
 
-def replay_send(w: World, payload: dict[str, Any]) -> tuple[int, dict[str, str], dict[str, Any]]:
+def replay_send(w: World, payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
     reply = w.api.predict(KEY_A, None, payload)
     return reply.status, reply.headers, reply.body
 
@@ -980,6 +980,53 @@ def case_replay_and_compare(c: Checker) -> None:
         c.check("a replay that cannot finish within its deadline fails", deadline_failed(w, tick))
     c.check("a corpus line that is not a ccn and a year is refused", corpus_refused("AAA001,2022\nnot-a-line\n"))
     c.check("a corpus over the line limit is refused", corpus_refused("AAA001,2022\n" * (replay.MAX_CORPUS + 1)))
+
+
+def case_replay_budget(c: Checker) -> None:
+    """A replay never waits longer than the time it has left: a long Retry-After is clamped to the budget and the replay then fails at its deadline."""
+    clock = Clock()
+    slept: list[float] = []
+
+    def pause(seconds: float) -> None:
+        slept.append(seconds)
+        clock.now += seconds
+
+    def always_limited(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        return 429, {"Retry-After": "60"}, {"error": "rate_limited"}
+
+    start = clock.now
+    failed = False
+    try:
+        replay.run(always_limited, [("AAA001", 2022)], HAI, clock=clock, sleep=pause, deadline_seconds=1.0)
+    except replay.ReplayDeadline:
+        failed = True
+    c.check("a Retry-After of 60 seconds on a 1 second deadline ends in the deadline error", failed)
+    c.check("no wait is longer than the time left", all(seconds <= 1.0 + 1e-9 for seconds in slept))
+    c.check("the replay does not run past its deadline", clock.now - start <= 1.0 + 1e-9)
+    clock2 = Clock()
+
+    def odd(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        return 429, {"Retry-After": "soon"}, {}
+
+    waits: list[float] = []
+
+    def note(seconds: float) -> None:
+        waits.append(seconds)
+        clock2.now += seconds
+
+    with contextlib.suppress(replay.ReplayDeadline):
+        replay.run(odd, [("AAA001", 2022)], HAI, clock=clock2, sleep=note, deadline_seconds=3.0)
+    seen: list[float] = []
+
+    def timed(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        seen.append(timeout)
+        clock3.now += 1.5
+        return 200, {}, {"served_by": "stable", "prediction": 1.0, "model_version": "3"}
+
+    clock3 = Clock()
+    replay.run(timed, [("AAA001", 2022), ("AAA002", 2022)], HAI, clock=clock3, sleep=lambda seconds: None, deadline_seconds=3.0)
+    c.check("every request timeout is the smaller of the default and the time left", seen == [3.0, 1.5])
+    c.check("a Retry-After that is not a number waits a short default within the budget", bool(waits) and all(0 < seconds <= 3.0 for seconds in waits))
 
 
 def deadline_failed(w: World, tick: Callable[[float], None]) -> bool:
@@ -1146,6 +1193,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
+    "replay_budget": (case_replay_budget, "canary compare"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }
