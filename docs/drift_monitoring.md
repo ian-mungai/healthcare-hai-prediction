@@ -31,9 +31,9 @@ The drift check asks one question for each infection type: have the features of 
 | `minimum_current_rows` | 100 | A report with fewer current rows is skipped and never starts retraining. |
 | `deadline_seconds` | 600 | The check ends with a named failure after this time. |
 
-The minimum of 100 current rows is the owner's starting value. It was not derived from the data. The owner reviews it once the real number of current rows per infection type is known, because a type with few reported windows could be skipped every time while a type with many windows would still pass a much higher minimum.
+The owner decided on a minimum of 100 current rows and keeps it. It was not derived from the data. The owner reviews it once the real number of current rows per infection type is known, because a type with few reported windows could be skipped every time while a type with many windows would still pass a much higher minimum.
 
-A skipped report records its reason: `no_new_window`, `too_few_current_rows` or `population_not_monitored`. A feature with no value anywhere in the current window is refused by name and blocks that type's report. Whether that should count as drift instead is open.
+A skipped report records its reason: `no_new_window`, `too_few_current_rows` or `population_not_monitored`. A feature with no value anywhere in the current window is refused by name and blocks that type's report. The owner decided this: the report gives no verdict and starts no retraining until someone looks at the feature.
 
 ## Where the parts are
 
