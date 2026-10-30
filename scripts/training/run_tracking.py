@@ -3,8 +3,9 @@
 The layout follows ``data_contracts/training/model_contract.json``: experiment ``hai_training_<type>``, a parent run ``<run_id>_<population>`` with the
 required tags and a child run per model slot, research question and validation. A run is found by its ``run_id`` and ``step_key`` tags, never created twice.
 The parent carries ``bundle_sha256`` last, as the completion mark. A parent that has it with the bundle's value is left as it is. A parent without it is an
-interrupted attempt, so it and every run of the same ``run_id`` are deleted (a soft delete) and logged again. A parent with another bundle hash, or two
-complete parents, fail. The client is any object with the MLflow client calls used here (``MlflowClient`` has them).
+interrupted attempt: the retry adopts it (a lost create response leaves such a run, found by its tags) and each child by its step key, logs only what is
+missing and finishes them. No run is ever deleted. A parent with another bundle hash, or two parents of one key, fail. The client is any object with the
+MLflow client calls used here (``MlflowClient`` has them).
 """
 
 from __future__ import annotations
@@ -65,8 +66,6 @@ class TrackingStore(Protocol):
     def log_artifact(self, run_id: str, local_path: str, artifact_path: str | None = None) -> None: ...
 
     def log_artifacts(self, run_id: str, local_dir: str, artifact_path: str | None = None) -> None: ...
-
-    def delete_run(self, run_id: str) -> None: ...
 
     def set_terminated(self, run_id: str, status: str = "FINISHED") -> None: ...
 
@@ -129,12 +128,16 @@ def numbers(prefix: str, value: Any) -> dict[str, float]:
     return {}
 
 
-def populate(store: TrackingStore, run_id: str, spec: RunSpec) -> None:
-    """Log a spec's parameters, metrics, files and folders into a fresh run."""
+def populate(store: TrackingStore, run_id: str, spec: RunSpec, kept: Any = None) -> None:
+    """Log a spec's parameters, metrics, files and folders into a run; a run adopted from an earlier attempt gets only the parameters and metrics it lacks."""
+    params = {} if kept is None else dict(kept.data.params)
+    metrics = {} if kept is None else dict(kept.data.metrics)
     for key, value in spec.params.items():
-        store.log_param(run_id, key, value)
+        if params.get(key) != str(value):
+            store.log_param(run_id, key, value)
     for key, number in spec.metrics.items():
-        store.log_metric(run_id, key, number)
+        if key not in metrics:
+            store.log_metric(run_id, key, number)
     for path, folder in spec.artifacts:
         store.log_artifact(run_id, str(path), folder)
     for path, folder in spec.folders:
@@ -161,6 +164,17 @@ def create_run_once(store: TrackingStore, experiment_id: str, run: str, step_key
     return str(created.info.run_id)
 
 
+def by_key(existing: Sequence[Any], hai_type: str, run: str) -> dict[str, Any]:
+    """Return the runs of a training run by step key; a key held by two runs fails, because only one can be resumed."""
+    found: dict[str, Any] = {}
+    for item in existing:
+        key = item.data.tags.get(STEP_TAG)
+        if key in found:
+            raise TrackingError("mlflow_duplicate_runs", f"two MLflow runs carry the key {key} of the training run {run} and type {hai_type}")
+        found[str(key)] = item
+    return found
+
+
 def log_type(store: TrackingStore, plan: TypePlan, run: str) -> str:
     """Log one type's parent and child runs unless a complete parent exists; return the parent run ID."""
     found = store.get_experiment_by_name(plan.experiment)
@@ -175,13 +189,24 @@ def log_type(store: TrackingStore, plan: TypePlan, run: str) -> str:
         raise TrackingError("mlflow_duplicate_runs", f"{len(finished)} complete MLflow runs carry the training run {run} and type {plan.hai_type}")
     if finished:
         return str(finished[0].info.run_id)
-    for item in existing:
-        store.delete_run(str(item.info.run_id))
-    parent_id = create_run_once(store, experiment_id, run, plan.parent.step_key, plan.parent.tags, f"{run}_{plan.parent.tags['population']}")
-    populate(store, parent_id, plan.parent)
+    kept = by_key(existing, plan.hai_type, run)
+    adopted = kept.pop(PARENT_STEP, None)
+    parent_id = (
+        str(adopted.info.run_id)
+        if adopted is not None
+        else create_run_once(store, experiment_id, run, plan.parent.step_key, plan.parent.tags, f"{run}_{plan.parent.tags['population']}")
+    )
+    populate(store, parent_id, plan.parent, adopted)
     for child in plan.children:
-        child_id = create_run_once(store, experiment_id, run, child.step_key, {**child.tags, PARENT_LINK: parent_id}, child.step_key)
-        populate(store, child_id, child)
+        before = kept.get(child.step_key)
+        if before is not None and before.info.status == "FINISHED":
+            continue
+        child_id = (
+            str(before.info.run_id)
+            if before is not None
+            else create_run_once(store, experiment_id, run, child.step_key, {**child.tags, PARENT_LINK: parent_id}, child.step_key)
+        )
+        populate(store, child_id, child, before)
         store.set_terminated(child_id, "FINISHED")
     dvc_baseline.log_baseline(plan.metafile, plan.matrix_path, dvc_baseline.Run(store, parent_id), plan.snapshots)
     store.set_terminated(parent_id, "FINISHED")
@@ -195,22 +220,27 @@ def log_all(store: TrackingStore, plans: Sequence[TypePlan], run: str) -> dict[s
 
 
 def log_child(store: TrackingStore, experiment: str, parent_id: str, spec: RunSpec, run: str, bundle_sha256: str) -> str:
-    """Log one more child run of a finished parent, once: a complete run of the same key is kept, an incomplete one is deleted and logged again."""
+    """Log one more child run of a finished parent, once: a complete run of the same key is kept, an incomplete one is adopted and finished."""
     found = store.get_experiment_by_name(experiment)
     if found is None:
         raise TrackingError("mlflow_experiment_missing", f"the experiment {experiment} does not exist")
     experiment_id = str(found.experiment_id)
     resolve_markers(store, experiment_id, run)
     existing = list(store.search_runs([experiment_id], f"tags.{RUN_TAG} = '{run}' and tags.{STEP_TAG} = '{spec.step_key}'", max_results=1000))
+    if any(COMPLETE_TAG in item.data.tags and item.data.tags[COMPLETE_TAG] != bundle_sha256 for item in existing):
+        raise TrackingError("mlflow_bundle_conflict", f"a complete MLflow run of {run} and {spec.step_key} carries another bundle hash")
     complete = [item for item in existing if item.data.tags.get(COMPLETE_TAG) == bundle_sha256]
-    if len(complete) > 1:
-        raise TrackingError("mlflow_duplicate_runs", f"{len(complete)} complete MLflow runs carry the key {spec.step_key} of the training run {run}")
+    if len(complete) > 1 or len(existing) > 1:
+        raise TrackingError("mlflow_duplicate_runs", f"{len(existing)} MLflow runs carry the key {spec.step_key} of the training run {run}")
     if complete:
         return str(complete[0].info.run_id)
-    for item in existing:
-        store.delete_run(str(item.info.run_id))
-    child_id = create_run_once(store, experiment_id, run, spec.step_key, {**spec.tags, PARENT_LINK: parent_id}, spec.step_key)
-    populate(store, child_id, spec)
+    kept = existing[0] if existing else None
+    child_id = (
+        str(kept.info.run_id)
+        if kept is not None
+        else create_run_once(store, experiment_id, run, spec.step_key, {**spec.tags, PARENT_LINK: parent_id}, spec.step_key)
+    )
+    populate(store, child_id, spec, kept)
     store.set_terminated(child_id, "FINISHED")
     store.set_tag(child_id, COMPLETE_TAG, bundle_sha256)
     return child_id

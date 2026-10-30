@@ -307,6 +307,8 @@ class FileTracking:
         self.runs: dict[str, dict[str, Any]] = {}
         self.calls: list[str] = []
         self.fail_on: str | None = None
+        self.creates = 0
+        self.lose_create: int | None = None
         self.models: dict[str, dict[str, Any]] = {}
         self.location = "mlflow-artifacts:/0"
 
@@ -351,6 +353,9 @@ class FileTracking:
             "metrics": {},
             "tags": dict(tags or {}),
         }
+        self.creates += 1
+        if self.lose_create == self.creates:
+            raise ConnectionError("synthetic lost response after the run was created")
         return SimpleNamespace(info=SimpleNamespace(run_id=run_id))
 
     def search_runs(self, experiment_ids: list[str], filter_string: str = "", run_view_type: int = 1, max_results: int = 1000) -> list[SimpleNamespace]:
@@ -389,10 +394,6 @@ class FileTracking:
     def log_artifacts(self, run_id: str, local_dir: str, artifact_path: str | None = None) -> None:
         self.enter("log_artifacts")
         shutil.copytree(local_dir, self.root / run_id / (artifact_path or ""), dirs_exist_ok=True)
-
-    def delete_run(self, run_id: str) -> None:
-        self.enter("delete_run")
-        self.runs[run_id]["deleted"] = True
 
     def get_registered_model(self, name: str) -> SimpleNamespace:
         self.enter("get_registered_model")
@@ -1108,6 +1109,21 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(store.models[name]["aliases"] == {"production": "1"}, f"a sensitivity run set an alias: {store.models[name]['aliases']}")
         require(listing(fixture.out) == [], "a refused check wrote output")
 
+    def lost_child_response() -> None:
+        fixture = promoted(folder / "lost_child")
+        store = fixture.tracking
+        before = len(store.runs)
+        store.lose_create = store.creates + 1
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_failed" and len(store.runs) == before + 1, f"{code} {error}")
+        store.lose_create = None
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"the retry failed: {error}")
+        promotion_runs = [run for run in store.runs.values() if run["tags"].get("step_key") == "promotion"]
+        require(len(store.runs) == before + 1 and len(promotion_runs) == 1 and not promotion_runs[0]["deleted"], f"runs: {len(store.runs)} of {before + 1}")
+        require(promotion_runs[0]["status"] == "FINISHED" and "bundle_sha256" in promotion_runs[0]["tags"], "the adopted promotion run was not completed")
+        require(len(store.models[name]["versions"]) == 1, "the retry registered another model version")
+
     def dirty_code() -> None:
         fixture = promoted(folder / "dirty")
         next(iter(fixture.tracking.parents().values()))["tags"]["git_dirty"] = "true"
@@ -1220,6 +1236,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_fails_worse_challenger_without_alias", worse_challenger)
     cases.check("job_promotion_check_never_moves_production", production_untouched)
     cases.check("job_promotion_check_refuses_sensitivity_population", sensitivity_population)
+    cases.check("job_promotion_check_retry_adopts_run_whose_response_was_lost", lost_child_response)
     cases.check("job_promotion_check_refuses_holdout_leak", holdout_leak)
     cases.check("job_promotion_check_refuses_champion_columns_outside_extract", champion_columns)
     cases.check("job_promotion_check_refuses_unloadable_champion", champion_unloadable)
@@ -1323,8 +1340,48 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_action(fixture, "log_run")
         store = fixture.tracking
         require(code == 0 and len(store.active()) == 1 + len(CHILDREN), f"the retry did not leave one complete set of runs: {error}")
-        require(len(store.runs) - len(store.active()) == 2, "the interrupted runs were not deleted")
+        require(len(store.runs) == len(store.active()), "the retry deleted an interrupted run instead of resuming it")
         require(all(len(values) == 1 for run in store.active().values() for values in run["metrics"].values()), "a retry duplicated a metric")
+
+    def lost_parent_response() -> None:
+        fixture = staged(folder / "lost_parent")
+        store = fixture.tracking
+        store.lose_create = 1
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_failed" and len(store.runs) == 1, f"{code} {error}")
+        first = next(iter(store.runs))
+        store.lose_create = None
+        code, _, error = run_action(fixture, "log_run")
+        require(code == 0, f"the retry failed: {error}")
+        require(
+            len(store.runs) == 1 + len(CHILDREN) and len(store.active()) == len(store.runs),
+            f"runs after the retry: {len(store.runs)} of which {len(store.active())} active",
+        )
+        require(list(store.parents()) == [first] and store.experiment_tags == {"0": {}}, "the retry did not adopt the run whose response was lost")
+        require(
+            all(run["tags"].get("mlflow.parentRunId") == first for run_id, run in store.runs.items() if run_id != first),
+            "a child is not under the adopted parent",
+        )
+
+    def lost_child_response() -> None:
+        fixture = staged(folder / "lost_child")
+        store = fixture.tracking
+        store.lose_create = 2
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_failed" and len(store.runs) == 2, f"{code} {error}")
+        lost = list(store.runs)[1]
+        store.lose_create = None
+        code, _, error = run_action(fixture, "log_run")
+        require(code == 0, f"the retry failed: {error}")
+        require(
+            len(store.runs) == 1 + len(CHILDREN) and len(store.active()) == len(store.runs),
+            f"runs after the retry: {len(store.runs)} of which {len(store.active())} active",
+        )
+        keys = sorted(run["tags"]["step_key"] for run in store.active().values())
+        require(
+            keys == sorted(set(keys)) and lost in store.runs and not store.runs[lost]["deleted"], f"a step key repeats or the lost child was replaced: {keys}"
+        )
+        require(all(run["status"] == "FINISHED" for run in store.active().values()), "a run was left unfinished")
 
     def duplicate_parents() -> None:
         fixture = staged(folder / "duplicates")
@@ -1370,8 +1427,8 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_action(fixture, "log_run")
         require(code == 0, f"the late run was not resolved: {error}")
         require(
-            store.runs[late]["deleted"] and len(store.parents()) == 1 and store.experiment_tags == {"0": {}},
-            "the late incomplete run was kept or the marker remained",
+            list(store.parents()) == [late] and len(store.runs) == len(store.active()) and store.experiment_tags == {"0": {}},
+            "the late run was not adopted as the parent or the marker remained",
         )
 
     def no_uri() -> None:
@@ -1428,12 +1485,14 @@ def log_run_cases(cases: Any, folder: Path) -> None:
     cases.check("job_log_run_logs_runs_tags_metrics_artifacts_and_metafile", logged)
     cases.check("job_log_run_retry_resumes_completed", retried)
     cases.check("job_log_run_retry_after_interrupt_keeps_complete_runs", interrupted)
-    cases.check("job_log_run_redoes_unfinished_runs", unfinished)
+    cases.check("job_log_run_resumes_unfinished_runs", unfinished)
+    cases.check("job_log_run_retry_adopts_parent_whose_response_was_lost", lost_parent_response)
+    cases.check("job_log_run_retry_adopts_child_whose_response_was_lost", lost_child_response)
     cases.check("job_log_run_refuses_duplicate_parents", duplicate_parents)
     cases.check("job_log_run_refuses_other_bundle_hash", bundle_conflict)
     cases.check("job_log_run_leaves_no_pending_marker", markers_cleaned)
     cases.check("job_log_run_refuses_unresolved_pending_create", unresolved_marker)
-    cases.check("job_log_run_resolves_late_run_of_pending_create", adopted_marker)
+    cases.check("job_log_run_adopts_late_run_of_pending_create", adopted_marker)
     cases.check("job_log_run_needs_tracking_uri", no_uri)
     cases.check("job_log_run_tracking_failure_named", tracking_down)
     cases.check("job_log_run_refuses_changed_fit_output", changed_fit)
