@@ -1,7 +1,7 @@
 """Run the lean broker target offline: the ECS adapter cases, then a DAG task through the HTTP broker to the fake ECS client.
 
 No AWS call, no Docker and no credential is used. The artifact goes to ``data/e2e/ecs_broker/<timestamp>.json`` (ignored by Git).
-Run from the repository root: ``.venv/bin/python -m scripts.orchestration.run_ecs_broker_e2e [--only adapter|broker] [--case NAME]``.
+Run from the repository root: ``.venv/bin/python -m scripts.orchestration.run_ecs_broker_e2e [--only adapter|broker|chain] [--case NAME]``.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = (
     "orchestration/ecs_adapter.py",
+    "dags/bronze_chain_dag.py",
+    "scripts/orchestration/ecs_chain_cases.py",
     "scripts/orchestration/ecs_broker.py",
     "config/orchestration/ecs_broker_jobs.json",
     "config/orchestration/ecs_broker_jobs.schema.json",
@@ -38,6 +40,9 @@ def suites() -> dict[str, dict[str, Callable[[], None]]]:
     except ImportError:
         return found
     found["broker"] = ecs_broker_cases.CASES
+    from scripts.orchestration import ecs_chain_cases
+
+    found["chain"] = ecs_chain_cases.CASES
     return found
 
 
@@ -47,7 +52,7 @@ def revision() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--only", choices=("adapter", "broker"))
+    parser.add_argument("--only", choices=("adapter", "broker", "chain"))
     parser.add_argument("--case")
     args = parser.parse_args()
     results = []
