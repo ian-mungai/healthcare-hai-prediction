@@ -373,7 +373,7 @@ def publish(job: Job, bucket: str) -> None:
         if step == "commit":
             accept_commit(job)
     if job.layer in RECORD_FILE:
-        run_publish(job, ["record", *common, "--record", job.folder / RECORD_FILE[job.layer], *job.local_flags])
+        run_publish(job, ["record", *common, "--publish-dir", job.publish_folder, "--record", job.folder / RECORD_FILE[job.layer], *job.local_flags])
     sys.stdout.write(f"publish acceptance passed for {job.layer} run {job.run}\n")
 
 
