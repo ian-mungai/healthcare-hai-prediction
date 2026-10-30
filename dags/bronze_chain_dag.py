@@ -12,13 +12,15 @@ exists is skipped, so a retry of one bronze snapshot starts nothing new. A faile
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import timedelta
 
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
-from airflow.sdk import DAG, Param, task
+from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration.dag_runtime import run_step
 
+LOG = logging.getLogger(__name__)
 RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
 CHAIN = (
     ("silver", "silver_transform_dag", None),
@@ -106,15 +108,28 @@ with DAG(
         previous >> current
         previous = current
 
-    # The catalog start is the last step and nothing waits for it, so a failed or slow catalog task never fails or delays a chain run. A retried bronze run
-    # names the same DAG run, which is skipped.
-    previous >> TriggerDagRunOperator(
-        task_id="start_metadata",
-        trigger_dag_id="metadata_ingest_dag",
-        trigger_run_id="{{ dag_run_id('metadata_ingest_dag', metadata_run_id(params.run_id)) }}",
-        conf={"run_id": "{{ metadata_run_id(params.run_id) }}", "mode": "{{ params.mode }}"},
-        wait_for_completion=False,
-        skip_when_already_exists=True,
-        reset_dag_run=False,
-        retries=0,
-    )
+    # The catalog start is the last step and nothing waits for it. It runs only after the drift layer succeeded, so an upstream failure still fails the chain.
+    # Its own errors (a missing or paused catalog DAG, a refused trigger) are logged and returned and never raised, so the chain result does not depend on the
+    # catalog. A retried bronze run names the same DAG run, which is skipped.
+    @task(task_id="start_metadata", retries=0)
+    def start_metadata() -> str:
+        context = get_current_context()
+        params = context["params"]
+        run = metadata_run_id(params["run_id"])
+        try:
+            TriggerDagRunOperator(
+                task_id="trigger_metadata_ingest",
+                trigger_dag_id="metadata_ingest_dag",
+                trigger_run_id=dag_run_id("metadata_ingest_dag", run),
+                conf={"run_id": run, "mode": params["mode"]},
+                wait_for_completion=False,
+                skip_when_already_exists=True,
+                reset_dag_run=False,
+                retries=0,
+            ).execute(context)
+        except Exception as error:
+            LOG.error("the catalog start for %s failed: %s", run, type(error).__name__)
+            return f"catalog start failed: {type(error).__name__}"
+        return f"catalog start requested: {run}"
+
+    previous >> start_metadata().operator
