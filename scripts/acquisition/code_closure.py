@@ -6,6 +6,7 @@ import os
 import posixpath
 import re
 import stat
+from functools import lru_cache
 from pathlib import Path
 
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, require
@@ -27,9 +28,9 @@ def compiled_file(base: Path, root: Path) -> Path | None:
     """A compiled or extension file Python would load for this module, such as native.so or native.cpython-312-darwin.so, else None."""
     for folder, stem in ((base, "__init__"), (base.parent, base.name)):
         if (root / folder).is_dir():
-            for child in sorted((root / folder).iterdir()):
-                if child.name.startswith(f"{stem}.") and child.name.endswith(COMPILED_SUFFIXES):
-                    return folder / child.name
+            for name in sorted(os.listdir(root / folder)):
+                if name.startswith(f"{stem}.") and name.endswith(COMPILED_SUFFIXES):
+                    return folder / name
     return None
 
 
@@ -317,6 +318,13 @@ def reached_files(text: str, root: Path, relative: str, index: dict[tuple[int, i
     return found, launched
 
 
+@lru_cache(maxsize=2048)
+def analyzed(source: str, relative: str) -> tuple[tuple[ast.AST, ...], dict[int, ast.Call], tuple[str, ...]]:
+    """Parse one file's text and run the checks that read only that text. A closure runs for each code check, so the same text is analyzed once per process."""
+    tree = ast.parse(source, filename=relative)
+    return tuple(ast.walk(tree)), refuse_dynamic(tree, relative), tuple(sorted(path_texts(tree)))
+
+
 def references(
     relative: str, root: Path, index: dict[tuple[int, int], list[str]], folders: set[str] | frozenset[str] = frozenset()
 ) -> tuple[set[str], set[str]]:
@@ -325,7 +333,7 @@ def references(
 
     A module is looked up in the repository root and in each of the given launch folders."""
     try:
-        tree = ast.parse((root / relative).read_text(encoding="utf-8"), filename=relative)
+        nodes, imports, texts = analyzed((root / relative).read_text(encoding="utf-8"), relative)
     except (SyntaxError, UnicodeDecodeError, ValueError) as error:
         raise RegistryError(f"Cannot bind code: {relative} is not readable Python ({error})") from error
     found: set[str] = set()
@@ -350,8 +358,7 @@ def references(
                 current.append(part)
                 add_module(current, exact=True)
 
-    imports = refuse_dynamic(tree, relative)
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 add_module(alias.name, exact=False)
@@ -371,7 +378,7 @@ def references(
             add_children(base, names)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and MODULE_LITERAL.fullmatch(node.value):
             add_module(node.value, exact=True)
-    for text in sorted(path_texts(tree)):
+    for text in texts:
         files, folders_found = reached_files(text, root, relative, index)
         found |= files
         launched |= folders_found
