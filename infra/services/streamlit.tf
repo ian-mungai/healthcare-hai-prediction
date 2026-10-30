@@ -31,7 +31,7 @@ variable "streamlit_task_role_arn" {
 }
 
 variable "streamlit_hai_types" {
-  description = "Comma separated HAI types the page offers. Each must be one the model API serves."
+  description = "Comma separated HAI types the page offers, each once. When the page is on, each must be one the model API serves."
   type        = string
   default     = "HAI_1"
 
@@ -41,8 +41,13 @@ variable "streamlit_hai_types" {
   }
 
   validation {
-    condition     = alltrue([for type in split(",", var.streamlit_hai_types) : contains(split(",", var.model_api_hai_types), type)])
+    condition     = !var.streamlit_enabled || alltrue([for type in split(",", var.streamlit_hai_types) : contains(split(",", var.model_api_hai_types), type)])
     error_message = "The page may offer only HAI types that model_api_hai_types serves."
+  }
+
+  validation {
+    condition     = length(distinct(split(",", var.streamlit_hai_types))) == length(split(",", var.streamlit_hai_types))
+    error_message = "List each HAI type once."
   }
 }
 
