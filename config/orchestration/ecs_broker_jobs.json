@@ -219,6 +219,7 @@
     },
     "metadata": {
       "deadline_seconds": 8100,
+      "network": "lakehouse",
       "log_container": "ingest_polaris",
       "containers": {
         "ingest_polaris": [
@@ -227,10 +228,46 @@
         ]
       },
       "chain": true
+    },
+    "bronze": {
+      "deadline_seconds": 14400,
+      "network": "lakehouse",
+      "log_container": "load",
+      "needs_bronze_request": true,
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "pin": [
+          "RUN_ID",
+          "CODE_SHA256",
+          "BRONZE_TABLES",
+          "BRONZE_TARGET",
+          "BRONZE_DRY_RUN"
+        ],
+        "load": [
+          "RUN_ID",
+          "POLARIS_URI",
+          "BRONZE_TABLES",
+          "BRONZE_TARGET",
+          "BRONZE_DRY_RUN"
+        ],
+        "check": [
+          "RUN_ID",
+          "BRONZE_TABLES",
+          "BRONZE_TARGET",
+          "BRONZE_DRY_RUN"
+        ]
+      },
+      "acceptance": [
+        "check"
+      ]
     }
   },
   "steps": {
     "acquire_run": null,
+    "bronze_load": "bronze",
     "catalog_backup": "gold",
     "catalog_release": null,
     "catalog_up": null,

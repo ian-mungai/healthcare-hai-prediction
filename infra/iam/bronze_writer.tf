@@ -3,14 +3,16 @@ locals {
   bronze_bucket_arn       = "arn:aws:s3:::${var.data_bucket_name}"
   bronze_namespaces       = ["bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check"]
   bronze_test_namespaces  = [for name in local.bronze_namespaces : "${name}_e2e"]
-  bronze_table_map        = jsondecode(file("${path.module}/../../config/lakehouse/bronze_tables.json"))
-  bronze_collections      = sort(distinct([for table in local.bronze_table_map.tables : table.collection]))
-  bronze_parameter_names  = [var.aws_polaris_bronze_client_id_name, var.aws_polaris_bronze_client_secret_name]
-  bronze_parameter_arns   = [for name in local.bronze_parameter_names : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"]
+  # The bronze job writes its two namespaces for a real run and their two test twins for a qualification run.
+  bronze_job_twins       = ["bronze_e2e", "bronze_dictionary_e2e"]
+  bronze_table_map       = jsondecode(file("${path.module}/../../config/lakehouse/bronze_tables.json"))
+  bronze_collections     = sort(distinct([for table in local.bronze_table_map.tables : table.collection]))
+  bronze_parameter_names = [var.aws_polaris_bronze_client_id_name, var.aws_polaris_bronze_client_secret_name]
+  bronze_parameter_arns  = [for name in local.bronze_parameter_names : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"]
   bronze_storage_inputs = {
     BUCKET_ARN           = local.bronze_bucket_arn
-    TABLE_OBJECT_ARNS    = jsonencode([for name in local.bronze_namespaces : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
-    TABLE_LIST_PREFIXES  = jsonencode([for name in local.bronze_namespaces : "lakehouse/${name}/*"])
+    TABLE_OBJECT_ARNS    = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
+    TABLE_LIST_PREFIXES  = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "lakehouse/${name}/*"])
     SOURCE_OBJECT_ARNS   = jsonencode([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${collection}/*"])
     SOURCE_LIST_PREFIXES = jsonencode([for collection in local.bronze_collections : "${collection}/*"])
   }

@@ -12,8 +12,8 @@ variable "broker_job_families" {
   nullable    = false
 
   validation {
-    condition     = alltrue([for family in var.broker_job_families : contains(["train", "silver", "gold", "features", "drift", "promote", "metadata"], family)]) && length(var.broker_job_families) == length(distinct(var.broker_job_families))
-    error_message = "Name distinct job families from train, silver, gold, features, drift, promote and metadata."
+    condition     = alltrue([for family in var.broker_job_families : contains(["train", "bronze", "silver", "gold", "features", "drift", "promote", "metadata"], family)]) && length(var.broker_job_families) == length(distinct(var.broker_job_families))
+    error_message = "Name distinct job families from train, bronze, silver, gold, features, drift, promote and metadata."
   }
 
   validation {
@@ -50,6 +50,7 @@ locals {
   # The task role each family runs with. The drift role does not exist yet: it follows the drift task, so naming drift before then fails at apply.
   broker_family_roles = {
     train    = "job_train_task"
+    bronze   = "job_write_bronze_task"
     silver   = "job_write_silver_task"
     gold     = "job_write_gold_task"
     features = "job_write_features_task"
@@ -91,6 +92,15 @@ resource "aws_iam_role_policy" "broker_jobs" {
   name   = "broker_jobs"
   role   = aws_iam_role.broker_task[0].name
   policy = templatefile("${path.module}/owner_policies/broker_jobs.json", local.broker_policy_values)
+}
+
+# The staged request of a bronze run holds its tables, target and dry run flag. Only a broker that may start the bronze family can read it.
+resource "aws_iam_role_policy" "broker_bronze_request" {
+  count = var.broker_prepared && contains(var.broker_job_families, "bronze") ? 1 : 0
+
+  name   = "broker_bronze_request"
+  role   = aws_iam_role.broker_task[0].name
+  policy = templatefile("${path.module}/owner_policies/broker_bronze_request.json", local.broker_policy_values)
 }
 
 # The host execution role injects the token into the broker and the scheduler. It holds this one parameter grant beside its other eight and the MLflow pair.

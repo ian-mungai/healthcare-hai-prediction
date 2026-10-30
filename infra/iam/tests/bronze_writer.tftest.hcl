@@ -96,7 +96,9 @@ run "bronze_prepared_role_and_pair" {
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_dictionary/*",
         "arn:aws:s3:::example-data-bucket/lakehouse/smoke_check/*",
-        "arn:aws:s3:::example-data-bucket/lakehouse/duckdb_view_check/*"
+        "arn:aws:s3:::example-data-bucket/lakehouse/duckdb_view_check/*",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_e2e/*",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_dictionary_e2e/*"
       ] &&
       output.bronze_writer_contract.principal == "bronze_writer" &&
       length(output.bronze_execution_delta.Statement[0].Resource) == 2 &&
@@ -148,9 +150,10 @@ run "bronze_rendered_storage_scope" {
 
   assert {
     condition = toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[1].Condition.StringLike["s3:prefix"]) == toset([
-      "lakehouse/bronze/*", "lakehouse/bronze_dictionary/*", "lakehouse/smoke_check/*", "lakehouse/duckdb_view_check/*"
+      "lakehouse/bronze/*", "lakehouse/bronze_dictionary/*", "lakehouse/smoke_check/*", "lakehouse/duckdb_view_check/*",
+      "lakehouse/bronze_e2e/*", "lakehouse/bronze_dictionary_e2e/*"
     ])
-    error_message = "The rendered production table list must contain exactly the four canonical prefixes."
+    error_message = "The rendered table list must contain the four canonical prefixes and the two bronze test twins, and no other test namespace."
   }
 
   assert {

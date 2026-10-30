@@ -24,6 +24,8 @@ SOURCES = (
     "dags/bronze_chain_dag.py",
     "scripts/orchestration/ecs_chain_cases.py",
     "scripts/orchestration/ecs_broker.py",
+    "scripts/orchestration/ecs_broker_cases.py",
+    "scripts/lakehouse/bronze_dispatch.py",
     "config/orchestration/ecs_broker_jobs.json",
     "config/orchestration/ecs_broker_jobs.schema.json",
     "data_contracts/orchestration/ecs_ledger_line.schema.json",
