@@ -3,7 +3,8 @@
 Only full local runs of ``scripts/run_ci.sh`` use this. The pre-push gate never does (it sets ``HAI_CI_REUSE=off`` and ``HAI_DOCKER_RELEASE=outer``),
 and hosted CI has no records. The inputs of a group are the files of the working tree (tracked, or untracked and not ignored) whose change would select
 the group: the paths for which ``scripts/quality/ci_groups.py`` selects it in the ``paths`` scope. A path that no group lists, or that is ``global``,
-belongs to every group. The input hash is the SHA-256 of the sorted ``path`` and Git blob hash lines of those files.
+belongs to every group. A ``full_only`` group has no path list, so every file is its input. The input hash is the SHA-256 of the sorted ``path`` and Git
+blob hash lines of those files.
 
 A record holds the group, the input hash, the commit and the time. It is written only when every one of these holds:
 
@@ -89,7 +90,7 @@ def input_hashes(root: Path, groups: list[str]) -> dict[str, str]:
     for path in paths:
         selected = set(ci_groups.plan("paths", "all", paths=[path], config=config)["run"])
         for group in groups:
-            if group in selected:
+            if group in selected or group in config["full_only"]:
                 lines[group].append(f"{path}\0{blobs[path]}\n")
     return {group: hashlib.sha256(("".join(lines[group])).encode()).hexdigest() for group in groups}
 

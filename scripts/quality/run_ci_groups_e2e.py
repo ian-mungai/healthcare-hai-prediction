@@ -4262,6 +4262,19 @@ def changed_files_without_a_range_case(scratch: Path) -> dict[str, Any]:
     return {"case": "pre_push_changed_file_checks_need_a_range", "passed": code == 0 and "changed_files" not in order and "run_ci" in order, "order": order}
 
 
+def unreadable_status_case(scratch: Path) -> dict[str, Any]:
+    """A tree whose state Git cannot read is refused: the checks could not describe the pushed commit."""
+    root = pre_push_repo(scratch, "gate_unreadable_status")
+    (root / ".git/index").write_bytes(b"not an index")
+    code, out, error = pre_push(root, "run", timeout=120)
+    return {
+        "case": "pre_push_refuses_a_tree_whose_state_cannot_be_read",
+        "passed": code != 0 and not [call for call in pre_push_calls(root) if call["stub"] == "run_ci"] and "no check ran" in out and "cannot be read" in out,
+        "exit": code,
+        "output": (out + error)[-300:],
+    }
+
+
 def small_case(
     scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_small: bool, mutate: Callable[[str], str] | None = None
 ) -> dict[str, Any]:
@@ -4358,6 +4371,7 @@ def osv_scanner_case(
 def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
     """The changed-file checks, the OSV-Scanner step and the small-change rule of the pre-push run."""
     results = [changed_files_first_case(scratch), changed_files_failure_case(scratch), changed_files_without_a_range_case(scratch)]
+    results.append(unreadable_status_case(scratch))
     results += changed_file_check_cases(scratch)
     results += [
         osv_scanner_case(scratch, "runs_for_a_requirements_change", ("requirements.txt",), None, True),
@@ -4437,6 +4451,11 @@ def affected(path: str) -> set[str]:
     return set(ci_groups.plan("paths", "all", paths=[path])["run"])
 
 
+def reuse_hit(path: str) -> set[str]:
+    """The groups whose main-reuse input hash a change to ``path`` moves: those it selects, and each full-only group, whose input is every file."""
+    return affected(path) | set(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["full_only"])
+
+
 def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
     """A group's pass is recorded only on a clean commit of main and reused only for identical inputs."""
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
@@ -4460,7 +4479,7 @@ def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
     probe = "dbt/models/silver/example.sql"
     (root / probe).write_text("changed\n")
     _, changed = passes(root, folder, "filter", groups)
-    hit = affected(probe)
+    hit = reuse_hit(probe)
     results.append(
         {
             "case": "pass_reuse_stops_for_the_groups_a_changed_file_selects",
@@ -4483,15 +4502,15 @@ def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
     results.append(
         {
             "case": "pass_reuse_stops_for_a_new_untracked_file",
-            "passed": all(untracked[group] == ("run" if group in affected("features/new_file.py") else "reuse") for group in recordable)
-            and bool(affected("features/new_file.py")),
+            "passed": all(untracked[group] == ("run" if group in reuse_hit("features/new_file.py") else "reuse") for group in recordable)
+            and bool(reuse_hit("features/new_file.py")),
             "run": sorted(group for group in groups if untracked[group] == "run"),
         }
     )
     (root / "features/new_file.py").unlink()
     (root / "README.md").write_text("docs change\n")
     _, documentation = passes(root, folder, "filter", groups)
-    expected = affected("README.md")
+    expected = reuse_hit("README.md")
     results.append(
         {
             "case": "pass_reuse_follows_the_selector_for_a_documentation_change",
@@ -4645,7 +4664,7 @@ def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
         (tree / probe).write_text("select 1\n")
 
     code, log = reuse_dry_run(work, out, "reuse_changed_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_changed_records", edit=add_probe)
-    hit = affected(probe)
+    hit = reuse_hit(probe)
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "selected_groups_ran": all(f"reused {group}:" not in log for group in hit),
@@ -4654,6 +4673,27 @@ def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     results.append(
         {"case": "local_run_reuse_stops_for_a_changed_input", "passed": all(checks.values()) and bool(hit), "checks": checks, "selected": sorted(hit)}
     )
+    acquisition_probe = "scripts/acquisition/example_probe.py"
+
+    def add_acquisition_probe(tree: Path) -> None:
+        (tree / acquisition_probe).write_text("EXAMPLE = 1\n")
+
+    code, log = reuse_dry_run(
+        work, out, "reuse_changed_full_only_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_full_only_records", edit=add_acquisition_probe
+    )
+    results.append({"case": "local_run_reuse_stops_for_a_changed_full_only_input", "passed": code == 0 and "reused acquisition:" not in log, "exit": code})
+
+    def break_the_lookup(tree: Path) -> None:
+        (tree / "scripts/quality/ci_main_passes.py").write_text("raise SystemExit(7)\n")
+
+    code, log = reuse_dry_run(work, out, "reuse_lookup_fails", {"HAI_CI_REUSE": "main"}, scratch / "reuse_lookup_records", edit=break_the_lookup)
+    items = local_plan_of(log)["items"]
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "nothing_reused": "reused " not in log,
+        "the_groups_still_ran": all(item in items for item in ("python_lint", "lakehouse_bronze", "sql_style")),
+    }
+    results.append({"case": "local_run_runs_every_group_when_the_reuse_lookup_fails", "passed": all(checks.values()), "checks": checks, "items": items})
     for label, env, why in (
         ("off", {"HAI_CI_REUSE": "off"}, "off by request"),
         ("under_the_gate", {"HAI_CI_REUSE": "main", "HAI_DOCKER_RELEASE": "outer"}, "the gate marker"),

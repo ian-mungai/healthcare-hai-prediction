@@ -410,7 +410,9 @@ def refusals(root: Path, end: str) -> list[str]:
     current = resolve_commit(root, "HEAD")
     if end != current:
         problems.append(f"the pushed head {end[:12] or 'is not a commit'} is not the checked-out commit {current[:12]}")
-    dirty = git(root, "status", "--porcelain", "--untracked-files=no")[1]
+    status, dirty = git(root, "status", "--porcelain", "--untracked-files=no")
+    if status != 0:
+        problems.append("the state of the working tree cannot be read (git status failed)")
     if dirty:
         problems.append("tracked files differ from HEAD (staged or unstaged): " + ", ".join(line.split(None, 1)[-1] for line in dirty.splitlines()[:10]))
     return problems

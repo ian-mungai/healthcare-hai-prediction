@@ -118,13 +118,18 @@ if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then reuse_mode=off; fi
 full_run=0
 if [[ "$part" == "all" && -z "${CI_UNITS:-}" && -z "${LAUNCHER_SHARD:-}" && -z "${FEATURE_SHARD:-}" ]]; then full_run=1; fi
 if [[ "$reuse_mode" == "main" && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then
-  kept=()
+  # Only a group the lookup names as reused leaves the run, so a lookup that fails or prints nothing runs every group.
+  reused=" "
   while read -r kind group commit; do
-    case "$kind" in
-      reuse) printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary" ;;
-      run) kept+=("$group") ;;
-    esac
-  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --groups "${run_groups[@]}")
+    if [[ "$kind" == reuse ]]; then
+      printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary"
+      reused+="$group "
+    fi
+  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
+  kept=()
+  for group in "${run_groups[@]}"; do
+    [[ "$reused" == *" $group "* ]] || kept+=("$group")
+  done
   run_groups=(${kept[@]+"${kept[@]}"})
   selected=" ${run_groups[*]:-} "
 fi

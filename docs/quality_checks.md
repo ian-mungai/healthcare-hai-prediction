@@ -945,7 +945,7 @@ tree, the reused run and the conclusion of each required job. `.venv/bin/python 
 
 A full local run of `scripts/run_ci.sh` (part `all`, no `CI_UNITS`, `LAUNCHER_SHARD` or `FEATURE_SHARD`) skips a check group when a full run on a commit of `origin/main` recorded a pass of that
 group with the same inputs (`scripts/quality/ci_main_passes.py`). The inputs of a group are the files of the working tree, tracked or new and not ignored, whose change would select the group in
-`scripts/quality/ci_groups.py`; a path that no group lists or that selects every group counts for every group. The input hash covers each such file's path and Git blob hash. The run prints
+`scripts/quality/ci_groups.py`. A path that no group lists or that selects every group counts for every group. Every file counts for a full-only group, which has no path list. A reuse lookup that fails runs every group. The input hash covers each such file's path and Git blob hash. The run prints
 `reused <group>: passed in a full run on main commit <commit> with identical inputs` and adds the line to the job summary.
 
 A passed full-scope run records its groups only when the checked-out commit is in `origin/main` and the working tree has no change. The records are files in the Git common folder
