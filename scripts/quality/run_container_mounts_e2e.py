@@ -532,6 +532,7 @@ def snapshot(deadline: float) -> dict[str, str]:
         "config/quality/launcher_inputs.json",
         "config/lakehouse/bronze_tables.json",
         "config/lakehouse/aws_bronze_grants.json",
+        "config/orchestration/ecs_broker_jobs.json",
     ):
         files[name] = (ROOT / name).read_text(encoding="utf-8")
     files[".gitignore"] = ".venv/\n.cache/\n"
