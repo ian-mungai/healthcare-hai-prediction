@@ -53,7 +53,7 @@ The project profile runs the third.
 `bronze_qualification_collection` and `bronze_live_locations`. They are set only in the committed, reviewed file
 `config/aws/iam_preparation.json`, never in `.env` or on the command line. The defaults are `false`, `false`, `""` and `{}`.
 The coordinating agent changes a value after the evidence for it exists, so Git history records who prepared what and when. The renderer refuses
-a file that is not exactly those four keys with the right types. It also refuses a collection that is not mapped in
+a file that is not exactly those four keys, plus the optional `athena_mirror_prepared` (a boolean, `false` when absent), with the right types. It also refuses a collection that is not mapped in
 `config/lakehouse/bronze_tables.json` and a location map that is neither empty nor exactly the bronze and bronze dictionary
 locations of the data bucket. It then writes the ignored `infra/iam/preparation.auto.tfvars.json`. Before an apply, the saved plan
 must carry exactly these values, so a file edited between plan and apply is refused. The Terraform preconditions still decide

@@ -25,7 +25,7 @@ BRONZE_TABLES_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_collection", "bronze_writer_prepared", "job_writer_e2e_prepared"})
 PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
 # Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
-OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared")
+OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared", "athena_mirror_prepared")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
