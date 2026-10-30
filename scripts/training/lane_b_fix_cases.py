@@ -303,8 +303,7 @@ def preparation_cases(cases: Cases, folder: Path) -> None:
         def prepared(template: str = template) -> None:
             subject = launcher.Launcher.__new__(launcher.Launcher)
             subject.cfg, subject.main_checkout, subject.key, subject.compose_models = config, ROOT, b"", {}
-            subject.docker = mock.NonCallableMock(spec_set=["image"])
-            subject.docker.image.return_value = None
+            subject.docker = mock.NonCallableMock(spec_set=["image"], **{"image.return_value": None})
             attempt = {"template": template, "checkout": str(ROOT), "params": {}}
             result = subject.prepare_attempt("at", attempt, False, {})
             service = launcher.TEMPLATES[template].service
