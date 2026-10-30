@@ -3310,7 +3310,9 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
 def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     everything = [entry for group in BODY_SELECTION for entry in STAND_IN_ENTRIES.get(group, [group])]
     core = [
-        entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
+        entry
+        for entry in everything
+        if entry not in {"launcher_e2e", "reuse_gate_checks", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
     ]
     layers = {
         "bronze": ["lakehouse_bronze"],
