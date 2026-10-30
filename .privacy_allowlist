@@ -10,6 +10,7 @@ aws-account infra/services/tests/monitoring.tftest.hcl -- synthetic all-ones acc
 aws-account infra/iam/tests/jobs_read.tftest.hcl -- synthetic all-ones and all-zeros account IDs in a Terraform test; not the project's account
 aws-account infra/iam/tests/training.tftest.hcl -- synthetic all-ones account IDs in mocked training IAM tests; not the project's account
 aws-account infra/iam/tests/job_writer.tftest.hcl -- synthetic all-ones account IDs in mocked qualification writer IAM tests; not the project's account
+aws-account infra/iam/tests/athena_mirror.tftest.hcl -- synthetic all-ones account IDs in mocked Athena mirror IAM tests; not the project's account
 aws-account scripts/infrastructure/run_jobs_iam_e2e.py -- a synthetic all-ones account ID in the job role policy assertions; not the project's account
 aws-account scripts/infrastructure/job_writer_policy_cases.py -- synthetic all-ones and all-twos account IDs in the writer policy cases; not the project's account
 aws-account scripts/infrastructure/run_e2e.py -- synthetic all-ones and all-twos account IDs in the infrastructure E2E; not the project's account
