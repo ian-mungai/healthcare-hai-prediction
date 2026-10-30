@@ -416,6 +416,8 @@ The stored collection scope remains:
 
 The 21 detailed ACS source tables plus one derived snapshot retain their 12 exact published-table comparisons. These are acquisition coverage statements. Definitions, suppression, revision, geography and model eligibility still require downstream review.
 
+**Data source verification log.** `config/acquisition/source_verification_log.json` has one row for each bronze source, for the validation-only HAC Reduction Program tables and for the rejected sources AHRF and NHSN. A row gives the publisher, route, access and terms, data class, status and the evidence the registry records. A fact that no committed record holds reads `not recorded` and has a question in the log. The log holds no names or contacts. `python -m scripts.acquisition.source_verification_log` rebuilds it. The option `--check` fails when a bronze source has no row or when a row no longer matches the registry or holds a field outside the row layout. The acquisition checks run `--check`.
+
 ### Recovered history provenance
 
 `data/acquisition_planning/closeout_20260929/history_provenance.json` (local record, not in the repository) identifies `scripts.acquisition.history_routes` as the collector for the six histories the filename table above does not fully match. Every saved job identifier matches the canonical candidate-derived identifier and its route URL matches the saved registry. Exact candidate lists were recovered from each job manifest. The original shell invocation was not logged and is not claimed.
