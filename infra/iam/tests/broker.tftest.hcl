@@ -324,3 +324,26 @@ run "token_name_under_the_aws_prefix_is_refused" {
 
   expect_failures = [var.broker_token_name]
 }
+
+run "metadata_family_passes_the_catalog_role" {
+  command = plan
+
+  variables {
+    broker_job_families = ["metadata", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_metadata:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train:*",
+      ] &&
+      [for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+      ]
+    )
+    error_message = "The metadata job has its own task definition and tag and passes the read-only catalog role."
+  }
+}

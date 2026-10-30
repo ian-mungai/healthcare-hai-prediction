@@ -343,8 +343,8 @@ variable "broker_jobs" {
   }
 
   validation {
-    condition     = !var.broker_enabled || (var.broker_jobs != null && length(try(var.broker_jobs.families, [])) > 0 && alltrue([for family in try(var.broker_jobs.families, []) : contains(["train", "silver", "gold", "features", "drift", "promote"], family)]))
-    error_message = "Name at least one job family and only from train, silver, gold, features, drift and promote."
+    condition     = !var.broker_enabled || (var.broker_jobs != null && length(try(var.broker_jobs.families, [])) > 0 && alltrue([for family in try(var.broker_jobs.families, []) : contains(["train", "silver", "gold", "features", "drift", "promote", "metadata"], family)]))
+    error_message = "Name at least one job family and only from train, silver, gold, features, drift, promote and metadata."
   }
 }
 
