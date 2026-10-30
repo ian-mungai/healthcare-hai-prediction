@@ -39,6 +39,7 @@ variables {
     marquez_web   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     mlflow        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/mlflow"
     model_api     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
+    streamlit     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
   }
 
   image_digests = {
@@ -51,6 +52,7 @@ variables {
     marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     mlflow        = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     model_api     = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    streamlit     = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
   }
 }
 
@@ -2208,4 +2210,160 @@ run "model_api_with_marquez_fits_the_resized_host" {
     condition     = contains(keys(aws_ecs_task_definition.service), "model_api") && contains(keys(aws_ecs_task_definition.service), "marquez")
     error_message = "Both optional services must plan on the resized host."
   }
+}
+
+run "streamlit_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(aws_ecs_task_definition.service), "streamlit") && !contains(keys(aws_ecs_service.service), "streamlit")
+    error_message = "The Streamlit page must not exist unless streamlit_enabled is true."
+  }
+
+  assert {
+    condition     = alltrue([for name in output.parameter_names_used : !strcontains(name, "streamlit")])
+    error_message = "No Streamlit parameter may be read while the page is off."
+  }
+}
+
+run "streamlit_is_private_pinned_and_small" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    streamlit_enabled       = true
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  assert {
+    condition     = contains(keys(aws_ecs_task_definition.service), "streamlit") && aws_ecs_service.service["streamlit"].desired_count == 1
+    error_message = "One Streamlit task must run when the flag is true."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.service["streamlit"].task_role_arn == "arn:aws:iam::111111111111:role/example-streamlit"
+    error_message = "The Streamlit page runs under its own task role."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["streamlit"].container_definitions) :
+      strcontains(container.image, "@sha256:3333") && container.readonlyRootFilesystem && !container.privileged && container.user == "10020:10020"
+    ])
+    error_message = "The Streamlit image runs by digest, unprivileged, on a read-only root file system."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["streamlit"].container_definitions) :
+      anytrue([for entry in container.environment : entry.name == "STREAMLIT_SERVER_ADDRESS" && entry.value == "127.0.0.1"])
+    ])
+    error_message = "The page binds the host loopback only, so Session Manager port forwarding is the one way in."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["streamlit"].container_definitions) :
+      anytrue([for entry in container.environment : entry.name == "MODEL_API_URL" && entry.value == "http://127.0.0.1:8000"])
+    ])
+    error_message = "The page reaches the model API over the host loopback."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["streamlit"].container_definitions) :
+      alltrue([for entry in container.environment : !can(regex("(?i)password|secret|credential|key", entry.name))])
+    ])
+    error_message = "No secret may sit in the plain environment."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["streamlit"].container_definitions) :
+      length(container.secrets) == 1 && container.secrets[0].name == "MODEL_API_KEY" && startswith(container.secrets[0].valueFrom, "arn:aws:ssm:us-west-2:111111111111:parameter/")
+    ])
+    error_message = "The page's only secret is its API key, a Parameter Store reference."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["streamlit"].container_definitions) :
+      container.memoryReservation == 256 && container.memory == 512
+    ])
+    error_message = "The assumed memory limits of the page are a 256 MiB reservation and a 512 MiB limit."
+  }
+
+  assert {
+    condition     = contains(output.parameter_names_used, "/healthcare_hai_prediction/streamlit_model_api_key")
+    error_message = "The execution role must be told to read the page's key parameter."
+  }
+
+  assert {
+    condition     = output.reserved_memory_mib <= var.host_memory_mib - var.other_services_reserve_mib
+    error_message = "With the page on, the reservations must still fit the host."
+  }
+
+  assert {
+    condition = sum(flatten([
+      for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : [for container in jsondecode(definition.container_definitions) : container.memory]
+    ])) <= var.host_memory_mib - 2048
+    error_message = "With the page on, the hard limits must still leave 2 GiB for the operating system."
+  }
+}
+
+run "streamlit_without_the_model_api_is_refused" {
+  command = plan
+
+  variables {
+    streamlit_enabled       = true
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+  }
+
+  expect_failures = [var.streamlit_enabled]
+}
+
+run "streamlit_without_a_role_is_refused" {
+  command = plan
+
+  variables {
+    streamlit_enabled       = true
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  expect_failures = [var.streamlit_task_role_arn]
+}
+
+run "streamlit_sharing_the_model_api_role_is_refused" {
+  command = plan
+
+  variables {
+    streamlit_enabled       = true
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  expect_failures = [var.streamlit_task_role_arn]
+}
+
+run "streamlit_offering_an_unserved_type_is_refused" {
+  command = plan
+
+  variables {
+    streamlit_hai_types = "HAI_2"
+  }
+
+  expect_failures = [var.streamlit_hai_types]
 }
