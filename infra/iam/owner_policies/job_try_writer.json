@@ -6,12 +6,6 @@
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
       "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/tries/*"
-    },
-    {
-      "Sid": "ReadCatalogEpochOnly",
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/authority/catalog_epoch.json"
     }
   ]
 }

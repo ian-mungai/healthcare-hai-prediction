@@ -145,8 +145,8 @@ run "read_roles_without_writers" {
   }
 
   assert {
-    condition     = aws_iam_role.job["try_writer"].description == "Upper bound for staged try outputs and the authority epoch read."
-    error_message = "The try output role description must name its output writes and its one epoch read."
+    condition     = aws_iam_role.job["try_writer"].description == "Upper bound for staged try outputs."
+    error_message = "The try output role description must name its output writes only."
   }
 
   assert {
@@ -207,14 +207,11 @@ run "read_roles_without_writers" {
     condition = (
       toset(jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[0].Action) == toset(["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]) &&
       jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/tries/*" &&
-      length(jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement) == 2 &&
-      jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[1].Effect == "Allow" &&
-      jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[1].Action == "s3:GetObject" &&
-      jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/authority/catalog_epoch.json" &&
+      length(jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement) == 1 &&
       jsondecode(aws_iam_role_policy.job_seal_deny.policy).Statement[0].Effect == "Deny" &&
       jsondecode(aws_iam_role_policy.job_seal_deny.policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/trees/*"
     )
-    error_message = "The output upper bound writes under tries and reads only the catalog epoch key, and seal tasks cannot read an input tree."
+    error_message = "The output upper bound writes under tries and grants nothing else, and seal tasks cannot read an input tree."
   }
 
   assert {

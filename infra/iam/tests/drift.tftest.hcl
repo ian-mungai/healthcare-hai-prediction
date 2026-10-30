@@ -155,7 +155,7 @@ run "drift_role_is_narrow" {
   assert {
     condition = (
       aws_iam_role.drift_task[0].name == "example_project_job_drift_task_dev" &&
-      toset(keys(aws_iam_role_policy.drift_task)) == toset(["stage_read", "features_read", "dvc_baseline", "drift_records"]) &&
+      toset(keys(aws_iam_role_policy.drift_task)) == toset(["stage_read", "features_read", "dvc_baseline_read", "drift_records"]) &&
       jsondecode(aws_iam_role.drift_task[0].assume_role_policy).Statement[0].Principal.Service == "ecs-tasks.amazonaws.com"
     )
     error_message = "The drift role is assumed by ECS tasks only and carries stage reads, the feature tables, the DVC remote and the drift records."
@@ -171,11 +171,20 @@ run "drift_role_is_narrow" {
   }
 
   assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.drift_task["dvc_baseline_read"].policy).Statement[0].Action == ["s3:GetObject"] &&
+      jsondecode(aws_iam_role_policy.drift_task["dvc_baseline_read"].policy).Statement[1].Action == "s3:ListBucket" &&
+      length(jsondecode(aws_iam_role_policy.drift_task["dvc_baseline_read"].policy).Statement) == 2
+    )
+    error_message = "The drift task only loads a baseline that training pushed: it may read and list the DVC remote and never write it."
+  }
+
+  assert {
     condition = alltrue([
-      for name, policy in aws_iam_role_policy.drift_task : name == "dvc_baseline" || name == "drift_records" ||
+      for name, policy in aws_iam_role_policy.drift_task : name == "drift_records" ||
       !anytrue([for statement in jsondecode(policy.policy).Statement : length(setintersection(toset(flatten([statement.Action])), toset(["s3:PutObject", "s3:DeleteObject"]))) > 0 && statement.Effect == "Allow"])
     ])
-    error_message = "Only the DVC remote and the drift records can be written. The stage and feature policies grant no write."
+    error_message = "Only the drift records can be written. The stage, feature and DVC policies grant no write."
   }
 }
 

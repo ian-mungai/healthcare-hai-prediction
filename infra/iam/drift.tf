@@ -19,14 +19,14 @@ variable "drift_mlflow_admin_password_name" {
 
 locals {
   drift_policy_documents = {
-    for name in ["job_dvc_baseline", "job_features_read", "drift_records", "drift_records_read", "job_drift_images"] :
+    for name in ["job_dvc_baseline_read", "job_features_read", "drift_records", "drift_records_read", "job_drift_images"] :
     name => templatefile("${path.module}/owner_policies/${name}.json", local.job_policy_inputs)
   }
   drift_policies = var.drift_prepared ? {
-    stage_read    = local.job_policy_documents.job_stage_read
-    features_read = local.drift_policy_documents.job_features_read
-    dvc_baseline  = local.drift_policy_documents.job_dvc_baseline
-    drift_records = local.drift_policy_documents.drift_records
+    stage_read        = local.job_policy_documents.job_stage_read
+    features_read     = local.drift_policy_documents.job_features_read
+    dvc_baseline_read = local.drift_policy_documents.job_dvc_baseline_read
+    drift_records     = local.drift_policy_documents.drift_records
   } : {}
 }
 
@@ -34,7 +34,7 @@ resource "aws_iam_role" "drift_task" {
   count = var.drift_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "job_drift_task")
-  description          = "Drift job: stage reads, the feature tables, the Feast registry and the DVC remote. It creates objects under drift/ and has no lakehouse write."
+  description          = "Drift job: stage reads, the feature tables, the Feast registry and a read of the DVC remote. It creates objects under drift/ and has no lakehouse write."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags

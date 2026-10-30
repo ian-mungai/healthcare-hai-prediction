@@ -37,6 +37,7 @@ POLICIES = (
     "job_execution",
     "job_try_trust",
     "job_dvc_baseline",
+    "job_dvc_baseline_read",
     *training_policy_cases.POLICIES,
 )
 Case = tuple[str, str, str, str, bool, dict[str, tuple[str, ...]]]
@@ -81,7 +82,7 @@ def cases() -> list[Case]:
         result.append((f"{actor} input tree", actor, "s3:GetObjectVersion", f"{S3}/lakehouse/run_stage/run/inputs/trees/code.tar", allowed, {}))
     for action in ("s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"):
         result.append((f"try writer {action}", "try_writer", action, f"{S3}/lakehouse/run_stage/run/tries/try_one/output", True, {}))
-    result.append(("try writer reads the catalog epoch key", "try_writer", "s3:GetObject", f"{S3}/{EPOCH_KEY}", True, {}))
+    result.append(("try writer cannot read the catalog epoch key", "try_writer", "s3:GetObject", f"{S3}/{EPOCH_KEY}", False, {}))
     for action in ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
         result.append((f"try writer cannot change or version-read the epoch key {action}", "try_writer", action, f"{S3}/{EPOCH_KEY}", False, {}))
     for resource in (
@@ -260,8 +261,6 @@ def main() -> int:
             ),
             "pass_any_role": ("project_iam", "PassReadJobRoles", "Resource", "arn:aws:iam::111111111111:role/*"),
             "seal_reads_tree": ("job_seal_deny", "NoTreeInput", "Resource", f"{S3}/unused/*"),
-            "epoch_prefix_wildcard": ("job_try_writer", "ReadCatalogEpochOnly", "Resource", f"{S3}/lakehouse/authority/*"),
-            "epoch_write": ("job_try_writer", "ReadCatalogEpochOnly", "Action", ["s3:GetObject", "s3:PutObject"]),
         }
         for label, (policy, sid, field, value) in mutations.items():
             changed = copy.deepcopy(documents)

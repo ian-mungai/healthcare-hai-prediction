@@ -1,4 +1,4 @@
-"""Exercise the DVC baseline grant of the training job role (decision 20): read and write on the ``dvc/`` prefix only, without AWS calls."""
+"""Exercise the DVC baseline grants without AWS calls: the training role reads and writes the ``dvc/`` prefix only, and the drift role reads it only."""
 
 from __future__ import annotations
 
@@ -12,20 +12,21 @@ from scripts.infrastructure.policy_evaluator import Request, decide
 BUCKET = "arn:aws:s3:::example-project-ci-bucket"
 OTHER_BUCKET = "arn:aws:s3:::another-example-bucket"
 POLICY = "job_dvc_baseline"
+READ_POLICY = "job_dvc_baseline_read"
 OBJECT = f"{BUCKET}/dvc/files/md5/6c/583397875b44dd36bdaf075486a2cf"
 OBJECT_ACTIONS = ("s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts")
 Case = tuple[str, str, str, bool, dict[str, tuple[str, ...]]]
 
 
-def cases() -> list[Case]:
-    """Specify each required grant and refusal independently of the rendered policy resources."""
+def cases(read_only: bool = False) -> list[Case]:
+    """Specify each required grant and refusal independently of the rendered policy resources. A read-only holder gets the object read and the listing only."""
     result: list[Case] = []
 
     def add(label: str, action: str, resource: str, expected: bool, context: dict[str, tuple[str, ...]] | None = None) -> None:
         result.append((label, action, resource, expected, context or {}))
 
     for action in OBJECT_ACTIONS:
-        add(f"dvc object {action}", action, OBJECT, True)
+        add(f"dvc object {action}", action, OBJECT, action == "s3:GetObject" or not read_only)
         add(f"dvc object in the other bucket {action}", action, OBJECT.replace(BUCKET, OTHER_BUCKET), False)
     for prefix in ("dvc/", "dvc/files/md5/6c/"):
         add(f"list under {prefix}", "s3:ListBucket", BUCKET, True, {"s3:prefix": (prefix,)})
@@ -50,10 +51,10 @@ def cases() -> list[Case]:
     return result
 
 
-def evaluate(document: dict[str, Any]) -> list[dict[str, Any]]:
-    """Evaluate the training role's DVC policy against every request."""
+def evaluate(document: dict[str, Any], read_only: bool = False) -> list[dict[str, Any]]:
+    """Evaluate a DVC policy against every request."""
     observations = []
-    for label, action, resource, expected, context in cases():
+    for label, action, resource, expected, context in cases(read_only):
         decision = decide([document], Request(action, resource, context))
         observations.append(
             {
@@ -69,28 +70,32 @@ def evaluate(document: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def verify(base: dict[str, dict[str, Any]], output: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Evaluate the rendered policy and retain each scope mutation; every mutation must fail at least one case."""
-    document = base[POLICY]
-    checks = evaluate(document)
-    defects = []
-    for statement in document["Statement"]:
-        variants: list[tuple[str, str, Any]] = [("widen_resource", "Resource", "*")]
-        if "Condition" in statement:
-            variants += [("drop_condition", "Condition", None), ("any_prefix", "Condition", {"StringLike": {"s3:prefix": ["*"]}})]
-        else:
-            variants += [("add_lakehouse_resource", "Resource", [*_listed(statement["Resource"]), f"{BUCKET}/lakehouse/*"])]
-            variants += [("add_delete", "Action", [*_listed(statement["Action"]), "s3:DeleteObject"])]
-        for label, field, value in variants:
-            changed = copy.deepcopy(document)
-            target = next(item for item in changed["Statement"] if item["Sid"] == statement["Sid"])
-            if value is None:
-                target.pop(field)
+    """Evaluate each rendered policy and retain each scope mutation; every mutation must fail at least one case."""
+    checks: list[dict[str, Any]] = []
+    defects: list[dict[str, Any]] = []
+    for policy, read_only in ((POLICY, False), (READ_POLICY, True)):
+        document = base[policy]
+        checks.extend(evaluate(document, read_only))
+        for statement in document["Statement"]:
+            variants: list[tuple[str, str, Any]] = [("widen_resource", "Resource", "*")]
+            if "Condition" in statement:
+                variants += [("drop_condition", "Condition", None), ("any_prefix", "Condition", {"StringLike": {"s3:prefix": ["*"]}})]
             else:
-                target[field] = value
-            failures = [item["case"] for item in evaluate(changed) if not item["passed"]]
-            name = f"{POLICY}_{statement['Sid']}_{label}"
-            (output / f"defect_{name}.json").write_text(json.dumps(changed, indent=2) + "\n")
-            defects.append({"defect": name, "caught": bool(failures), "failed_cases": failures})
+                variants += [("add_lakehouse_resource", "Resource", [*_listed(statement["Resource"]), f"{BUCKET}/lakehouse/*"])]
+                variants += [("add_delete", "Action", [*_listed(statement["Action"]), "s3:DeleteObject"])]
+                if read_only:
+                    variants += [("add_put", "Action", [*_listed(statement["Action"]), "s3:PutObject"])]
+            for label, field, value in variants:
+                changed = copy.deepcopy(document)
+                target = next(item for item in changed["Statement"] if item["Sid"] == statement["Sid"])
+                if value is None:
+                    target.pop(field)
+                else:
+                    target[field] = value
+                failures = [item["case"] for item in evaluate(changed, read_only) if not item["passed"]]
+                name = f"{policy}_{statement['Sid']}_{label}"
+                (output / f"defect_{name}.json").write_text(json.dumps(changed, indent=2) + "\n")
+                defects.append({"defect": name, "caught": bool(failures), "failed_cases": failures})
     return checks, defects
 
 
