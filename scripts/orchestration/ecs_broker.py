@@ -48,7 +48,7 @@ JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
 OPERATIONS = ("health", "submit", "status", "cancel", "logs", "record")
 MAX_BODY_BYTES = 4096
 BRONZE_REQUEST_BYTES = 4096
-BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run"}
+BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 HANDLER_TIMEOUT_SECONDS = 15.0
 CONTENT_LENGTH = re.compile(r"[0-9]{1,18}")
@@ -56,7 +56,8 @@ SUBMISSION = re.compile(
     r"^([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}):([a-z][a-z0-9_]{1,40}):(fixture|publish_fixture|real):([0-9]{1,2})(?::([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}))?$"
 )
 DIGEST = re.compile(r"[a-f0-9]{64}")
-BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN")
+BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
+DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 GATE = "@gate"
 CHAIN_LAYERS = ("silver", "gold", "features", "drift")
@@ -149,7 +150,8 @@ def s3_object_reader(s3: S3Reader, bucket: str, name: str) -> Callable[[str], st
 def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, str]) -> Callable[[str], dict[str, str]]:
     """Read and check the run's staged ``bronze_request.json`` and return the values of the bronze containers.
 
-    The file holds exactly ``tables`` (a list of table names), ``target`` (``real`` or ``qualify``) and ``dry_run`` (true or false). The tables must be
+    The file holds exactly ``tables`` (a list of table names), ``target`` (``real`` or ``qualify``), ``dry_run`` (true or false) and
+    ``inventory_sha256`` (the digest of the staged source inventory). The tables must be
     in the table map (``collections`` maps each table to its collection) and a qualification run takes the tables of one collection. A file that is not
     staged yet is retryable, a file that fails a check is refused.
     """
@@ -171,14 +173,22 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
             raise TaskRefused("bronze_request_malformed") from None
         if not isinstance(document, dict) or set(document) != BRONZE_REQUEST_KEYS:
             raise TaskRefused("bronze_request_needs_exactly_tables_target_and_dry_run")
-        tables, target, dry_run = document["tables"], document["target"], document["dry_run"]
-        if not isinstance(tables, list) or not all(isinstance(name, str) for name in tables) or not isinstance(target, str) or type(dry_run) is not bool:
+        tables, target, dry_run, inventory = document["tables"], document["target"], document["dry_run"], document["inventory_sha256"]
+        if (
+            not isinstance(tables, list)
+            or not all(isinstance(name, str) for name in tables)
+            or not isinstance(target, str)
+            or type(dry_run) is not bool
+            or not isinstance(inventory, str)
+            or not DIGEST.fullmatch(inventory)
+        ):
             raise TaskRefused("bronze_request_has_wrong_types")
         try:
             names = check_dispatch(tables, target, collections)
         except DispatchError as error:
             raise TaskRefused(f"bronze_request_refused: {error}") from None
-        return {"BRONZE_TABLES": ",".join(names), "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
+        values = {"BRONZE_TABLES": ",".join(names), "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
+        return values | {"BRONZE_REQUEST_SHA256": hashlib.sha256(body).hexdigest(), "BRONZE_INVENTORY_SHA256": inventory}
 
     return read
 
@@ -284,14 +294,24 @@ class EcsBroker:
                 raise SubmissionRefused(str(error)) from None
         if self.jobs[job].get("approval") == "promotion":
             self.require_promotion_approval(request)
+        return job
+
+    def dispatch_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
+        """The values fixed once for a submission: the checked bronze request, read once, and the absolute deadline of the task."""
+        names = {name for variables in self.jobs[job]["containers"].values() for name in variables}
+        values: dict[str, str] = {}
         if self.jobs[job].get("needs_bronze_request"):
+            if self.bronze_request is None:
+                raise SubmissionRefused("bronze_request_not_configured")
             try:
-                self.bronze_values(request.run_id)
+                values |= self.bronze_request(request.run_id)
             except TaskUnavailable as error:
                 raise Unavailable(str(error)) from None
             except TaskRefused as error:
                 raise SubmissionRefused(str(error)) from None
-        return job
+        if DEADLINE_VARIABLE in names:
+            values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(self.jobs[job]["deadline_seconds"]))
+        return values
 
     def require_promotion_approval(self, request: SubmissionRequest) -> None:
         """Refuse a promotion unless the owner staged a closed approval record for exactly this run, model, version and operation."""
@@ -324,12 +344,6 @@ class EcsBroker:
                 problem = "the approval date is invalid or in the future"
         if problem is not None:
             raise SubmissionRefused(problem)
-
-    def bronze_values(self, run_id: str) -> dict[str, str]:
-        """The checked dispatch values of a bronze run, read from the file the run staged."""
-        if self.bronze_request is None:
-            raise TaskRefused("bronze_request_not_configured")
-        return self.bronze_request(run_id)
 
     def require_signed(self) -> None:
         """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
@@ -367,7 +381,9 @@ class EcsBroker:
         if not ended or not all(line["event"] == "finished" and line.get("outcome") == "succeeded" for line in ended):
             raise SubmissionRefused(f"the {job} job needs the latest {after} attempt in run {input_run} to have passed")
 
-    def variables(self, request: SubmissionRequest, names: list[str], input_run: str | None, read: dict[str, str] | None = None) -> dict[str, str]:
+    def variables(
+        self, request: SubmissionRequest, names: list[str], input_run: str | None, fixed: Mapping[str, str], read: dict[str, str] | None = None
+    ) -> dict[str, str]:
         """The variables of one container. ``read`` holds what an earlier container of the same start already read from the bucket, so a value that was read
         once is the value every container gets."""
         read = {} if read is None else read
@@ -385,7 +401,7 @@ class EcsBroker:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: input_run or "latest",
-            **{name: partial(self.bronze_value, request.run_id, name) for name in BRONZE_VARIABLES},
+            **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, DEADLINE_VARIABLE)},
         }
         return {name: values[name]() for name in names}
 
@@ -422,9 +438,6 @@ class EcsBroker:
         temporary.write_text(text)
         os.replace(temporary, target)
 
-    def bronze_value(self, run_id: str, name: str) -> str:
-        return self.bronze_values(run_id)[name]
-
     def append(self, line: dict[str, Any]) -> dict[str, Any]:
         return self.ledger.append(line)
 
@@ -446,7 +459,15 @@ class EcsBroker:
         with self.ledger.locked(request.run_id):
             lines = self.ledger.submissions(request.run_id).get(request.submission_id)
             if lines is None:
-                self.append({"event": "intent", **self.identity(request, job), **({"job_key": self.job_key(request, job)} if job else {})})
+                fixed = self.dispatch_values(request, job) if job else {}
+                self.append(
+                    {
+                        "event": "intent",
+                        **self.identity(request, job),
+                        **({"job_key": self.job_key(request, job)} if job else {}),
+                        **({"dispatch": fixed} if fixed else {}),
+                    }
+                )
             elif {key: lines[0].get(key) for key in self.identity(request, job)} != self.identity(request, job):
                 raise SubmissionRefused("the key was used with another caller identity")
             self.advance(request, job)
@@ -475,8 +496,9 @@ class EcsBroker:
         try:
             names = self.jobs[job]["containers"]
             input_run = resolve_input(request, job, everything)
+            fixed = lines[0].get("dispatch", {})
             read: dict[str, str] = {}
-            environment = {container: self.variables(request, list(variables), input_run, read) for container, variables in names.items()}
+            environment = {container: self.variables(request, list(variables), input_run, fixed, read) for container, variables in names.items()}
             arn = self.adapter.start(job, key, environment, self.jobs[job]["network"])
         except TaskUnavailable as error:
             raise Unavailable(str(error)) from None

@@ -121,6 +121,26 @@ run "each_phase_runs_the_bronze_driver_and_nothing_else" {
   }
 }
 
+run "every_phase_runs_under_the_deadline_runner" {
+  command = plan
+
+  variables {
+    bronze_job_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for container in slice(jsondecode(output.bronze_container_definitions), 1, 5) :
+      container.entryPoint == ["/opt/hai/deadline_run", "sh", "-c"] && contains([for variable in container.environment : variable.name if variable.value == ""], "HAI_DEADLINE_UTC")
+    ])
+    error_message = "Fetch, pin, load and check start through the in-image deadline runner and take one absolute deadline from the broker, so no phase outlives the task deadline."
+  }
+
+  assert {
+    condition     = jsondecode(output.bronze_container_definitions)[0].entryPoint == ["sh", "-c"] && jsondecode(output.bronze_container_definitions)[0].command == ["chown 10001:10001 /workspace /tmp"]
+    error_message = "The init step only hands over the volumes and stays outside the runner."
+  }
+}
+
 run "the_init_step_hands_the_volumes_to_the_job_user" {
   command = plan
 
@@ -196,7 +216,7 @@ run "the_run_task_output_names_the_dispatch_variables" {
       output.bronze_run_task.task_definition == "example_project_dev_job_bronze" && output.bronze_run_task.task_role_key == "write_bronze_task" &&
       output.bronze_run_task.assign_public_ip == "DISABLED" && output.bronze_run_task.propagate_tags == "TASK_DEFINITION" &&
       output.bronze_run_task.dry_run_variable == "BRONZE_DRY_RUN" && output.bronze_run_task.dry_run_value == "1" &&
-      output.bronze_run_task.container_environment.load == ["RUN_ID", "POLARIS_URI", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN"]
+      output.bronze_run_task.container_environment.load == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers.load
     )
     error_message = "The run task output lists what the broker passes to each container and the one override that makes a dry run."
   }

@@ -237,27 +237,35 @@
       "containers": {
         "fetch": [
           "RUN_ID",
-          "CODE_SHA256"
+          "CODE_SHA256",
+          "HAI_DEADLINE_UTC"
         ],
         "pin": [
           "RUN_ID",
           "CODE_SHA256",
           "BRONZE_TABLES",
           "BRONZE_TARGET",
-          "BRONZE_DRY_RUN"
+          "BRONZE_DRY_RUN",
+          "BRONZE_REQUEST_SHA256",
+          "BRONZE_INVENTORY_SHA256",
+          "HAI_DEADLINE_UTC"
         ],
         "load": [
           "RUN_ID",
           "POLARIS_URI",
           "BRONZE_TABLES",
           "BRONZE_TARGET",
-          "BRONZE_DRY_RUN"
+          "BRONZE_DRY_RUN",
+          "BRONZE_REQUEST_SHA256",
+          "HAI_DEADLINE_UTC"
         ],
         "check": [
           "RUN_ID",
           "BRONZE_TABLES",
           "BRONZE_TARGET",
-          "BRONZE_DRY_RUN"
+          "BRONZE_DRY_RUN",
+          "BRONZE_REQUEST_SHA256",
+          "HAI_DEADLINE_UTC"
         ]
       },
       "acceptance": [

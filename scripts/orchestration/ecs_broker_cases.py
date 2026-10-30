@@ -7,6 +7,7 @@ the real ``BrokerClient``. Cluster time is the fake's poll count and the broker'
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import importlib
 import json
 import re
@@ -51,6 +52,7 @@ PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["
 JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote"})
 BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
 BRONZE_FAMILIES = JOB_FAMILIES | {"bronze"}
+INVENTORY = "cd" * 32
 
 
 def collections_of_table_map() -> dict[str, str]:
@@ -778,7 +780,7 @@ def bronze_variables(current: Rig) -> dict[str, dict[str, str]]:
 def bronze_job_gets_its_checked_dispatch_values() -> None:
     pair, _ = table_pair()
     with rig(BRONZE_FAMILIES, signed=None) as current:
-        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
         require(
             wait_for(current, current.client.submit(bronze_request())).state == State.SUCCEEDED,
             "the bronze job did not pass before the first publishes were signed",
@@ -789,12 +791,12 @@ def bronze_job_gets_its_checked_dispatch_values() -> None:
             sent["taskDefinition"] == "example_dev_job_bronze" and list(values) == ["fetch", "pin", "load", "check"],
             f"wrong definition or containers: {list(values)}",
         )
-        require(values["fetch"] == {"RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST}, str(values["fetch"]))
+        require(values["fetch"] == {"RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST, "HAI_DEADLINE_UTC": values["fetch"]["HAI_DEADLINE_UTC"]}, str(values["fetch"]))
         dispatch = {"BRONZE_TABLES": ",".join(pair), "BRONZE_TARGET": "real", "BRONZE_DRY_RUN": ""}
         for container in ("pin", "load", "check"):
             require(all(values[container][name] == value for name, value in dispatch.items()), f"{container}: {values[container]}")
         require(values["load"]["POLARIS_URI"] == "http://10.0.0.5:8181/api/catalog" and "POLARIS_URI" not in values["check"], str(values["load"]))
-        stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True})
+        stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True, "inventory_sha256": INVENTORY})
         wait_for(current, current.client.submit(bronze_request(2)))
         second = [arguments for name, arguments in current.ecs.calls if name == "run_task"][1]
         later = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in second["overrides"]["containerOverrides"]}
@@ -804,7 +806,7 @@ def bronze_job_gets_its_checked_dispatch_values() -> None:
 def bronze_job_is_off_unless_enabled() -> None:
     pair, _ = table_pair()
     with rig(JOB_FAMILIES) as current:
-        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
         raises(SubmissionRefused, lambda: current.client.submit(bronze_request()))
         require(not current.ecs.calls, "a disabled bronze job reached the cloud")
 
@@ -812,15 +814,16 @@ def bronze_job_is_off_unless_enabled() -> None:
 def bronze_refuses_bad_dispatch_values() -> None:
     pair, other = table_pair()
     bad = {
-        "unknown table": {"tables": ["not_a_table"], "target": "real", "dry_run": False},
-        "no tables": {"tables": [], "target": "real", "dry_run": False},
-        "repeated table": {"tables": [pair[0], pair[0]], "target": "real", "dry_run": False},
-        "other target": {"tables": pair, "target": "production", "dry_run": False},
-        "two collections in a qualification": {"tables": [pair[0], other], "target": "qualify", "dry_run": False},
-        "dry run not a flag": {"tables": pair, "target": "real", "dry_run": "yes"},
-        "extra key": {"tables": pair, "target": "real", "dry_run": False, "namespace": "bronze"},
-        "missing key": {"tables": pair, "target": "real"},
-        "tables not a list": {"tables": ",".join(pair), "target": "real", "dry_run": False},
+        "unknown table": {"tables": ["not_a_table"], "target": "real", "dry_run": False, "inventory_sha256": INVENTORY},
+        "no tables": {"tables": [], "target": "real", "dry_run": False, "inventory_sha256": INVENTORY},
+        "repeated table": {"tables": [pair[0], pair[0]], "target": "real", "dry_run": False, "inventory_sha256": INVENTORY},
+        "other target": {"tables": pair, "target": "production", "dry_run": False, "inventory_sha256": INVENTORY},
+        "two collections in a qualification": {"tables": [pair[0], other], "target": "qualify", "dry_run": False, "inventory_sha256": INVENTORY},
+        "dry run not a flag": {"tables": pair, "target": "real", "dry_run": "yes", "inventory_sha256": INVENTORY},
+        "extra key": {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "namespace": "bronze"},
+        "missing key": {"tables": pair, "target": "real", "dry_run": False},
+        "inventory digest not hex": {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": "xyz"},
+        "tables not a list": {"tables": ",".join(pair), "target": "real", "dry_run": False, "inventory_sha256": INVENTORY},
         "not an object": [pair],
     }
     with rig(BRONZE_FAMILIES) as current:
@@ -848,7 +851,7 @@ def bronze_without_a_staged_request_is_retryable() -> None:
 def bronze_failure_fails_the_job() -> None:
     pair, _ = table_pair()
     with rig(BRONZE_FAMILIES) as current:
-        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
         current.ecs.plan = {"load": 1}
         status = wait_for(current, current.client.submit(bronze_request()))
         require(status.state == State.FAILED and status.exit_code == 1, f"a failed load did not fail the job: {status}")
@@ -861,7 +864,7 @@ def bronze_failure_fails_the_job() -> None:
 def bronze_retry_starts_no_second_task() -> None:
     pair, _ = table_pair()
     with rig(BRONZE_FAMILIES) as current:
-        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
         first, second = current.client.submit(bronze_request()), current.client.submit(bronze_request())
         require(first == second and current.ecs.count("run_task") == 1, "a retried bronze submit started a second task")
         wait_for(current, first)
@@ -873,10 +876,60 @@ def bronze_retry_starts_no_second_task() -> None:
 def chain_stays_closed_while_bronze_runs() -> None:
     pair, _ = table_pair()
     with rig(BRONZE_FAMILIES, signed=None) as current:
-        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False})
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
         wait_for(current, current.client.submit(bronze_request()))
         raises(SubmissionRefused, partial(current.client.submit, silver_request()))
         require(current.ecs.count("run_task") == 1, "silver started on a bronze run without the signed record")
+
+
+def bronze_request_is_read_once_and_bound_to_the_task() -> None:
+    pair, _ = table_pair()
+    key = f"lakehouse/run_stage/{BRONZE_RUN}/inputs/bronze_request.json"
+    checked = {"tables": pair[:1], "target": "qualify", "dry_run": True, "inventory_sha256": INVENTORY}
+    live = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, checked)
+        first = current.s3.objects[key]
+        current.s3.after_read[key] = json.dumps(live).encode()
+        wait_for(current, current.client.submit(bronze_request()))
+        require(current.s3.reads.count(key) == 1, f"the request was read {current.s3.reads.count(key)} times")
+        values = bronze_variables(current)
+        digest = hashlib.sha256(first).hexdigest()
+        for container in ("pin", "load", "check"):
+            require(values[container]["BRONZE_TARGET"] == "qualify" and values[container]["BRONZE_DRY_RUN"] == "1", str(values[container]))
+            require(values[container]["BRONZE_TABLES"] == pair[0] and values[container]["BRONZE_REQUEST_SHA256"] == digest, str(values[container]))
+        require(values["pin"]["BRONZE_INVENTORY_SHA256"] == INVENTORY, str(values["pin"]))
+        intent = json.loads((current.folder / "state" / f"{BRONZE_RUN}.jsonl").read_text().splitlines()[0])
+        require(intent["dispatch"]["BRONZE_REQUEST_SHA256"] == digest, "the checked request is persisted with the intent")
+
+
+def bronze_retry_after_a_throttled_start_keeps_the_checked_request() -> None:
+    pair, _ = table_pair()
+    key = f"lakehouse/run_stage/{BRONZE_RUN}/inputs/bronze_request.json"
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "qualify", "dry_run": True, "inventory_sha256": INVENTORY})
+        current.ecs.faults["run_task"] = [client_error("ThrottlingException", "RunTask")]
+        raises(BrokerUnavailable, lambda: current.client.submit(bronze_request()))
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
+        wait_for(current, current.client.submit(bronze_request()))
+        values = bronze_variables(current)
+        require(
+            values["load"]["BRONZE_TARGET"] == "qualify" and values["load"]["BRONZE_DRY_RUN"] == "1", f"the retry used the changed request: {values['load']}"
+        )
+        require(current.s3.reads.count(key) == 1, "the retry read the request again")
+
+
+def bronze_containers_share_one_absolute_deadline() -> None:
+    pair, _ = table_pair()
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
+        wait_for(current, current.client.submit(bronze_request()))
+        values = bronze_variables(current)
+        expected = str(int(current.clock[0]) + 14400)
+        require(
+            all(values[name]["HAI_DEADLINE_UTC"] == expected for name in ("fetch", "pin", "load", "check")),
+            str({name: values[name].get("HAI_DEADLINE_UTC") for name in values}),
+        )
 
 
 CASES: dict[str, Callable[[], None]] = {
@@ -928,4 +981,7 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_failure_fails_the_job": bronze_failure_fails_the_job,
     "bronze_retry_starts_no_second_task": bronze_retry_starts_no_second_task,
     "chain_stays_closed_while_bronze_runs": chain_stays_closed_while_bronze_runs,
+    "bronze_request_is_read_once_and_bound_to_the_task": bronze_request_is_read_once_and_bound_to_the_task,
+    "bronze_retry_after_a_throttled_start_keeps_the_checked_request": bronze_retry_after_a_throttled_start_keeps_the_checked_request,
+    "bronze_containers_share_one_absolute_deadline": bronze_containers_share_one_absolute_deadline,
 }
