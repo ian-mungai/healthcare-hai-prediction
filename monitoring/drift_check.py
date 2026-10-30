@@ -45,7 +45,7 @@ class CheckError(Exception):
 
     def __init__(self, name: str, detail: str, code: int = 2) -> None:
         super().__init__(f"{name}: {detail}")
-        self.code = code
+        self.name, self.detail, self.code = name, detail, code
 
 
 @contextlib.contextmanager

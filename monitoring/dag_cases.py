@@ -9,9 +9,11 @@ trigger over the list, or starts ``training_dag``. That needs ``airflow dags tes
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import json
+import os
 import re
 import sys
 from collections.abc import Callable
@@ -22,6 +24,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar
 from unittest import mock
 
+from monitoring.aws_cases import MemoryS3
 from orchestration.interface import Handle, State, Status
 from orchestration.training_contract import RUN_ID
 from scripts.orchestration.trigger_dag import run_conf
@@ -29,6 +32,7 @@ from scripts.orchestration.trigger_dag import run_conf
 ROOT = Path(__file__).resolve().parents[1]
 DAG_FILE = ROOT / "dags/drift_monitoring_dag.py"
 DRIFT_RUN = "20261030T120000Z-0a1b2c3d"
+BUCKET = "bucket-for-tests"
 Problems = list[str]
 CONTEXT: dict[str, Any] = {}
 
@@ -159,17 +163,25 @@ def record(hai_type: str, *, run: str = DRIFT_RUN, status: str = "checked", trig
     }
 
 
-def write_records(folder: Path, records: list[dict[str, Any]]) -> Path:
-    folder.mkdir(parents=True, exist_ok=True)
-    for item in records:
-        (folder / f"drift_{item['hai_type']}.json").write_text(json.dumps(item) + "\n")
-    return folder
+def bucket_with(records: list[dict[str, Any]], *, marker: bool = True, marker_run: str = DRIFT_RUN, raw: dict[str, bytes] | None = None) -> MemoryS3:
+    """An in-memory bucket as the task's publish phase leaves it: the records, then the marker that names them."""
+    s3 = MemoryS3()
+    bodies = {f"drift_{item['hai_type']}.json": (json.dumps(item) + "\n").encode() for item in records}
+    sums = {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}
+    bodies.update(raw or {})
+    for name, body in bodies.items():
+        s3.put_object(Bucket=BUCKET, Key=f"drift/{DRIFT_RUN}/{name}", Body=body)
+        sums.setdefault(name, hashlib.sha256(body).hexdigest())
+    if marker:
+        document = {"run_id": marker_run, "monitored": [item["hai_type"] for item in records], "unmonitored": {}, "files": sums}
+        s3.put_object(Bucket=BUCKET, Key=f"drift/{DRIFT_RUN}/_complete.json", Body=json.dumps(document).encode())
+    return s3
 
 
-def decide(module: Any, folder: Path, *, mode: str = "fixture", mlflow: str = "local") -> list[dict[str, Any]]:
-    """Run the real ``decide`` task body for the DRIFT_RUN against records in ``folder``."""
-    CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": mode, "mlflow": mlflow}}
-    with mock.patch.object(module, "RECORDS", folder.parent):
+def decide(module: Any, s3: MemoryS3, *, mlflow: str = "local") -> list[dict[str, Any]]:
+    """Run the real ``decide`` task body for the DRIFT_RUN against the in-memory bucket."""
+    CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": mlflow}}
+    with mock.patch.dict(os.environ, {"DATA_BUCKET_NAME": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
         result: list[dict[str, Any]] = module.dag.task_dict["decide"].function()
     return result
 
@@ -178,13 +190,7 @@ def graph_is_declared(folder: Path) -> Problems:
     with loaded_dag() as module:
         dag = module.dag
         nodes = dag.task_dict
-        expected = {
-            "fetch_baseline": set(),
-            "fetch_current": {"fetch_baseline"},
-            "check_drift": {"fetch_current"},
-            "decide": {"check_drift"},
-            "trigger_training": {"decide"},
-        }
+        expected = {"drift_run": set(), "decide": {"drift_run"}, "trigger_training": {"decide"}}
         problems = []
         if {name: node.upstream_task_ids for name, node in nodes.items()} != expected:
             problems.append(f"the graph is { ({name: sorted(node.upstream_task_ids) for name, node in nodes.items()}) }")
@@ -196,15 +202,14 @@ def graph_is_declared(folder: Path) -> Problems:
         if trigger.get("fail_when_dag_is_paused") is not True:
             problems.append("a trigger of a paused training_dag would pass silently")
         params = dag.settings["params"]
-        if params["run_id"].settings.get("pattern") != f"^{RUN_ID}$" or params["mode"].settings.get("enum") != ["fixture", "real"]:
-            problems.append("the run_id or mode parameter differs from the training DAG's")
+        if params["run_id"].settings.get("pattern") != f"^{RUN_ID}$" or params["mode"].settings.get("enum") != ["real"]:
+            problems.append("the run_id pattern differs from the training DAG's or the mode is not real only")
         return problems
 
 
 def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
     with loaded_dag() as module:
-        records = [record("HAI_1", triggered=True), record("HAI_2"), record("HAI_3", status="skipped")]
-        requests = decide(module, write_records(folder / DRIFT_RUN, records))
+        requests = decide(module, bucket_with([record("HAI_1", triggered=True), record("HAI_2"), record("HAI_3", status="skipped")]))
         if len(requests) != 1:
             return [f"expected one trigger request, got {len(requests)}"]
         request = requests[0]
@@ -212,7 +217,7 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
         problems = []
         if request["trigger_run_id"] != f"drift__{DRIFT_RUN}":
             problems.append(f"the trigger run id is {request['trigger_run_id']}")
-        if request["conf"] != run_conf("training_dag", "fixture", request["conf"]["run_id"], None, training):
+        if request["conf"] != run_conf("training_dag", "real", request["conf"]["run_id"], None, training):
             problems.append(f"the training conf differs from the established builder's: {request['conf']}")
         if not re.fullmatch(RUN_ID, request["conf"]["run_id"]) or request["conf"]["run_id"] == DRIFT_RUN:
             problems.append("the training run id is malformed or equals the drift run id")
@@ -221,38 +226,35 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
 
 def several_drifted_types_share_one_run(folder: Path) -> Problems:
     with loaded_dag() as module:
-        records = [record("HAI_4", triggered=True), record("HAI_1", triggered=True), record("HAI_2")]
-        requests = decide(module, write_records(folder / DRIFT_RUN, records))
+        requests = decide(module, bucket_with([record("HAI_4", triggered=True), record("HAI_1", triggered=True), record("HAI_2")]))
         types = requests[0]["conf"]["hai_types"] if requests else None
         return [] if len(requests) == 1 and types == ["HAI_1", "HAI_4"] else [f"expected one run for HAI_1 and HAI_4, got {types} in {len(requests)} requests"]
 
 
 def quiet_records_start_nothing(folder: Path) -> Problems:
     with loaded_dag() as module:
-        requests = decide(module, write_records(folder / DRIFT_RUN, [record("HAI_1"), record("HAI_2", status="skipped"), record("HAI_3")]))
+        requests = decide(module, bucket_with([record("HAI_1"), record("HAI_2", status="skipped"), record("HAI_3")]))
         return [] if requests == [] else [f"quiet records started {requests}"]
 
 
-def real_mode_passes_through(folder: Path) -> Problems:
+def a_run_with_nothing_to_monitor_starts_nothing(folder: Path) -> Problems:
+    """Every type unmonitored: the marker names no record. The run ends well and the trigger is skipped."""
     with loaded_dag() as module:
-        requests = decide(module, write_records(folder / DRIFT_RUN, [record("HAI_5", triggered=True)]), mode="real")
-        return [] if requests and requests[0]["conf"]["mode"] == "real" else ["the training run did not take the drift run's mode"]
+        requests = decide(module, bucket_with([]))
+        return [] if requests == [] else [f"an empty marker started {requests}"]
 
 
 def decision_repeats(folder: Path) -> Problems:
     with loaded_dag() as module:
-        written = write_records(folder / DRIFT_RUN, [record("HAI_1", triggered=True)])
-        return [] if decide(module, written) == decide(module, written) else ["two decisions on the same records differ, so a retry could start a second run"]
+        s3 = bucket_with([record("HAI_1", triggered=True)])
+        return [] if decide(module, s3) == decide(module, s3) else ["two decisions on the same records differ, so a retry could start a second run"]
 
 
-def refuses(detail: str, records: list[dict[str, Any]], *, raw: dict[str, str] | None = None) -> Callable[[Path], Problems]:
+def refuses(detail: str, build: Callable[[], MemoryS3]) -> Callable[[Path], Problems]:
     def case(folder: Path) -> Problems:
         with loaded_dag() as module:
-            written = write_records(folder / DRIFT_RUN, records)
-            for name, text in (raw or {}).items():
-                (written / name).write_text(text)
             try:
-                requests = decide(module, written)
+                requests = decide(module, build())
             except RuntimeError as error:
                 return [] if detail in str(error) else [f"the error does not say {detail!r}: {error}"]
             return [f"records that must be refused started {requests}"]
@@ -260,8 +262,16 @@ def refuses(detail: str, records: list[dict[str, Any]], *, raw: dict[str, str] |
     return case
 
 
-def broker_steps(folder: Path) -> Problems:
-    """Each step reaches the broker as its own template for this DAG, carries no training parameters and passes the DAG run's mode."""
+def a_changed_record() -> MemoryS3:
+    s3 = bucket_with([record("HAI_1", triggered=True)])
+    s3.objects[(BUCKET, f"drift/{DRIFT_RUN}/drift_HAI_1.json")] = (
+        json.dumps(record("HAI_1", triggered=True, population="primary") | {"triggered": True, "extra": 1}) + "\n"
+    ).encode()
+    return s3
+
+
+def broker_step(folder: Path) -> Problems:
+    """The one step reaches the broker as the template drift_run for this DAG, in real mode and without training parameters."""
     sent: list[Any] = []
 
     def wait(client: Any, request: Any) -> tuple[Handle, Status]:
@@ -270,33 +280,15 @@ def broker_steps(folder: Path) -> Problems:
         return handle, Status(handle, State.SUCCEEDED, 0, None)
 
     with loaded_dag() as module:
-        for name in ("fetch_baseline", "fetch_current", "check_drift"):
-            instance = SimpleNamespace(try_number=1, dag_id="drift_monitoring_dag", task_id=name, run_id="manual")
-            CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}, "ti": instance}
-            with (
-                mock.patch.object(module.dag_runtime.BrokerClient, "from_session", return_value=SimpleNamespace()),
-                mock.patch.object(module.dag_runtime, "submit_and_wait", side_effect=wait),
-            ):
-                module.dag.task_dict[name].function()
+        instance = SimpleNamespace(try_number=1, dag_id="drift_monitoring_dag", task_id="drift_run", run_id="manual")
+        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}, "ti": instance}
+        with (
+            mock.patch.object(module.dag_runtime.BrokerClient, "from_session", return_value=SimpleNamespace()),
+            mock.patch.object(module.dag_runtime, "submit_and_wait", side_effect=wait),
+        ):
+            module.dag.task_dict["drift_run"].function()
     shape = [(request.template, request.dag_id, request.mode, request.training) for request in sent]
-    expected = [(name, "drift_monitoring_dag", "real", None) for name in ("fetch_baseline", "fetch_current", "check_drift")]
-    return [] if shape == expected else [f"the broker received {shape}"]
-
-
-def nothing_to_monitor_skips(exit_code: int, skips: bool) -> Callable[[Path], Problems]:
-    def case(folder: Path) -> Problems:
-        with loaded_dag() as module:
-            failure = RuntimeError(f"fetch_baseline ended failed with exit code {exit_code}")
-            with mock.patch.object(module.dag_runtime, "run_step", side_effect=failure):
-                try:
-                    module.dag.task_dict["fetch_baseline"].function()
-                except SkipSignal:
-                    return [] if skips else [f"exit code {exit_code} skipped the run, it is a failure"]
-                except RuntimeError:
-                    return [] if not skips else ["exit code 4 failed the run, it means nothing to monitor"]
-            return ["the step neither skipped nor failed"]
-
-    return case
+    return [] if shape == [("drift_run", "drift_monitoring_dag", "real", None)] else [f"the broker received {shape}"]
 
 
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
@@ -306,14 +298,17 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("dag_one_drifted_type_starts_one_training_run", one_drifted_type_starts_one_training_run),
         ("dag_drifted_types_share_one_training_run", several_drifted_types_share_one_run),
         ("dag_quiet_records_start_nothing", quiet_records_start_nothing),
-        ("dag_real_mode_passes_through", real_mode_passes_through),
+        ("dag_nothing_to_monitor_starts_nothing", a_run_with_nothing_to_monitor_starts_nothing),
         ("dag_decision_repeats", decision_repeats),
-        ("dag_refuses_a_record_of_another_run", refuses("another run", stale)),
-        ("dag_refuses_missing_records", refuses("no drift record", [])),
-        ("dag_refuses_an_unreadable_record", refuses("unreadable", [record("HAI_1")], raw={"drift_HAI_2.json": "{not json"})),
-        ("dag_refuses_a_skipped_record_that_triggers", refuses("inconsistent", [record("HAI_1", status="skipped", triggered=True)])),
-        ("dag_refuses_a_sensitivity_record_that_triggers", refuses("population", [record("HAI_1", triggered=True, population="sensitivity")])),
-        ("dag_steps_reach_the_broker", broker_steps),
-        ("dag_nothing_to_monitor_skips", nothing_to_monitor_skips(4, True)),
-        ("dag_other_step_failures_fail", nothing_to_monitor_skips(1, False)),
+        ("dag_refuses_a_record_of_another_run", refuses("another run", lambda: bucket_with(stale))),
+        ("dag_refuses_a_run_without_its_marker", refuses("not complete", lambda: bucket_with([record("HAI_1")], marker=False))),
+        ("dag_refuses_a_marker_of_another_run", refuses("another run", lambda: bucket_with([record("HAI_1")], marker_run="20261029T120000Z-ffffffff"))),
+        ("dag_refuses_a_changed_record", refuses("changed", a_changed_record)),
+        ("dag_refuses_an_unreadable_record", refuses("unreadable", lambda: bucket_with([record("HAI_1")], raw={"drift_HAI_2.json": b"{not json"}))),
+        ("dag_refuses_a_skipped_record_that_triggers", refuses("inconsistent", lambda: bucket_with([record("HAI_1", status="skipped", triggered=True)]))),
+        (
+            "dag_refuses_a_sensitivity_record_that_triggers",
+            refuses("population", lambda: bucket_with([record("HAI_1", triggered=True, population="sensitivity")])),
+        ),
+        ("dag_step_reaches_the_broker", broker_step),
     ]
