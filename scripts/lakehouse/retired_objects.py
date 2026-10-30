@@ -22,6 +22,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition.collection_layout import READ_ROOTS, strip_root
 from scripts.lakehouse.bronze import RETIRED, BronzeError
 from scripts.lakehouse.catalog import deployment
 
@@ -46,10 +47,11 @@ def build(client: Any, bucket: str, collections: Iterable[str], verified: dict[t
     for collection in collections:
         live: set[tuple[str, str]] = set()
         marked: set[str] = set()
-        for page in client.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=f"{collection}/"):
-            live.update((version["Key"], version["VersionId"]) for version in page.get("Versions", []))
-            marked.update(marker["Key"] for marker in page.get("DeleteMarkers", []))
-        manifests = [key for key, _ in live if key.startswith(f"{collection}/manifests/") and key.endswith("/manifest.json")]
+        for root in READ_ROOTS:
+            for page in client.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=f"{root}{collection}/"):
+                live.update((version["Key"], version["VersionId"]) for version in page.get("Versions", []))
+                marked.update(marker["Key"] for marker in page.get("DeleteMarkers", []))
+        manifests = [key for key, _ in live if strip_root(key).startswith(f"{collection}/manifests/") and key.endswith("/manifest.json")]
         for manifest_key in sorted(manifests):
             manifest = json.loads(client.get_object(Bucket=bucket, Key=manifest_key)["Body"].read())
             for stored in manifest.get("objects", []):

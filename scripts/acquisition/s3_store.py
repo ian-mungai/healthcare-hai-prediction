@@ -18,7 +18,7 @@ from typing import Any
 from scripts.acquisition.archive_review import is_zip_container, storage_entries
 from scripts.acquisition.capture import receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
-from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.collection_layout import capture_root, load_routes, object_prefix
 from scripts.acquisition.dataset_layout import CATEGORIES, dataset_id, group_entries
 from scripts.acquisition.legacy_versions import bound_record
 from scripts.acquisition.single_copy import load_policy, reference_scope
@@ -190,7 +190,10 @@ def verify_version(client: AwsCli, key: str, version: Any, digest: str, size: in
 
 def store_file(client: AwsCli, path: Path, key: str, *, manifest: bool = False) -> tuple[dict, bool]:
     """Create or verify one content-addressed object and return its version record and creation flag."""
-    parts = PurePosixPath(key).parts
+    root = capture_root()
+    if root and not key.startswith(root):
+        raise CaptureError(f"Object key is outside {root} on this route.")
+    parts = PurePosixPath(key.removeprefix(root)).parts
     if len(parts) < 6 or parts[2] not in CATEGORIES or any(part in {"", ".", ".."} for part in key.split("/")):
         raise CaptureError("Object key is outside approved storage prefixes.")
     dataset_id(parts[0])

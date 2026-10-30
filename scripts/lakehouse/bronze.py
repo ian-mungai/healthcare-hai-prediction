@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from scripts.acquisition.collection_layout import READ_ROOTS, strip_root
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
 
@@ -238,14 +239,12 @@ def select(table: dict[str, Any], dataset_id: str, file_name: str, snapshot_id: 
     return re.search(table["member_pattern"], file_name) is not None
 
 
-def source_roots(collection: str) -> tuple[str, ...]:
-    """The key prefixes under which a collection's captures are read: the bucket root alone for now.
+def source_roots(collection: str, roots: tuple[str, ...] = READ_ROOTS) -> tuple[str, ...]:
+    """The key prefixes under which a collection's captures are read, one for each read root.
 
-    Every listing of a collection's manifests and documents asks this function, and nothing else names a prefix. When the redownload route stores new captures
-    under ``raw/`` and the owner qualifies the reload from there, the one change is to return ``(f"{collection}/", f"raw/{collection}/")``. The grants of the
-    bronze writer role and the classification of the keys in ``scripts/acquisition/single_copy.py`` change in the same step.
+    Every listing of a collection's manifests asks this function. A document is read beside its manifest, under the same root.
     """
-    return (f"{collection}/",)
+    return tuple(f"{root}{collection}/" for root in roots)
 
 
 def single_document(storage: Storage, bucket: str, collection: str, manifest_key: str, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -258,12 +257,8 @@ def single_document(storage: Storage, bucket: str, collection: str, manifest_key
     scope = manifest.get("scope_exception")
     if scope is not None and (scope.get("allowed_document_sha256") != digest or scope.get("allowed_role") != role):
         raise BronzeError(f"{manifest_key}: the scope exception does not allow this document and role")
-    found = [
-        (key, version)
-        for root in source_roots(collection)
-        for key, version in storage.list_current(bucket, root)
-        if f"/{digest}/" in key and "/manifests/" not in key
-    ]
+    root = manifest_key[: len(manifest_key) - len(strip_root(manifest_key))]
+    found = [(key, version) for key, version in storage.list_current(bucket, f"{root}{collection}/") if f"/{digest}/" in key and "/manifests/" not in key]
     if len(found) != 1:
         raise BronzeError(
             f"{manifest_key}: no stored object has the document's SHA-256" if not found else f"{manifest_key}: {len(found)} stored objects share it"
@@ -399,8 +394,11 @@ def discover(
     canonical_keys: dict[tuple[str, str], str] | None = None,
     canonical_observations: dict[tuple[str, str], str] | None = None,
     published_observations: set[str] | None = None,
+    roots: tuple[str, ...] = READ_ROOTS,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """List the chosen tables' inputs from the S3 manifests; return them with the unselected data objects.
+    """List the chosen tables' inputs from the S3 manifests under each read root; return them with the unselected data objects.
+
+    Objects keep the exact key and version ID they were stored with, whichever root holds them.
 
     Objects on the retired list are skipped and reported as retired, matched on key, version and SHA-256; every list
     entry under a discovered collection must match a manifest object [146] to [148].
@@ -418,11 +416,11 @@ def discover(
     inputs: list[dict[str, Any]] = []
     unselected: list[dict[str, Any]] = []
     for collection, group in sorted(by_collection.items()):
-        listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(source_roots(collection))}
+        listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(source_roots(collection, roots))}
         matched: set[tuple[str, str]] = set()
         stored_manifests = {
             (manifest_key, manifest_version): storage.get(bucket, manifest_key, manifest_version)
-            for root in source_roots(collection)
+            for root in source_roots(collection, roots)
             for manifest_key, manifest_version in storage.list_keys(bucket, f"{root}manifests/")
             if manifest_key.endswith("/manifest.json")
         }
@@ -503,7 +501,7 @@ def discover(
                 raise BronzeError("two stored objects share one snapshot and member chain")
             unselected.append(
                 {
-                    "collection": "/".join(item["manifest_key"].split("/")[:2]),
+                    "collection": "/".join(strip_root(item["manifest_key"]).split("/")[:2]),
                     "dataset_id": item["dataset_id"],
                     "file_name": item["file_name"],
                     "identical_copy": True,
@@ -520,7 +518,7 @@ def discover(
         if first is not item:
             unselected.append(
                 {
-                    "collection": "/".join(item["key"].split("/", 2)[:2]),
+                    "collection": "/".join(strip_root(item["key"]).split("/", 2)[:2]),
                     "dataset_id": item["dataset_id"],
                     "file_name": item["file_name"],
                     "identical_copy": True,

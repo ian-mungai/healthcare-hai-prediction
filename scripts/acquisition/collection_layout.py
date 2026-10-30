@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from scripts.acquisition.dataset_layout import dataset_id
@@ -9,6 +10,9 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_
 from scripts.acquisition.transport import CaptureError
 
 LAYOUT_PATH = REPO_ROOT / "config/acquisition/collection_layout.json"
+RAW_ROOT = "raw/"
+CAPTURE_ROOT_VARIABLE = "HAI_CAPTURE_ROOT"
+READ_ROOTS = ("", RAW_ROOT)
 
 
 def collection_routes(registry: dict, layout: dict) -> dict[str, dict]:
@@ -34,9 +38,22 @@ def load_routes(registry: dict, path: Path = LAYOUT_PATH) -> dict[str, dict]:
     return collection_routes(registry, read_json(path))
 
 
+def capture_root() -> str:
+    """Return the root new captures write under: empty for the original layout or ``raw/`` on the AWS route."""
+    root = os.environ.get(CAPTURE_ROOT_VARIABLE, "")
+    if root not in {"", RAW_ROOT}:
+        raise CaptureError(f"{CAPTURE_ROOT_VARIABLE} must be empty or {RAW_ROOT}.")
+    return root
+
+
+def strip_root(key: str) -> str:
+    """Return the key without a leading read root, for code that reads the publisher and collection by position."""
+    return key.removeprefix(RAW_ROOT)
+
+
 def object_prefix(route: dict, folder: str, role: str, release: str, run: str, evidence_only: bool) -> str:
     """Return the collection prefix for the selected role, release and evidence status."""
-    root = f"{dataset_id(route['publisher'])}/{dataset_id(route['collection'])}"
+    root = f"{capture_root()}{dataset_id(route['publisher'])}/{dataset_id(route['collection'])}"
     partition = f"release_date={release}" if release != run else f"capture_id={run}"
     if evidence_only or role in {"transport_audit", "archive_inventory", "source_metadata_conflict"}:
         return f"{root}/audit/{run}"
