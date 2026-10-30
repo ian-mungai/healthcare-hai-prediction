@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadIcebergMetadataFiles",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze/*/metadata/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/*/metadata/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/*/metadata/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/*/metadata/*"
+      ]
+    },
+    {
+      "Sid": "ReadDbtArtifacts",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/*"
+    },
+    {
+      "Sid": "ListMetadataPrefixes",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["metadata/dbt/", "metadata/dbt/*", "lakehouse/*/metadata/", "lakehouse/*/metadata/*"]
+        }
+      }
+    },
+    {
+      "Sid": "NoWrites",
+      "Effect": "Deny",
+      "Action": ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:PutObjectAcl", "s3:PutObjectTagging", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/*"
+    }
+  ]
+}

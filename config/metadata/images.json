@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "note": "The images the owner pushes to the project registry before the catalog task is enabled. Push each by digest into the repository named here, with the same platform for all four, then put the four digests in the jobs variable openmetadata_images. The tracked file names no release and no digest: the owner chooses the release and records the digest in the variable file, which stays out of Git. Every upstream name below is unverified.",
+  "platform": "linux/amd64 until the Arm check passes for all four images, then linux/arm64 together with openmetadata_cpu_architecture = ARM64",
+  "arm64_check": "docker buildx imagetools inspect <upstream>:<release> lists linux/arm64 for each of the four images",
+  "images": {
+    "server": {
+      "ecr_repository": "<project>_openmetadata_server_<environment>",
+      "upstream": "docker.io/openmetadata/server",
+      "push_by": "digest",
+      "arm64": "unverified: no registry read was possible in the offline session",
+      "runs_as": "migration step and catalog server of the catalog task"
+    },
+    "ingestion": {
+      "ecr_repository": "<project>_openmetadata_ingestion_<environment>",
+      "upstream": "docker.io/openmetadata/ingestion",
+      "push_by": "digest",
+      "arm64": "unverified: no registry read was possible in the offline session",
+      "runs_as": "bootstrap and ingestion steps of the catalog task"
+    },
+    "search": {
+      "ecr_repository": "<project>_openmetadata_search_<environment>",
+      "upstream": "docker.io/opensearchproject/opensearch",
+      "push_by": "digest",
+      "arm64": "unverified: no registry read was possible in the offline session",
+      "runs_as": "search index of the catalog task"
+    },
+    "database": {
+      "ecr_repository": "<project>_openmetadata_database_<environment>",
+      "upstream": "docker.io/library/postgres",
+      "push_by": "digest",
+      "arm64": "unverified: no registry read was possible in the offline session",
+      "runs_as": "metadata database of the catalog task, rebuilt empty on each start"
+    }
+  }
+}

@@ -159,6 +159,10 @@
     "tests/orchestration/fixtures/combined_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "dags/metadata_ingest_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     }
   }
 }

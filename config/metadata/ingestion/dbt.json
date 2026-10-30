@@ -1,0 +1,31 @@
+{
+  "source": {
+    "type": "dbt",
+    "serviceName": "polaris",
+    "sourceConfig": {
+      "config": {
+        "type": "DBT",
+        "dbtConfigSource": {
+          "dbtConfigType": "local",
+          "dbtManifestFilePath": "${DBT_ARTIFACT_DIR}/manifest.json",
+          "dbtCatalogFilePath": "${DBT_ARTIFACT_DIR}/catalog.json",
+          "dbtRunResultsFilePath": "${DBT_ARTIFACT_DIR}/run_results.json"
+        }
+      }
+    }
+  },
+  "sink": {
+    "type": "metadata-rest",
+    "config": {}
+  },
+  "workflowConfig": {
+    "loggerLevel": "INFO",
+    "openMetadataServerConfig": {
+      "hostPort": "http://127.0.0.1:8585/api",
+      "authProvider": "openmetadata",
+      "securityConfig": {
+        "jwtToken": "${OM_INGESTION_TOKEN}"
+      }
+    }
+  }
+}
