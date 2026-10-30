@@ -169,7 +169,7 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
 
     The parameter read set is the 17 project parameters and the write set the 16 managed ones, the same lists as ``read_parameter_names`` and
     ``managed_parameter_names`` in ``infra/iam/main.tf`` (its tests pin those). The sts policy grants the two lakehouse roles and the task execution
-    policy injects eight of the managed parameters, each from its own variable, checked here with ``PROJECT_NAME`` set to a value that no variable
+    policy injects nine of the managed parameters, each from its own variable, checked here with ``PROJECT_NAME`` set to a value that no variable
     default contains. The approved lists are written out in ``policy_cases``, not read from a file.
     """
     names = terraform_names(variables)

@@ -537,17 +537,17 @@ run "platform_roles" {
         Effect = "Allow"
         Action = "ssm:GetParameters"
         Resource = [
-          for name in ["postgres_password", "airflow_db_password", "marquez_db_password", "airflow_fernet_key", "airflow_jwt_secret", "airflow_api_secret_key", "redis_password", "polaris_root_secret"] :
+          for name in ["postgres_password", "airflow_db_password", "marquez_db_password", "airflow_fernet_key", "airflow_jwt_secret", "airflow_api_secret_key", "redis_password", "polaris_root_secret", "grafana_admin_password"] :
           "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/${name}"
         ]
       } &&
-      length(one([for statement in jsondecode(aws_iam_role_policy.task_execution.policy).Statement : statement.Resource if statement.Sid == "InjectNamedParameters"])) == 8 &&
+      length(one([for statement in jsondecode(aws_iam_role_policy.task_execution.policy).Statement : statement.Resource if statement.Sid == "InjectNamedParameters"])) == 9 &&
       !anytrue([for statement in jsondecode(aws_iam_role_policy.task_execution.policy).Statement : anytrue([for resource in flatten([statement.Resource]) : strcontains(resource, "parameter") && (strcontains(resource, "*") || strcontains(resource, "?"))])]) &&
       !strcontains(aws_iam_role_policy.task_execution.policy, "secretsmanager") && !strcontains(aws_iam_role_policy.task_execution.policy, "kms:") &&
       !anytrue([for role_policy in [aws_iam_role_policy.ecs_host, aws_iam_role_policy.polaris_task, aws_iam_role_policy.snapshots] : strcontains(role_policy.policy, "ssm:GetParameter") || strcontains(role_policy.policy, "secretsmanager")]) &&
       !anytrue([for statement in jsondecode(aws_iam_role_policy.polaris_task.policy).Statement : anytrue([for action in flatten([statement.Action]) : !startswith(action, "s3:")])])
     )
-    error_message = "Only the execution role reads secrets, only as ssm:GetParameters on the eight control-plane parameter ARNs, with no Secrets Manager or KMS grant; the Polaris role has S3 only."
+    error_message = "Only the execution role reads secrets, only as ssm:GetParameters on the nine control-plane parameter ARNs, with no Secrets Manager or KMS grant; the Polaris role has S3 only."
   }
 
   assert {
@@ -812,7 +812,7 @@ run "project_secret_names" {
       for name in [
         "postgres_password", "polaris_root_secret", "polaris_reader_client_id", "polaris_reader_client_secret", "polaris_gold_client_id",
         "polaris_gold_client_secret", "polaris_silver_client_id", "polaris_silver_client_secret", "airflow_db_password", "airflow_fernet_key",
-        "airflow_jwt_secret", "airflow_api_secret_key", "marquez_db_password", "redis_password", "mlflow_db_password", "mlflow_admin_password",
+        "airflow_jwt_secret", "airflow_api_secret_key", "marquez_db_password", "redis_password", "mlflow_db_password", "mlflow_admin_password", "grafana_admin_password",
       ] : "/healthcare_hai_prediction/${name}"
     ]
     error_message = "The managed parameters are exactly the 16 project parameters under /healthcare_hai_prediction/, none of them the Airflow administrator password."

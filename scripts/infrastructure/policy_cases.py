@@ -71,6 +71,7 @@ PARAMETERS = (
     "airflow_db_password",
     "airflow_fernet_key",
     "airflow_jwt_secret",
+    "grafana_admin_password",
     "marquez_db_password",
     "mlflow_admin_password",
     "mlflow_db_password",
@@ -87,7 +88,7 @@ PARAMETERS = (
 READ_ONLY_PARAMETERS = ("airflow_admin",)
 # The old hand-made Secrets Manager copy of the Airflow administrator password; no policy grants it since the one-time copy was done.
 LEGACY_AIRFLOW_ADMIN = "healthcare-hai-prediction/airflow-admin"
-# The eight control-plane parameters the task execution role injects; each is one of PARAMETERS.
+# The nine control-plane parameters the task execution role injects; each is one of PARAMETERS.
 EXECUTION_PARAMETERS = (
     "postgres_password",
     "airflow_db_password",
@@ -97,6 +98,7 @@ EXECUTION_PARAMETERS = (
     "airflow_api_secret_key",
     "redis_password",
     "polaris_root_secret",
+    "grafana_admin_password",
 )
 SHARED_KEYS = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 AWS_READER_PARAMETERS = ("aws_polaris_reader_client_id", "aws_polaris_reader_client_secret")
@@ -1365,7 +1367,7 @@ def snapshot_cases() -> Iterator[Case]:
 
 
 def execution_cases() -> Iterator[Case]:
-    """The task execution role: it injects exactly eight parameters, pulls project images and writes project logs."""
+    """The task execution role: it injects exactly nine parameters, pulls project images and writes project logs."""
     names = EXECUTION_PARAMETERS
 
     def case(label: str, action: str, resource: str, allowed: bool, region: str | None = None) -> Case:

@@ -41,6 +41,7 @@ AIRFLOW_ADMIN = PREFIX + "airflow_admin"
 REDIS_PASSWORD = PREFIX + "redis_password"
 MLFLOW_DB_PASSWORD = PREFIX + "mlflow_db_password"
 MLFLOW_ADMIN_PASSWORD = PREFIX + "mlflow_admin_password"
+GRAFANA_ADMIN_PASSWORD = PREFIX + "grafana_admin_password"
 MANAGED = (
     POSTGRES_PASSWORD,
     POLARIS_ROOT_SECRET,
@@ -58,6 +59,7 @@ MANAGED = (
     REDIS_PASSWORD,
     MLFLOW_DB_PASSWORD,
     MLFLOW_ADMIN_PASSWORD,
+    GRAFANA_ADMIN_PASSWORD,
 )
 READ_ONLY = (AIRFLOW_ADMIN,)
 SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")

@@ -9,7 +9,7 @@ locals {
     WRITE_PREFIXES   = local.lakehouse_write_prefixes
   }
 
-  # The policies in owner_policies/ are JSON files rendered with these values. The task execution policy names the eight
+  # The policies in owner_policies/ are JSON files rendered with these values. The task execution policy names the nine
   # control-plane parameters the task definitions inject (Systems Manager Parameter Store SecureString parameters); each name is
   # the variable of that secret, the same default the project user's policy files and the secret store read. The Airflow
   # administrator password is not injected (the Simple auth manager runs with all users as administrators), so it has no
@@ -27,6 +27,7 @@ locals {
     AIRFLOW_API_SECRET_KEY_NAME = var.airflow_api_secret_key_name
     REDIS_PASSWORD_NAME         = var.redis_password_name
     POLARIS_ROOT_SECRET_NAME    = var.polaris_root_secret_name
+    GRAFANA_ADMIN_PASSWORD_NAME = var.grafana_admin_password_name
   }
 
   # The platform stack builds these names and the Project tag the same way; both stacks' tests pin them.
