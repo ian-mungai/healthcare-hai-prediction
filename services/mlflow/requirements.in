@@ -1,0 +1,6 @@
+# MLflow tracking server image: the server version the local stack uses (hai-mlflow:3.17.0) with the PostgreSQL driver and boto3 for S3 artifacts.
+# Transitive packages are resolved by services/mlflow/compile_lock.sh into requirements.txt and listed at lock review. The driver and boto3 versions are
+# chosen by that first compile and then fixed by the committed lock.
+mlflow==3.17.0
+psycopg2-binary
+boto3
