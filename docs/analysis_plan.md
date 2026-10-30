@@ -1,7 +1,7 @@
 ---
 title: Analysis plan
 description: The outcome, predictors, six models, evaluation and promotion rules used by every training run.
-last_updated: 2026-10-23
+last_updated: 2026-10-30
 ---
 
 # Analysis plan
@@ -59,7 +59,13 @@ For Moran's I, two hospitals are neighbours when their counties are the same or 
 - **RQ3 (H3):** mediation of the process measures on SIR through PSI-90, by the product of coefficients with a bootstrap confidence interval for the indirect effect (5,000 resamples). The result is associational, not causal.
 - **RQ4 (H4):** a nested comparison of CMS-only against CMS plus HCRIS, CMI and county context on the same rows: likelihood-ratio and F tests in-sample and the holdout RMSE difference with a bootstrap interval.
 - **RQ5 (H5) and RQ6 (H6):** models 5 and 6.
-- **Validation:** hospitals are ranked by predicted SIR and compared with the HAC Reduction Program worst-performer flag of the matching program year. The run reports the AUC and the share of flagged hospitals in the top predicted quartile. The flag is never a training input.
+- **Validation:** hospitals are ranked by predicted SIR and compared with the HAC Reduction Program worst-performer flag of the matching program year. The newest window year with published SIRs is Y. The matching program year is the one whose two-year HAI performance period covers windows Y-1 and Y, as the reviewed year map `config/training/hac_year_mapping.json` records with its known weak spots.
+  1. A validation-only fit takes the selected model specification (the same predictors and tuning grid) and trains on the windows through Y-2, so no window of the flag's period is in its training data.
+  2. It predicts windows Y-1 and Y. Each hospital's score is the average of its predictions over those windows.
+  3. If the program year's period covers one year only, the fit predicts and compares that window alone. The result records this.
+  4. The result validates the selected specification, not the final fitted model. The validation-only fit is never saved, promoted or counted in a research question test.
+  5. The run reports the AUC and the share of flagged hospitals in the top predicted quartile. A hospital without a flag stays missing and is counted.
+  6. The flag is never a training input.
 - **Multiple testing:** each of the six hypotheses is reported at 0.05 with its exact p-value and no correction across hypotheses. Sensitivity analyses are marked exploratory.
 
 ## Tracking and promotion
