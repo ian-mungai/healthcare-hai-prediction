@@ -584,7 +584,7 @@ def case_profile_refused(_: Path) -> dict[str, bool]:
 
 
 def case_check_metadata(_: Path) -> dict[str, bool]:
-    """P6: the check reports all ten names by exact name with type and version, reads nothing with decryption and prints no value."""
+    """P6: the check reports all twelve names by exact name with type and version, reads nothing with decryption and prints no value."""
     pairs = setup.configured_pairs()
     seeded = {pairs["reader"][0]: "reader-id-" + secrets.token_hex(6), pairs["reader"][1]: "reader-secret-" + secrets.token_hex(6)}
     seeded[pairs["gold"][1]] = "gold-secret-" + secrets.token_hex(6)
@@ -595,7 +595,7 @@ def case_check_metadata(_: Path) -> dict[str, bool]:
         SECRETS_SEEN.extend(seeded.values())
         return {
             "the check succeeds": code == 0,
-            "all ten names are reported": set(found) == set(setup.writable_names()),
+            "all twelve names are reported": set(found) == set(setup.writable_names()),
             "presence matches the store": all(found[name]["present"] == (name in seeded) for name in found),
             "present names report SecureString and a version": all(found[name].get("type") == "SecureString" and found[name].get("version") for name in seeded),
             "no read asked for decryption": bool(services.decryption) and not any(services.decryption),
@@ -621,7 +621,7 @@ def case_check_catalog(_: Path) -> dict[str, bool]:
 
 
 def case_vault_scope(_: Path) -> dict[str, bool]:
-    """P2, P12: the vault writes only the ten AWS pair names, refuses the Mac and root names before any request and reads the root secret."""
+    """P2, P12: the vault writes only the twelve AWS pair names, refuses the Mac and root names before any request and reads the root secret."""
     pairs = setup.configured_pairs()
     with world() as (ssm, polaris, root):
         vault = Services(ssm, polaris).vault()
@@ -653,7 +653,8 @@ def case_vault_scope(_: Path) -> dict[str, bool]:
 def case_pair_names(out: Path) -> dict[str, bool]:
     """P12: pair names that overlap a Mac name, repeat or lose their own leaf are refused before any call."""
     source = (REPO_ROOT / secret_store.VARIABLES).read_text()
-    checks: dict[str, bool] = {"the committed names are ten distinct names": len(setup.writable_names()) == 10}
+    (out / setup.WRITER_VARIABLES).write_text((REPO_ROOT / secret_store.VARIABLES).with_name(setup.WRITER_VARIABLES).read_text())
+    checks: dict[str, bool] = {"the committed names are twelve distinct names": len(setup.writable_names()) == 12}
     plants = {
         "a Mac name": ("/healthcare_hai_prediction/aws_polaris_silver_client_id", "/healthcare_hai_prediction/polaris_silver_client_id"),
         "a repeated name": ("/healthcare_hai_prediction/aws_polaris_gold_client_id", "/healthcare_hai_prediction/aws_polaris_silver_client_id"),
@@ -845,11 +846,15 @@ def case_e2e_principal(_: Path) -> dict[str, bool]:
 
 
 def case_layer_writers(_: Path) -> dict[str, bool]:
-    """P12: the silver and gold writers write their own namespace only, and their pairs go to the AWS names, never the Mac names."""
+    """P12: the silver, gold and features writers write their own namespace only, and their pairs go to the AWS names, never the Mac names."""
     checks: dict[str, bool] = {}
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        for layer, mac in (("silver", secret_store.POLARIS_SILVER_CLIENT_ID), ("gold", secret_store.POLARIS_GOLD_CLIENT_ID)):
+        for layer, mac in (
+            ("silver", secret_store.POLARIS_SILVER_CLIENT_ID),
+            ("gold", secret_store.POLARIS_GOLD_CLIENT_ID),
+            ("features", secret_store.PREFIX + "polaris_features_client_id"),
+        ):
             code, _out, _err = principal(services, root, layer, f"{layer}_namespace")
             grants = polaris.grants.get(setup.PRINCIPALS[layer], [])
             checks[f"the {layer} step succeeds"] = code == 0
