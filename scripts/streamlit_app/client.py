@@ -8,6 +8,7 @@ The client follows no redirect and retries nothing: the owner of a 429 or 503 de
 from __future__ import annotations
 
 import contextlib
+import datetime
 import http.client
 import json
 import logging
@@ -35,8 +36,10 @@ LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 KEY_PATTERN = re.compile(r"[\x21-\x7e]{1,256}")
 HAI_PATTERN = re.compile(r"HAI_[1-6]")
-SAFE_TEXT = re.compile(r"[A-Za-z0-9._:+/@-]{1,64}")
-AS_OF_TEXT = re.compile(r"[A-Za-z0-9:+. -]{1,40}")
+REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+MODEL_VERSION_PATTERN = re.compile(r"[1-9][0-9]{0,18}")
+AS_OF_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+SCHEMA_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 CCN_PATTERN = re.compile(r"[A-Za-z0-9]{6}")
 YEAR_MIN, YEAR_MAX = 1990, 2100
 
@@ -131,37 +134,6 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     return Settings(api_url=api_url, api_key=Credential(key), deadline_seconds=deadline, hai_types=types)
 
 
-class Watchdog:
-    """Closes the socket when the deadline passes, which wakes any blocked read. One deadline then covers connect, send, headers and body."""
-
-    def __init__(self, seconds: float) -> None:
-        self.expired = threading.Event()
-        self._sock: socket.socket | None = None
-        self._lock = threading.Lock()
-        self._timer = threading.Timer(seconds, self._fire)
-        self._timer.daemon = True
-        self._timer.start()
-
-    def attach(self, sock: socket.socket | None) -> None:
-        with self._lock:
-            self._sock = sock
-            if self.expired.is_set():
-                self._shut()
-
-    def _fire(self) -> None:
-        with self._lock:
-            self.expired.set()
-            self._shut()
-
-    def _shut(self) -> None:
-        if self._sock is not None:
-            with contextlib.suppress(OSError):
-                self._sock.shutdown(socket.SHUT_RDWR)
-
-    def stop(self) -> None:
-        self._timer.cancel()
-
-
 def parse_wait(value: str | None) -> float | None:
     """The seconds a Retry-After header asks for, or None when it is absent, negative, not finite or not a number of seconds."""
     if value is None:
@@ -188,8 +160,12 @@ def refuse_constant(name: str) -> NoReturn:
     raise ValueError("not a finite JSON number")
 
 
-def read_answer(raw: bytes, hai_type: str, ccn: str, window_year: int) -> Prediction | None:
-    """The prediction in a 200 answer, or None when the answer is not what the API documents. Nothing in a refused answer reaches the page."""
+def read_answer(raw: bytes, hai_type: str, ccn: str, window_year: int, request_id: str, key: str) -> Prediction | None:
+    """The prediction in a 200 answer, or None when the answer is not what the API documents. Nothing in a refused answer reaches the page.
+
+    The metadata must have the formats the API writes and the request id must be the one sent. An answer whose shown fields hold the key is refused, so a server
+    that echoes the key cannot put it on the page.
+    """
     if len(raw) > MAX_ANSWER_BYTES:
         return None
     try:
@@ -199,58 +175,89 @@ def read_answer(raw: bytes, hai_type: str, ccn: str, window_year: int) -> Predic
     if not isinstance(data, dict):
         return None
     value, year, fallback = data.get("prediction"), data.get("window_year"), data.get("fallback")
-    request_id, answered_hai, answered_ccn = data.get("request_id"), data.get("hai_type"), data.get("ccn")
+    answered_id, answered_hai, answered_ccn = data.get("request_id"), data.get("hai_type"), data.get("ccn")
     model_version, served_by, as_of, schema = data.get("model_version"), data.get("served_by"), data.get("features_as_of"), data.get("feature_schema_sha256")
-    if not (isinstance(request_id, str) and isinstance(answered_hai, str) and isinstance(answered_ccn, str) and isinstance(model_version, str)):
+    if not (isinstance(answered_id, str) and isinstance(answered_hai, str) and isinstance(answered_ccn, str) and isinstance(model_version, str)):
         return None
     if not (isinstance(served_by, str) and isinstance(as_of, str) and isinstance(schema, str) and isinstance(fallback, bool)):
         return None
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+    if any(key in shown for shown in (answered_id, answered_hai, answered_ccn, model_version, served_by, as_of, schema)):
         return None
-    if isinstance(year, bool) or year != window_year or answered_hai != hai_type or answered_ccn.upper() != ccn.upper():
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    if served_by not in ("stable", "canary") or not SAFE_TEXT.fullmatch(model_version) or not SAFE_TEXT.fullmatch(request_id):
+    try:
+        number = float(value)
+    except OverflowError:
         return None
-    if not AS_OF_TEXT.fullmatch(as_of) or not SAFE_TEXT.fullmatch(schema):
+    if not math.isfinite(number) or isinstance(year, bool) or year != window_year or answered_hai != hai_type or answered_ccn.upper() != ccn.upper():
         return None
-    return Prediction(request_id, hai_type, ccn, window_year, float(value), model_version, served_by, fallback, as_of, schema)
+    if served_by not in ("stable", "canary") or answered_id != request_id or not REQUEST_ID_PATTERN.fullmatch(answered_id):
+        return None
+    if not MODEL_VERSION_PATTERN.fullmatch(model_version) or not SCHEMA_HASH_PATTERN.fullmatch(schema) or not AS_OF_PATTERN.fullmatch(as_of):
+        return None
+    try:
+        datetime.date.fromisoformat(as_of)
+    except ValueError:
+        return None
+    return Prediction(answered_id, hai_type, ccn, window_year, number, model_version, served_by, fallback, as_of, schema)
+
+
+def exchange(connection: http.client.HTTPConnection, payload: bytes, headers: dict[str, str], abandoned: threading.Event, box: dict[str, Any]) -> None:
+    """The whole exchange, run in a worker thread so the caller can stop waiting at the deadline in any phase, name lookup included."""
+    try:
+        connection.connect()
+        if abandoned.is_set():
+            connection.close()
+            return
+        connection.request("POST", PREDICT_PATH, body=payload, headers=headers)
+        response = connection.getresponse()
+        box["status"] = response.status
+        box["wait"] = parse_wait(response.getheader("Retry-After"))
+        if response.status == 200:
+            box["raw"] = response.read(MAX_ANSWER_BYTES + 1)
+    except (OSError, http.client.HTTPException) as error:
+        box["error"] = error
 
 
 def predict(settings: Settings, hai_type: str, ccn: str, window_year: int) -> Prediction | Failure:
-    """Ask the API for one prediction. Every outcome returns: a prediction or a failure that names its cause."""
+    """Ask the API for one prediction. Every outcome returns: a prediction or a failure that names its cause.
+
+    One absolute deadline covers name lookup, connection, send, headers and body. At the deadline the caller returns a timeout, closes the socket if one exists
+    and tells the worker not to send if it has not yet connected.
+    """
     request_id = uuid.uuid4().hex
     parts = urllib.parse.urlsplit(settings.api_url)
     connection_class = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
     connection = connection_class(parts.hostname or "", parts.port, timeout=settings.deadline_seconds)
     payload = json.dumps({"hai_type": hai_type, "ccn": ccn, "window_year": window_year}).encode()
     headers = {"Content-Type": "application/json", KEY_HEADER: settings.api_key.reveal(), REQUEST_HEADER: request_id}
-    watchdog = Watchdog(settings.deadline_seconds)
+    abandoned = threading.Event()
+    box: dict[str, Any] = {}
     started = time.monotonic()
-    status: int | None = None
-    wait: float | None = None
-    raw = b""
+    worker = threading.Thread(target=exchange, args=(connection, payload, headers, abandoned, box), daemon=True)
+    worker.start()
+    worker.join(settings.deadline_seconds)
     kind = ""
-    try:
-        connection.connect()
-        watchdog.attach(connection.sock)
-        connection.request("POST", PREDICT_PATH, body=payload, headers=headers)
-        response = connection.getresponse()
-        status = response.status
-        wait = parse_wait(response.getheader("Retry-After"))
-        if status == 200:
-            raw = response.read(MAX_ANSWER_BYTES + 1)
-    except (OSError, http.client.HTTPException) as error:
-        kind = "timeout" if watchdog.expired.is_set() or isinstance(error, TimeoutError) else "unreachable"
-    finally:
-        watchdog.stop()
-        connection.close()
+    if worker.is_alive():
+        abandoned.set()
+        sock = connection.sock
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+        kind = "timeout"
+    connection.close()
+    error = box.get("error")
+    status: int | None = box.get("status")
+    if error is not None:
+        kind = "timeout" if isinstance(error, TimeoutError) else "unreachable"
     outcome: Prediction | Failure
     if not kind and status == 200:
-        answer = read_answer(raw, hai_type, ccn, window_year)
+        answer = read_answer(box.get("raw", b""), hai_type, ccn, window_year, request_id, settings.api_key.reveal())
         outcome = answer if answer is not None else Failure("bad_answer", status, None, request_id, settings.deadline_seconds)
     else:
         kind = kind or STATUS_KINDS.get(status or 0, "unexpected_status")
-        outcome = Failure(kind, status, wait if kind in ("rate_limited", "unavailable") else None, request_id, settings.deadline_seconds)
+        wait = box.get("wait") if kind in ("rate_limited", "unavailable") else None
+        outcome = Failure(kind, None if kind in ("timeout", "unreachable") else status, wait, request_id, settings.deadline_seconds)
     LOG.info(
         "model API call finished: outcome=%s status=%s request_id=%s ms=%d",
         "prediction" if isinstance(outcome, Prediction) else outcome.kind,
