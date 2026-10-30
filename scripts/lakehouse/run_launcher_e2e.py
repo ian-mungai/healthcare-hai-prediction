@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration import launcher, online_store, pipeline_session
+from orchestration import code_digest, launcher, mlflow_service, online_store, pipeline_session, training_contract
 from scripts.infrastructure import sts_stand_in
 from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.infrastructure.sts_stand_in import StandInSts
@@ -53,6 +53,8 @@ from scripts.lakehouse import launcher_cleanup, run_lock
 from scripts.lakehouse import pins as pins_module
 from scripts.lakehouse.fake_docker import FakeDocker, Gate
 from scripts.process import TimeoutExpired, run_command
+from scripts.training import lane_b_cases
+from scripts.training.step_records import write_done
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "launcher"
@@ -4868,7 +4870,14 @@ class NotingRenderer(launcher.Renderer):
     """A renderer that notes the template of every render that returns a specification, to show which templates a case rendered. It watches the
     public render calls, so a template that builds its specification without ``assemble`` (the probe) is seen like any other."""
 
-    ENTRY_POINTS = ("render", "render_service", "render_orchestration_service", "render_lineage_service", "render_online_store_service")
+    ENTRY_POINTS = (
+        "render",
+        "render_service",
+        "render_orchestration_service",
+        "render_lineage_service",
+        "render_online_store_service",
+        "render_mlflow_service",
+    )
 
     def __init__(self, *arguments: Any, noted: set[str], **options: Any) -> None:
         super().__init__(*arguments, **options)
@@ -5382,6 +5391,124 @@ def role_session_history(env: Env) -> dict[str, bool]:
         and saved == b""
     )
     out["the premise held: the unguarded child returned the session it saved"] = isinstance(unguarded, pipeline_session.RoleSession)
+    return out
+
+
+def training_render_checks(env: Env, config: Any, registry_id: str, rendered_templates: set[str]) -> dict[str, bool]:
+    """The training templates, rendered as the launcher renders them: a snapshot of synthetic code, the fixture extract and the offline job,
+    the writer on the run's isolated MLflow network, and the MLflow and database services; none receives a credential."""
+    out: dict[str, bool] = {}
+    folder = env.work / "training"
+    source, run_folder = folder / "source", folder / "runs" / lane_b_cases.RUN
+    lane_b_cases.fixture(source)
+    record = code_digest.snapshot_training(source, run_folder, lane_b_cases.RUN, git_reader=lane_b_cases.fixture_git)
+    parameters = lane_b_cases.PARAMETERS
+    (run_folder / "training_parameters.json").write_text(json.dumps(parameters))
+    for step in ("guard", "extract", "version_extract", "fit", "log_run"):
+        output = run_folder / "outputs" / step
+        output.mkdir(parents=True, exist_ok=True)
+        names = [f"{step}.json"]
+        if step == "extract":
+            names += [f"{prefix}_{hai}.{suffix}" for hai in training_contract.HAI_TYPES for prefix, suffix in (("extract", "parquet"), ("manifest", "json"))]
+            names += ["mediator.parquet", "hac.parquet", "adjacency.parquet"]
+        for name in names:
+            (output / name).write_text("synthetic step output\n")
+        write_done(output, step, record["code_digest"], names)
+    mlflow_network = f"hai-{registry_id[:8]}-mlflow-net"
+    state = {
+        "registry_kind": "test",
+        "training": {"dag_id": "training_dag", "parameters": parameters},
+        "training_snapshot": {"phase": "complete", "record_sha256": hashlib.sha256((run_folder / code_digest.RECORD).read_bytes()).hexdigest()},
+        "training_mlflow": {"phase": "ready", "name": mlflow_network},
+        "training_publication": {"local_catalog": str(folder / "publication/local_catalog"), "registry": str(folder / "publication/registry.pb")},
+    }
+    limits = {"JOB_MEMORY_LIMIT": str(1024**3), "JOB_THREADS": "1"}
+    renderer = NotingRenderer(config, launcher.ComposeModel(ROOT / mlflow_service.TRAINING_COMPOSE), ROOT, ROOT, b"k" * 32, noted=rendered_templates)
+
+    def job(template: str, action: str) -> dict[str, Any]:
+        inp = launcher.RenderInput(
+            template,
+            "owner",
+            f"training-{action}",
+            1,
+            1,
+            "op-training",
+            limits,
+            int(time.time()) + 600,
+            [],
+            {"action": action, "parameters": parameters},
+            {"hai.registry_id": registry_id},
+            run_folder=run_folder,
+            run_mode="fixture",
+            pipeline=state,
+        )
+        return facts(renderer.render(inp, registry_id))
+
+    def credential_free(f: dict[str, Any]) -> bool:
+        return not any(name.startswith(("AWS", "POLARIS", "HTTP", "NO_PROXY")) for name in f["env"])
+
+    code = {
+        (str(run_folder / "code" / name), f"/workspace/{name}", True)
+        for name in ("scripts", "orchestration", "feature_store", "config", "data_contracts", "docs", "dbt")
+    }
+    f = job("training_extract", "extract")
+    out["training_extract fixture: the feature-store image and extract module, snapshot code read-only, the synthetic publication, no network"] = (
+        f["image"] == renderer.image("feature-store")
+        and f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", "scripts.features.training_extract"]
+        and f["cmd"][:5] == ["extract", "--run", lane_b_cases.RUN, "--mode", "fixture"]
+        and f["network"] == "none"
+        and code <= f["mounts"]
+        and (str(state["training_publication"]["local_catalog"]), "/workspace/local_catalog", True) in f["mounts"]
+        and (str(run_folder / "outputs/extract"), "/workspace/out", False) in f["mounts"]
+        and f["env"]["FEAST_CATALOG_TYPE"] == "sql"
+        and credential_free(f)
+    )
+    f = job("training_job", "fit")
+    out["training_job fit: the training image and job module, snapshot code read-only, no network, no auxiliary outcome file, no credential"] = (
+        f["image"] == renderer.image("training")
+        and f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", "scripts.training.job"]
+        and f["cmd"][:5] == ["fit", "--run", lane_b_cases.RUN, "--mode", "fixture"]
+        and f["network"] == "none"
+        and code <= f["mounts"]
+        and (str(run_folder / "outputs/fit"), "/workspace/out", False) in f["mounts"]
+        and not any(Path(host).name in ("mediator.parquet", "hac.parquet") for host, _, _ in f["mounts"])
+        and "MLFLOW_TRACKING_URI" not in f["env"]
+        and credential_free(f)
+    )
+    f = job("training_mlflow", "promotion_check")
+    out["training_mlflow promotion_check: only the run's isolated MLflow network, the tracking address in the environment, no credential"] = (
+        f["image"] == renderer.image("training")
+        and f["cmd"][:5] == ["promotion_check", "--run", lane_b_cases.RUN, "--mode", "fixture"]
+        and f["network"] == mlflow_network
+        and f["env"]["MLFLOW_TRACKING_URI"] == "http://mlflow:5100"
+        and (str(run_folder / "outputs/promotion_check"), "/workspace/out", False) in f["mounts"]
+        and credential_free(f)
+    )
+    service_renderer = NotingRenderer(config, launcher.ComposeModel(ROOT / mlflow_service.COMPOSE), ROOT, ROOT, b"k" * 32, noted=rendered_templates)
+    service_values = {"HAI_MLFLOW_STATE": str(folder / "mlflow_state"), "HAI_MLFLOW_MEMORY": str(1024**3), "HAI_MLFLOW_DB_MEMORY": str(256 * 1024**2)}
+    for service in mlflow_service.SERVICES:
+        inp = launcher.RenderInput(
+            mlflow_service.TEMPLATE,
+            "mlflow",
+            f"mlflow-{service}",
+            1,
+            1,
+            "op-mlflow",
+            service_values,
+            0,
+            [],
+            {"service": service},
+            {"hai.registry_id": registry_id},
+        )
+        rendered = service_renderer.render_mlflow_service(inp, service, registry_id)
+        f = facts(rendered)
+        mlflow_service.validate_bindings(service, f["body"])
+        out[f"mlflow_service {service}: closed bindings, the password only in the environment, never in a command or a mount"] = (
+            f["image"] == service_renderer.image(service)
+            and f["network"] == mlflow_service.network_names(registry_id)["ui" if service == "mlflow" else "backend"]
+            and "MLFLOW_DB_PASSWORD" not in " ".join(f["cmd"])
+            and not any("password" in host.lower() for host, _, _ in f["mounts"])
+        )
     return out
 
 
@@ -6030,6 +6157,7 @@ def render_templates(env: Env) -> dict[str, bool]:
             )
         )
     out.update(feature_store_render_checks(env, renderer, config, registry_id, values, run_folder, snapshot, pipeline, rendered_templates))
+    out.update(training_render_checks(env, config, registry_id, rendered_templates))
     for role in (*network_policy.CLASSES, "offline"):
         f = pipeline_facts("pipeline_probe", {"class": role, "case": "traffic"})
         out[f"pipeline_probe/{role}"] = (
