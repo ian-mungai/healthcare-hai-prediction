@@ -89,7 +89,7 @@ MODEL_API_KEY="$(cat "$TMPDIR/api_key_folder/api_key")" .venv/bin/python -m scri
   --url http://127.0.0.1:8000 --hai-type HAI_1 --corpus hospital_windows.csv --output replay_report.json
 ```
 
-The report holds the status counts and the split. It also holds a comparison of the two prediction sets: counts, mean, three quantiles, the Kolmogorov-Smirnov distance and the mean shift. A side with fewer than 30 rows gets no comparison. The comparison judges nothing. Whether the canary becomes the production model is the owner's decision, through the promotion DAG.
+Each request has one deadline for the whole exchange. A result that arrives after the replay deadline is refused. The report holds the status counts and the split. It also holds a comparison of the two prediction sets: counts, mean, three quantiles, the Kolmogorov-Smirnov distance and the mean shift. A side with fewer than 30 rows gets no comparison. The comparison judges nothing. Whether the canary becomes the production model is the owner's decision, through the promotion DAG.
 
 ## Deploying
 
@@ -102,7 +102,7 @@ aws s3 cp /tmp/serving_request.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_
 
 For a rollback use `"candidate_version": null`, `"percent": 0` and `"deploy_mode": "rollback"`. The job checks the request, reads the production alias and the candidate's version record, then writes the deployment. It refuses a candidate that is the production version, does not exist or has no completed bundle. A refusal writes nothing and exits with code 2.
 
-A retried deploy has no second effect. The run id is the deployment id. Each deployment carries a sequence number one above the deployment it replaced. A retry with the same parameters returns `unchanged` while that deployment is active. A retry with other parameters is refused. The history record is written once before the active record moves, so a deploy that stopped between the two writes finishes on its retry, with the stable version it recorded the first time. A retry of a deployment that a later one replaced is refused, so an old retry cannot undo a rollback. The active record is replaced only if it is still the one the deploy read. The DAG allows one active run, which closes the short gap that remains on S3.
+A retried deploy has no second effect. The run id is the deployment id. Each deployment carries a sequence number one above the deployment it replaced. A record from the first release has no sequence field. It reads as sequence 1, so the service starts from it and the next deploy is numbered 2. A retry with the same parameters returns `unchanged` while that deployment is active. A retry with other parameters is refused. The history record is written once before the active record moves, so a deploy that stopped between the two writes finishes on its retry, with the stable version it recorded the first time. A retry of a deployment that a later one replaced is refused, so an old retry cannot undo a rollback. The active record is replaced only if it is still the one the deploy read. The DAG allows one active run, which closes the short gap that remains on S3.
 
 The deploy never moves an alias. Promotion stays the owner's, through `model_promotion_dag`. After a promotion, run a deploy without a candidate so the record names the new production version as stable.
 

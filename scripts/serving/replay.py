@@ -3,7 +3,8 @@
 This is the canary proof: replayed requests, not live traffic. No caller uses the API yet, so the replay shows that the split is deterministic and
 close to its share and how the two models' predictions differ on the same inputs. It cannot show how the canary behaves under real use. The key comes
 from the environment variable ``MODEL_API_KEY`` and is never printed or written. A rate limit answer is waited out, and the whole replay has a
-deadline that clamps every wait and every request timeout.
+deadline that clamps every wait and every request timeout. A request timeout covers the whole HTTP exchange.
+A result that arrives after the deadline is refused.
 
     MODEL_API_KEY=... python -m scripts.serving.replay --url http://127.0.0.1:8000 --hai-type HAI_1 --corpus hospital_windows.csv --output report.json
 
@@ -13,12 +14,15 @@ The corpus is a text file with one ``ccn,window_year`` line for each hospital-wi
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
 import json
 import math
 import os
 import re
+import socket
 import sys
+import threading
 import time
 import urllib.parse
 from collections import Counter
@@ -71,6 +75,8 @@ def run(
         payload = {"hai_type": hai_type, "ccn": ccn, "window_year": year}
         for attempt in range(MAX_RETRIES + 1):
             status, headers, body = send(payload, min(REQUEST_SECONDS, remaining()))
+            if clock() > deadline:
+                raise ReplayDeadline(f"the replay did not finish within {deadline_seconds:g} s")
             if status != 429 or attempt == MAX_RETRIES:
                 break
             sleep(min(retry_after(headers), remaining()))
@@ -102,13 +108,33 @@ def http_send(url: str, key: str) -> Send:
         raise ValueError("the URL must be an http address, normally the local end of the port forward")
 
     def send(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        """One deadline covers connection, headers and body. A worker thread does the exchange and the caller stops waiting at the deadline."""
         connection = http.client.HTTPConnection(parts.hostname or "", parts.port or 80, timeout=timeout)
-        try:
-            connection.request("POST", "/v1/predict", body=json.dumps(payload), headers={"Content-Type": "application/json", "X-API-Key": key})
-            response = connection.getresponse()
-            return response.status, dict(response.getheaders()), json.loads(response.read() or b"{}")
-        finally:
+        box: dict[str, Any] = {}
+
+        def exchange() -> None:
+            try:
+                connection.request("POST", "/v1/predict", body=json.dumps(payload), headers={"Content-Type": "application/json", "X-API-Key": key})
+                response = connection.getresponse()
+                box["result"] = response.status, dict(response.getheaders()), json.loads(response.read() or b"{}")
+            except (OSError, http.client.HTTPException, ValueError) as error:
+                box["error"] = error
+
+        worker = threading.Thread(target=exchange, daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            sock = connection.sock
+            if sock is not None:
+                with contextlib.suppress(OSError):
+                    sock.shutdown(socket.SHUT_RDWR)
             connection.close()
+            raise TimeoutError(f"the request did not finish within {timeout:g} s")
+        connection.close()
+        if "error" in box:
+            raise box["error"]
+        result: tuple[int, dict[str, str], dict[str, Any]] = box["result"]
+        return result
 
     return send
 
