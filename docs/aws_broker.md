@@ -14,12 +14,12 @@ The job broker is the only path from an Airflow DAG to work on AWS. It keeps the
 | Part | Where | What it does |
 | --- | --- | --- |
 | Broker service | The container host, loopback port 18790 | Takes a DAG step, writes the ledger line, starts or joins the job task and reports its state |
-| Job task | Fargate, on demand | One task per job, run and attempt. A job is `train`, `silver`, `gold`, `features` or `drift` |
+| Job task | Fargate, on demand | One task per job, run and attempt. A job is `train`, `silver`, `gold`, `features`, `drift` or `promote` |
 | Chain DAG `bronze_chain_dag` | Airflow | The owner starts it by hand. It asks the broker whether the chain is open, then triggers silver, gold, features and drift in order |
 
 The table `config/orchestration/ecs_broker_jobs.json` names the job of each DAG step. A step with no job (acquire, seal, release and the gates) answers at once. The first step of a job starts its task and the later steps join it, because the containers of one job share a workspace. A job passes only when every container exits 0 and every acceptance container appears in the task report. A job that runs past its deadline is stopped.
 
-The `train` job exists today. The `silver`, `gold`, `features` and `drift` jobs need their task definitions and layer driver first. Their names stay out of `broker_job_families` until those exist.
+The `train` job exists today. Five jobs need task definitions first: `silver`, `gold`, `features`, `drift`, `promote`. The first four also need the layer driver. Their names stay out of `broker_job_families` until those exist. The `promote` job uses the training task role.
 
 ## Apply order
 
@@ -37,7 +37,7 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 
 4. `infra/services`: set `broker_enabled = true` and set `broker_task_role_arn` to the ARN in the `broker_roles` output. Set `broker_jobs` to the job subnet, the job security group, the jobs log group, the data bucket, the private address of the host and the families. Then run the host preparation task again. It creates the broker state folder on the data volume.
 5. Check that the broker service reached a `COMPLETED` deployment, as for the other services.
-6. For each run, stage the code as for a training run and add the digest beside it. A chain needs this under the run ID of each layer, which the trigger tasks of the chain run show:
+6. For each run, stage the code as for a training run and add the digest beside it. A chain needs this once, under the bronze run ID. The chain gate names that run for the four layer runs, so each layer reads the bronze run's digest:
 
    ```sh
    git archive --format=tar.gz --output=/tmp/code.tar.gz HEAD
@@ -49,6 +49,17 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 7. After new bronze data is registered and the first publishes are signed, start `bronze_chain_dag` by hand as described below.
 
 The training DAG sends `mlflow=local` because the DAG runtime accepts nothing else. The broker passes `mlflow=aws` to the task.
+
+## Promote a model
+
+A promotion is a run of `model_promotion_dag`. The broker starts the `promote` job only when the owner has approved exactly that promotion. Stage the code as above under the promotion's run ID. Then write the approval as one file per run and copy it beside the code:
+
+```sh
+printf '{"run_id": "<RUN_ID>", "dag_id": "model_promotion_dag", "scope": "promote", "approved_on": "<YYYY-MM-DD>", "hai_type": "<HAI_TYPE>", "model_version": "<VERSION>"}' > /tmp/promotion_approval.json
+aws s3 cp /tmp/promotion_approval.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/promotion_approval.json --profile <PROJECT_PROFILE>
+```
+
+Use `"scope": "rollback"` for a rollback. The record must name the run, the DAG, the operation, the HAI type and the model version of the request. Its date must not be after today. Any other field or value is refused. The record covers one run, so each promotion needs its own. Then trigger `model_promotion_dag` in Airflow with the same run ID, HAI type and version. Training runs need no approval record.
 
 ## Sign the first publishes
 
@@ -92,3 +103,4 @@ aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUS
 - Whether `RunTask` returns the same task for a repeated client token after that task stopped.
 - Whether the Airflow trigger operator renders the run ID templates as the offline Jinja check does.
 - The task definitions and layer driver of the silver, gold, features and drift jobs.
+- The task definition of the `promote` job and a `promote` phase in the AWS training run script. Until they exist the broker accepts and checks the approval but has no task to start.
