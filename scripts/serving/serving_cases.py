@@ -75,6 +75,8 @@ class Loader:
     def __init__(self) -> None:
         self.broken: set[str] = set()
         self.cost = 0.0
+        self.schema_hashes: dict[str, str] = {}
+        self.extra_references: dict[str, tuple[str, ...]] = {}
         self.calls = 0
         self.rows: list[Mapping[str, Any]] = []
         self.clock: Clock | None = None
@@ -96,7 +98,8 @@ class Loader:
                 raise RuntimeError("synthetic prediction failure")
             return float(version) + sum(len(str(value)) for value in row.values()) / 10000
 
-        return service.LoadedModel(version, tuple(online_cases.REFERENCES), online_cases.SCHEMA_HASH, predict)
+        references = (*online_cases.REFERENCES, *self.extra_references.get(version, ()))
+        return service.LoadedModel(version, references, self.schema_hashes.get(version, online_cases.SCHEMA_HASH), predict)
 
     def release(self, model: service.LoadedModel) -> None:
         self.released.append(model.version)
@@ -141,6 +144,8 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         store = manifests.FileManifestStore(Path(folder))
         registry, loader, sink, clock = Registry(), Loader(), Sink(), Clock()
+        if "configure" in options:
+            options.pop("configure")(loader)
         if deployment:
             deploy.run(
                 registry=registry,
@@ -588,6 +593,46 @@ def case_absent_row(c: Checker) -> None:
         c.check("a present row answers 200", ask(w).status == 200)
 
 
+def candidate_trouble(loader: Loader) -> None:
+    loader.schema_hashes[CANDIDATE] = online_cases.OTHER_HASH
+
+
+def case_candidate_feature_errors(c: Checker) -> None:
+    """A feature error that belongs to the canary model sends its requests to the stable model and ejects the canary. A store error does not."""
+    keys_ = hospital_keys(40)
+    with world(count=40, percent=50, configure=candidate_trouble) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        stable_keys = [key for key, kind in routed.items() if kind == "stable"]
+        first = ask(w, canary_keys[0])
+        c.check(
+            "a canary with another feature schema falls back to the stable model with 200",
+            first.status == 200 and first.body["model_version"] == PRODUCTION and first.body["fallback"] is True,
+        )
+        for key in canary_keys[1:3]:
+            ask(w, key)
+        c.check("three such failures eject the canary", w.api.health().body[HAI]["candidate"] == "ejected")
+        c.check("every stable request still answers 200 from the stable model", all(ask(w, key).body["model_version"] == PRODUCTION for key in stable_keys))
+        c.check("the fallback rows name the canary as the routed version", any(row["routed_version"] == CANDIDATE and row["fallback"] for row in rows_of(w)))
+    absent = "feature_matrix_extra:x"
+    with world(count=40, percent=50, wrap=with_view(absent, None, 0), configure=lambda loader: loader.extra_references.update({CANDIDATE: (absent,)})) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        replies = [ask(w, key) for key in canary_keys[:4]]
+        c.check(
+            "a canary that needs an absent view row falls back to the stable model",
+            all(r.status == 200 and r.body["model_version"] == PRODUCTION for r in replies),
+        )
+        c.check("and is ejected", w.api.health().body[HAI]["candidate"] == "ejected")
+    with world(count=40, percent=50) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        w.server.write_hash(online.CONTROL_DB, online.MARKER_KEY, {"state": "loading"})
+        outage = [ask(w, key).status for key in canary_keys[:5]]
+        c.check("a store that is loading gives 503 for canary requests", outage == [503] * 5)
+        c.check("a store outage does not eject the canary", w.api.health().body[HAI]["candidate"] == CANDIDATE)
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -887,6 +932,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "absent_row": (case_absent_row, "feast"),
     "split_deterministic": (case_split, "canary"),
     "version_failure_isolated": (case_version_failure, "canary"),
+    "candidate_feature_errors": (case_candidate_feature_errors, "canary"),
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),

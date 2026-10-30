@@ -259,12 +259,21 @@ class ModelService:
         return Reply(200, body, {"X-Request-ID": rid}), row
 
     def _answer(self, slot: Slot, ccn: str, window_year: int) -> tuple[float, contract.Served] | None:
-        """Read the features for the slot's model and predict. None when the slot cannot predict. Feature store errors propagate as serving errors."""
+        """Read the features for the slot's model and predict. None when the slot cannot predict.
+
+        Store errors propagate as serving errors. A feature error that belongs to a canary model counts as that model's failure.
+        """
         if slot.model is None or slot.state != "loaded":
             return None
-        served = contract.serve(
-            self._read_marker, self._read_features, references=slot.model.references, schema_hash=slot.model.schema_hash, ccn=ccn, window_year=window_year
-        )
+        try:
+            served = contract.serve(
+                self._read_marker, self._read_features, references=slot.model.references, schema_hash=slot.model.schema_hash, ccn=ccn, window_year=window_year
+            )
+        except contract.ModelMismatch as error:
+            self._failed(slot, error)
+            if self._is_stable(slot):
+                raise
+            return None
         try:
             value = float(slot.model.predict(served.values))
         except Exception as error:
@@ -278,14 +287,11 @@ class ModelService:
         with self._lock:
             slot.failures += 1
             LOG.warning("model version %s failed a prediction (%s), %d in a row", slot.version, type(error).__name__, slot.failures)
-            if slot.failures >= self._failure_limit and slot is not self._stable_slot(slot):
+            if slot.failures >= self._failure_limit and not self._is_stable(slot):
                 slot.state = "ejected"
 
-    def _stable_slot(self, slot: Slot) -> Slot | None:
-        for active in self._active.values():
-            if slot is active.stable:
-                return slot
-        return None
+    def _is_stable(self, slot: Slot) -> bool:
+        return any(slot is active.stable for active in self._active.values())
 
     def _parse(self, payload: Any) -> tuple[str, str, int] | Reply:
         if not isinstance(payload, dict) or set(payload) != FIELDS:

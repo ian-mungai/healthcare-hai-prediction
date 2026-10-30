@@ -43,6 +43,13 @@ class Unavailable(ServingError):
     status = 503
 
 
+class ModelMismatch(Unavailable):
+    """The online store cannot serve this model's features: another schema hash, a requested view row that is absent or an answer without a requested feature.
+
+    A store that is loading, changed during the read or did not answer is plain ``Unavailable``: that fails every model alike.
+    """
+
+
 class NotFound(ServingError):
     status = 404
 
@@ -91,7 +98,7 @@ def checked_marker(raw: Mapping[str, str], schema_hash: str | None = None) -> Ma
     if raw.get("state") != "ready":
         raise Unavailable("the online store is not ready")
     if schema_hash is not None and raw.get("feature_schema_sha256") != schema_hash:
-        raise Unavailable("the online store holds another feature schema than the model")
+        raise ModelMismatch("the online store holds another feature schema than the model")
     return raw
 
 
@@ -114,12 +121,12 @@ def serve(read_marker: MarkerReader, read_features: FeatureReader, *, references
         seconds = int(answer[probe + TIMESTAMP_POSTFIX][0])
         values = {reference: answer[feast_name(reference)][0] for reference in references}
     except (KeyError, IndexError, TypeError, ValueError):
-        raise Unavailable("the online store answered without the requested features") from None
+        raise ModelMismatch("the online store answered without the requested features") from None
     if seconds == 0:
         raise NotFound("the hospital-window is not in the online store")
     absent = sorted(reference for reference in references if not event_time(answer, feast_name(reference)))
     if absent:
-        raise Unavailable(f"the online store holds no row of {len(absent)} requested views for this hospital-window")
+        raise ModelMismatch(f"the online store holds no row of {len(absent)} requested views for this hospital-window")
     return Served(values, datetime.fromtimestamp(seconds, UTC).date().isoformat(), schema_hash)
 
 
