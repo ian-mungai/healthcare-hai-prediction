@@ -16,6 +16,7 @@ repeated-test check stays empty).
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import re
 import sys
@@ -726,7 +727,7 @@ def test_binding_problems(documents: dict[str, Any], generic: Collection[str], s
 
 def model_problems(dbt: Path = DBT, published: Collection[str] | None = None) -> list[str]:
     """Offline reads of the dbt tree: gold models name only published silver models, and model YAML lists only tests dbt can bind."""
-    import yaml  # the host checks need it; the in-container readers of this module do not
+    yaml = importlib.import_module("yaml")  # PyYAML ships no type hints and the in-container readers of this module do not need it
 
     silver = {path.stem for path in (dbt / "models/silver").rglob("*.sql")}
     gold = {path.stem: path.read_text() for path in (dbt / "models/gold").rglob("*.sql")}
