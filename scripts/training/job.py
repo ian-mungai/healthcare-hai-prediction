@@ -14,12 +14,15 @@ from pathlib import Path
 from types import FrameType, ModuleType
 from typing import Any
 
+from scripts.training.job_failure import EXIT_DEADLINE, EXIT_NOT_IMPLEMENTED, JobFailure
+from scripts.training.job_failure import EXIT_FAILED as EXIT_FAILED
+
 ROOT = Path(__file__).resolve().parents[2]
 ACTIONS = ("guard", "version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check", "promote", "smoke")
 MODULES: dict[str, tuple[str, ...]] = {
     "guard": ("scripts.training.guards", "scripts.training.targets", "scripts.training.step_records"),
     "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records"),
-    "fit": ("scripts.training.models.suite",),
+    "fit": ("scripts.training.models.suite", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "mediation": ("scripts.training.mediation",),
     "hac_validate": ("scripts.training.hac_validation",),
     "log_run": (),
@@ -31,15 +34,6 @@ SNAPSHOT_PACKAGES = ("scripts", "orchestration", "feature_store")
 STATIC_SECONDS = {"guard": 300.0, "smoke": 120.0}
 REQUIRED = ("run", "mode", "run_dir", "parameters", "snapshot_record")
 OPTIONS = {name: "--" + name.replace("_", "-") for name in (*REQUIRED, "approval")}
-EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_DEADLINE = 1, 3, 4
-
-
-class JobFailure(Exception):
-    """A named, visible failure of one action."""
-
-    def __init__(self, name: str, detail: str, code: int = EXIT_FAILED) -> None:
-        super().__init__(detail)
-        self.name, self.detail, self.code = name, detail, code
 
 
 @dataclass(frozen=True)
@@ -127,12 +121,14 @@ def action_modules() -> tuple[ModuleType, ...]:
     import scripts.training.dvc_baseline as dvc_baseline
     import scripts.training.guards as guards
     import scripts.training.hac_validation as hac_validation
+    import scripts.training.job_actions as job_actions
+    import scripts.training.job_inputs as job_inputs
     import scripts.training.mediation as mediation
     import scripts.training.models.suite as suite
     import scripts.training.step_records as step_records
     import scripts.training.targets as targets
 
-    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation)
+    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation, job_actions, job_inputs)
 
 
 def run_smoke(context: Context) -> None:
@@ -149,7 +145,14 @@ def run_smoke(context: Context) -> None:
     sys.stdout.write(json.dumps({"action": "smoke", "modules": names, "unimplemented": [name for name in ACTIONS if name not in HANDLERS]}) + "\n")
 
 
-HANDLERS: dict[str, Callable[[Context], None]] = {"guard": run_guard, "smoke": run_smoke}
+def run_fit(context: Context) -> None:
+    """Fit the six-model suite for every requested HAI type from the mounted extract."""
+    from scripts.training import job_actions
+
+    job_actions.run_fit(context, read_record(context))
+
+
+HANDLERS: dict[str, Callable[[Context], None]] = {"guard": run_guard, "fit": run_fit, "smoke": run_smoke}
 
 
 def budget(action: str) -> float:

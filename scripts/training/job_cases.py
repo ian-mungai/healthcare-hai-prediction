@@ -17,7 +17,7 @@ from unittest import mock
 
 from orchestration import training_render
 from scripts.process import run_command
-from scripts.training import guards, job
+from scripts.training import guards, job, job_failure
 from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.step_records import verify_done
 
@@ -205,7 +205,8 @@ def smoke_cases(cases: Cases, folder: Path) -> None:
         for package in ("scripts", "scripts/training", "scripts/training/models", "orchestration"):
             (root / package).mkdir(parents=True, exist_ok=True)
             (root / package / "__init__.py").write_text("")
-        (root / "scripts/training/job.py").write_bytes(Path(job.__file__).read_bytes())
+        for source in (job.__file__, job_failure.__file__):
+            (root / "scripts/training" / Path(source).name).write_bytes(Path(source).read_bytes())
         for module in names:
             (root / (module.replace(".", "/") + ".py")).write_text("VALUE = 1\n")
         return root
