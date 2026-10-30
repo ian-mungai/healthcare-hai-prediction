@@ -200,6 +200,14 @@ repos:
         pass_filenames: false
         files: ^(.*requirements[^/]*\.txt|services/orchestration/constraints-3\.12\.txt|\.linter_allowlist|config/quality_tools\.json)$
         stages: [pre-push]
+      - id: zizmor
+        # Offline audits only (the online ones need a GitHub token); Homebrew tool, local only.
+        name: Workflows pass the zizmor security audits
+        entry: .venv/bin/python -m scripts.quality.lint_tools zizmor
+        language: system
+        pass_filenames: false
+        files: ^(\.github/workflows/.*\.ya?ml|\.linter_allowlist|config/quality_tools\.json)$
+        stages: [pre-commit]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata

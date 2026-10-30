@@ -34,3 +34,4 @@ osv-scanner services/orchestration/constraints-3.12.txt:uv==0.12.13 -- pin upgra
 osv-scanner services/orchestration/constraints-3.12.txt:virtualenv==21.7.9 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
 osv-scanner services/orchestration/constraints-3.12.txt:werkzeug==3.1.8 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
 osv-scanner services/quality/requirements.txt:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+zizmor .github/workflows/ci.yml:self-repository -- style suggestion to write the local setup action as $/.github/actions/setup; workflow edits belong to the CI change, so revisit it there

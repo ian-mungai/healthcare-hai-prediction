@@ -151,6 +151,12 @@
       "installer": "homebrew",
       "formula": "osv-scanner",
       "executable": "/opt/homebrew/bin/osv-scanner"
+    },
+    "zizmor": {
+      "version": "1.31.1",
+      "installer": "homebrew",
+      "formula": "zizmor",
+      "executable": "/opt/homebrew/bin/zizmor"
     }
   }
 }
