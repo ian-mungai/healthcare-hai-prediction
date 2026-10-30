@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -178,3 +180,39 @@ def test_layout_collection_without_a_registry_source_fails_the_check(built: dict
         any("bronze collection" in problem and "registry" in problem for problem in problems),
         "any('bronze collection' in problem and 'registry' in problem for pro",
     )
+
+
+def run_check_on(text: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+    path = tmp_path / "source_verification_log.json"
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(log_module, "LOG_PATH", path)
+    monkeypatch.setattr(sys, "argv", ["source_verification_log", "--check"])
+    try:
+        log_module.main()
+    except SystemExit as stop:
+        return int(stop.code or 0), capsys.readouterr().err
+    return 0, capsys.readouterr().out
+
+
+def test_check_accepts_the_canonical_file(built: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    code, output = run_check_on(log_module.render(built), tmp_path, monkeypatch, capsys)
+    check(code == 0 and "valid" in output, "code == 0 and 'valid' in output")
+
+
+def test_duplicate_key_with_an_email_before_the_real_value_fails_the_check(
+    built: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = log_module.render(built)
+    first_title = json.dumps(built["rows"][0]["title"], ensure_ascii=False)
+    hidden = text.replace(f'"title": {first_title}', f'"title": "owner@example.org",\n      "title": {first_title}', 1)
+    check(hidden != text and json.loads(hidden) == built, "hidden != text and json.loads(hidden) == built")
+    code, output = run_check_on(hidden, tmp_path, monkeypatch, capsys)
+    check(code == 1 and "Duplicate JSON key: title" in output, "code == 1 and 'Duplicate JSON key: title' in output")
+
+
+def test_file_text_that_is_not_the_canonical_serialization_fails_the_check(
+    built: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    compact = json.dumps(built, ensure_ascii=False)
+    code, output = run_check_on(compact, tmp_path, monkeypatch, capsys)
+    check(code == 1 and "canonical" in output, "code == 1 and 'canonical' in output")

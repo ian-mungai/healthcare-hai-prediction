@@ -366,6 +366,18 @@ def check_log(log: dict[str, Any], inputs: dict[str, Any]) -> list[str]:
     return problems
 
 
+def check_file(path: Path, inputs: dict[str, Any]) -> list[str]:
+    """Return the problems of the committed file: duplicate keys, text other than the canonical serialization, and every check_log problem."""
+    try:
+        log = read_json(path)
+    except RegistryError as error:
+        return [str(error)]
+    problems = check_log(log, inputs)
+    if path.read_text(encoding="utf-8") != render(log):
+        problems.append("the file text is not the canonical serialization of its content; run python -m scripts.acquisition.source_verification_log")
+    return problems
+
+
 def write_log(log: dict[str, Any], path: Path = LOG_PATH) -> bool:
     """Write the log when its text changed, through a temporary file; return whether the file changed."""
     text = render(log)
@@ -392,7 +404,7 @@ def main() -> None:
         return
     if not LOG_PATH.exists():
         parser.exit(1, f"Missing {LOG_PATH.relative_to(REPO_ROOT)}\n")
-    problems = check_log(json.loads(LOG_PATH.read_text(encoding="utf-8")), inputs)
+    problems = check_file(LOG_PATH, inputs)
     if problems:
         parser.exit(1, "Source verification log check failed:\n" + "\n".join(f"- {problem}" for problem in problems) + "\n")
     sys.stdout.write(f"Source verification log valid: {len(logged_source_ids(inputs))} rows\n")
