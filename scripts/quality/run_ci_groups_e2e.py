@@ -304,7 +304,7 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     stage_readme(work)
     # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
     launcher_part = "launcher" in PART_GROUPS[part]
-    marker = install_launcher_stub(work) if launcher_part else None
+    marker = (install_launcher_group_stub(work) if "repository_code_checks" in PART_GROUPS[part] else install_launcher_stub(work)) if launcher_part else None
     try:
         code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part})
     finally:
@@ -428,6 +428,18 @@ def install_launcher_stub(work: Path) -> Path:
         'marker.parent.mkdir(exist_ok=True)\nmarker.write_text(" ".join(sys.argv[1:]))\n',
         encoding="utf-8",
     )
+    marker = work / "data" / "launcher_stub.marker"
+    marker.unlink(missing_ok=True)
+    return marker
+
+
+def install_launcher_group_stub(work: Path) -> Path:
+    """A launcher stub for a part that also runs repository_code_checks: it replaces the group body, because the process start guard there rejects an edited
+    run_launcher_e2e.py, whose hash its reviewed entries record."""
+    # The stub still names the module, because the launcher input check compares the body with its entry points.
+    run = ": -m scripts.lakehouse.run_launcher_e2e >data/launcher_stub.marker"
+    body = f"#!/usr/bin/env bash\n# shellcheck disable=SC2154,SC2329\nlauncher_e2e() {{\n  mkdir -p data\n  {run}\n}}\n"
+    (work / GROUP_FILES / "launcher.sh").write_text(body, encoding="utf-8")
     marker = work / "data" / "launcher_stub.marker"
     marker.unlink(missing_ok=True)
     return marker
