@@ -9,6 +9,7 @@ import pytest
 from scripts.acquisition import collection_layout as layout
 from scripts.acquisition import s3_store
 from scripts.acquisition.s3_store import AwsCli
+from scripts.acquisition.single_copy import reference_scope
 from scripts.acquisition.transport import CaptureError
 from tests.support import check
 
@@ -58,3 +59,11 @@ def test_a_capture_never_writes_outside_raw(monkeypatch: pytest.MonkeyPatch, tmp
         s3_store.store_file(cast(AwsCli, Client()), path, root_key)
     with pytest.raises(Stop):
         s3_store.store_file(cast(AwsCli, Client()), path, f"raw/{root_key}")
+
+
+def test_a_single_copy_reference_under_raw_has_the_same_scope_as_one_at_the_root() -> None:
+    digest = "a" * 64
+    tail = f"example/collection/datasets/table/release_date=2026/{digest}/file.csv"
+    check(reference_scope(f"raw/{tail}", digest) == reference_scope(tail, digest) == "objects", "raw and root payload keys share a scope")
+    audit = f"example/collection/audit/run/{digest}/file.json"
+    check(reference_scope(f"raw/{audit}", digest) == reference_scope(audit, digest) == "evidence_objects", "raw and root evidence keys share a scope")

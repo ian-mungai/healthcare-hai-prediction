@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition.raw_root import strip_root
 from scripts.acquisition.source_registry import REPO_ROOT
 from scripts.acquisition.transport import CaptureError
 
@@ -19,6 +20,7 @@ def reference_scope(key: str, checksum: str) -> str:
     parts = key.split("/")
     if any(part in {"", ".", ".."} for part in parts):
         raise CaptureError("Single-copy bootstrap has an invalid scoped payload key.")
+    parts = strip_root(key).split("/")
     for scope, prefix, legacy in (("objects", "bronze_objects", {"datasets", "references"}), ("evidence_objects", "bronze_evidence", {"audit"})):
         if parts == [prefix, "sha256", checksum] or (len(parts) >= 6 and parts[2] in legacy):
             return scope
