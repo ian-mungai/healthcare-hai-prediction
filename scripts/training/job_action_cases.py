@@ -19,7 +19,7 @@ from typing import Any
 from unittest import mock
 
 from scripts.features.training_extract import canonical, content_sha256
-from scripts.training import hac_validation, job, job_inputs, mediation, run_tracking
+from scripts.training import dvc_baseline, hac_validation, job, job_inputs, mediation, run_tracking
 from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
 from scripts.training.lane_b_cases import RUN, require
@@ -267,7 +267,9 @@ def standins(fixture: Fixture) -> Iterator[None]:
         mock.patch.object(job_inputs, "ROOT", fixture.root),
         mock.patch.object(job_inputs, "read_rows", read_parquet),
         mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
-        mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100"}),
+        mock.patch.dict(
+            os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100", "DVC_REMOTE_URL": str(fixture.folder / "dvc_remote"), "DVC_NO_ANALYTICS": "1"}
+        ),
         libraries(),
         mock.patch.object(panel, "native_fits", side_effect=panel_standin),
     ):
@@ -679,11 +681,99 @@ def hac_cases(cases: Any, folder: Path) -> None:
     cases.check("job_hac_deadline_named", deadline)
 
 
-def staged(folder: Path, **options: Any) -> Fixture:
+def version_cases(cases: Any, folder: Path) -> None:
+    """Version each exported matrix with the pinned DVC against a local remote, then check that the run can load it back."""
+
+    def versioned() -> None:
+        fixture = Fixture(folder / "versioned")
+        code, out, error = run_action(fixture, "version_extract")
+        require(code == 0, f"version_extract failed: {error}")
+        names = listing(fixture.out)
+        metafile = f"extract_{HAI_TYPE}.parquet.dvc"
+        require(names == [f"baseline_{HAI_TYPE}.json", metafile, "version_extract.done.json"], f"outputs: {names}")
+        baseline = output_of(fixture, f"baseline_{HAI_TYPE}.json")
+        require(baseline["metafile_sha256"] == file_sha256(fixture.out / metafile), "the baseline record carries another metafile hash")
+        require(baseline["matrix_path"] == f"data/training/{RUN}/extract_{HAI_TYPE}.parquet", f"matrix path: {baseline['matrix_path']}")
+        require(
+            f"md5: {dvc_baseline.file_digest(fixture.extract / f'extract_{HAI_TYPE}.parquet', 'md5')}" in (fixture.out / metafile).read_text(),
+            "the metafile does not hold the matrix MD5",
+        )
+        require(any(path.is_file() for path in (fixture.folder / "dvc_remote").rglob("*")), "nothing reached the remote")
+        verify_done(fixture.out, "version_extract", DIGEST)
+        require(json.loads(out)["resumed"] is False, "the first run reported a resume")
+
+    def retried() -> None:
+        fixture = Fixture(folder / "retried")
+        require(run_action(fixture, "version_extract")[0] == 0, "the first run failed")
+        with mock.patch.object(dvc_baseline, "run_dvc", side_effect=AssertionError("a completed step must not call DVC again")):
+            code, out, error = run_action(fixture, "version_extract")
+        require(code == 0 and json.loads(out)["resumed"] is True, f"the retry did not resume: {error}")
+
+    def interrupted() -> None:
+        fixture = Fixture(folder / "interrupted")
+        require(run_action(fixture, "version_extract")[0] == 0, "the first run failed")
+        before = {name: (fixture.out / name).read_bytes() for name in listing(fixture.out) if not name.endswith(".done.json")}
+        (fixture.out / "version_extract.done.json").unlink()
+        code, _, error = run_action(fixture, "version_extract")
+        require(code == 0, f"the retry failed: {error}")
+        require(before == {name: (fixture.out / name).read_bytes() for name in before}, "a retry changed the recorded baseline")
+
+    def no_remote() -> None:
+        fixture = Fixture(folder / "no_remote")
+        with standins(fixture), mock.patch.dict(os.environ, {"DVC_REMOTE_URL": ""}):
+            code, _, error = call(fixture.arguments("version_extract"))
+        require(code == job.EXIT_FAILED and failure_of(error) == "dvc_remote_missing" and listing(fixture.out) == [], f"{code} {error}")
+
+    def push_failure() -> None:
+        fixture = Fixture(folder / "push_failure")
+        (fixture.folder / "blocked").write_text("a file, not a folder\n")
+        with standins(fixture), mock.patch.dict(os.environ, {"DVC_REMOTE_URL": str(fixture.folder / "blocked/remote")}):
+            code, _, error = call(fixture.arguments("version_extract"))
+        require(code == job.EXIT_FAILED and failure_of(error) == "dvc_failed" and "dvc push" in error, f"{code} {error}")
+        require(listing(fixture.out) == [], "a failed push left output")
+
+    def changed_extract() -> None:
+        fixture = Fixture(folder / "changed")
+        with (fixture.extract / f"extract_{HAI_TYPE}.parquet").open("ab") as handle:
+            handle.write(b"x")
+        code, _, error = run_action(fixture, "version_extract")
+        require(code == job.EXIT_FAILED and failure_of(error) == "extract_changed" and listing(fixture.out) == [], f"{code} {error}")
+
+    def deadline() -> None:
+        fixture = Fixture(folder / "deadline")
+        with mock.patch.object(job, "budget", return_value=0.5), mock.patch.object(dvc_baseline, "run_dvc", side_effect=lambda *_: time.sleep(5)):
+            code, _, error = run_action(fixture, "version_extract")
+        require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
+
+    def round_trip() -> None:
+        fixture = staged(folder / "round_trip", baseline=False)
+        stage(fixture, "version_extract")
+        code, _, error = run_action(fixture, "log_run")
+        require(code == 0, f"log_run failed: {error}")
+        run_id = next(iter(fixture.tracking.runs))
+        project = folder / "round_trip/loader"
+        (project / ".dvc").mkdir(parents=True)
+        (project / ".dvc/config").write_text("[core]\n    analytics = false\n    autostage = false\n    no_scm = true\n")
+        dvc_baseline.run_dvc(["remote", "add", "--local", "--default", "store", str(fixture.folder / "dvc_remote")], project, 120)
+        matrix = dvc_baseline.load(dvc_baseline.Run(fixture.tracking, run_id), project=project)
+        require(matrix.read_bytes() == (fixture.extract / f"extract_{HAI_TYPE}.parquet").read_bytes(), "the loaded baseline differs from the exported matrix")
+
+    cases.check("job_version_extract_pushes_matrix_and_records_metafile", versioned)
+    cases.check("job_version_extract_retry_resumes_completed", retried)
+    cases.check("job_version_extract_retry_after_interrupt_keeps_baseline", interrupted)
+    cases.check("job_version_extract_needs_remote", no_remote)
+    cases.check("job_version_extract_push_failure_named", push_failure)
+    cases.check("job_version_extract_refuses_changed_extract", changed_extract)
+    cases.check("job_version_extract_deadline_named", deadline)
+    cases.check("job_version_extract_baseline_loads_from_logged_run", round_trip)
+
+
+def staged(folder: Path, *, baseline: bool = True, **options: Any) -> Fixture:
     """Return a fixture whose earlier steps (version_extract, fit, mediation, hac_validate) are complete and mounted."""
     fixture = Fixture(folder, **options)
     stage(fixture, "fit", "mediation", "hac_validate")
-    stage_baseline(fixture)
+    if baseline:
+        stage_baseline(fixture)
     return fixture
 
 
@@ -834,6 +924,7 @@ def scenarios(cases: Any, folder: Path) -> None:
     fit_cases(cases, folder / "fit")
     mediation_cases(cases, folder / "mediation")
     hac_cases(cases, folder / "hac")
+    version_cases(cases, folder / "version")
     log_run_cases(cases, folder / "log_run")
 
 

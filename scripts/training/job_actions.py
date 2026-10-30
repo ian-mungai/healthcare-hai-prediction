@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import pickle
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from scripts.training import job_inputs, run_tracking, step_records, targets
+from scripts.training import dvc_baseline, job_inputs, run_tracking, step_records, targets
 from scripts.training.job_failure import EXIT_DEADLINE, JobFailure
 from scripts.training.job_inputs import InputError
 
 HAC_SECONDS = 600.0
 HAC_MAPPING = "config/training/hac_year_mapping.json"
+DVC_CONFIG = "[core]\n    analytics = false\n    autostage = false\n    no_scm = true\n"
+DVC_DEADLINES = dvc_baseline.Deadlines(add=240, push=480)
 Plan = Callable[[], dict[str, bytes]]
 
 
@@ -319,3 +324,49 @@ def run_log_run(context: Any, record: Mapping[str, Any]) -> None:
             return {"log_run.json": text({"experiment": run_tracking.EXPERIMENT, "runs": runs})}
 
         run_step(context, record, "log_run", {"log_run.json"}, plan)
+
+
+def version_names(hai_types: list[str]) -> set[str]:
+    """Return every output name version_extract writes for the run's types."""
+    return {name for hai_type in hai_types for name in (f"baseline_{hai_type}.json", f"extract_{hai_type}.parquet.dvc")}
+
+
+def run_version_extract(context: Any, record: Mapping[str, Any]) -> None:
+    """Version each exported matrix with DVC in a scratch project, push it to the run's remote and record its metafile and path."""
+    with guarded("version_extract"):
+        parameters = job_inputs.parameters_of(context.parameters)
+
+        def plan() -> dict[str, bytes]:
+            remote = os.environ.get("DVC_REMOTE_URL", "")
+            if not remote:
+                raise JobFailure("dvc_remote_missing", "DVC_REMOTE_URL is not set")
+            extract = job_inputs.input_root(context.parameters) / "extract"
+            manifests = {hai_type: job_inputs.manifest_of(extract, hai_type, context.run) for hai_type in parameters["hai_types"]}
+            for manifest in manifests.values():
+                job_inputs.table_of(extract, manifest, read=False)
+            outputs: dict[str, bytes] = {}
+            with tempfile.TemporaryDirectory(prefix="dvc_version_") as scratch:
+                project = Path(scratch)
+                try:
+                    (project / ".dvc").mkdir()
+                    (project / ".dvc/config").write_text(DVC_CONFIG)
+                    dvc_baseline.run_dvc(["remote", "add", "--local", "--default", "store", remote], project, 120)
+                    for hai_type, manifest in manifests.items():
+                        matrix = project / "data/training" / context.run / manifest["file"]
+                        matrix.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(extract / manifest["file"], matrix)
+                        relative, metafile = dvc_baseline.add_and_push(matrix, project=project, deadlines=DVC_DEADLINES)
+                        content = metafile.read_bytes()
+                        outputs[metafile.name] = content
+                        baseline = {
+                            "hai_type": hai_type,
+                            "matrix_path": relative.as_posix(),
+                            "metafile": metafile.name,
+                            "metafile_sha256": hashlib.sha256(content).hexdigest(),
+                        }
+                        outputs[f"baseline_{hai_type}.json"] = text(baseline)
+                except dvc_baseline.BaselineError as error:
+                    raise JobFailure("dvc_failed", str(error)) from None
+            return outputs
+
+        run_step(context, record, "version_extract", version_names(parameters["hai_types"]), plan)
