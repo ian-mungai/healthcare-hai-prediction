@@ -65,3 +65,15 @@ variable "aws_polaris_features_client_secret_name" {
     error_message = "Use the dedicated aws_polaris_features_client_secret parameter path with at most 15 underscore-compatible parts and 512 characters."
   }
 }
+
+variable "job_layer_runs_prepared" {
+  description = "Prepare the grants that the permanent silver, gold and features jobs need beyond their layer storage: reading the input layer, uploading the run folder, and for features applying Feast. It needs job_writer_layers_prepared. Catalog writes and activation remain separate."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.job_layer_runs_prepared || var.job_writer_layers_prepared
+    error_message = "The layer run grants attach to the prepared silver, gold and features roles: set job_writer_layers_prepared as well."
+  }
+}

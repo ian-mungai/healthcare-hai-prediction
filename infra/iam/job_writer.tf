@@ -181,3 +181,53 @@ output "job_writer_layer_contract" {
     }
   }
 }
+
+locals {
+  job_layer_run_inputs         = { silver = "bronze", gold = "silver", features = "gold" }
+  job_layer_run_upload_layers  = ["silver", "gold"]
+  job_layer_run_registry_key   = "lakehouse/feast/registry.pb"
+  job_layer_run_prepared_roles = var.job_layer_runs_prepared ? aws_iam_role.job_write_layer_task : {}
+}
+
+resource "aws_iam_role_policy" "job_writer_layer_input" {
+  for_each = local.job_layer_run_prepared_roles
+
+  name = "layer_input_read"
+  role = each.value.name
+  policy = templatefile("${path.module}/owner_policies/job_writer_layer_input.json", {
+    BUCKET_ARN          = local.bronze_bucket_arn
+    INPUT_OBJECT_ARNS   = jsonencode(["${local.bronze_bucket_arn}/lakehouse/${local.job_layer_run_inputs[each.key]}/*"])
+    INPUT_LIST_PREFIXES = jsonencode(["lakehouse/${local.job_layer_run_inputs[each.key]}/*"])
+  })
+}
+
+resource "aws_iam_role_policy" "job_writer_layer_upload" {
+  for_each = { for layer, role in local.job_layer_run_prepared_roles : layer => role if contains(local.job_layer_run_upload_layers, layer) }
+
+  name = "layer_run_upload"
+  role = each.value.name
+  policy = templatefile("${path.module}/owner_policies/job_writer_layer_upload.json", {
+    UPLOAD_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/lakehouse/layer_runs/${each.key}/*"])
+  })
+}
+
+resource "aws_iam_role_policy" "job_writer_features_feast" {
+  for_each = { for layer, role in local.job_layer_run_prepared_roles : layer => role if layer == "features" }
+
+  name = "feast_registry_and_redis_password"
+  role = each.value.name
+  policy = templatefile("${path.module}/owner_policies/job_writer_features_feast.json", {
+    REGISTRY_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/${local.job_layer_run_registry_key}"])
+    REDIS_PARAMETER_ARNS = jsonencode(["arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.redis_password_name}"])
+  })
+}
+
+output "job_layer_runs_contract" {
+  description = "Prepared run grants of the silver, gold and features jobs: the input layer each reads and the upload prefix of each layer that uploads. Activation stays off."
+  value = {
+    prepared              = var.job_layer_runs_prepared
+    inputs                = var.job_layer_runs_prepared ? local.job_layer_run_inputs : {}
+    uploads               = var.job_layer_runs_prepared ? { for layer in local.job_layer_run_upload_layers : layer => "lakehouse/layer_runs/${layer}/" } : {}
+    production_activation = false
+  }
+}
