@@ -31,7 +31,7 @@ from unittest import mock
 
 import duckdb
 
-from scripts.lakehouse import layer_run
+from scripts.lakehouse import layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
@@ -126,6 +126,10 @@ def parser_options(module: str) -> dict[str, tuple[bool, str | None]]:
     return options
 
 
+def pins_table_map() -> Path:
+    return Path(__file__).resolve().parents[2] / "config/lakehouse/bronze_tables.json"
+
+
 def argument_contract(module: str, arguments: Sequence[str | Path]) -> None:
     """Check the driver's arguments against the module's own parser: every option must exist, every required one must be given, and no option that has a
     default under /workspace may be left to it, because the task's code folder is elsewhere and a default would read or write the wrong run."""
@@ -152,7 +156,10 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
     step = str(arguments[0]) if arguments else ""
     if name == "pins":
         if step == "pin":
-            (folder / "pins.json").write_text(json.dumps({"bronze_a": "11"}, sort_keys=True) + "\n")
+            tables = pins.mapped_tables(pins_table_map())
+            if "pin_tables" in DEFECTS:
+                tables = tables[1:]
+            (folder / "pins.json").write_text(json.dumps({name: "11" for name in tables}, sort_keys=True) + "\n")
         elif not (folder / "pins.json").is_file():
             fail(module)
     elif name in ("silver_publish", "features_input", "features_publish", "gold_publish") and step in (
@@ -260,6 +267,26 @@ def export(job: Job, module: str, arguments: Sequence[str | Path]) -> None:
         fail(module)
 
 
+class FingerprintSpark:
+    """Answers the publisher's fingerprint query the way Spark does: the row count and the decimal string of the sum of 64-bit hashes cast to DECIMAL(38, 0)."""
+
+    def __init__(self, rows: dict[str, str]) -> None:
+        self.rows = rows
+
+    def sql(self, text: str) -> SimpleNamespace:
+        require("xxhash64" in text and "DECIMAL(38, 0)" in text and "AS STRING" in text, text)
+        hashes = (int.from_bytes(hashlib.sha256(f"{key}={value}".encode()).digest()[:8], "big", signed=True) for key, value in self.rows.items())
+        return SimpleNamespace(collect=lambda: [(len(self.rows), str(sum(hashes) - 3 * 10**18))])
+
+
+def publisher_fingerprint(rows: dict[str, str], columns: Sequence[Sequence[str]]) -> str:
+    """The fingerprint the real publisher function computes, from a stand-in Spark that returns the publisher's own output format."""
+    from scripts.lakehouse import gold_publish
+
+    context: Any = SimpleNamespace(spark=FingerprintSpark(rows))  # the function reads only the Spark session of its context
+    return gold_publish.fingerprint(context, columns, "export_view")[1]
+
+
 def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[str | Path]) -> None:
     folder = job.folder
     publish = folder / "publish"
@@ -269,7 +296,10 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
         if source and not any(row["run_id"] == source for row in runs):
             fail(module)
         target = Path(option(arguments, "--record")) if "--record" in [str(item) for item in arguments] else folder / "gold_pins.json"
-        target.write_text(json.dumps({"source_run_id": source, "snapshot_set": {"t": 1}}) + "\n")
+        pinned = sorted(contract("silver" if job.layer == "gold" else "gold", job.mode)[1].tables)
+        if "pin_tables" in DEFECTS:
+            pinned = pinned[1:]
+        target.write_text(json.dumps({"source_run_id": source, "snapshot_set": {name: 1 for name in pinned}}) + "\n")
     elif step == "read":
         if option(arguments, "--expected-pin-sha256") != sha_of(folder / "gold_pins.json"):
             fail(module)
@@ -310,14 +340,15 @@ def publish_step(job: Job, module: str, step: str, arguments: Sequence[str | Pat
         tables = {}
         for name, item in manifest["tables"].items():
             rows = item["rows"] + (1 if "reconcile_rows" in DEFECTS else 0)
-            fingerprint = "f" * 64
+            fingerprint = publisher_fingerprint(read_json(publish / "export" / item["file"]), item["columns"])
             entry = {
                 "candidate_snapshot_id": candidates["tables"][name]["candidate_snapshot_id"],
                 "rows": rows,
                 "export_rows": item["rows"],
                 "manifest_rows": item["rows"],
             }
-            entry |= {"fingerprint": fingerprint if "reconcile_fingerprint" not in DEFECTS else "e" * 64, "export_fingerprint": fingerprint}
+            other = publisher_fingerprint({"extra": "row"}, item["columns"])
+            entry |= {"fingerprint": fingerprint if "reconcile_fingerprint" not in DEFECTS else other, "export_fingerprint": fingerprint}
             entry["equal"] = True
             tables[name] = entry
         record = {"run_id": job.run, "candidates_sha256": sha_of(publish / "candidates.json"), "tables": tables, "pass": True}
@@ -389,6 +420,19 @@ def plan_state(job: Job, arguments: Sequence[str | Path]) -> None:
     Path(option(arguments, "--output")).write_text(json.dumps(state, sort_keys=True) + "\n")
 
 
+INPUT_VERSIONS: list[dict[str, Any]] = []  # the object versions of the input layers in the stand-in bucket
+LIST_PAGE = 2  # versions per page of the stand-in listing, small so that every listing paginates
+
+
+def reset_input_versions() -> None:
+    INPUT_VERSIONS[:] = [
+        {"Key": f"lakehouse/{layer}/{table}/data/{number}.parquet", "VersionId": f"v{number}", "ETag": f'"{layer}{table}{number}"', "Size": 100 + number}
+        for layer in ("bronze", "silver", "gold")
+        for table in ("a", "b")
+        for number in (1, 2)
+    ]
+
+
 STORED: dict[str, bytes] = {}  # the bucket objects the stand-in publish steps write: the catalog backups
 SLOW_UPLOAD = [0.0]  # seconds the stand-in bucket takes for each upload
 STAGED_VERSION = ["1"]  # the object version of the staged code files; a case changes it to model an input replaced during the run
@@ -404,6 +448,20 @@ class FakeS3:
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         require(Bucket == BUCKET and Key.startswith("lakehouse/run_stage/"), (Bucket, Key))
         return {"VersionId": STAGED_VERSION[0], "ETag": f'"{Key.rsplit("/", 1)[1]}"', "ContentLength": 64}
+
+    def list_object_versions(self, Bucket: str, Prefix: str, KeyMarker: str = "", VersionIdMarker: str = "") -> dict[str, Any]:
+        require(Bucket == BUCKET, Bucket)
+        ordered = sorted((item for item in INPUT_VERSIONS if item["Key"].startswith(Prefix)), key=lambda item: (item["Key"], item["VersionId"]))
+        after = [item for item in ordered if (item["Key"], item["VersionId"]) > (KeyMarker, VersionIdMarker)]
+        page = after[:LIST_PAGE]
+        found = {
+            "Versions": [item for item in page if not item.get("DeleteMarker")],
+            "DeleteMarkers": [item for item in page if item.get("DeleteMarker")],
+            "IsTruncated": len(after) > len(page),
+        }
+        if found["IsTruncated"]:
+            found |= {"NextKeyMarker": page[-1]["Key"], "NextVersionIdMarker": page[-1]["VersionId"]}
+        return found
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         require(Bucket == BUCKET and Key in STORED, (Bucket, Key))
@@ -437,6 +495,7 @@ class Case:
         UPLOADS.clear()
         DEFECTS.clear()
         STORED.clear()
+        reset_input_versions()
         STAGED_VERSION[0] = "1"
         SLOW_UPLOAD[0] = 0.0
         self.archive, self.digest = archive(root)
@@ -606,6 +665,52 @@ def case_staged_input_changes_after_the_pin(case: Case) -> None:
     require(writes() == [], "a changed input object stops publish before any catalog write")
 
 
+def case_input_prefix_changes_during_the_run(case: Case) -> None:
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    INPUT_VERSIONS.append({"Key": "lakehouse/bronze/a/data/3.parquet", "VersionId": "v3", "ETag": '"new"', "Size": 1})
+    require(case.phase("silver", "publish") != 0 and "input version" in case.err, case.err)
+    require(writes() == [], "a changed input prefix stops publish before any catalog write")
+
+
+def case_input_object_replaced_by_a_new_version(case: Case) -> None:
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    INPUT_VERSIONS[0] = INPUT_VERSIONS[0] | {"VersionId": "v9", "ETag": '"replaced"'}
+    require(case.phase("silver", "publish") != 0 and "input version" in case.err, case.err)
+    require(writes() == [], "a replaced input object stops publish before any catalog write")
+
+
+def case_input_delete_marker_is_a_change(case: Case) -> None:
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    INPUT_VERSIONS.append({"Key": "lakehouse/bronze/a/data/1.parquet", "VersionId": "v7", "DeleteMarker": True, "ETag": '""', "Size": 0})
+    require(case.phase("silver", "publish") != 0 and "input version" in case.err, case.err)
+
+
+def case_input_listing_beyond_the_bound_fails_closed(case: Case) -> None:
+    with mock.patch.object(layer_run, "LIST_PAGES", 1):
+        require(case.phase("silver", "pin") != 0 and "larger than" in case.err, case.err)
+
+
+def case_pin_table_list_must_match_the_bronze_config(case: Case) -> None:
+    DEFECTS.add("pin_tables")
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    require(case.phase("silver", "publish") != 0 and "pin" in case.err and "bronze_tables" in case.err, case.err)
+    require(writes() == [], "a pin that misses a configured bronze table stops publish before any catalog write")
+
+
+def case_gold_pin_table_list_must_match_the_silver_contract(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7, case.err)
+    DEFECTS.add("pin_tables")
+    for phase in ("pin", "build", "validate", "export"):
+        require(case.phase("gold", phase) == 0, case.err)
+    before = len(writes())
+    require(case.phase("gold", "publish") != 0 and "silver" in case.err and "pin" in case.err, case.err)
+    require(len(writes()) == before, "a gold pin that misses a silver table stops publish before any catalog write")
+
+
 def case_stored_backup_differs_from_its_record(case: Case) -> None:
     DEFECTS.add("backup_object")
     for phase in ("pin", "build", "validate", "verify", "export"):
@@ -703,6 +808,12 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a row count mismatch stops before the run row": case_reconcile_rows_mismatch,
     "a commit naming other snapshots fails and uploads nothing": case_commit_names_wrong_snapshots,
     "an input object replaced after the pin stops publish before any write": case_staged_input_changes_after_the_pin,
+    "a new object in the input prefix stops publish before any write": case_input_prefix_changes_during_the_run,
+    "a replaced input object stops publish before any write": case_input_object_replaced_by_a_new_version,
+    "a delete marker in the input prefix counts as a change": case_input_delete_marker_is_a_change,
+    "an input listing beyond the bound fails closed": case_input_listing_beyond_the_bound_fails_closed,
+    "a silver pin that misses a configured bronze table stops publish": case_pin_table_list_must_match_the_bronze_config,
+    "a gold pin that misses a silver contract table stops publish": case_gold_pin_table_list_must_match_the_silver_contract,
     "a stored backup that differs from its record stops before the commit": case_stored_backup_differs_from_its_record,
     "a task past its deadline stops at the next phase": case_expired_task_deadline_stops_the_next_phase,
     "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
