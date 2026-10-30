@@ -75,6 +75,8 @@ class Loader:
     def __init__(self) -> None:
         self.broken: set[str] = set()
         self.cost = 0.0
+        self.calls = 0
+        self.rows: list[Mapping[str, Any]] = []
         self.clock: Clock | None = None
         self.unloadable: set[str] = set()
         self.loaded: list[str] = []
@@ -86,6 +88,8 @@ class Loader:
         self.loaded.append(version)
 
         def predict(row: Mapping[str, Any]) -> float:
+            self.calls += 1
+            self.rows.append(dict(row))
             if self.clock is not None:
                 self.clock.now += self.cost
             if version in self.broken:
@@ -551,6 +555,39 @@ def case_deploy_order(c: Checker) -> None:
         )
 
 
+def with_view(reference: str, value: Any, stamp: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """A reader wrapper that answers one reference with the given value and event time, as Feast does for a view row that is absent or published as null."""
+
+    def wrap(inner: Callable[..., Any]) -> Callable[..., Any]:
+        def read(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+            answer = dict(inner(references, key))
+            name = reference.replace(":", "__", 1)
+            answer[name] = [value]
+            answer[name + "__ts"] = [stamp]
+            return answer
+
+        return read
+
+    return wrap
+
+
+def case_absent_row(c: Checker) -> None:
+    """A view row that is absent gives 503 and no prediction. A value published as null still reaches the model."""
+    view_reference = online_cases.REFERENCES[1]
+    for label, stamp in (("an event time of zero", 0), ("no event time", None)):
+        with world(wrap=with_view(view_reference, None, stamp)) as w:
+            reply = ask(w)
+            c.check(f"an absent row with {label} gives 503", reply.status == 503 and "prediction" not in reply.body)
+            c.check(f"the model was not asked for {label}", w.loader.calls == 0)
+            c.check(f"no row was written for {label}", rows_of(w) == [])
+    with world(wrap=with_view(view_reference, None, online_cases.WINDOW_SECONDS)) as w:
+        reply = ask(w)
+        c.check("a value published as null answers 200", reply.status == 200)
+        c.check("the model received the null for its own preprocessing", w.loader.calls == 1 and w.loader.rows[0][view_reference] is None)
+    with world(wrap=with_view(view_reference, "v1|AAA001:2022|x", online_cases.WINDOW_SECONDS)) as w:
+        c.check("a present row answers 200", ask(w).status == 200)
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -828,6 +865,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "rate_limit_429": (case_rate_limit, "rate limit"),
     "validation_and_unknown_hospital": (case_validation_and_unknown_hospital, "api"),
     "missing_feature_503": (case_missing_feature, "feast"),
+    "absent_row": (case_absent_row, "feast"),
     "split_deterministic": (case_split, "canary"),
     "version_failure_isolated": (case_version_failure, "canary"),
     "rollback": (case_rollback, "canary deploy"),

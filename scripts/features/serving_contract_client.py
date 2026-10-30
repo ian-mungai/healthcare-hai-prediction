@@ -7,7 +7,8 @@ The prediction API must follow this contract; the online cases drive this client
    predictor that is never null for a published key), without duplicates, with event times.
 3. Read the marker again. 503 unless it is ``ready`` with the same ``load_id`` as the first read; the values of step 2 are discarded otherwise.
 4. 404 when the event time of ``feature_matrix_hospital_window`` is the epoch (a key never written, Feast fact F10). This holds for a model that uses no
-   hospital-window predictor too, because the probe is always requested.
+   hospital-window predictor too, because the probe is always requested. A requested reference whose own view row is absent (no event time, or the epoch) is
+   503: an absent row is not a value published as null, and the model must not receive it as one.
 5. Return the values, ``features_as_of`` (the window start) and the schema hash. Nothing else from the marker is returned.
 6. Every Redis call has a 1 s timeout and none is retried; a timeout or any Redis or Feast error is 503.
 
@@ -116,7 +117,19 @@ def serve(read_marker: MarkerReader, read_features: FeatureReader, *, references
         raise Unavailable("the online store answered without the requested features") from None
     if seconds == 0:
         raise NotFound("the hospital-window is not in the online store")
+    absent = sorted(reference for reference in references if not event_time(answer, feast_name(reference)))
+    if absent:
+        raise Unavailable(f"the online store holds no row of {len(absent)} requested views for this hospital-window")
     return Served(values, datetime.fromtimestamp(seconds, UTC).date().isoformat(), schema_hash)
+
+
+def event_time(answer: Mapping[str, Sequence[Any]], name: str) -> int:
+    """The event time in seconds of a feature's view row, or 0 when the answer has none (the view row is absent)."""
+    stamps = answer.get(name + TIMESTAMP_POSTFIX)
+    try:
+        return int(stamps[0]) if stamps is not None and stamps[0] is not None else 0
+    except (IndexError, TypeError, ValueError):
+        return 0
 
 
 def marker_reader(environ: MutableMapping[str, str], *, client: online.RedisClient | None = None) -> MarkerReader:
