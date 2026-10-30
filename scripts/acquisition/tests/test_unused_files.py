@@ -60,6 +60,8 @@ class Client:
                 "DeleteMarkers": [{"Key": key, "VersionId": marker, "IsLatest": True} for key, marker in self.markers.items()],
             }
         check(operation == "delete-objects" and arguments is not None, 'operation == "delete-objects" and arguments is not None')
+        if arguments is None:
+            raise ValueError("Missing deletion arguments")
         request = json.loads(Path(arguments[1].removeprefix("file://")).read_text())
         check(all(set(item) == {"Key"} for item in request["Objects"]), 'all(set(item) == {"Key"} for item in request["Objects"])')
         self.deletes.append([item["Key"] for item in request["Objects"]])
