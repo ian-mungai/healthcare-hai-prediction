@@ -11,21 +11,6 @@ from orchestration.pipeline_render import JobSpec, PipelineInput
 from orchestration.pipeline_session import RoleSession
 from scripts.training.step_records import verify_done
 
-PREREQUISITES = {
-    "guard": (),
-    "extract": ("guard",),
-    "version_extract": ("extract",),
-    "fit": ("extract", "version_extract"),
-    "mediation": ("extract", "version_extract", "fit"),
-    "hac_validate": ("extract", "fit", "mediation"),
-    "log_run": ("extract", "version_extract", "fit", "mediation", "hac_validate"),
-    "promotion_check": ("extract", "version_extract", "fit", "log_run"),
-    "promote": (),
-    "smoke": (),
-}
-
-INPUT_STEPS = {**PREREQUISITES, "mediation": ("extract",), "hac_validate": ("extract", "fit")}
-
 
 def environment_kind(template: str, params: dict[str, Any], mode: str) -> str:
     """Select the credential kind from the closed action matrix."""
@@ -60,7 +45,7 @@ def build(inp: PipelineInput, values: dict[str, str], session: RoleSession | Non
     recorded = state.get("training_snapshot", {})
     if recorded.get("phase") != "complete" or recorded.get("record_sha256") != hashlib.sha256((folder / code_digest.RECORD).read_bytes()).hexdigest():
         raise ValueError("training snapshot record differs from the launcher's completion")
-    for step in PREREQUISITES[action]:
+    for step in training_contract.PREREQUISITES[action]:
         verify_done(folder / "outputs" / step, step, record["code_digest"])
     output = folder / "outputs" / action
     output.mkdir(parents=True, exist_ok=True)
@@ -83,7 +68,7 @@ def build(inp: PipelineInput, values: dict[str, str], session: RoleSession | Non
     }
     for filename in auxiliary.get(action, ()):
         mounts.append((str(extracts / filename), f"/workspace/in/extract/{filename}", True))
-    for step in INPUT_STEPS[action]:
+    for step in training_contract.INPUT_STEPS[action]:
         if step != "extract":
             mounts.append((str(folder / "outputs" / step), f"/workspace/in/{step}", True))
     environment = {key: str(inp.values[key]) for key in ("JOB_THREADS", "DUCKDB_MEMORY_LIMIT") if key in inp.values}

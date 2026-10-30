@@ -1520,6 +1520,9 @@ def scenarios(cases: Any, folder: Path) -> None:
     log_run_cases(cases, folder / "log_run")
     promotion_cases.gate_cases(cases)
     promotion_check_cases(cases, folder / "promotion")
+    from scripts.training import aws_run_cases
+
+    aws_run_cases.scenarios(cases, folder / "aws_run")
 
 
 class Selected(Cases):
