@@ -1311,7 +1311,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "launcher_path",
             ["--scope", "paths", "--path", "orchestration/launcher.py", "--part", "all"],
-            ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "launcher"],
+            ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "configuration_checks", "launcher"],
         ),
         selection_case(
             work,
