@@ -10,7 +10,10 @@ import shutil
 import sys
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -106,14 +109,18 @@ def check_targets(root: Path) -> None:
         raise JobFailure("targets_refused", "; ".join(problems))
 
 
-def fit_type(context: Any, record: Mapping[str, Any], config: Mapping[str, Any], hai_type: str) -> dict[str, bytes]:
-    """Fit the six-model suite on one type's verified extract and return the files of its bundle."""
-    from scripts.training import bundle
+def fit_type(
+    context: Any, record: Mapping[str, Any], config: Mapping[str, Any], hai_type: str, mapping: Mapping[int, int], periods: Mapping[int, tuple[int, int]]
+) -> dict[str, bytes]:
+    """Fit the six-model suite on one type's verified extract and return the files of its bundle and of its validation-only predictions."""
+    from scripts.training import bundle, hac_validation
     from scripts.training.models import suite
+    from scripts.training.models.common import Deadline
 
     started = time.monotonic()
     extract = job_inputs.input_root(context.parameters) / "extract"
     manifest, rows = job_inputs.extract_of(extract, hai_type, context.run)
+    plan = hac_validation.plan_validation(Counter(row["window_year"] for row in rows), mapping, periods)
     adjacency = job_inputs.auxiliary_of(extract, manifest, job_inputs.ADJACENCY)
     request = job_inputs.model_request(hai_type, rows, adjacency, config, float(config["budgets"]["fit_seconds"]), job_inputs.ROOT)
     contract = job_inputs.read_json(job_inputs.ROOT / "data_contracts/training/model_contract.json", "model_contract")
@@ -126,28 +133,61 @@ def fit_type(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
             },
         },
     }
-    return bundle.build(suite.fit_models(request), hai_type, inputs, record, context.run, contract, job_inputs.ROOT, started)
+    fitted = suite.fit_models(request)
+    files = bundle.build(fitted, hai_type, inputs, record, context.run, contract, job_inputs.ROOT, started)
+    refit = replace(request, deadline=Deadline.after(float(config["budgets"]["fit_seconds"])))
+    return files | {validation_name(hai_type): text(validation_predictions(refit, fitted.selected, plan, hai_type))}
+
+
+def validation_name(hai_type: str) -> str:
+    """Return the name of a type's validation-only prediction file, which sits outside the bundle."""
+    return f"hac_predictions_{hai_type}.json"
+
+
+def validation_predictions(request: Any, chosen: str | None, plan: Any, hai_type: str) -> dict[str, Any]:
+    """Refit the selected specification on the windows through the plan's cut and return its predictions for the windows of the flag's period.
+
+    This file is validation only: no bundle, registry candidate, research test or promotion check reads it.
+    """
+    from scripts.training.models import suite
+
+    document: dict[str, Any] = {"hai_type": hai_type, "model": chosen, "plan": plan.record()}
+    if chosen is None:
+        return document | {"status": "not_run", "reason": "the fit selected no model", "predictions": []}
+    result = suite.fit_validation(request, chosen, plan.training_last_year, plan.windows)
+    training, holdout = suite.validation_split(request.data, plan.training_last_year, plan.windows)
+    predictions = {holdout.keys[position]: value for position, value in zip(result.holdout_positions, result.predictions, strict=True)}
+    return document | {
+        "status": result.status,
+        "reason": result.reason,
+        "training_rows": len(training.rows),
+        "training_hospitals": len({row["ccn"] for row in training.rows}),
+        "refit_parameters": result.details.get("selected_parameters", {}),
+        "predictions": [{"spine_key": key, "predicted": predictions[key]} for key in sorted(predictions)],
+    }
 
 
 def fit_allowed(hai_types: list[str]) -> Callable[[str], bool]:
-    """Return the test for the names a fit may write: any file under a requested type's bundle folder."""
+    """Return the test for the names a fit may write: any file under a requested type's bundle folder, and its validation-only predictions."""
     from scripts.training import bundle
 
     prefixes = tuple(bundle.prefix(hai_type) + "/" for hai_type in hai_types)
-    return lambda name: name.startswith(prefixes)
+    validation = {validation_name(hai_type) for hai_type in hai_types}
+    return lambda name: name.startswith(prefixes) or name in validation
 
 
 def run_fit(context: Any, record: Mapping[str, Any]) -> None:
-    """Fit the six-model suite for every requested type from the mounted extract, after the target-list check."""
+    """Fit the six-model suite and the validation-only refit for every requested type from the mounted extract, after the target-list check."""
     with guarded("fit"):
         parameters = job_inputs.parameters_of(context.parameters)
 
         def plan() -> dict[str, bytes]:
             check_targets(job_inputs.ROOT)
             config = job_inputs.config_of(job_inputs.ROOT)
+            mapping, periods = year_mapping(job_inputs.ROOT), hac_periods(job_inputs.ROOT)
             outputs: dict[str, bytes] = {}
             for hai_type in parameters["hai_types"]:
-                outputs |= fit_type(context, record, config, hai_type)
+                outputs |= fit_type(context, record, config, hai_type, mapping, periods)
             return outputs
 
         run_step(context, record, "fit", fit_allowed(parameters["hai_types"]), plan)
@@ -194,34 +234,55 @@ def year_mapping(root: Path) -> dict[int, int]:
         raise InputError("hac_year_mapping", f"{HAC_MAPPING} needs a mapping object of whole years") from None
 
 
-def hac_type(context: Any, record: Mapping[str, Any], mapping: Mapping[int, int], hai_type: str) -> dict[str, bytes]:
-    """Rank one type's selected-model holdout against its HAC flags; the flag table is checked against the hash the fit recorded."""
+def hac_periods(root: Path) -> dict[int, tuple[int, int]]:
+    """Return the first and last calendar year of the HAI performance period of each HAC program year, from the reviewed year map file."""
+    document = job_inputs.read_json(root / HAC_MAPPING, "hac_year_mapping")
+    try:
+        found = {}
+        for program, period in document["nhsn_periods"].items():
+            start, end = date.fromisoformat(period["start"]), date.fromisoformat(period["end"])
+            if (start.month, start.day, end.month, end.day) != (1, 1, 12, 31) or end < start:
+                raise ValueError
+            found[int(program)] = (start.year, end.year)
+        return found
+    except (KeyError, AttributeError, TypeError, ValueError):
+        raise InputError("hac_year_mapping", f"{HAC_MAPPING} needs nhsn_periods that run from January 1 to December 31 of whole years") from None
+
+
+def hac_type(context: Any, record: Mapping[str, Any], hai_type: str) -> dict[str, bytes]:
+    """Compare one type's validation-only predictions with its HAC flags; the flag table is checked against the hash the fit recorded."""
     from scripts.training import bundle, hac_validation
     from scripts.training.models.common import Deadline
 
     inputs = job_inputs.input_root(context.parameters)
-    folder = verified_step(inputs, "fit", record) / bundle.prefix(hai_type)
-    fitted = job_inputs.read_json(folder / "result.json", "fit_changed")
-    chosen = fitted["selection"]["selected"]
-    table = job_inputs.read_rows(folder / "holdout_predictions.parquet") if chosen is not None else []
-    predictions = [{"spine_key": row["spine_key"], "predicted": row[f"predicted_{chosen}"]} for row in table if row.get(f"predicted_{chosen}") is not None]
-    recorded = job_inputs.read_json(folder / "provenance.json", "fit_changed")["inputs"]["auxiliary_files"]["hac.parquet"]
+    fit_folder = verified_step(inputs, "fit", record)
+    refit = job_inputs.read_json(fit_folder / validation_name(hai_type), "fit_changed")
+    plan = hac_validation.HacPlan.from_record(refit["plan"])
+    recorded = job_inputs.read_json(fit_folder / bundle.prefix(hai_type) / "provenance.json", "fit_changed")["inputs"]["auxiliary_files"]["hac.parquet"]
     flags = job_inputs.table_of(inputs / "extract", {"file": "hac.parquet", **recorded})
-    result = hac_validation.validate_hac(predictions, flags, mapping, Deadline.after(HAC_SECONDS))
-    return {f"hac_{hai_type}.json": text({"hai_type": hai_type, "model": chosen, **result})}
+    if refit["status"] == "fitted":
+        result = hac_validation.validate_hac(refit["predictions"], flags, plan, Deadline.after(HAC_SECONDS))
+    else:
+        result = {
+            "status": "not_run",
+            "reason": f"the refit through window {plan.training_last_year} ended {refit['status']}: {refit['reason']}",
+            "matched_hospitals": 0,
+        }
+        result |= {"outcome_year": plan.outcome_year, "program_year": plan.program_year, "training_last_year": plan.training_last_year}
+    document = {"hai_type": hai_type, "model": refit["model"], "validation_only": True, **result}
+    return {f"hac_{hai_type}.json": text(document)}
 
 
 def run_hac_validate(context: Any, record: Mapping[str, Any]) -> None:
-    """Validate every requested type's fitted holdout against the HAC Reduction Program flags."""
+    """Validate every requested type's validation-only predictions against the HAC Reduction Program flags."""
     with guarded("hac_validate"):
         parameters = job_inputs.parameters_of(context.parameters)
         names = {f"hac_{hai_type}.json" for hai_type in parameters["hai_types"]}
 
         def plan() -> dict[str, bytes]:
-            mapping = year_mapping(job_inputs.ROOT)
             outputs: dict[str, bytes] = {}
             for hai_type in parameters["hai_types"]:
-                outputs |= hac_type(context, record, mapping, hai_type)
+                outputs |= hac_type(context, record, hai_type)
             return outputs
 
         run_step(context, record, "hac_validate", names.__contains__, plan)

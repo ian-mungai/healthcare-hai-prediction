@@ -12,7 +12,7 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -134,14 +134,30 @@ def table_entry(folder: Path, name: str, rows: list[dict[str, Any]], columns: di
 class Fixture:
     """One run folder with the mounted extract inputs, a small code root and the job's output folder."""
 
-    def __init__(self, folder: Path, *, hai_types: tuple[str, ...] = (HAI_TYPE,), mediator: bool = True, hac: bool = True, late_mediator: bool = False) -> None:
+    def __init__(
+        self,
+        folder: Path,
+        *,
+        hai_types: tuple[str, ...] = (HAI_TYPE,),
+        mediator: bool = True,
+        hac: bool = True,
+        late_mediator: bool = False,
+        years: Sequence[int] = range(2019, 2024),
+        hospitals: int = 48,
+        period_years: int = 2,
+        adjust: Callable[[list[dict[str, Any]]], None] | None = None,
+        flags: dict[str, float] | None = None,
+    ) -> None:
         self.folder = prepare(folder)
         self.extract = folder / "in/extract"
         self.extract.mkdir(parents=True)
         self.out = folder / "out"
         self.hai_types = hai_types
         self.root = folder / "code"
-        self.rows = [dict(row) for row in request().data.rows]
+        self.rows = [dict(row) for row in request(years, hospitals).data.rows]
+        if adjust is not None:
+            adjust(self.rows)
+        self.newest, self.period_years, self.flag_values = max(row["window_year"] for row in self.rows), period_years, flags
         self.parameters = {"features_run": "latest", "population": "primary", "hai_types": list(hai_types), "trigger": "manual", "mlflow": "local"}
         (folder / "training_parameters.json").write_text(json.dumps(self.parameters) + "\n")
         self.code_root()
@@ -180,11 +196,13 @@ class Fixture:
         (self.root / "data_contracts/features").mkdir(parents=True)
         (self.root / "data_contracts/features/feature_schema.json").write_text(json.dumps({"schema": 1, "tables": tables, "servable": list(REFERENCES)}) + "\n")
         hac_years = self.root / "config/training/hac_year_mapping.json"
-        hac_years.write_text(json.dumps({"schema": 1, "mapping": {"2023": 2025}}) + "\n")
+        period = {"start": f"{self.newest - self.period_years + 1}-01-01", "end": f"{self.newest}-12-31", "psi_90": "unused"}
+        mapping = {"schema": 1, "mapping": {str(self.newest): self.newest + 2}, "nhsn_periods": {str(self.newest + 2): period}}
+        hac_years.write_text(json.dumps(mapping) + "\n")
 
     def write_extract(self, *, mediator: bool, hac: bool) -> None:
         """Write the per-type extract and manifest, and the three shared tables, the way the extract step lays them out."""
-        newest = max(row["window_year"] for row in self.rows)
+        newest = self.newest
         counties = sorted({row["county_fips"] for row in self.rows})
         adjacency = [
             {"edge_key": f"{left}:{right}", "county_fips": left, "neighbor_fips": right, "is_self_link": False, "is_isolated": False}
@@ -204,16 +222,18 @@ class Fixture:
             for index, row in enumerate(self.rows)
             for measure in ("PSI_90", "PSI_13")
         ] * mediator
+        values = self.flag_values if self.flag_values is not None else {row["ccn"]: float(index % 2) for index, row in enumerate(previous)}
         flags = [
             {
                 "spine_key": row["spine_key"],
                 "measure_control": "C400",
-                "value_number": float(index % 2),
+                "value_number": values[row["ccn"]],
                 "value_text": None,
-                "fiscal_year": 2025,
+                "fiscal_year": newest + 2,
                 "alignment_status": "aligned",
             }
-            for index, row in enumerate(previous)
+            for row in previous
+            if row["ccn"] in values
         ] * hac
         shared = {
             "mediator.parquet": table_entry(self.extract, "mediator.parquet", mediators, MEDIATOR_COLUMNS, "mediator"),
@@ -530,7 +550,10 @@ def fit_cases(cases: Any, folder: Path) -> None:
         required = [f"{BUNDLE}/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
         require(all(name in names for name in [*required, "fit.done.json"]), f"missing outputs: {names}")
         require(any(name.startswith(f"{BUNDLE}/model/") for name in names), "the registry candidate was not saved")
-        require(all(name.startswith(f"{BUNDLE}/") or name == "fit.done.json" for name in names), f"files outside the bundle: {names}")
+        require(
+            all(name.startswith(f"{BUNDLE}/") or name in ("fit.done.json", f"hac_predictions_{HAI_TYPE}.json") for name in names),
+            f"files outside the bundle: {names}",
+        )
         result = output_of(fixture, f"{BUNDLE}/result.json")
         contract = json.loads((REAL / "data_contracts/training/bundle.json").read_text())
         require(set(result) == set(contract["result_fields"]), f"result.json fields differ from the bundle contract: {sorted(result)}")
@@ -794,17 +817,136 @@ def mediation_cases(cases: Any, folder: Path) -> None:
     cases.check("job_mediation_deadline_named", deadline)
 
 
+def pairwise_auc(scores: dict[str, float], flags: dict[str, float]) -> float:
+    """Return the AUC by comparing every flagged hospital with every unflagged one, so no rank formula is shared with the code under test."""
+    high, low = [scores[ccn] for ccn in scores if flags[ccn] == 1], [scores[ccn] for ccn in scores if flags[ccn] == 0]
+    return sum((a > b) + 0.5 * (a == b) for a in high for b in low) / (len(high) * len(low))
+
+
+def averaging_rows(rows: list[dict[str, Any]]) -> None:
+    """Make the label an exact linear function of one predictor, and make each flagged hospital score high in only one of the last two windows."""
+    newest = max(row["window_year"] for row in rows)
+    for row in rows:
+        number = int(row["ccn"]) - 990000
+        if row["window_year"] in (newest - 1, newest) and number % 3 == 0:
+            earlier = row["window_year"] == newest - 1
+            row["process"] = (6.0 if (number % 6 == 0) == earlier else -2.0) + 0.01 * number
+        elif row["window_year"] in (newest - 1, newest):
+            row["process"] = 0.01 * number
+        row[LABEL] = 2 + 0.5 * row["process"]
+
+
+def drop_windows(*years: int, hospital: str | None = None) -> Callable[[list[dict[str, Any]]], None]:
+    """Return a fixture change that removes whole window years, or one hospital's rows of those years."""
+
+    def change(rows: list[dict[str, Any]]) -> None:
+        rows[:] = [row for row in rows if row["window_year"] not in years or (hospital is not None and row["ccn"] != hospital)]
+
+    return change
+
+
+def both(*changes: Callable[[list[dict[str, Any]]], None]) -> Callable[[list[dict[str, Any]]], None]:
+    """Apply several fixture changes in order."""
+
+    def change(rows: list[dict[str, Any]]) -> None:
+        for each in changes:
+            each(rows)
+
+    return change
+
+
+@contextlib.contextmanager
+def watch_validation_training() -> Iterator[list[set[int]]]:
+    """Record the window years of every training set that the validation-only fit hands to the model library, seen from outside the code under test."""
+    seen: list[set[int]] = []
+    inside = [False]
+    refit, tune, pipeline = suite.fit_validation, suite._tune, suite._fit_pipeline
+
+    def watched_refit(*arguments: Any, **options: Any) -> Any:
+        inside[0] = True
+        try:
+            return refit(*arguments, **options)
+        finally:
+            inside[0] = False
+
+    def recording(real: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapper(*arguments: Any) -> Any:
+            if inside[0]:
+                seen.append({row["window_year"] for row in arguments[-1].rows})
+            return real(*arguments)
+
+        return wrapper
+
+    with (
+        mock.patch.object(suite, "fit_validation", watched_refit),
+        mock.patch.object(suite, "_tune", recording(tune)),
+        mock.patch.object(suite, "_fit_pipeline", recording(pipeline)),
+    ):
+        yield seen
+
+
 def hac_cases(cases: Any, folder: Path) -> None:
-    """Rank the fitted holdout against the HAC flags with the committed year map and check the refusals."""
+    """Validate the selected specification, refit through window Y-2, against the HAC flags of the program year that covers windows Y-1 and Y."""
+    flagged = {f"{990000 + number}": float(number % 3 == 0) for number in range(48)}
 
     def written() -> None:
         fixture = Fixture(folder / "written")
-        stage(fixture, "fit")
+        with watch_validation_training() as seen:
+            stage(fixture, "fit")
         code, _, error = run_action(fixture, "hac_validate")
         require(code == 0, f"hac_validate failed: {error}")
         result = output_of(fixture, f"hac_{HAI_TYPE}.json")
         require(result["status"] == "fitted" and result["program_year"] == 2025 and result["matched_hospitals"] > 0, f"another result: {result}")
+        require(result["validation_only"] is True and "selected specification" in result["scope"], f"the result does not say what it validates: {result}")
+        require(result["outcome_year"] == 2023 and result["training_last_year"] == 2021 and result["windows_compared"] == [2022, 2023], f"plan: {result}")
+        require(not result["one_year_period"], "a two-year period was reported as one year")
+        require(listing(fixture.out) == ["hac_HAI_1.json", "hac_validate.done.json"], f"outputs: {listing(fixture.out)}")
         verify_done(fixture.out, "hac_validate", DIGEST)
+        years = set().union(*seen)
+        require(seen and years == {2019, 2020, 2021}, f"the validation-only fit trained on {sorted(years)}, not on the windows through 2021")
+
+    def averaged() -> None:
+        fixture = Fixture(folder / "averaged", adjust=averaging_rows, flags=flagged)
+        stage(fixture, "fit")
+        require(run_action(fixture, "hac_validate")[0] == 0, "hac_validate failed")
+        result = output_of(fixture, f"hac_{HAI_TYPE}.json")
+        by_window = {year: {row["ccn"]: row[LABEL] for row in fixture.rows if row["window_year"] == year} for year in (2022, 2023)}
+        average = {ccn: (by_window[2022][ccn] + by_window[2023][ccn]) / 2 for ccn in flagged}
+        expected = pairwise_auc(average, flagged)
+        singles = [pairwise_auc(by_window[year], flagged) for year in (2022, 2023)]
+        require(all(single < 0.95 for single in singles) and expected > 0.99, f"the fixture does not tell the average from one window: {singles} {expected}")
+        require(abs(result["auc"] - expected) < 1e-6, f"auc {result['auc']} is not the AUC {expected} of the two-window average")
+        require(result["matched_hospitals"] == 48 and result["flagged_hospitals"] == 16 and result["hospitals_one_window"] == 0, f"counts: {result}")
+        require(result["prediction_rows"] == 96, f"prediction rows: {result['prediction_rows']}")
+
+    def one_window_hospital() -> None:
+        change = both(averaging_rows, drop_windows(2022, hospital="990001"))
+        fixture = Fixture(folder / "one_window", adjust=change, flags=flagged)
+        stage(fixture, "fit")
+        require(run_action(fixture, "hac_validate")[0] == 0, "hac_validate failed")
+        result = output_of(fixture, f"hac_{HAI_TYPE}.json")
+        require(result["hospitals_one_window"] == 1 and result["matched_hospitals"] == 48 and result["prediction_rows"] == 95, f"counts: {result}")
+
+    def one_year_period() -> None:
+        fixture = Fixture(folder / "one_year", years=range(2018, 2023), period_years=1, adjust=averaging_rows, flags=flagged)
+        with watch_validation_training() as seen:
+            stage(fixture, "fit")
+        require(run_action(fixture, "hac_validate")[0] == 0, "hac_validate failed")
+        result = output_of(fixture, f"hac_{HAI_TYPE}.json")
+        require(result["program_year"] == 2024 and result["windows_compared"] == [2022] and result["one_year_period"] is True, f"plan: {result}")
+        require("one year" in result["period_note"] and "2022" in result["period_note"], f"the one-year period is not recorded: {result['period_note']}")
+        require(result["prediction_rows"] == 48 and result["training_last_year"] == 2020, f"counts: {result}")
+        newest = {row["ccn"]: row[LABEL] for row in fixture.rows if row["window_year"] == 2022}
+        require(abs(result["auc"] - pairwise_auc(newest, flagged)) < 1e-6, "the one-year period was not compared on its own window")
+        require(set().union(*seen) == {2018, 2019, 2020}, f"trained on {sorted(set().union(*seen))}")
+
+    def missing_flags() -> None:
+        kept = {ccn: flag for ccn, flag in flagged.items() if int(ccn) % 6 != 5}
+        fixture = Fixture(folder / "missing_flags", flags=kept)
+        stage(fixture, "fit")
+        require(run_action(fixture, "hac_validate")[0] == 0, "hac_validate failed")
+        result = output_of(fixture, f"hac_{HAI_TYPE}.json")
+        require(result["matched_hospitals"] == len(kept) and result["missing_flags"] == 48 - len(kept), f"missing flags were not reported: {result}")
 
     def retried() -> None:
         fixture = Fixture(folder / "retried")
@@ -816,23 +958,95 @@ def hac_cases(cases: Any, folder: Path) -> None:
 
     def no_mapping() -> None:
         fixture = Fixture(folder / "no_mapping")
-        stage(fixture, "fit")
         (fixture.root / "config/training/hac_year_mapping.json").unlink()
-        code, _, error = run_action(fixture, "hac_validate")
+        code, _, error = run_action(fixture, "fit")
         require(code == job.EXIT_FAILED and failure_of(error) == "hac_year_mapping_missing", f"{code} {error}")
         require(listing(fixture.out) == [], "a refused step wrote output")
 
     def unmapped_year() -> None:
         fixture = Fixture(folder / "unmapped")
-        stage(fixture, "fit")
-        (fixture.root / "config/training/hac_year_mapping.json").write_text(json.dumps({"schema": 1, "mapping": {"2019": 2021}}) + "\n")
-        code, _, error = run_action(fixture, "hac_validate")
-        require(code == job.EXIT_FAILED and failure_of(error) == "hac_validate_refused" and "year mapping" in error, f"{code} {error}")
+        (fixture.root / "config/training/hac_year_mapping.json").write_text(json.dumps({"schema": 1, "mapping": {"2019": 2021}, "nhsn_periods": {}}) + "\n")
+        code, _, error = run_action(fixture, "fit")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_refused" and "year mapping" in error, f"{code} {error}")
+        require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def window_without_rows() -> None:
+        fixture = Fixture(folder / "no_previous", adjust=drop_windows(2022))
+        code, _, error = run_action(fixture, "fit")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_refused", f"{code} {error}")
+        require("window 2022" in error and "no rows" in error, f"the refusal does not name the window: {error}")
+        require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def no_training_windows() -> None:
+        fixture = Fixture(folder / "no_training", years=(2022, 2023), hospitals=110)
+        code, _, error = run_action(fixture, "fit")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_refused", f"{code} {error}")
+        require("through 2021" in error and "no windows" in error, f"the refusal does not name the cut: {error}")
+        require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def dropped_predictions() -> None:
+        for dropped in (2022, 2023):
+            fixture = Fixture(folder / f"no_predictions_{dropped}")
+            refit = suite.fit_validation
+
+            def without(request: Any, slot: str, last: int, years: Sequence[int], *, window: int = dropped, real: Any = refit) -> Any:
+                result = real(request, slot, last, years)
+                held = [row for row in request.data.rows if row["window_year"] in years]
+                keep = [i for i, position in enumerate(result.holdout_positions) if held[position]["window_year"] != window]
+                result.holdout_positions = tuple(result.holdout_positions[i] for i in keep)
+                result.predictions = tuple(result.predictions[i] for i in keep)
+                return result
+
+            with mock.patch.object(suite, "fit_validation", without):
+                stage(fixture, "fit")
+            code, _, error = run_action(fixture, "hac_validate")
+            require(code == job.EXIT_FAILED and failure_of(error) == "hac_validate_refused", f"{code} {error}")
+            require(f"window {dropped}" in error and "no predictions" in error, f"the refusal does not name the window: {error}")
+            require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def overlap_refused() -> None:
+        fixture = Fixture(folder / "overlap")
+        with mock.patch.object(hac_validation, "training_cutoff", side_effect=lambda year: year - 1):
+            code, _, error = run_action(fixture, "fit")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_refused" and "overlap" in error, f"{code} {error}")
+
+    def planted_overlap_is_caught() -> None:
+        fixture = Fixture(folder / "planted")
+        with (
+            mock.patch.object(hac_validation, "training_cutoff", side_effect=lambda year: year - 1),
+            mock.patch.object(hac_validation, "check_no_overlap"),
+            watch_validation_training() as seen,
+        ):
+            stage(fixture, "fit")
+        leaked = sorted(set().union(*seen) & {2022, 2023})
+        require(leaked == [2022], f"the watcher must see window 2022 in the planted defect, saw {leaked}")
+
+    def stays_out_of_promotion() -> None:
+        fixture = Fixture(folder / "outside")
+        saved: list[str] = []
+        real = save_model_standin
+
+        def counted(*arguments: Any) -> None:
+            saved.append("model")
+            real(*arguments)
+
+        with mock.patch(f"{__name__}.save_model_standin", side_effect=counted):
+            stage(fixture, "fit")
+            fitted_models = len(saved)
+            require(run_action(fixture, "hac_validate")[0] == 0, "hac_validate failed")
+        require(fitted_models == 1 and len(saved) == 1, f"models saved: {fitted_models} by the fit, {len(saved) - fitted_models} by the validation")
+        require(not fixture.tracking.calls, f"the validation called MLflow: {fixture.tracking.calls}")
+        names = listing(fixture.folder / "in/fit")
+        require(all(name.startswith((BUNDLE, "hac_predictions_", "fit.done")) for name in names), f"fit outputs: {names}")
+        outside = [name for name in names if not name.startswith(BUNDLE) and name.startswith("hac_predictions_")]
+        require(outside == [f"hac_predictions_{HAI_TYPE}.json"], f"the validation predictions must stay outside the bundle: {names}")
+        result = json.loads((fixture.folder / "in/fit" / BUNDLE / "result.json").read_text())
+        require("hac" not in json.dumps(result), "the fit result carries the validation")
 
     def changed_fit() -> None:
         fixture = Fixture(folder / "changed_fit")
         stage(fixture, "fit")
-        (fixture.folder / "in/fit" / f"holdout_{HAI_TYPE}.json").write_text("{}\n")
+        (fixture.folder / "in/fit" / f"hac_predictions_{HAI_TYPE}.json").write_text("{}\n")
         code, _, error = run_action(fixture, "hac_validate")
         require(code == job.EXIT_FAILED and failure_of(error) == "fit_changed", f"{code} {error}")
 
@@ -858,9 +1072,19 @@ def hac_cases(cases: Any, folder: Path) -> None:
         require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
 
     cases.check("job_hac_writes_result_and_done", written)
+    cases.check("job_hac_averages_the_windows_of_the_period", averaged)
+    cases.check("job_hac_averages_a_one_window_hospital_and_reports_it", one_window_hospital)
+    cases.check("job_hac_one_year_period_compares_only_its_year", one_year_period)
+    cases.check("job_hac_reports_missing_flags", missing_flags)
     cases.check("job_hac_retry_resumes_completed", retried)
     cases.check("job_hac_year_mapping_missing_named", no_mapping)
     cases.check("job_hac_refuses_unmapped_year", unmapped_year)
+    cases.check("job_hac_refuses_window_without_rows", window_without_rows)
+    cases.check("job_hac_refuses_training_without_windows_through_y_minus_2", no_training_windows)
+    cases.check("job_hac_refuses_window_without_predictions", dropped_predictions)
+    cases.check("job_hac_refuses_training_that_overlaps_the_period", overlap_refused)
+    cases.check("job_hac_watcher_catches_planted_overlap", planted_overlap_is_caught)
+    cases.check("job_hac_stays_out_of_promotion_registry_and_rq", stays_out_of_promotion)
     cases.check("job_hac_refuses_changed_fit_output", changed_fit)
     cases.check("job_hac_refuses_changed_table", changed_table)
     cases.check("job_hac_reports_empty_flag_table", no_flags)
