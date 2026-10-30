@@ -3288,7 +3288,7 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
             "bash",
             ["scripts/run_ci.sh"],
             cwd=work,
-            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), **extra},
+            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), "HAI_CI_REUSE": "off", **extra},
             timeout=600,
         )
     finally:
