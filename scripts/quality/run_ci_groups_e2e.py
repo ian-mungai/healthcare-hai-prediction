@@ -4631,7 +4631,12 @@ def reuse_dry_run(
             edit(tree)
 
     return dry_run(
-        work, out, label, {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": "HEAD", **env}, prepare=prepare
+        work,
+        out,
+        label,
+        # The case's own gate marker counts, not the one of a gate that runs this suite.
+        {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": "HEAD", "HAI_DOCKER_RELEASE": "", **env},
+        prepare=prepare,
     )
 
 
