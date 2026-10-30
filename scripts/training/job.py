@@ -34,7 +34,13 @@ MODULES: dict[str, tuple[str, ...]] = {
         "scripts.training.job_actions",
         "scripts.training.job_inputs",
     ),
-    "promote": (),
+    "promote": (
+        "scripts.training.promote",
+        "scripts.training.registry",
+        "scripts.training.run_tracking",
+        "scripts.training.job_actions",
+        "scripts.training.job_inputs",
+    ),
     "smoke": (),
 }
 SNAPSHOT_PACKAGES = ("scripts", "orchestration", "feature_store")
@@ -207,6 +213,13 @@ def run_promotion_check(context: Context) -> None:
     promotion_check.run(context, read_record(context))
 
 
+def run_promote(context: Context) -> None:
+    """Move the production alias of the requested model to the requested version."""
+    from scripts.training import promote
+
+    promote.run(context, read_record(context))
+
+
 def run_log_run(context: Context) -> None:
     """Log one MLflow run per requested HAI type from the mounted outputs of the earlier steps."""
     from scripts.training import job_actions
@@ -222,6 +235,7 @@ HANDLERS: dict[str, Callable[[Context], None]] = {
     "hac_validate": run_hac_validate,
     "log_run": run_log_run,
     "promotion_check": run_promotion_check,
+    "promote": run_promote,
     "smoke": run_smoke,
 }
 

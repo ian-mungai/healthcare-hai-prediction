@@ -35,3 +35,4 @@ aws-account tests/test_services_preparation.py -- synthetic all-ones account IDs
 aws-account scripts/orchestration/ecs_broker_fake.py -- a synthetic all-zeros account ID that marks stand-in ARNs; not the project's account
 aws-account infra/iam/tests/broker.tftest.hcl -- synthetic all-ones account IDs in mocked broker IAM tests; not the project's account
 aws-account scripts/infrastructure/broker_policy_cases.py -- a synthetic all-ones account ID in the broker policy cases; not the project's account
+aws-account infra/jobs/tests/promote.tftest.hcl -- synthetic all-ones account IDs in mocked promotion task tests; not the project's account

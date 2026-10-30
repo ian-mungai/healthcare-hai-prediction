@@ -1,6 +1,6 @@
 """Run one phase of a training run inside an AWS task (project decision 56).
 
-    python -m scripts.training.aws_run prepare|extract|train --run <run ID> [--mode real|fixture] [--work /workspace]
+    python -m scripts.training.aws_run prepare|extract|train|promote --run <run ID> [--mode real|fixture] [--work /workspace]
 
 The task definition chains three containers on one shared ``/workspace``. A fetch container has already downloaded ``code.tar.gz`` of the run, checked
 ``CODE_SHA256`` and unpacked it to ``<work>/code``. Every phase runs from that folder, so the modules it imports are the bytes the record names.
@@ -10,6 +10,8 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
 - ``extract`` (feature store image): runs the extraction against the catalog and the Feast registry of the data bucket.
 - ``train`` (training image): logs in to MLflow with MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD, because the server grants nothing without a login.
   It then runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
+- ``promote`` (training image, a separate task): records the code identity and the promotion parameters, then runs the ``promote`` action. It moves the
+  ``production`` alias of one registered model to the version the parameters name. The broker checks the owner's approval before the task starts.
 
 Each action writes to ``<work>/in/<action>``, where the next action reads it, as the local renderer mounts them. A phase checks the completion records of
 the steps an action needs before it starts that action. A rerun in the same workspace resumes: a completed step is verified and not run again. A rerun in a
@@ -39,7 +41,7 @@ from scripts.training import job
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
 
-PHASES = ("prepare", "extract", "train")
+PHASES = ("prepare", "extract", "train", "promote")
 TRAIN_STEPS = ("version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check")
 ARCHIVE = "code.tar.gz"
 COMMIT = re.compile(r"[a-f0-9]{40}")
@@ -169,9 +171,8 @@ def archive_commit(archive: Path) -> str:
     return commit
 
 
-def prepare(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
-    """Record the code identity and the parameters, then run the guard."""
-    parameters = read_parameters(parse_json("TRAINING_PARAMETERS"))
+def record_code(work: Path, run: str) -> None:
+    """Check the archive against CODE_SHA256 and write the snapshot record of the unpacked code once."""
     archive = work / ARCHIVE
     expected = required("CODE_SHA256")
     if not archive.is_file() or hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
@@ -190,9 +191,35 @@ def prepare(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
         "git_commit": commit,
         "git_dirty": False,
     }
-    write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
     write_once(work / "snapshot_training.json", json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def prepare(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
+    """Record the code identity and the parameters, then run the guard."""
+    parameters = read_parameters(parse_json("TRAINING_PARAMETERS"))
+    record_code(work, run)
+    write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
     return [run_action(work, run, mode, "guard")]
+
+
+def promote(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
+    """Record the code identity and the promotion parameters, then move the production alias in the MLflow service."""
+    raw = parse_json("TRAINING_PARAMETERS")
+    try:
+        parameters = training_contract.parameters_for("model_promotion_dag", raw, ("aws",))
+    except ValueError as error:
+        raise RunRefused(f"an AWS promotion needs the parameters of a promotion run with mlflow=aws: {error}") from None
+    uri = os.environ.get("MLFLOW_TRACKING_URI", "")
+    if not TRACKING_URI.fullmatch(uri):
+        raise RunRefused(f"MLFLOW_TRACKING_URI must be http://<private IPv4 address>:{mlflow_service.PORT}. It is {uri or 'not set'}")
+    for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
+        required(name)
+    task_environment(work)
+    record_code(work, run)
+    write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
+    step = run_action(work, run, mode, "promote")
+    sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
+    return [step]
 
 
 def parse_json(name: str) -> Any:
@@ -289,7 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not re.fullmatch(training_contract.RUN_ID, values.run):
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": "the run ID has another form"}) + "\n")
         return EXIT_FAILED
-    handler = {"prepare": prepare, "extract": extract, "train": train}[values.phase]
+    handler = {"prepare": prepare, "extract": extract, "train": train, "promote": promote}[values.phase]
     try:
         steps = handler(values.work, values.run, values.mode)
     except RunRefused as refusal:
@@ -298,7 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except StepFailed as failure:
         sys.stderr.write(json.dumps({"phase": values.phase, "step": failure.step, "failure": failure.failure, "detail": failure.detail}, sort_keys=True) + "\n")
         return failure.code
-    if values.phase != "train":
+    if values.phase not in ("train", "promote"):
         for step in steps:
             sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return 0
