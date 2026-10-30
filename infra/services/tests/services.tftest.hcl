@@ -38,6 +38,7 @@ variables {
     marquez       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
     marquez_web   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     mlflow        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/mlflow"
+    model_api     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
   }
 
   image_digests = {
@@ -49,6 +50,7 @@ variables {
     marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     mlflow        = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    model_api     = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
   }
 }
 
@@ -2054,5 +2056,156 @@ run "broker_accepts_the_promote_family" {
   assert {
     condition     = contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : "${item.name}=${item.value}"], "BROKER_FAMILIES=train,promote")
     error_message = "The broker enables the promote job when it is named."
+  }
+}
+
+run "model_api_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(aws_ecs_task_definition.service), "model_api") && !contains(keys(aws_ecs_service.service), "model_api")
+    error_message = "The model API must not exist unless model_api_enabled is true."
+  }
+
+  assert {
+    condition     = alltrue([for name in output.parameter_names_used : !strcontains(name, "model_api")])
+    error_message = "No model API parameter may be read while the API is off."
+  }
+}
+
+run "model_api_is_private_and_pinned" {
+  command = plan
+
+  variables {
+    model_api_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+
+  }
+
+  assert {
+    condition     = contains(keys(aws_ecs_task_definition.service), "model_api") && aws_ecs_service.service["model_api"].desired_count == 1
+    error_message = "One model API task must run when the flag is true."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.service["model_api"].task_role_arn == "arn:aws:iam::111111111111:role/example-model-api"
+    error_message = "The model API runs under its own task role."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      strcontains(container.image, "@sha256:2222") && container.readonlyRootFilesystem && !container.privileged
+    ])
+    error_message = "The model API image runs by digest on a read-only root file system."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      anytrue([for entry in container.environment : entry.name == "MODEL_API_BIND" && entry.value == "127.0.0.1"])
+    ])
+    error_message = "The API binds the host loopback only, so no network path reaches it except Session Manager port forwarding."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      alltrue([for entry in container.environment : !can(regex("(?i)password|secret|credential|key_hash", entry.name))])
+    ])
+    error_message = "No secret may sit in the plain environment. Secrets arrive through the secrets list."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      alltrue([for secret in container.secrets : startswith(secret.valueFrom, "arn:aws:ssm:us-west-2:111111111111:parameter/")])
+    ])
+    error_message = "Every model API secret is a Parameter Store reference."
+  }
+
+  assert {
+    condition     = output.reserved_memory_mib <= var.host_memory_mib - var.other_services_reserve_mib
+    error_message = "With the model API on, the reservations must still fit the host."
+  }
+
+  assert {
+    condition     = contains(output.parameter_names_used, "/healthcare_hai_prediction/model_api_key_hashes")
+    error_message = "The execution role must be told to read the key hash parameter."
+  }
+}
+
+run "model_api_without_a_role_is_refused" {
+  command = plan
+
+  variables {
+    model_api_enabled      = true
+    model_api_manifest_uri = "s3://example-data/serving/deployments"
+    model_api_registry_uri = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri   = "http://127.0.0.1:5100"
+  }
+
+  expect_failures = [var.model_api_task_role_arn]
+}
+
+run "model_api_sharing_the_polaris_role_is_refused" {
+  command = plan
+
+  variables {
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-polaris"
+  }
+
+  expect_failures = [var.model_api_task_role_arn]
+}
+
+run "model_api_with_a_public_mlflow_address_is_refused" {
+  command = plan
+
+  variables {
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://203.0.113.5:5100"
+  }
+
+  expect_failures = [var.model_api_mlflow_uri]
+}
+
+run "model_api_with_marquez_does_not_fit_the_small_host" {
+  command = plan
+
+  variables {
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+
+  }
+
+  expect_failures = [aws_ecs_task_definition.service]
+}
+
+run "model_api_with_marquez_fits_the_resized_host" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+
+  }
+
+  assert {
+    condition     = contains(keys(aws_ecs_task_definition.service), "model_api") && contains(keys(aws_ecs_task_definition.service), "marquez")
+    error_message = "Both optional services must plan on the resized host."
   }
 }
