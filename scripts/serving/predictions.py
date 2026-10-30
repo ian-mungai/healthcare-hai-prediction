@@ -1,9 +1,10 @@
 """A bounded buffer between answered requests and the predictions Iceberg table.
 
-A request adds one row and goes on. A flush (the service's background thread, or a case) sends the pending rows to the sink with a deadline and
-removes them only when the sink returned, so a failed append is sent again and a successful one is never sent twice. A buffer at capacity drops its
-oldest rows and counts them. Iceberg commits are atomic, so a failed append wrote nothing. An append whose answer was lost may be sent again, and a
-reader removes such rows by ``request_id``.
+A request reserves room before it does any work, adds its row when it answers and gives the room back when it ends without a row. A full buffer refuses
+the reservation, so the service answers 503 with a retry time and never drops a row it acknowledged. A flush (the service's background thread, or a case)
+sends the pending rows to the sink with a deadline and removes them only when the sink returned, so a failed append is sent again and a successful one is
+never sent twice. Iceberg commits are atomic, so a failed append wrote nothing. An append whose answer was lost may be sent again, and a reader removes
+such rows by ``request_id``.
 """
 
 from __future__ import annotations
@@ -16,8 +17,15 @@ from typing import Any, Protocol
 LOG = logging.getLogger(__name__)
 
 
+RETRY_AFTER_SECONDS = 10
+
+
 class RowRefused(ValueError):
     """A row whose columns differ from the table contract."""
+
+
+class BufferFull(Exception):
+    """No room for another row: the pending rows and the reserved rooms fill the capacity."""
 
 
 class Sink(Protocol):
@@ -31,18 +39,28 @@ class PredictionBuffer:
         self._sink, self._columns = sink, frozenset(columns)
         self.capacity, self.batch, self.deadline_seconds = capacity, batch, deadline_seconds
         self._rows: list[dict[str, Any]] = []
-        self.dropped = 0
+        self._reserved = 0
         self._lock = threading.Lock()
         self._flushing = threading.Lock()
 
+    def reserve(self) -> None:
+        """Take room for one row, or raise ``BufferFull``. Every reservation ends in ``add`` or ``release``."""
+        with self._lock:
+            if len(self._rows) + self._reserved >= self.capacity:
+                raise BufferFull
+            self._reserved += 1
+
+    def release(self) -> None:
+        with self._lock:
+            self._reserved -= 1
+
     def add(self, row: Mapping[str, Any]) -> None:
+        """Add the row for a reservation and end that reservation. A row with other columns is refused and the reservation stays."""
         if set(row) != self._columns:
             raise RowRefused("the row has other columns than the predictions contract")
         with self._lock:
             self._rows.append(dict(row))
-            if len(self._rows) > self.capacity:
-                del self._rows[0]
-                self.dropped += 1
+            self._reserved -= 1
 
     def pending(self) -> int:
         with self._lock:
@@ -54,7 +72,7 @@ class PredictionBuffer:
             return 0
         try:
             with self._lock:
-                snapshot, mark = list(self._rows), self.dropped
+                snapshot = list(self._rows)
             if not snapshot:
                 return 0
             try:
@@ -63,7 +81,7 @@ class PredictionBuffer:
                 LOG.warning("prediction append failed (%s); %d rows kept", type(error).__name__, len(snapshot))
                 return 0
             with self._lock:
-                del self._rows[: max(0, len(snapshot) - (self.dropped - mark))]
+                del self._rows[: len(snapshot)]
             return len(snapshot)
         finally:
             self._flushing.release()

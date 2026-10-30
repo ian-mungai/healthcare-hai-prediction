@@ -40,6 +40,27 @@ def call(port: int, method: str, path: str, body: bytes | None = None, headers: 
         connection.close()
 
 
+def call_chunked(port: int, pieces: list[bytes], headers: dict[str, str]) -> tuple[int, dict[str, str], Any]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=REQUEST_SECONDS)
+    try:
+        connection.request("POST", "/v1/predict", body=iter(pieces), headers=headers, encode_chunked=True)
+        response = connection.getresponse()
+        raw = response.read()
+        return response.status, dict(response.getheaders()), json.loads(raw) if raw else None
+    finally:
+        connection.close()
+
+
+def stalled_status(port: int) -> int:
+    """Send the headers of a body that never arrives and return the status the server gives, waiting at most 10 seconds."""
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as stream:
+        head = f"POST /v1/predict HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nX-API-Key: {base.KEY_A}\r\nContent-Length: 50\r\n\r\n"
+        stream.sendall(head.encode())
+        stream.sendall(b"{")
+        data = stream.recv(4096)
+    return int(data.split(b" ", 2)[1]) if data.startswith(b"HTTP/") else 0
+
+
 def raw_get(port: int, path: str) -> tuple[int, str]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=REQUEST_SECONDS)
     try:
@@ -60,7 +81,7 @@ def case_http(c: Checker) -> None:
     from scripts.serving.api import create_app
 
     uvicorn = importlib.import_module("uvicorn")
-    with base.captured_logs() as logs, base.world(rate=60, burst=4) as w:
+    with base.captured_logs() as logs, base.world(rate=60, burst=12) as w:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
@@ -81,8 +102,13 @@ def case_http(c: Checker) -> None:
             c.check("an unknown hospital answers 404", post(port, good | {"ccn": "ZZZ999"})[0] == 404)
             oversize = call(port, "POST", "/v1/predict", b"{" + b" " * 2048 + b"}", {"Content-Type": "application/json", "X-API-Key": base.KEY_A})
             c.check("a body over the limit answers 413", oversize[0] == 413)
+            unauthenticated = call(port, "POST", "/v1/predict", b"{" + b" " * 2048 + b"}", {"Content-Type": "application/json"})
+            c.check("a large body without a key answers 401, so the key is checked first", unauthenticated[0] == 401)
+            chunked = call_chunked(port, [b"{" + b" " * 600, b" " * 600, b" " * 600 + b"}"], {"Content-Type": "application/json", "X-API-Key": base.KEY_A})
+            c.check("a body without a declared length is cut off at the limit with 413", chunked[0] == 413)
+            c.check("a body that stalls answers 408 within its deadline", stalled_status(port) == 408)
             c.check("health answers 200", call(port, "GET", "/v1/health")[0] == 200)
-            limited = [post(port, good)[0] for _ in range(6)]
+            limited = [post(port, good)[0] for _ in range(15)]
             c.check("the burst ends in 429", 429 in limited)
             document = call(port, "GET", "/v1/openapi.json")[2]
             c.check(

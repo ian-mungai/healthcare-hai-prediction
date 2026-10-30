@@ -2,7 +2,7 @@
 
 The version supplies its feature references from the bundle's ``feature_list.json`` in the source run, and the feature schema hash from the version
 tag the promotion check wrote. The model code travels in the model artifact (``code_paths``) and its classes load under the contract's trusted types.
-Missing feature values reach the model as NaN.
+A value published as null reaches the model as NaN. The serving contract has already refused an absent view row.
 """
 
 from __future__ import annotations

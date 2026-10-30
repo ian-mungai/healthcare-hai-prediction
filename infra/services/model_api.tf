@@ -186,7 +186,7 @@ locals {
       readonlyRootFilesystem = true
       memory                 = 1280
       memoryReservation      = 640
-      stopTimeout            = 30
+      stopTimeout            = 60
       environment            = [for name, value in local.model_api_environment : { name = name, value = value }]
       secrets = [
         { name = "MODEL_API_KEY_HASHES", valueFrom = local.secret_arn["model_api_key_hashes"] },

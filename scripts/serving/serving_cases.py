@@ -12,8 +12,10 @@ import contextlib
 import io
 import json
 import logging
+import math
 import re
 import tempfile
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -24,7 +26,7 @@ from typing import Any
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
-from scripts.serving import canary, deploy, keys, limiter, manifests, metrics, predictions, replay, service
+from scripts.serving import body, canary, deploy, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -75,6 +77,11 @@ class Loader:
     def __init__(self) -> None:
         self.broken: set[str] = set()
         self.cost = 0.0
+        self.nonfinite: dict[str, float] = {}
+        self.schema_hashes: dict[str, str] = {}
+        self.extra_references: dict[str, tuple[str, ...]] = {}
+        self.calls = 0
+        self.rows: list[Mapping[str, Any]] = []
         self.clock: Clock | None = None
         self.unloadable: set[str] = set()
         self.loaded: list[str] = []
@@ -86,13 +93,18 @@ class Loader:
         self.loaded.append(version)
 
         def predict(row: Mapping[str, Any]) -> float:
+            self.calls += 1
+            self.rows.append(dict(row))
             if self.clock is not None:
                 self.clock.now += self.cost
             if version in self.broken:
                 raise RuntimeError("synthetic prediction failure")
+            if version in self.nonfinite:
+                return self.nonfinite[version]
             return float(version) + sum(len(str(value)) for value in row.values()) / 10000
 
-        return service.LoadedModel(version, tuple(online_cases.REFERENCES), online_cases.SCHEMA_HASH, predict)
+        references = (*online_cases.REFERENCES, *self.extra_references.get(version, ()))
+        return service.LoadedModel(version, references, self.schema_hashes.get(version, online_cases.SCHEMA_HASH), predict)
 
     def release(self, model: service.LoadedModel) -> None:
         self.released.append(model.version)
@@ -137,6 +149,8 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         store = manifests.FileManifestStore(Path(folder))
         registry, loader, sink, clock = Registry(), Loader(), Sink(), Clock()
+        if "configure" in options:
+            options.pop("configure")(loader)
         if deployment:
             deploy.run(
                 registry=registry,
@@ -482,6 +496,347 @@ def canary_deploy(w: World, percent: int) -> deploy.Outcome:
     return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=percent, mode="canary", deployment_id=RUN_2)
 
 
+class CrashingStore(manifests.FileManifestStore):
+    """A file store whose next replace of the active record fails, as a deploy that stopped between its two writes."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.crash_next_replace = False
+
+    def replace_active(self, hai_type: str, body: bytes, expected_token: str | None) -> None:
+        if self.crash_next_replace:
+            self.crash_next_replace = False
+            raise OSError("synthetic stop between the history write and the active write")
+        super().replace_active(hai_type, body, expected_token)
+
+
+def case_deploy_order(c: Checker) -> None:
+    """An older deploy that is retried never replaces a later deployment, and a deploy that stopped between its writes finishes on its retry."""
+    with world(deployment=False) as w:
+
+        def canary_run(run: str, version: str = CANDIDATE, percent: int = 10) -> deploy.Outcome:
+            return deploy.run(
+                registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=version, percent=percent, mode="canary", deployment_id=run
+            )
+
+        def rollback_run(run: str) -> deploy.Outcome:
+            return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=run)
+
+        canary_run(RUN_1)
+        rollback_run(RUN_2)
+        after_rollback = w.store.read_active(HAI)
+        c.check("the rollback is active", after_rollback is not None and canary.Deployment.parse(after_rollback.body).candidate_version is None)
+        c.check("a retry of the older canary deploy is refused", refused(lambda: canary_run(RUN_1)))
+        c.check("the refused retry left the rollback active", w.store.read_active(HAI) == after_rollback)
+        c.check("a retry of the rollback changes nothing", rollback_run(RUN_2).status == "unchanged" and w.store.read_active(HAI) == after_rollback)
+        later = canary_run(RUN_3, "5", 20)
+        c.check("a new run still deploys after the refusal", later.status == "written" and later.deployment.candidate_version == "5")
+        newest = w.store.read_active(HAI)
+        c.check("each deployment is numbered one above the one it replaced", newest is not None and canary.Deployment.parse(newest.body).sequence == 3)
+        c.check("a retry of the oldest deploy is still refused", refused(lambda: canary_run(RUN_1)))
+        c.check("the production alias was never written", w.registry.alias_writes == 0)
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        store = CrashingStore(Path(folder))
+        registry = Registry()
+        store.crash_next_replace = True
+        stopped = False
+        try:
+            deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        except OSError:
+            stopped = True
+        c.check("a deploy that stops between its writes leaves no active record", stopped and store.read_active(HAI) is None)
+        finished = deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        active = store.read_active(HAI)
+        c.check(
+            "its retry finishes the same deployment",
+            finished.status == "written" and active is not None and canary.Deployment.parse(active.body).deployment_id == RUN_1,
+        )
+        registry.aliases["production"] = "5"
+        c.check(
+            "a retry after the production alias moved keeps the recorded stable version",
+            deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1).status
+            == "unchanged",
+        )
+        c.check(
+            "the stable version is the one recorded at the first attempt",
+            active is not None and canary.Deployment.parse(active.body).stable_version == PRODUCTION,
+        )
+
+
+def with_view(reference: str, value: Any, stamp: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """A reader wrapper that answers one reference with the given value and event time, as Feast does for a view row that is absent or published as null."""
+
+    def wrap(inner: Callable[..., Any]) -> Callable[..., Any]:
+        def read(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+            answer = dict(inner(references, key))
+            name = reference.replace(":", "__", 1)
+            answer[name] = [value]
+            answer[name + "__ts"] = [stamp]
+            return answer
+
+        return read
+
+    return wrap
+
+
+def case_absent_row(c: Checker) -> None:
+    """A view row that is absent gives 503 and no prediction. A value published as null still reaches the model."""
+    view_reference = online_cases.REFERENCES[1]
+    for label, stamp in (("an event time of zero", 0), ("no event time", None)):
+        with world(wrap=with_view(view_reference, None, stamp)) as w:
+            reply = ask(w)
+            c.check(f"an absent row with {label} gives 503", reply.status == 503 and "prediction" not in reply.body)
+            c.check(f"the model was not asked for {label}", w.loader.calls == 0)
+            c.check(f"no row was written for {label}", rows_of(w) == [])
+    with world(wrap=with_view(view_reference, None, online_cases.WINDOW_SECONDS)) as w:
+        reply = ask(w)
+        c.check("a value published as null answers 200", reply.status == 200)
+        c.check("the model received the null for its own preprocessing", w.loader.calls == 1 and w.loader.rows[0][view_reference] is None)
+    with world(wrap=with_view(view_reference, "v1|AAA001:2022|x", online_cases.WINDOW_SECONDS)) as w:
+        c.check("a present row answers 200", ask(w).status == 200)
+
+
+def candidate_trouble(loader: Loader) -> None:
+    loader.schema_hashes[CANDIDATE] = online_cases.OTHER_HASH
+
+
+def case_candidate_feature_errors(c: Checker) -> None:
+    """A feature error that belongs to the canary model sends its requests to the stable model and ejects the canary. A store error does not."""
+    keys_ = hospital_keys(40)
+    with world(count=40, percent=50, configure=candidate_trouble) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        stable_keys = [key for key, kind in routed.items() if kind == "stable"]
+        first = ask(w, canary_keys[0])
+        c.check(
+            "a canary with another feature schema falls back to the stable model with 200",
+            first.status == 200 and first.body["model_version"] == PRODUCTION and first.body["fallback"] is True,
+        )
+        for key in canary_keys[1:3]:
+            ask(w, key)
+        c.check("three such failures eject the canary", w.api.health().body[HAI]["candidate"] == "ejected")
+        c.check("every stable request still answers 200 from the stable model", all(ask(w, key).body["model_version"] == PRODUCTION for key in stable_keys))
+        c.check("the fallback rows name the canary as the routed version", any(row["routed_version"] == CANDIDATE and row["fallback"] for row in rows_of(w)))
+    absent = "feature_matrix_extra:x"
+    with world(count=40, percent=50, wrap=with_view(absent, None, 0), configure=lambda loader: loader.extra_references.update({CANDIDATE: (absent,)})) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        replies = [ask(w, key) for key in canary_keys[:4]]
+        c.check(
+            "a canary that needs an absent view row falls back to the stable model",
+            all(r.status == 200 and r.body["model_version"] == PRODUCTION for r in replies),
+        )
+        c.check("and is ejected", w.api.health().body[HAI]["candidate"] == "ejected")
+    with world(count=40, percent=50) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        w.server.write_hash(online.CONTROL_DB, online.MARKER_KEY, {"state": "loading"})
+        outage = [ask(w, key).status for key in canary_keys[:5]]
+        c.check("a store that is loading gives 503 for canary requests", outage == [503] * 5)
+        c.check("a store outage does not eject the canary", w.api.health().body[HAI]["candidate"] == CANDIDATE)
+
+
+class SlowWriter:
+    """A stand-in for the PyIceberg append: it waits for ``release`` and then commits, as a slow commit does after the caller gave up."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.committed: list[str] = []
+        self.calls = 0
+        self.fail: Exception | None = None
+        self.blocking = True
+
+    def __call__(self, rows: Sequence[Mapping[str, Any]], timeout: float) -> None:
+        self.calls += 1
+        self.started.set()
+        if self.blocking:
+            self.release.wait(10)
+        if self.fail is not None:
+            raise self.fail
+        self.committed.extend(str(row["request_id"]) for row in rows)
+
+
+def sink_rows(*names: str) -> list[dict[str, Any]]:
+    return [{"request_id": name} for name in names]
+
+
+def case_sink_late_commit(c: Checker) -> None:
+    """After an append timeout the one worker keeps its place, a late commit is remembered and not sent again, and the worker has an owned shutdown."""
+    environ = {"POLARIS_URI": "http://127.0.0.1:1/api/catalog", "POLARIS_CLIENT_ID": "writer", "POLARIS_CLIENT_SECRET": "x"}
+    writer = SlowWriter()
+    sink = iceberg_sink.IcebergSink(environ, writer=writer)
+    timed_out = False
+    try:
+        sink.append(sink_rows("a", "b", "c"), 0.2)
+    except TimeoutError:
+        timed_out = True
+    c.check("a slow commit ends in a timeout for the caller", timed_out and writer.started.is_set())
+    second = False
+    try:
+        sink.append(sink_rows("a", "b", "c", "d"), 0.2)
+    except TimeoutError:
+        second = True
+    c.check("a second append is refused while the first still runs, with no second writer", second and writer.calls == 1)
+    writer.release.set()
+    c.check("the late commit finishes within a deadline", sink.wait_idle(5.0))
+    sink.append(sink_rows("a", "b", "c", "d"), 1.0)
+    c.check("the retry sends only the row the late commit did not cover", writer.committed == ["a", "b", "c", "d"] and writer.calls == 2)
+    sink.append(sink_rows("e"), 1.0)
+    c.check("a later append sends only its own rows", writer.committed == ["a", "b", "c", "d", "e"])
+    failing = SlowWriter()
+    failing.blocking = False
+    failing.fail = OSError("synthetic commit failure")
+    other = iceberg_sink.IcebergSink(environ, writer=failing)
+    raised = False
+    try:
+        other.append(sink_rows("x"), 1.0)
+    except OSError:
+        raised = True
+    failing.fail = None
+    other.append(sink_rows("x"), 1.0)
+    c.check("a failed commit is raised and its rows are sent again", raised and failing.committed == ["x"])
+    c.check("close reports a clean stop when nothing runs", sink.close(1.0) is True)
+    closed = False
+    try:
+        sink.append(sink_rows("f"), 1.0)
+    except RuntimeError:
+        closed = True
+    c.check("a closed sink refuses new appends", closed)
+    stuck = SlowWriter()
+    hanging = iceberg_sink.IcebergSink(environ, writer=stuck)
+    with contextlib.suppress(TimeoutError):
+        hanging.append(sink_rows("g"), 0.1)
+    c.check("close reports a worker that does not stop within its deadline", hanging.close(0.2) is False)
+    c.check("a stuck worker is a daemon thread, so it cannot hold the process open", hanging.worker_is_daemon())
+    stuck.release.set()
+    c.check("the stuck worker ends once released", hanging.wait_idle(5.0))
+
+
+def case_nonfinite(c: Checker) -> None:
+    """A prediction that is not a finite number is a model failure: it triggers fallback and ejection, and it is never returned or recorded."""
+    keys_ = hospital_keys(40)
+    with world(count=40, percent=50) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        w.loader.nonfinite[CANDIDATE] = math.nan
+        first = ask(w, canary_keys[0])
+        c.check(
+            "a NaN from the canary falls back to the stable model with 200",
+            first.status == 200 and first.body["model_version"] == PRODUCTION and first.body["fallback"] is True,
+        )
+        for key in canary_keys[1:3]:
+            ask(w, key)
+        c.check("three nonfinite answers eject the canary", w.api.health().body[HAI]["candidate"] == "ejected")
+        w.loader.nonfinite[CANDIDATE] = math.inf
+        c.check("an infinite answer is handled alike", ask(w, canary_keys[3]).body["model_version"] == PRODUCTION)
+        c.check("no recorded prediction is nonfinite", all(math.isfinite(row["prediction"]) for row in rows_of(w)))
+    with world(count=40, percent=50) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        stable_keys = [key for key, kind in routed.items() if kind == "stable"]
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        w.loader.nonfinite[PRODUCTION] = -math.inf
+        refused_ = [ask(w, key) for key in stable_keys[:5]]
+        c.check("a nonfinite stable answer gives 503 with no prediction", all(r.status == 503 and "prediction" not in r.body for r in refused_))
+        c.check("the canary still answers its own requests", all(ask(w, key).status == 200 for key in canary_keys[:3]))
+        c.check("no row holds the nonfinite value", all(math.isfinite(row["prediction"]) for row in rows_of(w)))
+        reply = ask(w, stable_keys[0])
+        c.check("the refusal body is valid JSON", json.loads(json.dumps(reply.body, allow_nan=False)) == reply.body)
+
+
+def case_admit_before_body(c: Checker) -> None:
+    """The key check and the rate limit come before the body is read, every refusal is counted once, and the streamed body has a size and a time limit."""
+    with world(rate=600, burst=3) as w:
+        refused_ = w.api.admit(None)
+        c.check("a missing key is refused at admission with 401, before any body", isinstance(refused_, service.Reply) and refused_.status == 401)
+        c.check("a wrong key is refused alike", isinstance(w.api.admit("sk-test-wrong-key-12345"), service.Reply))
+        admitted = [w.api.admit(KEY_A) for _ in range(3)]
+        c.check("a valid key is admitted until its burst is used", all(isinstance(item, service.Admitted) for item in admitted))
+        limited = w.api.admit(KEY_A)
+        c.check("the burst ends in 429 at admission", isinstance(limited, service.Reply) and limited.status == 429 and "Retry-After" in limited.headers)
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "admission refusals are counted once each",
+            series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="401") == [2.0]
+            and series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="429") == [1.0],
+        )
+        c.check("a refused admission read no feature and reserved no room", w.reads == [] and w.api.buffer.pending() == 0)
+        granted = [item for item in admitted if isinstance(item, service.Admitted)]
+        if len(granted) != 3:
+            return
+        first, second = granted[0], granted[1]
+        reply = w.api.finish(first, None, {"hai_type": HAI, "ccn": "AAA001", "window_year": 2022})
+        c.check("an admitted request finishes with the same answer predict gives", reply.status == 200 and isinstance(reply.body.get("prediction"), float))
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "admission and finish count the request once", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="200") == [1.0]
+        )
+        cut = w.api.reject_body(second, 413, "body_too_large")
+        c.check("a refused body answers its status and is counted", cut.status == 413 and cut.body == {"error": "body_too_large"})
+        _, samples = scrape(w.api.metrics.render())
+        c.check("the refused body shows in the counter", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="413") == [1.0])
+    budget = body.BodyBudget(limit=10, seconds=5.0, clock=Clock())
+    budget.add(b"123456")
+    budget.add(b"7890")
+    c.check("a body of exactly the limit is accepted", budget.total == 10)
+    c.check("one more byte is refused as too large", raised_body(lambda: budget.add(b"x"), body.BodyTooLarge, 413))
+    c.check(
+        "a declared length over the limit is refused before any read",
+        raised_body(lambda: body.BodyBudget(limit=10, seconds=5.0, clock=Clock()).declare("11"), body.BodyTooLarge, 413),
+    )
+    c.check(
+        "a declared length that is not a number is refused",
+        raised_body(lambda: body.BodyBudget(limit=10, seconds=5.0, clock=Clock()).declare("1e3"), body.BodyInvalid, 400),
+    )
+    clock = Clock()
+    slow = body.BodyBudget(limit=100, seconds=5.0, clock=clock)
+    slow.add(b"a")
+    clock.now += 6
+    c.check("a chunk that arrives after the deadline is refused as too slow", raised_body(lambda: slow.add(b"b"), body.BodyTooSlow, 408))
+    c.check("the remaining time is clamped to the deadline", abs(body.BodyBudget(limit=1, seconds=5.0, clock=Clock()).remaining() - 5.0) < 1e-9)
+    c.check("no time left is refused too", raised_body(slow.remaining, body.BodyTooSlow, 408))
+
+
+def raised_body(call: Callable[[], object], kind: type[body.BodyRefused], status: int) -> bool:
+    try:
+        call()
+    except body.BodyRefused as error:
+        return isinstance(error, kind) and error.status == status
+    return False
+
+
+def case_key_tool(c: Checker) -> None:
+    """The documented way to make a key gives a hash of exactly the bytes a caller presents, and the key is never printed."""
+    with tempfile.TemporaryDirectory(prefix="serving_keys_") as folder:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = keys.main(["new", "--id", "ops", "--output", folder])
+        key_file = Path(folder) / "api_key"
+        raw = key_file.read_bytes() if key_file.exists() else b""
+        c.check("the tool succeeds and writes the key file", code == 0 and bool(raw))
+        c.check("the key file holds the key and no trailing whitespace", raw == raw.strip() and len(raw) == 48)
+        c.check("the key file is private to its owner", key_file.exists() and (key_file.stat().st_mode & 0o777) == 0o600)
+        printed = output.getvalue()
+        entry = json.loads(printed.splitlines()[-1]) if printed.strip() else {}
+        c.check("what the tool prints is the hash entry for the key identifier", list(entry) == ["ops"])
+        c.check("the key ring made from that entry accepts exactly the key file's text", keys.KeyRing.from_hashes(entry).identify(raw.decode()) == "ops")
+        c.check("the key ring refuses the key with a newline added", keys.KeyRing.from_hashes(entry).identify(raw.decode() + "\n") is None)
+        c.check("the tool never prints the key", raw.decode() not in printed)
+        again = io.StringIO()
+        with contextlib.redirect_stdout(again), contextlib.redirect_stderr(again):
+            second = keys.main(["new", "--id", "ops", "--output", folder])
+        c.check("a second run does not overwrite the key file", second != 0 and key_file.read_bytes() == raw)
+        bad = io.StringIO()
+        with contextlib.redirect_stdout(bad), contextlib.redirect_stderr(bad):
+            wrong = keys.main(["new", "--id", "Not A Key Id", "--output", folder])
+        c.check("a key identifier that the ring refuses is refused at creation", wrong != 0)
+    text = (ROOT / "docs/model_api.md").read_text()
+    c.check(
+        "the document points to the tool and no longer hashes a file with a newline",
+        "scripts.serving.keys new" in text and "openssl rand" not in text and "shasum" not in text,
+    )
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -493,19 +848,38 @@ def refused(call: Callable[[], object]) -> bool:
 
 
 def case_predictions(c: Checker) -> None:
-    """The prediction append never fails a request, retries without duplicates, is bounded and carries a deadline."""
+    """The append never fails a request, retries without duplicates and has a deadline. A full buffer refuses new requests and drops no acknowledged row."""
     with world(capacity=5) as w:
         w.sink.fail = True
         replies = [ask(w, key) for key in list(online_cases.KEYS) * 2]
-        c.check("a failing sink does not fail a request", all(r.status == 200 for r in replies))
+        accepted = [reply for reply in replies if reply.status == 200]
+        refused_ = [reply for reply in replies if reply.status == 503]
+        c.check("a failing sink does not fail a request that has room", len(accepted) == 5)
+        c.check(
+            "the three requests over the capacity are refused with 503 and a retry time",
+            len(refused_) == 3 and all(int(r.headers.get("Retry-After", "0")) >= 1 for r in refused_),
+        )
+        c.check("a refused request names the backlog", all(r.body.get("error") == "predictions_backlog" for r in refused_))
+        calls, reads = w.loader.calls, len(w.reads)
+        ask(w)
+        c.check("a refused request reads no feature and asks no model", w.loader.calls == calls and len(w.reads) == reads)
         w.api.buffer.flush()
-        c.check("the failed flush kept the rows, within the capacity", w.api.buffer.pending() == 5 and w.api.buffer.dropped == 3)
+        c.check("the failed flush kept every acknowledged row", w.api.buffer.pending() == 5)
         c.check("the flush passed its deadline to the sink", w.sink.timeouts == [5.0])
         w.sink.fail = False
         w.api.buffer.flush()
-        c.check("the next flush appends each kept row once", len(w.sink.rows) == 5 and len({row["request_id"] for row in w.sink.rows}) == 5)
+        sent = {row["request_id"] for row in w.sink.rows}
+        c.check("the next flush appends each acknowledged row once", len(w.sink.rows) == 5 and sent == {r.body["request_id"] for r in accepted})
         w.api.buffer.flush()
         c.check("a flush with nothing pending appends nothing", len(w.sink.rows) == 5)
+        c.check("the room is back after the flush", ask(w).status == 200)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("the refusals are counted as 503 answers", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="503") == [4.0])
+    with world(capacity=2) as w:
+        for _ in range(5):
+            ask(w, "ZZZ999:2022")
+            ask(w, "AAA:2022")
+        c.check("requests that end without a row give their room back", ask(w).status == 200 and ask(w).status == 200 and ask(w).status == 503)
     c.check("a row with another column set is refused before it reaches the sink", refused_row())
 
 
@@ -558,7 +932,7 @@ def case_dag(c: Checker) -> None:
     )
 
 
-def replay_send(w: World, payload: dict[str, Any]) -> tuple[int, dict[str, str], dict[str, Any]]:
+def replay_send(w: World, payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
     reply = w.api.predict(KEY_A, None, payload)
     return reply.status, reply.headers, reply.body
 
@@ -606,6 +980,53 @@ def case_replay_and_compare(c: Checker) -> None:
         c.check("a replay that cannot finish within its deadline fails", deadline_failed(w, tick))
     c.check("a corpus line that is not a ccn and a year is refused", corpus_refused("AAA001,2022\nnot-a-line\n"))
     c.check("a corpus over the line limit is refused", corpus_refused("AAA001,2022\n" * (replay.MAX_CORPUS + 1)))
+
+
+def case_replay_budget(c: Checker) -> None:
+    """A replay never waits longer than the time it has left: a long Retry-After is clamped to the budget and the replay then fails at its deadline."""
+    clock = Clock()
+    slept: list[float] = []
+
+    def pause(seconds: float) -> None:
+        slept.append(seconds)
+        clock.now += seconds
+
+    def always_limited(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        return 429, {"Retry-After": "60"}, {"error": "rate_limited"}
+
+    start = clock.now
+    failed = False
+    try:
+        replay.run(always_limited, [("AAA001", 2022)], HAI, clock=clock, sleep=pause, deadline_seconds=1.0)
+    except replay.ReplayDeadline:
+        failed = True
+    c.check("a Retry-After of 60 seconds on a 1 second deadline ends in the deadline error", failed)
+    c.check("no wait is longer than the time left", all(seconds <= 1.0 + 1e-9 for seconds in slept))
+    c.check("the replay does not run past its deadline", clock.now - start <= 1.0 + 1e-9)
+    clock2 = Clock()
+
+    def odd(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        return 429, {"Retry-After": "soon"}, {}
+
+    waits: list[float] = []
+
+    def note(seconds: float) -> None:
+        waits.append(seconds)
+        clock2.now += seconds
+
+    with contextlib.suppress(replay.ReplayDeadline):
+        replay.run(odd, [("AAA001", 2022)], HAI, clock=clock2, sleep=note, deadline_seconds=3.0)
+    seen: list[float] = []
+
+    def timed(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        seen.append(timeout)
+        clock3.now += 1.5
+        return 200, {}, {"served_by": "stable", "prediction": 1.0, "model_version": "3"}
+
+    clock3 = Clock()
+    replay.run(timed, [("AAA001", 2022), ("AAA002", 2022)], HAI, clock=clock3, sleep=lambda seconds: None, deadline_seconds=3.0)
+    c.check("every request timeout is the smaller of the default and the time left", seen == [3.0, 1.5])
+    c.check("a Retry-After that is not a number waits a short default within the budget", bool(waits) and all(0 < seconds <= 3.0 for seconds in waits))
 
 
 def deadline_failed(w: World, tick: Callable[[float], None]) -> bool:
@@ -759,12 +1180,20 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "rate_limit_429": (case_rate_limit, "rate limit"),
     "validation_and_unknown_hospital": (case_validation_and_unknown_hospital, "api"),
     "missing_feature_503": (case_missing_feature, "feast"),
+    "absent_row": (case_absent_row, "feast"),
+    "admit_before_body": (case_admit_before_body, "api"),
+    "key_tool": (case_key_tool, "api key"),
     "split_deterministic": (case_split, "canary"),
     "version_failure_isolated": (case_version_failure, "canary"),
+    "candidate_feature_errors": (case_candidate_feature_errors, "canary"),
+    "nonfinite_predictions": (case_nonfinite, "canary"),
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
+    "deploy_order": (case_deploy_order, "deploy"),
     "predictions_append": (case_predictions, "iceberg"),
+    "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
+    "replay_budget": (case_replay_budget, "canary compare"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }
