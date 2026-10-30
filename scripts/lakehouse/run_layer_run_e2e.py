@@ -677,6 +677,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     results = run_all(args.only)
     failed = [item for item in results if item["outcome"] != "PASS"]
     sys.stdout.write(f"{len(results) - len(failed)} of {len(results)} cases passed\n")
+    if not results:
+        sys.stderr.write(f"no case name contains {' or '.join(args.only)}\n")
+        return 1
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps({"at": datetime.now(UTC).isoformat(), "revision": REVISION, "results": results}, indent=2) + "\n")
