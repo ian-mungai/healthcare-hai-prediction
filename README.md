@@ -165,6 +165,7 @@ Each run writes its report under `data/e2e/`. The configuration E2E writes under
 - `docs/quality_checks.md`: how the checks run and what each one blocks.
 - `docs/lakehouse_usage.md`: the lakehouse commands.
 - `docs/aws_control_plane.md`: the AWS catalog setup (`scripts.lakehouse.aws_catalog_setup` with `catalog`, `principal`, `check` and `inspect`).
+- `docs/monitoring.md`: the Prometheus, Grafana and StatsD stack on the AWS host, its memory limits, retention and the owner steps.
 - `docs/install_details.md`: the resource limits, the pinned tools and the manual setup steps behind Install.
 - `docs/aws_training_run.md`: how the owner applies the training pieces on AWS, starts one training run and stops the MLflow service.
 - `docs/aws_broker.md`: how the owner applies the lean job broker, signs the first publishes and starts the bronze-triggered chain.

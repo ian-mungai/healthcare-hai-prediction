@@ -124,7 +124,7 @@ No script performs the following setup steps. Do them by hand:
    `polaris_gold_client_secret`, `polaris_silver_client_id`,
    `polaris_silver_client_secret`, `airflow_db_password`, `airflow_fernet_key`,
    `airflow_jwt_secret`, `airflow_api_secret_key`, `marquez_db_password`,
-   `redis_password` and `mlflow_db_password`. Each name is a root variable in `infra/iam/variables.tf`
+   `redis_password`, `mlflow_db_password` and `grafana_admin_password`. Each name is a root variable in `infra/iam/variables.tf`
    (the secret's last path part with `_name`, for example
    `postgres_password_name`) with its full name as default. A name starts with a
    slash and has up to 15 parts of letters, digits and underscores. It never
@@ -146,7 +146,7 @@ No script performs the following setup steps. Do them by hand:
    once per name, taking the names from the variable defaults through
    `scripts/infrastructure/secret_store.py`. The `sts` policy file takes the two
    lakehouse role names (`lakehouse_reader_role_name`, `lakehouse_writer_role_name`)
-   and the task execution policy takes its eight parameter names from the same
+   and the task execution policy takes its nine parameter names from the same
    variables, not from `PROJECT_NAME`.
 
    To add a secret:
