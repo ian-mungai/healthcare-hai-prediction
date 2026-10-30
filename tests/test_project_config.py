@@ -361,3 +361,35 @@ def test_cli_rejects_unreadable_plan_without_echoing_output(
     with pytest.raises(SystemExit):
         renderer.main()
     check("example private diagnostic" not in capsys.readouterr().err, '"example private diagnostic" not in capsys.readouterr().err')
+
+
+def preparation_file(tmp_path: Path, **extra: Any) -> Path:
+    document = json.loads(renderer.PREPARATION_PATH.read_text(encoding="utf-8")) | extra
+    path = tmp_path / "iam_preparation.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_optional_preparation_flags_are_absent_by_default(tmp_path: Path) -> None:
+    document = renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path))
+    check(
+        not {"job_endpoints_enabled", "training_prepared"} & document.keys(),
+        "a flag that is not set stays out of the rendered inputs, so the stack default applies",
+    )
+
+
+def test_optional_preparation_flags_are_read_when_set(tmp_path: Path) -> None:
+    document = renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, job_endpoints_enabled=True, training_prepared=True))
+    check(document["job_endpoints_enabled"] is True and document["training_prepared"] is True, "both flags are rendered as set")
+
+
+@pytest.mark.parametrize("name", ["job_endpoints_enabled", "training_prepared"])
+def test_optional_preparation_flag_must_be_a_boolean_and_is_not_echoed(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ConfigurationError) as refusal:
+        renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, **{name: "synthetic-value"}))
+    check(name in str(refusal.value) and "synthetic-value" not in str(refusal.value), "the message names the input and never echoes the value")
+
+
+def test_unknown_preparation_input_is_still_refused(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError):
+        renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, example_extra_input=True))

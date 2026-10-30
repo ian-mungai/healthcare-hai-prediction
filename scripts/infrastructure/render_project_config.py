@@ -24,6 +24,8 @@ PREPARATION_PATH = REPO_ROOT / "config" / "aws" / "iam_preparation.json"
 BRONZE_TABLES_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_collection", "bronze_writer_prepared", "job_writer_e2e_prepared"})
 PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
+# Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
+OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
@@ -92,7 +94,7 @@ def mapped_collections(path: Path) -> set[object]:
 
 
 def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = BRONZE_TABLES_PATH) -> dict[str, object]:
-    """Read the committed IAM preparation inputs and refuse anything but the four documented values; no rejected value is echoed."""
+    """Read the committed IAM preparation inputs and refuse anything but the documented values; no rejected value is echoed."""
     if not path.is_file():
         raise ConfigurationError("The IAM preparation file is missing: config/aws/iam_preparation.json.")
     try:
@@ -101,9 +103,11 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
         document = None
     if not isinstance(document, dict):
         raise ConfigurationError("The IAM preparation file must be one JSON object with unique keys.")
-    if document.keys() != PREPARATION_NAMES:
-        raise ConfigurationError(f"The IAM preparation file must hold exactly the four inputs: {', '.join(sorted(PREPARATION_NAMES))}.")
-    for name in PREPARATION_FLAGS:
+    if not document.keys() >= PREPARATION_NAMES or document.keys() - PREPARATION_NAMES - set(OPTIONAL_PREPARATION_FLAGS):
+        raise ConfigurationError(
+            f"The IAM preparation file must hold the four inputs {', '.join(sorted(PREPARATION_NAMES))} and may hold {', '.join(OPTIONAL_PREPARATION_FLAGS)}."
+        )
+    for name in (*PREPARATION_FLAGS, *(flag for flag in OPTIONAL_PREPARATION_FLAGS if flag in document)):
         if not isinstance(document[name], bool):
             raise ConfigurationError(f"Set {name} to true or false in the IAM preparation file.")
     collection = document["bronze_qualification_collection"]

@@ -427,6 +427,71 @@
               "items": false
             }
           }
+        },
+        "train_enabled": {
+          "type": "boolean"
+        },
+        "train_images": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "training": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_training_(dev|prod)@sha256:[a-f0-9]{64}$"
+            },
+            "feature_store": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_feature_store_(dev|prod)@sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "train_roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_job_execution_(dev|prod)$"
+            },
+            "train_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_job_train_task_(dev|prod)$"
+            }
+          }
+        },
+        "train_resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory",
+            "ephemeral_storage_gib"
+          ],
+          "properties": {
+            "cpu": {
+              "enum": [
+                1024,
+                2048,
+                4096,
+                8192,
+                16384
+              ]
+            },
+            "memory": {
+              "type": "integer",
+              "minimum": 2048,
+              "maximum": 122880
+            },
+            "ephemeral_storage_gib": {
+              "type": "integer",
+              "minimum": 20,
+              "maximum": 200
+            }
+          }
+        },
+        "mlflow_admin_password_name": {
+          "type": "string",
+          "pattern": "^/[a-z][a-z0-9_]+/mlflow_admin_password$"
         }
       }
     },

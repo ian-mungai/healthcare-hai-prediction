@@ -41,8 +41,8 @@ SOURCE_PATHS = (
 PREPARATION_PATH = "config/aws/iam_preparation.json"
 PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
 BRONZE_TABLES_PATH = "config/lakehouse/bronze_tables.json"
-# The IAM stack files that declare the four preparation inputs.
-PREPARATION_VARIABLE_FILES = ("variables.tf", "bronze_writer_variables.tf", "job_writer_variables.tf")
+# The IAM stack files that declare the preparation inputs.
+PREPARATION_VARIABLE_FILES = ("variables.tf", "bronze_writer_variables.tf", "job_variables.tf", "job_writer_variables.tf", "training_variables.tf")
 # The resource types the platform stack (the project profile) may declare, and the ones the IAM stack (the administrator) must keep.
 PLATFORM_RESOURCE_TYPES = {
     "aws_cloudwatch_log_group",
@@ -601,7 +601,10 @@ PREPARATION_PLANTS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
     ),
     "duplicate_key_allowed": ([("if len({key for key, _ in pairs}) != len(pairs):", "if False:")], ["duplicate_key"]),
     "object_check_removed": ([("if not isinstance(document, dict):", "if False:")], ["not_json", "not_object"]),
-    "closed_schema_removed": ([("if document.keys() != PREPARATION_NAMES:", "if False:")], ["missing_key", "extra_key"]),
+    "closed_schema_removed": (
+        [("if not document.keys() >= PREPARATION_NAMES or document.keys() - PREPARATION_NAMES - set(OPTIONAL_PREPARATION_FLAGS):", "if False:")],
+        ["missing_key", "extra_key"],
+    ),
     "bool_check_removed": ([("if not isinstance(document[name], bool):", "if document[name] is None:")], ["string_bool", "int_bool"]),
     "pattern_check_removed": ([("(collection and not COLLECTION_PATTERN.fullmatch(collection))", "False")], ["collection_pattern", "collection_extra_part"]),
     "membership_check_removed": ([("if collection and collection not in mapped_collections(tables):", "if False:")], ["unmapped_collection"]),
@@ -681,10 +684,12 @@ def preparation_rejections() -> list[tuple[str, str | None, str, str | None, str
         ("not_json", "{not json", "one JSON object with unique keys", None),
         ("not_object", "[]", "one JSON object with unique keys", None),
         ("duplicate_key", json.dumps(default_document())[:-1] + ', "bronze_writer_prepared": true}', "one JSON object with unique keys", None),
-        ("missing_key", json.dumps(without_key), "exactly the four inputs", None),
-        ("extra_key", text(example_extra_input="example_planted_extra"), "exactly the four inputs", "example_planted_extra"),
+        ("missing_key", json.dumps(without_key), "must hold the four inputs", None),
+        ("extra_key", text(example_extra_input="example_planted_extra"), "must hold the four inputs", "example_planted_extra"),
         ("string_bool", text(bronze_writer_prepared="true"), "bronze_writer_prepared to true or false", None),
         ("int_bool", text(job_writer_e2e_prepared=1), "job_writer_e2e_prepared to true or false", None),
+        ("endpoints_string_bool", text(job_endpoints_enabled="true"), "job_endpoints_enabled to true or false", None),
+        ("training_string_bool", text(training_prepared="true"), "training_prepared to true or false", None),
         ("null_bool", text(bronze_writer_prepared=None), "bronze_writer_prepared to true or false", None),
         ("collection_type", text(bronze_qualification_collection=5), "empty or a publisher/collection", None),
         ("collection_pattern", text(bronze_qualification_collection="Example/Planted_Bad"), "empty or a publisher/collection", "Example/Planted_Bad"),
@@ -864,6 +869,8 @@ def run_preparation_plan_cases(evidence: Evidence, sources: dict[str, bytes], re
         "reverted_to_defaults": default_document(),
         "bronze_writer_prepared": {**prepared, "bronze_writer_prepared": False},
         "job_writer_e2e_prepared": {**prepared, "job_writer_e2e_prepared": False},
+        "job_endpoints_enabled": {**prepared, "job_endpoints_enabled": True},
+        "training_prepared": {**prepared, "training_prepared": True},
         "bronze_qualification_collection": {**prepared, "bronze_qualification_collection": collections[1]},
         "bronze_live_locations": {**prepared, "bronze_live_locations": {}},
     }
