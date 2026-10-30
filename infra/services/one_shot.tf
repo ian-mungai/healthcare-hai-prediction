@@ -1,10 +1,10 @@
 locals {
   host_prepare_script = <<-EOT
-    mkdir -p /host/postgres /host/redis /host/airflow/logs /host/airflow/lineage_provider /host/repo
+    mkdir -p /host/postgres /host/redis /host/airflow/logs /host/airflow/lineage_provider /host/repo${var.broker_enabled ? " /host/broker" : ""}
     chown 999:999 /host/postgres /host/redis
-    chown 50000:0 /host/airflow/logs /host/airflow/lineage_provider
+    chown 50000:0 /host/airflow/logs /host/airflow/lineage_provider${var.broker_enabled ? " /host/broker" : ""}
     chmod 0700 /host/postgres
-    chmod 0750 /host/airflow/logs /host/airflow/lineage_provider /host/redis
+    chmod 0750 /host/airflow/logs /host/airflow/lineage_provider /host/redis${var.broker_enabled ? " /host/broker" : ""}
   EOT
 
   polaris_bootstrap_script = <<-EOT

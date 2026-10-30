@@ -41,7 +41,7 @@ locals {
     "marquez_web"           = "marquez"
     "host_prepare"          = "airflow"
     "polaris_bootstrap"     = "polaris"
-  }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {})
+  }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {})
 
   log_configuration = {
     for container, component in local.container_component : container => {
@@ -80,6 +80,7 @@ locals {
     polaris_root_secret    = var.polaris_root_secret_name
     mlflow_db_password     = var.mlflow_db_password_name
     mlflow_admin_password  = var.mlflow_admin_password_name
+    broker_token           = var.broker_token_name
   }
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value
@@ -141,6 +142,15 @@ locals {
           volumes       = {}
         }
       } : key => service if var.mlflow_enabled
+    },
+    {
+      for key, service in {
+        broker = {
+          task_role_arn = var.broker_task_role_arn
+          containers    = local.broker_containers
+          volumes       = { code_repo = local.code_path, broker_state = local.broker_state_path }
+        }
+      } : key => service if var.broker_enabled
     }
   )
 

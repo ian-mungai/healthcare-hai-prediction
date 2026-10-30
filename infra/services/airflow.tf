@@ -113,7 +113,7 @@ locals {
       name              = "airflow_scheduler"
       memory            = 1536
       memoryReservation = 1024
-      command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
+      command           = ["bash", "-ec", "${var.broker_enabled ? local.broker_session_script : ""}${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
       mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
       portMappings      = [{ containerPort = 8974, hostPort = 8974, protocol = "tcp" }]
       healthCheck = {
@@ -125,6 +125,16 @@ locals {
       }
       restartPolicy    = local.restart_policy
       logConfiguration = local.log_configuration["airflow_scheduler"]
+      },
+      # With the broker on, the scheduler also holds the broker token and a memory-backed folder for the client files the unchanged DAG client reads.
+      {
+        for key, value in {
+          secrets = concat(local.airflow_secrets, [{ name = "BROKER_TOKEN", valueFrom = local.secret_arn["broker_token"] }])
+          linuxParameters = {
+            capabilities = { add = [], drop = ["ALL"] }
+            tmpfs        = [{ containerPath = local.broker_session_path, size = 1, mountOptions = ["nosuid"] }]
+          }
+        } : key => value if var.broker_enabled
     }),
   ]
 

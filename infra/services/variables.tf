@@ -240,6 +240,70 @@ variable "mlflow_admin_password_name" {
   }
 }
 
+variable "broker_enabled" {
+  description = "Run the lean job broker on the host. Airflow reaches it on loopback port 18790 with a token from Parameter Store, and it starts the named job tasks on Fargate. Set this to false to stop it: the ledger on the data volume stays."
+  type        = bool
+  default     = false
+}
+
+variable "broker_task_role_arn" {
+  description = "Foundation output: the task role of the broker. It may run, stop and describe the named job families, pass their roles and read the code digest of a run. Required when broker_enabled is true."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.broker_enabled || (var.broker_task_role_arn != null && can(regex("^arn:aws:iam::[0-9]{12}:role/", coalesce(var.broker_task_role_arn, "none"))))
+    error_message = "Supply an IAM role ARN for the broker, or set broker_enabled to false."
+  }
+
+  validation {
+    condition = !var.broker_enabled || (
+      var.broker_task_role_arn != var.control_plane_task_role_arn && var.broker_task_role_arn != var.polaris_task_role_arn && var.broker_task_role_arn != var.mlflow_task_role_arn
+    )
+    error_message = "The broker must have its own task role, so the control plane, Polaris and MLflow hold no permission to start job tasks."
+  }
+}
+
+variable "broker_token_name" {
+  description = "Parameter Store SecureString name of the broker session token. The broker and the Airflow scheduler read it. Set its value outside Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/broker_token"
+
+  validation {
+    condition     = length(var.broker_token_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.broker_token_name)) && !can(regex("^/(?i:aws|ssm)", var.broker_token_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "broker_jobs" {
+  description = "Where the broker starts job tasks: the closed job subnet and security group, the jobs log group, the data bucket that holds the staged code digest, the private address of the host and the job families to enable. Required when broker_enabled is true."
+  type = object({
+    subnet_id         = string
+    security_group_id = string
+    log_group_name    = string
+    bucket_name       = string
+    host_ip           = string
+    families          = list(string)
+  })
+  default = null
+
+  validation {
+    condition = !var.broker_enabled || (
+      var.broker_jobs != null &&
+      can(regex("^subnet-[a-z0-9]+$", try(var.broker_jobs.subnet_id, "!"))) &&
+      can(regex("^sg-[a-z0-9]+$", try(var.broker_jobs.security_group_id, "!"))) &&
+      can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", try(var.broker_jobs.bucket_name, "!"))) &&
+      can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", try(var.broker_jobs.host_ip, "!")))
+    )
+    error_message = "Supply the job subnet, the job security group, the data bucket and the private address of the host, or set broker_enabled to false."
+  }
+
+  validation {
+    condition     = !var.broker_enabled || (var.broker_jobs != null && length(try(var.broker_jobs.families, [])) > 0 && alltrue([for family in try(var.broker_jobs.families, []) : contains(["train", "silver", "gold", "features", "drift"], family)]))
+    error_message = "Name at least one job family and only from train, silver, gold, features and drift."
+  }
+}
+
 variable "data_mount_path" {
   description = "Foundation output: absolute path where the host mounts the data volume. Every stateful container stores its data below it."
   type        = string

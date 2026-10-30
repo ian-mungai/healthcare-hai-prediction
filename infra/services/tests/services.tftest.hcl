@@ -1740,3 +1740,258 @@ run "mlflow_secrets_reach_no_file_argument_log_or_dump" {
     error_message = "The shared check follows the secrets of the MLflow container and of the databases container."
   }
 }
+
+run "broker_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      !contains(keys(aws_ecs_service.service), "broker")
+      && length(aws_ecs_service.service) == 8
+      && !contains(output.parameter_names_used, var.broker_token_name)
+      && !strcontains(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].command[2], "broker")
+      && !strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "broker")
+      && !contains(keys(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].linuxParameters), "tmpfs")
+      && !contains(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].secrets[*].name, "BROKER_TOKEN")
+    )
+    error_message = "The broker adds no service, no secret, no scheduler setting and no host folder until broker_enabled is true."
+  }
+}
+
+run "broker_off_needs_no_inputs" {
+  command = plan
+
+  variables {
+    broker_task_role_arn = null
+    broker_jobs          = null
+  }
+
+  assert {
+    condition     = length(aws_ecs_service.service) == 8
+    error_message = "With the broker off the stack needs no broker role and no job settings."
+  }
+}
+
+run "broker_service_shape" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train", "silver"]
+    }
+  }
+
+  assert {
+    condition = (
+      contains(keys(aws_ecs_service.service), "broker")
+      && length(aws_ecs_service.service) == 9
+      && aws_ecs_task_definition.service["broker"].task_role_arn == var.broker_task_role_arn
+      && aws_ecs_task_definition.service["broker"].network_mode == "host"
+      && length(jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)) == 1
+    )
+    error_message = "The broker is one more host service with its own task role."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].secrets == [
+        { name = "BROKER_TOKEN", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/broker_token" }
+      ]
+      && contains(output.parameter_names_used, "/healthcare_hai_prediction/broker_token")
+      && !contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : item.name], "BROKER_TOKEN")
+    )
+    error_message = "The broker token reaches the container only as a Parameter Store secret, never as an environment value."
+  }
+
+  assert {
+    condition = (
+      alltrue([
+        for expected in [
+          "BROKER_FAMILIES=train,silver",
+          "BROKER_FAMILY_PREFIX=example_project_dev_job_",
+          "BROKER_CLUSTER=example-project-dev",
+          "BROKER_PORT=18790",
+          "BROKER_POLARIS_URI=http://10.0.1.20:8181/api/catalog",
+          "BROKER_MLFLOW_URI=http://10.0.1.20:5100",
+          "BROKER_SUBNETS=subnet-0example1",
+          "BROKER_SECURITY_GROUPS=sg-0example1",
+        ] : contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : "${item.name}=${item.value}"], expected)
+      ])
+      && jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].entryPoint == ["python", "-m", "scripts.orchestration.ecs_broker"]
+      && jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].readonlyRootFilesystem == true
+    )
+    error_message = "The broker names its cluster, job definition prefix, families, subnet, security group and host addresses, and runs the broker module with a read-only root file system."
+  }
+
+  assert {
+    condition = (
+      toset([for volume in aws_ecs_task_definition.service["broker"].volume : "${volume.name}=${volume.host_path}"]) == toset(["code_repo=/mnt/example-data/repo", "broker_state=/mnt/example-data/broker"])
+      && alltrue([for mount in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].mountPoints : mount.readOnly if mount.sourceVolume == "code_repo"])
+    )
+    error_message = "The broker reads the code checkout read-only and keeps its ledger on the data volume."
+  }
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].secrets[*].name, "BROKER_TOKEN")
+      && jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].linuxParameters.tmpfs[0].containerPath == "/opt/hai/broker"
+      && strcontains(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].command[2], "/opt/hai/broker/client.json")
+      && strcontains(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].command[2], "http://127.0.0.1:18790")
+      && strcontains(jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions)[0].command[2], "/opt/hai/broker/broker_token")
+    )
+    error_message = "The scheduler gets the token and writes the client settings the unchanged DAG client reads into a memory-backed folder."
+  }
+
+  assert {
+    condition     = strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "/host/broker")
+    error_message = "Host preparation creates the broker state folder."
+  }
+}
+
+run "broker_without_role_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled = true
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train"]
+    }
+  }
+
+  expect_failures = [var.broker_task_role_arn]
+}
+
+run "broker_with_shared_role_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train"]
+    }
+  }
+
+  expect_failures = [var.broker_task_role_arn]
+}
+
+run "broker_without_job_settings_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+  }
+
+  expect_failures = [var.broker_jobs]
+}
+
+run "broker_with_public_host_address_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "203.0.113.20"
+      families          = ["train"]
+    }
+  }
+
+  expect_failures = [var.broker_jobs]
+}
+
+run "broker_with_unknown_family_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train", "write_gold"]
+    }
+  }
+
+  expect_failures = [var.broker_jobs]
+}
+
+run "broker_token_name_under_the_aws_prefix_is_refused" {
+  command = plan
+
+  variables {
+    broker_token_name = "/aws/broker_token"
+  }
+
+  expect_failures = [var.broker_token_name]
+}
+
+run "broker_definitions_for_review" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train"]
+    }
+  }
+}
+
+run "broker_secrets_reach_no_argument_log_or_dump" {
+  command = plan
+
+  module {
+    source = "./tests/flow"
+  }
+
+  variables {
+    tasks       = run.broker_definitions_for_review.task_definition_settings
+    definitions = run.broker_definitions_for_review.container_definitions
+  }
+
+  # The unchanged DAG client reads the token from a file, so the scheduler writes it into its private memory-backed folder. The shared check must report that
+  # write and no other: nothing in the broker container, and no argument, log line or environment dump anywhere.
+  assert {
+    condition = (
+      length(output.violations) > 0
+      && alltrue([for line in output.violations : startswith(line, "airflow_scheduler/airflow_scheduler: printf ") && strcontains(line, "> /opt/hai/broker/")])
+    )
+    error_message = "Only the scheduler's write of the client files into /opt/hai/broker may reach a file. No other line may let the broker token out."
+  }
+
+  assert {
+    condition     = contains(output.containers_checked, "broker/broker") && contains(output.containers_checked, "airflow_scheduler/airflow_scheduler")
+    error_message = "The shared check follows the token in the broker container and in the scheduler."
+  }
+}
