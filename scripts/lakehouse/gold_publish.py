@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from scripts.lakehouse import glue_mirror
 from scripts.lakehouse.gold_publish_record import IDENT_MAX, RESULT_NAME, RUN_ID, SHA256, PublishError, accept_consumer, read_record, sha256_bytes
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -617,7 +618,7 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
         if any(existing[key] != value for key, value in identity.items()):
             raise PublishError("this run is committed with a different identity, predecessor hash or snapshot set")
         sha = restore_receipt(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
-        return {"step": "commit", "already_committed": True, "tables": len(snapshot_set), "record_sha256": sha}
+        return {"step": "commit", "already_committed": True, "tables": len(snapshot_set), "record_sha256": sha, "mirror": mirror_after_commit(ctx)}
     heads = {name: main_head(ctx, name) for name in snapshot_set}
     for name, candidate in snapshot_set.items():
         base = candidates["tables"][name]["base_snapshot_id"]
@@ -652,7 +653,35 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
     ctx.spark.sql(MERGE_RUN.format(table=ctx.fq(ctx.plan.runs_table), view=runs_view(ctx, row)))
     ctx.faults.hit("commit:after_publish_runs")
     sha = write_record(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
-    return {"step": "commit", "already_committed": False, "tables": len(snapshot_set), "record_sha256": sha}
+    return {"step": "commit", "already_committed": False, "tables": len(snapshot_set), "record_sha256": sha, "mirror": mirror_after_commit(ctx)}
+
+
+def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, config: Any = None) -> dict[str, Any]:
+    """Register the committed tables that the Athena mirror config lists in Glue. The publish is already committed, so this never raises and never undoes it.
+
+    The report goes to ``mirror.json`` in the publish folder, to standard error when it failed, and into the step's JSON line. Skipped runs write nothing.
+    """
+    try:
+        config = config or glue_mirror.load_config()
+        wanted, reason = glue_mirror.tables_to_mirror(config, ctx.plan.namespaces["real"], ctx.mode, list(ctx.plan.tables))
+        if not wanted:
+            return {"status": "skipped", "reason": reason, "tables": {}}
+        if source is None:
+            source = glue_mirror.SparkSource(ctx.spark, CATALOG, ctx.namespace)
+        if glue is None:
+            import boto3
+
+            glue = boto3.Session(region_name=os.environ["AWS_REGION"]).client("glue")
+        report = glue_mirror.mirror(config, ctx.plan.namespaces["real"], ctx.mode, list(ctx.plan.tables), source, glue)
+    except Exception as error:
+        report = {"status": "failed", "reason": glue_mirror.explain(error), "tables": {}}
+    try:
+        write_record(ctx.path("mirror.json"), {"schema": SCHEMA, "run_id": ctx.run_id, **report})
+    except OSError as error:
+        report["record"] = f"mirror.json was not written: {error.__class__.__name__}"
+    if report["status"] == "failed":
+        sys.stderr.write(f"gold publish: the Glue mirror FAILED and the publish stays committed: {report['reason']}. Rerun this step to retry the mirror.\n")
+    return report
 
 
 def published_head(ctx: Context) -> dict[str, Any] | None:
