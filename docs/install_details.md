@@ -1,7 +1,7 @@
 ---
 title: Install Details
 description: Resource limits, pinned tools, the native installer and the manual setup steps behind the README's Install.
-last_updated: 2026-10-22
+last_updated: 2026-10-29
 ---
 
 # Install Details
@@ -61,7 +61,10 @@ Dependencies are shared across development and production in `requirements.txt`;
 a requirement used only as a command carries `# tool: <use>` and one imported by
 name carries `# dynamic: <where>`, so the dependency check reads them correctly.
 Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
-publisher SHA-256 values are pinned in `config/quality_tools.json`. The markdownlint
+publisher SHA-256 values are pinned in `config/quality_tools.json`. The Python lint tools
+(import-linter, check-jsonschema) install into `.tools/` with `scripts.quality.install_lint_tools` from hash-pinned
+requirements; typos, zizmor, OSV-Scanner and the `trivy-config` hook's trivy come from Homebrew at the pinned versions
+(`docs/quality_checks.md`, Linters beside lint_sources). The markdownlint
 hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `npm ci`
 from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
 integrity hash; it needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and

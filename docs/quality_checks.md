@@ -1,7 +1,7 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 ---
 
 # Quality checks
@@ -489,6 +489,60 @@ The full run also tests the scanner on synthetic exports, including value-free r
 It writes `data/e2e/model_metadata/<UTC>_<pid>/report.json`. `--case <NAME>` runs one metadata case.
 `--checker` and `--hook-config` select another checker or hook configuration, for example a mutant with one rule removed.
 `scan-personal-data --output-directory <folder>` runs only the scanner fixtures through the E2E module.
+
+## Linters beside lint_sources
+
+Seven more linters run through `.venv/bin/python -m scripts.quality.lint_tools <CHECK>`. Each check verifies that its tool runs at the version pinned in
+`config/quality_tools.json` before it scans and fails visibly if the tool is missing or differs; nothing installs or updates a tool for you. A finding prints as
+`path:line: <CHECK>: problem`. The single exception list is `.linter_allowlist`, one line per exception as `<CHECK> <key> -- <reason>`. The key is `path:rule`
+(`path:package==version` for OSV-Scanner) and may use `*`. An entry that has no reason, an unknown check name or no matching finding is itself a
+finding, so the list cannot rot.
+
+| Hook (check) | Tool and pin | What it blocks | Configuration | Stage |
+| --- | --- | --- | --- | --- |
+| `tflint` | TFLint 0.65.0 with the AWS ruleset 0.50.0 | Terraform that breaks the recommended preset or an AWS rule, in every folder that holds a tracked `.tf` file | `.tflint.hcl` | commit |
+| `trivy-config` | trivy 0.76.1 (Homebrew) | misconfigurations in `infra/`, from trivy's embedded checks (no network); `*.tfvars`, `*.tfvars.json`, `terraform.tfstate*` and `.terraform` are skipped by name and never read | skip flags in `lint_tools.py` | commit |
+| `osv-scanner` | OSV-Scanner 2.7.0 (Homebrew) | known vulnerabilities in the tracked requirements files and `services/orchestration/constraints-3.12.txt` | `.linter_allowlist` | pre-push |
+| `zizmor` | zizmor 1.31.1 (Homebrew) | workflow security findings, offline audits only | `.linter_allowlist` | commit |
+| `import-linter` | import-linter 2.15 in `.tools/import-linter` | an import that breaks a boundary in `.importlinter` | `.importlinter` | commit |
+| `typos` | typos 1.51.1 (typos-cli, Homebrew) | common misspellings in staged text files | `_typos.toml` | commit |
+| `check-jsonschema` | check-jsonschema 0.39.0 in `.tools/check-jsonschema` | a workflow, action or mapped JSON contract that does not satisfy its schema; a schema that breaks its metaschema | `config/quality/json_schemas.json` | commit |
+
+- **TFLint:** the existing `terraform-unused` hook keeps running only the unused-declarations rule with the cleanup allowlist. The `tflint` hook runs the full
+  `.tflint.hcl` configuration instead. The AWS ruleset is installed once with `tflint --init`; the check refuses to run when version 0.50.0 is absent from the
+  plugin folder (`TFLINT_PLUGIN_DIR`, default `~/.tflint.d/plugins`). The release archive hash in `config/quality_tools.json` is 5a71c634...ac71 for macOS arm64.
+  TFLint 0.65.0 is installed in `.tools/bin`, but `.tools/receipts/tflint.json` still records 0.64.0 until `scripts/quality/install_tools.py --tool tflint` is run
+  again with the pinned archive.
+- **trivy config:** `static_checks.py` uses the release-binary trivy in `.tools/bin` (pin `trivy`, 0.74.0). The `trivy-config` hook uses the Homebrew binary (pin
+  `trivy-config`, 0.76.1). Both read the same embedded checks, so bring the two pins to one version when the release-binary pin is next updated.
+- **OSV-Scanner:** it queries osv.dev, so it needs the network and runs at the pre-push stage:
+  `.venv/bin/pre-commit run osv-scanner --hook-stage pre-push --all-files`. The constraints file is scanned as a requirements file without dependency
+  resolution. Every pinned version with known vulnerabilities is allowlisted today with the reason that a pin change needs its own E2E and the owner's decision.
+  Remove an entry when the pin moves; the check then fails on any new vulnerability for that package.
+- **zizmor:** the only finding today is the style suggestion `self-repository` (write the local setup action as `$/.github/actions/setup`), allowlisted until
+  the workflow is next edited.
+- **import-linter:** `.importlinter` holds forbidden-import contracts for the boundaries that hold today: container services import no script or orchestration
+  code, the launcher imports no pipeline package, acquisition and infrastructure stay below the pipeline packages, review scripts import only the launcher and
+  training scripts import no acquisition, quality or service code. The `orchestration` runtime package imports no orchestration script, quality or review code.
+  No script package except training imports the orchestration scripts. Lakehouse, orchestration, acquisition and infrastructure import each other in both
+  directions today, so no contract covers those pairs. The training scripts import the orchestration runtime, the orchestration scripts, the lakehouse and the
+  infrastructure scripts. The runtime imports `scripts.training.step_records`. No contract covers those pairs either. A contract is added only after the code
+  satisfies it.
+- **typos:** `_typos.toml` excludes machine-written data (`config/`, `data_contracts/`, `dbt/seeds/`, the generated architecture page and the pip constraints) and
+  accepts a few domain terms everywhere (`hsa`, `ehr`, `froms`, `unparseable`). Other accepted words apply only to the named files; a type glob matches a file name, so
+  keep those names unique.
+- **check-jsonschema:** `config/quality/json_schemas.json` lists each schema with the tracked files that must satisfy it. A pattern that matches no tracked file is an
+  error. Its note names what is not mapped and why.
+
+Install the two Python tools with `.venv/bin/python -m scripts.quality.install_lint_tools` (hash-pinned requirements in `scripts/quality/lint_requirements/`, one
+environment per tool). Add `--check` to compare the installed environments with the pins without installing. The Homebrew tools install with `brew install <formula>`;
+the formula and executable are in `config/quality_tools.json`.
+
+All seven hooks are local only. The hosted runner installs tools from pins through `.github/actions/setup`. That action does not install these seven.
+The four Homebrew tools have no pinned download there. The two Python tools need `install_lint_tools.py` added to the action. The AWS ruleset needs
+`tflint --init` with the network. Until the action installs them, the hooks stay out of the manual stage that the hosted hooks job runs.
+`.venv/bin/python -m scripts.quality.run_lint_tools_e2e` runs the real hooks on a scratch copy of the working tree, once clean and once with a planted
+defect per tool. It writes `data/e2e/lint_tools/<UTC>/report.json`. Add `--offline` to skip the OSV-Scanner case.
 
 ## How the checks run
 
