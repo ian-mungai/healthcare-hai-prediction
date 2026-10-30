@@ -82,7 +82,7 @@ variable "enabled_definitions" {
       (var.jobs_enabled || length(var.enabled_definitions) == 0) &&
       length(setsubtract(var.enabled_definitions, toset(keys(local.all_definition_specs)))) == 0
     )
-    error_message = "Select only the five read or five writer definitions and enable jobs_enabled before selecting any definition."
+    error_message = "Select only the five read, five writer or one publisher definition and enable jobs_enabled before selecting any definition."
   }
 }
 
@@ -105,7 +105,7 @@ variable "images" {
 }
 
 variable "job_role_arns" {
-  description = "ARNs from the merged IAM job_roles output, keyed by execution, offline_task, seal_task, read_task or the five write_<layer>_task keys."
+  description = "ARNs from the merged IAM job_roles output, keyed by execution, offline_task, seal_task, read_task, publisher_task or the five write_<layer>_task keys."
   type        = map(string)
   default     = {}
   nullable    = false
@@ -113,7 +113,7 @@ variable "job_role_arns" {
   validation {
     condition = (
       alltrue([for name, arn in var.job_role_arns :
-        contains(concat(["execution", "offline_task", "seal_task", "read_task"], keys(local.writer_role_layers)), name) &&
+        contains(concat(["execution", "offline_task", "seal_task", "read_task", "publisher_task"], keys(local.writer_role_layers)), name) &&
         arn == "arn:aws:iam::${var.expected_account_id}:role/${var.project_name}_job_${name}_${var.environment}"
       ]) &&
       (length(var.enabled_definitions) == 0 || contains(keys(var.job_role_arns), "execution")) &&

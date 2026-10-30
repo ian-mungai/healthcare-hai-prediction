@@ -32,13 +32,20 @@ locals {
     spark_write_features = { class = "lakehouse_write", image = "spark", role = "write_features_task", layer = "features" }
     spark_write_bronze   = { class = "lakehouse_write", image = "spark", role = "write_bronze_task", layer = "bronze" }
   }
+  publisher_specs = {
+    publisher_fetch = { class = "publisher", image = "analytics", role = "publisher_task" }
+  }
   writer_role_layers   = { for spec in values(local.writer_specs) : spec.role => spec.layer }
-  all_definition_specs = merge(local.definition_specs, local.writer_specs)
+  all_definition_specs = merge(local.definition_specs, local.writer_specs, local.publisher_specs)
   selected_writers = {
     for name, spec in local.writer_specs : name => spec
     if var.jobs_enabled && contains(var.enabled_definitions, name)
   }
-  selected_definitions = merge(local.selected, local.selected_writers)
+  selected_publishers = {
+    for name, spec in local.publisher_specs : name => spec
+    if var.jobs_enabled && contains(var.enabled_definitions, name)
+  }
+  selected_definitions = merge(local.selected, local.selected_writers, local.selected_publishers)
   writer_parameters = {
     for role, names in var.writer_parameter_names : role => [
       { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${try(names[0], "invalid")}" },
@@ -73,12 +80,12 @@ locals {
       stopTimeout            = 90
       linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
-      environment = [
+      environment = concat([
         { name = "AWS_REGION", value = var.aws_region },
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },
         { name = "AWS_EC2_METADATA_DISABLED", value = "true" },
         { name = "DATA_BUCKET_NAME", value = var.data_bucket_name }
-      ]
+      ], spec.class == "publisher" ? [{ name = "HAI_CAPTURE_ROOT", value = "raw/" }] : [])
       secrets = spec.class == "lakehouse_write" ? lookup(local.writer_parameters, spec.role, []) : (spec.class == "lakehouse_read" ? local.reader_parameters : [])
       mountPoints = [
         { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
@@ -137,7 +144,7 @@ resource "aws_ecs_task_definition" "read" {
 }
 
 locals {
-  task_definitions                  = merge(aws_ecs_task_definition.read, aws_ecs_task_definition.writer)
+  task_definitions                  = merge(aws_ecs_task_definition.read, aws_ecs_task_definition.writer, aws_ecs_task_definition.publisher)
   task_attributes_assigned_at_apply = ["arn", "arn_without_revision", "id", "region", "revision", "tags_all"]
   task_settings = {
     for name, task in local.task_definitions : name => {

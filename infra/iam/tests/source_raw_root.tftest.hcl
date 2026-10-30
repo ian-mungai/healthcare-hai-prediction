@@ -159,3 +159,48 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
     error_message = "Publisher egress is HTTPS only, and the contract states that the host limit is enforced by the queue gate."
   }
 }
+
+run "publisher_role_and_network_are_exported_only_when_enabled" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(output.job_roles), "publisher_task") && output.publisher_network == null && toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
+    error_message = "By default no publisher role or network is exported and the private job network is unchanged."
+  }
+}
+
+run "publisher_role_and_network_export_for_the_jobs_root" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+  }
+
+  assert {
+    condition = (
+      output.job_roles["publisher_task"].name == "example_project_job_publisher_task_dev" &&
+      output.publisher_network.assign_public_ip == "ENABLED" &&
+      toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
+    )
+    error_message = "The jobs root must receive the publisher role and its own network group, and the private job groups must stay as they were."
+  }
+}
+
+run "publisher_logs_and_image_pull_come_from_the_execution_role" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_iam_role_policy.job_execution.policy, "log-group:example_project_jobs_dev:log-stream:*") &&
+      strcontains(aws_iam_role_policy.job_execution.policy, "repository/example_project_analytics_dev") &&
+      !strcontains(aws_iam_role_policy.job_publisher[0].policy, "logs:") &&
+      !strcontains(aws_iam_role_policy.job_publisher[0].policy, "ecr:") &&
+      !strcontains(aws_iam_role_policy.job_publisher[0].policy, "ssm:")
+    )
+    error_message = "Logs and image pull belong to the shared execution role. The publisher task role must hold none of them."
+  }
+}

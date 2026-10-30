@@ -65,3 +65,17 @@ output "writer_dispatch_contracts" {
     }
   }
 }
+
+output "publisher_dispatch_contracts" {
+  description = "Closed run 3 publisher placement. The class has its own network group and a public IP because the network has no NAT. Dispatch must enforce this contract and the approved hosts file before RunTask."
+  value = {
+    for name, spec in local.selected_publishers : name => {
+      job_class          = "publisher"
+      task_role_key      = spec.role
+      capacity_providers = ["FARGATE"]
+      network            = "publisher"
+      assign_public_ip   = "ENABLED"
+      capture_root       = "raw/"
+    }
+  }
+}

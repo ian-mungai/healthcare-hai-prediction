@@ -34,6 +34,15 @@ resource "aws_vpc_security_group_egress_rule" "job_publisher_https" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
+output "publisher_network" {
+  description = "The run 3 publisher class network for the jobs root. It needs a public IP because the platform has no NAT. Null until the class is enabled."
+  value = var.publisher_job_enabled ? {
+    subnet_id         = aws_subnet.public[0].id
+    security_group_id = aws_security_group.job_publisher[0].id
+    assign_public_ip  = "ENABLED"
+  } : null
+}
+
 resource "aws_iam_role" "job_publisher" {
   count = var.publisher_job_enabled ? 1 : 0
 
