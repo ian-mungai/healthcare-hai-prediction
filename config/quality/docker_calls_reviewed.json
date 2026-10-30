@@ -1427,6 +1427,144 @@
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "Report.command runs sys.executable -m <module> --check with its arguments; every caller passes the literal module scripts.training.guards or scripts.training.locks, and the check cannot follow the module because the list is built from the parameter"
+    },
+    {
+      "path": "scripts/quality/install_lint_tools.py",
+      "line": 56,
+      "code_sha256": "62480e63ed1f0b78c7260c0d225b456c363e92252561765fd3d7f8edcf21e73a",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "1828309298be6f911328c43958dc391d960af6264ea4413cef21917c831d0316",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/install_sqlfluff.py": "sha256:27073843f1c14f6ce42f8292e485d79ecac342fe13d4236a89059b89620734d4"
+      },
+      "reason": "creates a virtual environment for a pinned lint tool with the interpreter the running environment was made from"
+    },
+    {
+      "path": "scripts/quality/install_lint_tools.py",
+      "line": 43,
+      "code_sha256": "65d96f1f2077158032cd264f1555ce9c2a58a6cd1e124572f4839b241a021453",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "1828309298be6f911328c43958dc391d960af6264ea4413cef21917c831d0316",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/install_sqlfluff.py": "sha256:27073843f1c14f6ce42f8292e485d79ecac342fe13d4236a89059b89620734d4"
+      },
+      "reason": "runs the pinned lint tool named in config/quality_tools.json with --version to check its version"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 130,
+      "code_sha256": "3c1db58758fa280711417fd7eea03b1ee88c5a1ea273e2052fee5273122552ab",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned trivy config scan over infra/ with its skip flags and a throwaway cache"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 205,
+      "code_sha256": "478caea49b5dd93154bf67735409e484acfec34b75d8ecf9b33f87afc7d307f0",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned typos with _typos.toml over the given files"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 228,
+      "code_sha256": "831f64d116d631a36a334c8f75c6233ccefce5da6a9f9c687e17968e1590a9d4",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned check-jsonschema over mapped files"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 109,
+      "code_sha256": "9f88f77491fde0080d2298e91d17d0b5340fbece7f221e626d6d9929b1afcadc",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned .tools/bin/tflint with the project's .tflint.hcl over one Terraform folder"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 196,
+      "code_sha256": "a1100cb9424da73e39c705ef806304231e3beaba326329e2e7bfaf7e74c49007",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned import-linter with .importlinter"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 59,
+      "code_sha256": "a4736163dd24a98efbc0a8995774f6408df81be0bd71fe2e6d41c1476095bf44",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned lint tool named in config/quality_tools.json with --version to check its version"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 176,
+      "code_sha256": "a4f1d6bc19e5785326a616a20679827641615f37b9fe86b9a8813006cf2eea08",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned zizmor in offline mode over .github/workflows"
+    },
+    {
+      "path": "scripts/quality/lint_tools.py",
+      "line": 153,
+      "code_sha256": "fb77582ae6d93075c1388387ffe73ec7cbd55170287f2d665c472e1b3b2112d0",
+      "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
+      "occurrences": 1,
+      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
+        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+      },
+      "reason": "runs the pinned OSV-Scanner over the tracked requirements files"
     }
   ]
 }

@@ -20,6 +20,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m scripts.quality.install_markdownlint
 .venv/bin/python -m scripts.quality.install_sqlfluff
 .venv/bin/python -m scripts.quality.install_dvc
+.venv/bin/python -m scripts.quality.install_lint_tools
 .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
 PRE_COMMIT_HOME="$PWD/.tools/pre_commit_cache" .venv/bin/python -m pre_commit install
 cp .env.example .env

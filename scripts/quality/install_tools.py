@@ -122,7 +122,8 @@ def install(manifest: Path, destination: Path, archives: Path | None, tools: lis
     config = json.loads(manifest.read_text(encoding="utf-8"))
     native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb"}
     names = set(config["tools"])
-    if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - {"yamllint"}:
+    other_installers = {name for name, tool in config["tools"].items() if "installer" in tool}
+    if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - other_installers:
         raise ValueError("Unsupported tool manifest")
     selected_tools = names & native if tools is None else set(tools)
     if not selected_tools or not selected_tools <= names & native:
