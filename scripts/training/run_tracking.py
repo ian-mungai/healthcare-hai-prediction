@@ -162,3 +162,24 @@ def log_type(store: TrackingStore, plan: TypePlan, run: str) -> str:
 def log_all(store: TrackingStore, plans: Sequence[TypePlan], run: str) -> dict[str, str]:
     """Log every type and return the parent run ID of each."""
     return {plan.hai_type: log_type(store, plan, run) for plan in plans}
+
+
+def log_child(store: TrackingStore, experiment: str, parent_id: str, spec: RunSpec, run: str, bundle_sha256: str) -> str:
+    """Log one more child run of a finished parent, once: a complete run of the same key is kept, an incomplete one is deleted and logged again."""
+    found = store.get_experiment_by_name(experiment)
+    if found is None:
+        raise TrackingError("mlflow_experiment_missing", f"the experiment {experiment} does not exist")
+    experiment_id = str(found.experiment_id)
+    existing = list(store.search_runs([experiment_id], f"tags.{RUN_TAG} = '{run}' and tags.{STEP_TAG} = '{spec.step_key}'", max_results=1000))
+    complete = [item for item in existing if item.data.tags.get(COMPLETE_TAG) == bundle_sha256]
+    if len(complete) > 1:
+        raise TrackingError("mlflow_duplicate_runs", f"{len(complete)} complete MLflow runs carry the key {spec.step_key} of the training run {run}")
+    if complete:
+        return str(complete[0].info.run_id)
+    for item in existing:
+        store.delete_run(str(item.info.run_id))
+    child_id = str(store.create_run(experiment_id, tags={**spec.tags, PARENT_LINK: parent_id}, run_name=spec.step_key).info.run_id)
+    populate(store, child_id, spec)
+    store.set_terminated(child_id, "FINISHED")
+    store.set_tag(child_id, COMPLETE_TAG, bundle_sha256)
+    return child_id

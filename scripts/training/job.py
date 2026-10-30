@@ -26,7 +26,14 @@ MODULES: dict[str, tuple[str, ...]] = {
     "mediation": ("scripts.training.mediation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "hac_validate": ("scripts.training.hac_validation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "log_run": ("scripts.training.run_tracking", "scripts.training.dvc_baseline", "scripts.training.job_actions", "scripts.training.job_inputs"),
-    "promotion_check": (),
+    "promotion_check": (
+        "scripts.training.promotion_check",
+        "scripts.training.promotion",
+        "scripts.training.registry",
+        "scripts.training.run_tracking",
+        "scripts.training.job_actions",
+        "scripts.training.job_inputs",
+    ),
     "promote": (),
     "smoke": (),
 }
@@ -126,11 +133,29 @@ def action_modules() -> tuple[ModuleType, ...]:
     import scripts.training.job_inputs as job_inputs
     import scripts.training.mediation as mediation
     import scripts.training.models.suite as suite
+    import scripts.training.promotion as promotion
+    import scripts.training.promotion_check as promotion_check
+    import scripts.training.registry as registry
     import scripts.training.run_tracking as run_tracking
     import scripts.training.step_records as step_records
     import scripts.training.targets as targets
 
-    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation, job_actions, job_inputs, run_tracking, bundle)
+    return (
+        guards,
+        targets,
+        step_records,
+        dvc_baseline,
+        suite,
+        mediation,
+        hac_validation,
+        job_actions,
+        job_inputs,
+        run_tracking,
+        bundle,
+        promotion,
+        promotion_check,
+        registry,
+    )
 
 
 def run_smoke(context: Context) -> None:
@@ -175,6 +200,13 @@ def run_version_extract(context: Context) -> None:
     job_actions.run_version_extract(context, read_record(context))
 
 
+def run_promotion_check(context: Context) -> None:
+    """Register each candidate, score it against the champion and record the verdict without changing production."""
+    from scripts.training import promotion_check
+
+    promotion_check.run(context, read_record(context))
+
+
 def run_log_run(context: Context) -> None:
     """Log one MLflow run per requested HAI type from the mounted outputs of the earlier steps."""
     from scripts.training import job_actions
@@ -189,6 +221,7 @@ HANDLERS: dict[str, Callable[[Context], None]] = {
     "mediation": run_mediation,
     "hac_validate": run_hac_validate,
     "log_run": run_log_run,
+    "promotion_check": run_promotion_check,
     "smoke": run_smoke,
 }
 

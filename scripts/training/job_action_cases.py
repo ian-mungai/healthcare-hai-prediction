@@ -7,7 +7,6 @@ import copy
 import hashlib
 import json
 import os
-import pickle
 import re
 import shutil
 import tempfile
@@ -20,10 +19,10 @@ from typing import Any
 from unittest import mock
 
 from scripts.features.training_extract import canonical, content_sha256
-from scripts.training import bundle, dvc_baseline, guards, hac_validation, job, job_inputs, mediation, run_tracking
+from scripts.training import bundle, dvc_baseline, guards, hac_validation, job, job_inputs, mediation, promotion, promotion_cases, promotion_check, run_tracking
 from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
-from scripts.training.lane_b_cases import RUN, require
+from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
@@ -32,6 +31,7 @@ from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
 GUARD = {"analysis_plan_sha256": "7" * 64, "targets_sha256": "8" * 64, "training_config_sha256": "9" * 64}
+SAVED: dict[str, Any] = {}
 CHILDREN = {*SLOTS, "rq1_joint", "rq3_mediation", "rq4_nested", "rq5_moran", "rq6_hausman", "hac_validation"}
 HAI_TYPE = "HAI_1"
 BUNDLE = f"bundles/bundle_{HAI_TYPE}"
@@ -146,6 +146,7 @@ class Fixture:
         self.code_root()
         self.late_mediator = late_mediator
         self.tracking = FileTracking(folder / "tracking")
+        self.champion: Predictor | None = None
         self.write_extract(mediator=mediator, hac=hac)
 
     def code_root(self) -> None:
@@ -156,9 +157,13 @@ class Fixture:
             "dbt/seeds/gold/hai_outcome_measures_bridge.csv",
             "data_contracts/training/extract_manifest.schema.json",
             "data_contracts/training/model_contract.json",
+            "config/training/census_regions.json",
         ):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REAL / name, self.root / name)
+        rules = json.loads((REAL / "config/training/promotion.json").read_text())
+        rules["bootstrap"]["draws"] = 300
+        (self.root / "config/training/promotion.json").write_text(json.dumps(rules) + "\n")
         config = copy.deepcopy(dict(request().config))
         config["slots"]["m2_elastic_net"]["forced_references"] = [REFERENCES[1]]
         (self.root / "config/training/models.json").write_text(json.dumps(config) + "\n")
@@ -284,6 +289,12 @@ def standins(fixture: Fixture) -> Iterator[None]:
         yield
 
 
+class NotFound(Exception):
+    """The error MLflow raises for a missing entity, with its error code."""
+
+    error_code = "RESOURCE_DOES_NOT_EXIST"
+
+
 class FileTracking:
     """A stand-in for the MLflow client: the calls the log_run action makes, with MLflow's rules for parameters, tags and run lookup."""
 
@@ -293,6 +304,8 @@ class FileTracking:
         self.runs: dict[str, dict[str, Any]] = {}
         self.calls: list[str] = []
         self.fail_on: str | None = None
+        self.models: dict[str, dict[str, Any]] = {}
+        self.location = "mlflow-artifacts:/0"
 
     def enter(self, call: str) -> None:
         """Record a call and fail it when the case asks for that failure."""
@@ -302,7 +315,8 @@ class FileTracking:
 
     def get_experiment_by_name(self, name: str) -> SimpleNamespace | None:
         self.enter("get_experiment_by_name")
-        return SimpleNamespace(experiment_id=self.experiments[name]) if name in self.experiments else None
+        found = SimpleNamespace(experiment_id=self.experiments[name], artifact_location=self.location) if name in self.experiments else None
+        return found
 
     def create_experiment(self, name: str) -> str:
         self.enter("create_experiment")
@@ -362,6 +376,56 @@ class FileTracking:
         self.enter("delete_run")
         self.runs[run_id]["deleted"] = True
 
+    def get_registered_model(self, name: str) -> SimpleNamespace:
+        self.enter("get_registered_model")
+        if name not in self.models:
+            raise NotFound(name)
+        return SimpleNamespace(name=name, tags=dict(self.models[name]["tags"]))
+
+    def create_registered_model(self, name: str) -> SimpleNamespace:
+        self.enter("create_registered_model")
+        self.models[name] = {"tags": {}, "versions": [], "aliases": {}}
+        return self.get_registered_model(name)
+
+    def search_model_versions(self, filter_string: str = "") -> list[SimpleNamespace]:
+        self.enter("search_model_versions")
+        name = re.findall(r"name='([^']*)'", filter_string)[0]
+        return [self.version_of(name, item) for item in self.models.get(name, {"versions": []})["versions"]]
+
+    def version_of(self, name: str, item: dict[str, Any]) -> SimpleNamespace:
+        return SimpleNamespace(name=name, version=item["version"], run_id=item["run_id"], tags=dict(item["tags"]))
+
+    def create_model_version(self, name: str, source: str, run_id: str | None = None, tags: dict[str, str] | None = None) -> SimpleNamespace:
+        self.enter("create_model_version")
+        versions = self.models[name]["versions"]
+        versions.append({"version": str(len(versions) + 1), "run_id": run_id, "source": source, "tags": dict(tags or {})})
+        return self.version_of(name, versions[-1])
+
+    def find_version(self, name: str, version: str) -> dict[str, Any]:
+        return next(item for item in self.models[name]["versions"] if item["version"] == version)
+
+    def set_model_version_tag(self, name: str, version: str, key: str, value: str) -> None:
+        self.enter("set_model_version_tag")
+        self.find_version(name, version)["tags"][key] = value
+
+    def set_registered_model_alias(self, name: str, alias: str, version: str) -> None:
+        self.enter("set_registered_model_alias")
+        self.models[name]["aliases"][alias] = version
+
+    def get_model_version_by_alias(self, name: str, alias: str) -> SimpleNamespace:
+        self.enter("get_model_version_by_alias")
+        if alias not in self.models.get(name, {"aliases": {}})["aliases"]:
+            raise NotFound(alias)
+        return self.version_of(name, self.find_version(name, self.models[name]["aliases"][alias]))
+
+    def set_registered_model_tag(self, name: str, key: str, value: str) -> None:
+        self.enter("set_registered_model_tag")
+        self.models[name]["tags"][key] = value
+
+    def delete_registered_model_tag(self, name: str, key: str) -> None:
+        self.enter("delete_registered_model_tag")
+        self.models[name]["tags"].pop(key, None)
+
     def active(self) -> dict[str, dict[str, Any]]:
         """Return the runs that are not deleted."""
         return {run_id: run for run_id, run in self.runs.items() if not run["deleted"]}
@@ -409,9 +473,10 @@ def stage_baseline(fixture: Fixture) -> dict[str, Any]:
 
 
 def save_model_standin(pipeline: Any, folder: Path, features: Any, contract: Any, code_root: Path) -> None:
-    """Stand in for mlflow.sklearn.save_model: write the pickled pipeline and the bare feature columns the signature would list."""
+    """Stand in for mlflow.sklearn.save_model: write a token for the pipeline and the bare feature columns the signature would list."""
     folder.mkdir(parents=True)
-    (folder / "model.pkl").write_bytes(pickle.dumps(pipeline, protocol=4))
+    SAVED[str(id(pipeline))] = pipeline
+    (folder / "model.bin").write_text(str(id(pipeline)))
     (folder / "MLmodel").write_text(json.dumps({"columns": [feature.name for feature in features], "format": contract["serialization"]["format"]}) + "\n")
 
 
@@ -821,6 +886,271 @@ def version_cases(cases: Any, folder: Path) -> None:
     cases.check("job_version_extract_baseline_loads_from_logged_run", round_trip)
 
 
+class Predictor:
+    """A stand-in champion: it predicts the label plus a fixed offset, or a constant when no offset is given."""
+
+    def __init__(self, label: str, offset: float | None = None, constant: float | None = None) -> None:
+        self.label, self.offset, self.constant = label, offset, constant
+
+    def predict(self, rows: Any) -> Any:
+        return [self.constant if self.constant is not None else row[self.label] + (self.offset or 0.0) for row in rows]
+
+
+def seed_champion(fixture: Fixture, *, newest_window: str = "2023", columns: tuple[str, ...] = ("process", "cmi", "extra")) -> str:
+    """Put a production version of the type in the registry stand-in, with the source run and feature list the check reads."""
+    store = fixture.tracking
+    name = f"hai_model_{HAI_TYPE}"
+    store.models[name] = {"tags": {}, "versions": [], "aliases": {}}
+    run = store.create_run("0", tags={"newest_window": newest_window, "run_id": "20250101T000000Z-aaaaaaaa", "step_key": "parent"}).info.run_id
+    target = store.root / run / "bundle"
+    target.mkdir(parents=True)
+    (target / "feature_list.json").write_text(json.dumps({"slot": "m1_ols", "references": [], "columns": list(columns)}) + "\n")
+    store.create_model_version(name, f"runs:/{run}/model", run_id=run, tags={"bundle_sha256": "e" * 64})
+    store.set_registered_model_alias(name, "production", "1")
+    store.calls.clear()
+    return run
+
+
+def promoted(folder: Path, champion: Predictor | None | str = None, **options: Any) -> Fixture:
+    """Return a fixture with every earlier step complete, log_run included, and the champion the case names registered."""
+    fixture = staged(folder, **options)
+    (fixture.folder / "in/log_run").mkdir(exist_ok=True)
+    code, _, error = run_action(fixture, "log_run", fixture.folder / "in/log_run")
+    require(code == 0, f"log_run failed while staging: {error}")
+    if champion is not None:
+        seed_champion(fixture)
+    fixture.champion = champion if isinstance(champion, Predictor) else None
+    fixture.tracking.calls.clear()
+    return fixture
+
+
+def run_promotion(fixture: Fixture, **patches: Any) -> tuple[int, str, str]:
+    """Run promotion_check with the model loader replaced by stand-ins: the saved candidate and, when seeded, the champion."""
+    label = LABEL
+
+    def loader(uri: str) -> Any:
+        if uri.startswith("models:/"):
+            if fixture.champion is None:
+                raise OSError("synthetic champion cannot be loaded")
+            return fixture.champion
+        return SAVED[(Path(uri) / "model.bin").read_text()]
+
+    del label
+    with mock.patch.object(promotion_check, "load_pipeline", side_effect=loader):
+        return run_action(fixture, "promotion_check")
+
+
+def promotion_check_cases(cases: Any, folder: Path) -> None:
+    """Register the candidate, compare it with the champion and record the verdict, without ever moving production."""
+    name = f"hai_model_{HAI_TYPE}"
+
+    def first_version() -> None:
+        fixture = promoted(folder / "first")
+        code, out, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        store = fixture.tracking
+        version = store.models[name]["versions"][0]
+        require(version["version"] == "1" and version["tags"]["promotion_verdict"] == "no_champion", f"version: {version}")
+        require(store.models[name]["aliases"] == {}, f"a first version must not set an alias: {store.models[name]['aliases']}")
+        require(
+            set(version["tags"])
+            >= {
+                "hai_type",
+                "target_control",
+                "feature_schema_sha256",
+                "feature_list_sha256",
+                "source_run_id",
+                "bundle_sha256",
+                "create_identity",
+                "comparison_sha256",
+            },
+            f"tags: {sorted(version['tags'])}",
+        )
+        require(store.models[name]["tags"] == {}, "the pending marker was left behind")
+        document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
+        require(
+            document["champion_version"] is None and document["challenger_version"] == "1" and document["verdict"]["verdict"] == "no_champion",
+            f"comparison: {document}",
+        )
+        require(
+            version["tags"]["comparison_sha256"] == hashlib.sha256((fixture.out / f"comparison_{HAI_TYPE}.json").read_bytes()).hexdigest(),
+            "the comparison hash tag differs",
+        )
+        table = read_parquet(fixture.out / f"comparison_{HAI_TYPE}.parquet")
+        require(set(table[0]) == set(promotion.COLUMNS) and all(row["champion_prediction"] is None for row in table), f"comparison rows: {sorted(table[0])}")
+        promotion_run = [run for run in store.active().values() if run["tags"].get("step_key") == "promotion"]
+        require(
+            len(promotion_run) == 1 and promotion_run[0]["status"] == "FINISHED" and "bundle_sha256" in promotion_run[0]["tags"],
+            "the promotion child run is missing or incomplete",
+        )
+        require(promotion_run[0]["tags"]["mlflow.parentRunId"] == next(iter(store.parents())), "the promotion run is not a child of the parent run")
+        verify_done(fixture.out, "promotion_check", DIGEST)
+
+    def better_challenger() -> None:
+        fixture = promoted(folder / "better", Predictor(LABEL, constant=3.0))
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        store = fixture.tracking
+        require(store.models[name]["aliases"] == {"production": "1", "challenger": "2"}, f"aliases: {store.models[name]['aliases']}")
+        require(store.models[name]["versions"][1]["tags"]["promotion_verdict"] == "pass", f"tags: {store.models[name]['versions'][1]['tags']}")
+        document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
+        require(document["champion_version"] == "1" and document["challenger_version"] == "2", f"comparison: {document}")
+
+    def worse_challenger() -> None:
+        fixture = promoted(folder / "worse", Predictor(LABEL, offset=0.01))
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        store = fixture.tracking
+        verdict = store.models[name]["versions"][1]["tags"]["promotion_verdict"]
+        require(verdict.startswith("fail:") and "rmse_improvement" in verdict, f"verdict tag: {verdict}")
+        require(store.models[name]["aliases"] == {"production": "1"}, f"a failed challenger got an alias: {store.models[name]['aliases']}")
+
+    def production_untouched() -> None:
+        fixture = promoted(folder / "production", Predictor(LABEL, constant=3.0))
+        require(run_promotion(fixture)[0] == 0, "promotion_check failed")
+        require("set_registered_model_alias" in fixture.tracking.calls, "the case did not reach the alias step")
+        require(fixture.tracking.models[name]["aliases"]["production"] == "1", "the production alias moved")
+
+    def holdout_leak() -> None:
+        fixture = promoted(folder / "leak", Predictor(LABEL, constant=3.0))
+        for run in fixture.tracking.runs.values():
+            if run["tags"].get("newest_window") == "2023" and run["tags"].get("step_key") == "parent" and run["tags"]["run_id"].startswith("2025"):
+                run["tags"]["newest_window"] = "2024"
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "holdout_leak" and listing(fixture.out) == [], f"{code} {error}")
+
+    def champion_columns() -> None:
+        fixture = promoted(folder / "columns", Predictor(LABEL, constant=3.0))
+        feature_list = next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
+        feature_list.write_text(json.dumps({"slot": "m1_ols", "references": [], "columns": ["process", "unknown_column"]}) + "\n")
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "champion_features", f"{code} {error}")
+
+    def champion_unloadable() -> None:
+        fixture = promoted(folder / "unloadable")
+        seed_champion(fixture)
+        fixture.champion = None
+        code, _, error = run_promotion(fixture)
+        require(
+            code == job.EXIT_FAILED
+            and failure_of(error) == "champion_unloadable"
+            and "production" not in fixture.tracking.models[name]["aliases"].get("challenger", ""),
+            f"{code} {error}",
+        )
+        require(listing(fixture.out) == [], "a refused check wrote output")
+
+    def dirty_code() -> None:
+        fixture = promoted(folder / "dirty")
+        next(iter(fixture.tracking.parents().values()))["tags"]["git_dirty"] = "true"
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        verdict = fixture.tracking.models[name]["versions"][0]["tags"]["promotion_verdict"]
+        require(verdict.startswith("fail:") and "provenance" in verdict, f"a dirty tree was not failed: {verdict}")
+
+    def retried() -> None:
+        fixture = promoted(folder / "retried")
+        require(run_promotion(fixture)[0] == 0, "the first run failed")
+        fixture.tracking.calls.clear()
+        code, out, error = run_promotion(fixture)
+        require(
+            code == 0 and json.loads(out)["resumed"] is True and not fixture.tracking.calls, f"the retry called the store: {error} {fixture.tracking.calls}"
+        )
+
+    def interrupted() -> None:
+        fixture = promoted(folder / "interrupted")
+        require(run_promotion(fixture)[0] == 0, "the first run failed")
+        before = (fixture.out / f"comparison_{HAI_TYPE}.json").read_bytes()
+        (fixture.out / "promotion_check.done.json").unlink()
+        code, _, error = run_promotion(fixture)
+        store = fixture.tracking
+        require(code == 0 and len(store.models[name]["versions"]) == 1, f"the retry created a second version: {error}")
+        require(len([run for run in store.active().values() if run["tags"].get("step_key") == "promotion"]) == 1, "the retry left two promotion runs")
+        require((fixture.out / f"comparison_{HAI_TYPE}.json").read_bytes() == before, "the retry changed the comparison")
+
+    def pending_create() -> None:
+        fixture = promoted(folder / "pending")
+        store = fixture.tracking
+        store.models[name] = {"tags": {"pending_create." + "a" * 32: f"{RUN}:{HAI_TYPE}:promotion"}, "versions": [], "aliases": {}}
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "pending_create" and "create_model_version" not in store.calls, f"{code} {error}")
+
+    def version_conflict() -> None:
+        fixture = promoted(folder / "conflict")
+        require(run_promotion(fixture)[0] == 0, "the first run failed")
+        (fixture.out / "promotion_check.done.json").unlink()
+        fixture.tracking.models[name]["versions"][0]["tags"]["bundle_sha256"] = "0" * 64
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "model_version_conflict", f"{code} {error}")
+
+    def other_location() -> None:
+        fixture = promoted(folder / "location")
+        fixture.tracking.location = "s3://elsewhere/0"
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "artifact_location" and not fixture.tracking.models, f"{code} {error}")
+
+    def incomplete_run() -> None:
+        fixture = promoted(folder / "incomplete")
+        next(iter(fixture.tracking.parents().values()))["tags"].pop("bundle_sha256")
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "run_incomplete" and not fixture.tracking.models, f"{code} {error}")
+
+    def changed_log_run() -> None:
+        fixture = promoted(folder / "changed_log")
+        (fixture.folder / "in/log_run/log_run.json").write_text("{}\n")
+        code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_FAILED and failure_of(error) == "log_run_changed", f"{code} {error}")
+
+    def mismatch() -> None:
+        fixture = promoted(folder / "mismatch")
+        real = promotion.evaluate
+        calls = []
+
+        def drifting(*args: Any, **kwargs: Any) -> Any:
+            calls.append(1)
+            result = real(*args, **kwargs)
+            return result if len(calls) == 1 else {**result, "verdict": "pass"}
+
+        with mock.patch.object(promotion, "evaluate", side_effect=drifting):
+            code, _, error = run_promotion(fixture)
+        require(
+            code == job.EXIT_FAILED
+            and failure_of(error) == "comparison_mismatch"
+            and not fixture.tracking.models[name]["versions"][0]["tags"].get("promotion_verdict"),
+            f"{code} {error}",
+        )
+
+    def deadline() -> None:
+        fixture = promoted(folder / "deadline")
+        with mock.patch.object(job, "budget", return_value=0.5), mock.patch.object(promotion_check, "predict", side_effect=lambda *_: time.sleep(5)):
+            code, _, error = run_promotion(fixture)
+        require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
+
+    def no_uri() -> None:
+        fixture = promoted(folder / "no_uri")
+        with standins(fixture), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": ""}):
+            code, _, error = call(fixture.arguments("promotion_check"))
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_uri_missing", f"{code} {error}")
+
+    cases.check("job_promotion_check_registers_first_version_without_alias", first_version)
+    cases.check("job_promotion_check_sets_challenger_on_pass", better_challenger)
+    cases.check("job_promotion_check_fails_worse_challenger_without_alias", worse_challenger)
+    cases.check("job_promotion_check_never_moves_production", production_untouched)
+    cases.check("job_promotion_check_refuses_holdout_leak", holdout_leak)
+    cases.check("job_promotion_check_refuses_champion_columns_outside_extract", champion_columns)
+    cases.check("job_promotion_check_refuses_unloadable_champion", champion_unloadable)
+    cases.check("job_promotion_check_fails_dirty_code", dirty_code)
+    cases.check("job_promotion_check_retry_resumes_completed", retried)
+    cases.check("job_promotion_check_retry_after_interrupt_keeps_one_version", interrupted)
+    cases.check("job_promotion_check_refuses_unresolved_pending_create", pending_create)
+    cases.check("job_promotion_check_refuses_version_with_other_bundle", version_conflict)
+    cases.check("job_promotion_check_refuses_other_artifact_location", other_location)
+    cases.check("job_promotion_check_refuses_incomplete_run", incomplete_run)
+    cases.check("job_promotion_check_refuses_changed_log_run", changed_log_run)
+    cases.check("job_promotion_check_refuses_verdict_mismatch_on_written_file", mismatch)
+    cases.check("job_promotion_check_deadline_named", deadline)
+    cases.check("job_promotion_check_needs_tracking_uri", no_uri)
+
+
 def staged(folder: Path, *, baseline: bool = True, **options: Any) -> Fixture:
     """Return a fixture whose earlier steps (version_extract, fit, mediation, hac_validate) are complete and mounted."""
     fixture = Fixture(folder, **options)
@@ -872,7 +1202,7 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         artifacts = store.artifacts(run_id)
         expected = [f"bundle/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
         require(all(name in artifacts for name in expected), f"bundle artifacts: {artifacts}")
-        require("model/model.pkl" in artifacts and "model/MLmodel" in artifacts and f"extract/manifest_{HAI_TYPE}.json" in artifacts, f"artifacts: {artifacts}")
+        require("model/model.bin" in artifacts and "model/MLmodel" in artifacts and f"extract/manifest_{HAI_TYPE}.json" in artifacts, f"artifacts: {artifacts}")
         require(f"dvc/{metafile.name}" in artifacts, f"the DVC metafile was not logged: {artifacts}")
         mediation_id = next(key for key, item in store.active().items() if item["tags"].get("step_key") == "rq3_mediation")
         require(f"result/mediation_{HAI_TYPE}.json" in store.artifacts(mediation_id), "the mediation result was not logged on its child run")
@@ -1004,16 +1334,28 @@ def scenarios(cases: Any, folder: Path) -> None:
     hac_cases(cases, folder / "hac")
     version_cases(cases, folder / "version")
     log_run_cases(cases, folder / "log_run")
+    promotion_cases.gate_cases(cases)
+    promotion_check_cases(cases, folder / "promotion")
+
+
+class Selected(Cases):
+    """A ledger that runs only the named case, so a single case builds only its own fixture."""
+
+    def __init__(self, only: str | None) -> None:
+        super().__init__([])
+        self.only = only
+
+    def check(self, name: str, operation: Callable[[], Any]) -> None:
+        """Run the case when it is selected."""
+        if self.only is None or name == self.only:
+            super().check(name, operation)
 
 
 def run(only: str | None = None) -> list[dict[str, Any]]:
     """Run the data-action cases, or one named case, in a temporary folder."""
-    from scripts.training.lane_b_cases import Cases
-
-    cases = Cases([])
+    cases = Selected(only)
     with tempfile.TemporaryDirectory(prefix="hai_training_actions_") as temporary:
         scenarios(cases, Path(temporary))
-    if only is None:
-        return cases.results
-    selected = [result for result in cases.results if result["name"] == only]
-    return selected or [{"name": only, "passed": False, "detail": "named case is unavailable"}]
+    if only is not None and not cases.results:
+        return [{"name": only, "passed": False, "detail": "named case is unavailable"}]
+    return cases.results
