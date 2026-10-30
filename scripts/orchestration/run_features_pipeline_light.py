@@ -40,7 +40,7 @@ from scripts.orchestration.ledger import schema_validator
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE_REVISION = "214ff3f2e156c00da96a8c610ee211a889df6d78"
+BASE_REVISION = "75f348719b03054e62d887390b4c438ff62ef5ff"
 RUN_SECONDS = 120
 RUN = "20261022T120000Z-0a1b2c3d"
 GOLD_RUN = "20261021T110000Z-1a2b3c4d"
