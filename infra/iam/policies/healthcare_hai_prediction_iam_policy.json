@@ -98,6 +98,16 @@
           "iam:PassedToService": "ecs-tasks.amazonaws.com"
         }
       }
+    },
+    {
+      "Sid": "SimulateProjectRoles",
+      "Effect": "Allow",
+      "Action": "iam:SimulatePrincipalPolicy",
+      "Resource": [
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_*_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${LAKEHOUSE_READER_ROLE_NAME}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${LAKEHOUSE_WRITER_ROLE_NAME}"
+      ]
     }
   ]
 }
