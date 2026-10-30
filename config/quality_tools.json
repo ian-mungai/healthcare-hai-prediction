@@ -145,6 +145,12 @@
       "installer": "homebrew",
       "formula": "trivy",
       "executable": "/opt/homebrew/bin/trivy"
+    },
+    "osv-scanner": {
+      "version": "2.7.0",
+      "installer": "homebrew",
+      "formula": "osv-scanner",
+      "executable": "/opt/homebrew/bin/osv-scanner"
     }
   }
 }

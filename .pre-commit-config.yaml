@@ -192,6 +192,14 @@ repos:
         pass_filenames: false
         files: ^(infra/.*\.tf|\.linter_allowlist|config/quality_tools\.json)$
         stages: [pre-commit]
+      - id: osv-scanner
+        # Queries osv.dev, so it needs the network and runs at the pre-push stage (pre-commit run osv-scanner --hook-stage pre-push --all-files); Homebrew tool, local only.
+        name: Pinned requirements have no unreviewed known vulnerabilities (OSV-Scanner)
+        entry: .venv/bin/python -m scripts.quality.lint_tools osv-scanner
+        language: system
+        pass_filenames: false
+        files: ^(.*requirements[^/]*\.txt|services/orchestration/constraints-3\.12\.txt|\.linter_allowlist|config/quality_tools\.json)$
+        stages: [pre-push]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata
