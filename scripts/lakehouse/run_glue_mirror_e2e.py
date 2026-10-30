@@ -17,11 +17,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import yaml
 from botocore.exceptions import ClientError
 
 from scripts.lakehouse import glue_mirror, gold_publish
 from scripts.lakehouse.gold_publish_record import PublishError
+from scripts.quality.model_metadata import load_yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -280,7 +280,7 @@ def case_other_pointers_are_refused() -> Check:
 def dbt_classes() -> dict[str, str]:
     classes: dict[str, str] = {}
     for path in sorted((REPO_ROOT / "dbt/models").rglob("*.yml")):
-        for model in (yaml.safe_load(path.read_text()) or {}).get("models", []):
+        for model in (load_yaml(str(path), path.read_text())[0] or {}).get("models", []):
             classes[model["name"]] = str((model.get("meta") or {}).get("classification"))
     return classes
 
