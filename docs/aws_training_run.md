@@ -29,7 +29,7 @@ The task role reads the stage inputs, the feature tables and the Feast registry.
 
 Each apply is the owner's. Show the plan first and apply exactly that plan.
 
-1. `infra/iam` (administrator profile): set `training_prepared = true`. It adds the `job_train_task` and `mlflow_task` roles, their policies, the `job_training` security group and the rules for ports 8181 and 5100 on the host.
+1. `infra/iam` (administrator profile): set `training_prepared = true` and `job_endpoints_enabled = true`. The second switch creates the S3 gateway endpoint and the interface endpoints for ECR (two), Logs and Parameter Store. It defaults to false. Without it a task in the closed job network has no route. It cannot pull its images. It cannot write its logs or read its secrets either. The first switch adds the `job_train_task` and `mlflow_task` roles, their policies, the `job_training` security group and the rules for ports 8181 and 5100 on the host.
 2. Policy scripts (administrator profile): `manage_policies plan`, then `manage_policies apply` with the typed confirmation. The project user's IAM policy now passes the `job_train_task` and `mlflow_task` roles. Without it the services and jobs applies fail on the PassRole check.
 3. `infra` (project profile): apply the `expire_replaced_mlflow_versions` lifecycle rule.
 4. `infra/platform`: add `mlflow`, `training` and `feature_store` to the ECR repositories and `mlflow` to the log groups.
@@ -100,6 +100,8 @@ aws ssm start-session --profile <PROJECT_PROFILE> --region <REGION> --target <IN
 
 ## Cost and stop
 
+The four interface endpoints bill for every hour they exist, whether or not a task runs (about 0.04 dollars per hour in total, from the earlier design, so check the current price list). Keep them only for the length of a run.
+
 The MLflow service adds no instance. It runs beside the catalog on the host that is already up, with a 640 MiB limit. The host costs about 0.11 dollars per hour on demand while it is up (check the current price list). A training task of 4 vCPU and 16 GiB costs about 0.19 dollars per hour on Fargate and is capped by the action budgets, 3 hours for `fit`. Storage in the database and in `mlflow/` is small.
 
 Stop steps, in this order:
@@ -107,7 +109,15 @@ Stop steps, in this order:
 1. The task stops itself when its last container ends. Check with `aws ecs describe-tasks` that no `job_train` task still runs.
 2. Stop the MLflow service: in `infra/services`, set `mlflow_enabled = false` and apply the shown plan. It removes the service and its task definition link. The database on the host volume and the artifacts in `mlflow/` stay.
 3. Turn the host off as for the rest of the control plane, with `aws autoscaling set-desired-capacity ... --desired-capacity 0`. Verify through `describe-services` and `describe-auto-scaling-groups` that nothing billable still runs.
-4. Leave `training_prepared`, `train_enabled` and the lifecycle rule in place. They cost nothing while idle. Remove the roles only with an approved destroy plan.
+4. Turn the job endpoints off: in `infra/iam`, set `job_endpoints_enabled = false` and apply the shown plan. It removes the gateway endpoint, the four interface endpoints and their rules. Verify that none is left:
+
+   ```sh
+   aws ec2 describe-vpc-endpoints --profile <PROJECT_PROFILE> --region <REGION> --filters Name=tag:Project,Values=<PROJECT_TAG> \
+     --query 'VpcEndpoints[].{id:VpcEndpointId,type:VpcEndpointType,state:State}'
+   ```
+
+   An empty list or only `deleted` states is the result you want. A listed endpoint in another state still bills.
+5. Leave `training_prepared`, `train_enabled` and the lifecycle rule in place. They cost nothing while idle. Remove the roles only with an approved destroy plan.
 
 ## Not proven
 
@@ -115,4 +125,5 @@ Stop steps, in this order:
 - The `linux/arm64` build of both new images and the DVC hashes for that platform.
 - The library versions of the model code against real data.
 - The MLflow server memory limit of 640 MiB under a real run.
+- Whether the endpoints alone give the task every route it needs. The job network has no NAT.
 - Every network path between the task and the host. Only the plans and policies are checked offline.
