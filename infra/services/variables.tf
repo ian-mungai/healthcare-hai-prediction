@@ -131,12 +131,12 @@ variable "log_group_names" {
 }
 
 variable "ecr_repository_urls" {
-  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, marquez and marquez_web when marquez_enabled is true, mlflow when mlflow_enabled is true, and model_api when model_api_enabled is true."
+  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, marquez and marquez_web when marquez_enabled is true, mlflow when mlflow_enabled is true, model_api when model_api_enabled is true, and streamlit when streamlit_enabled is true."
   type        = map(string)
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
     error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs."
@@ -170,6 +170,11 @@ variable "image_digests" {
   validation {
     condition     = !var.model_api_enabled || contains(keys(var.image_digests), "model_api")
     error_message = "Supply a digest for model_api, or set model_api_enabled to false."
+  }
+
+  validation {
+    condition     = !var.streamlit_enabled || contains(keys(var.image_digests), "streamlit")
+    error_message = "Supply a digest for streamlit, or set streamlit_enabled to false."
   }
 }
 
