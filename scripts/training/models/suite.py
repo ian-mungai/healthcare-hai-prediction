@@ -7,7 +7,7 @@ import importlib
 import itertools
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -170,8 +170,8 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     return options[best[1]], audit
 
 
-def _fit_slot(request: ModelRequest, slot: str, forest: bool) -> SlotResult:
-    training, holdout = request.data.split()
+def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Dataset, Dataset] | None = None) -> SlotResult:
+    training, holdout = request.data.split() if parts is None else parts
     positions = tuple(range(len(holdout.rows)))
     if slot == "m3_mixed":
         training = training.subset([index for index, row in enumerate(training.rows) if not missing(row.get("control_type_code"))])
@@ -244,6 +244,37 @@ def fit_slot(request: ModelRequest, slot: str, *, forest: bool = False) -> SlotR
         }
         result.details["excluded_missing_ownership"] = {**excluded, "total": sum(excluded.values())}
         result.details["excluded_fixed_references"] = [feature.reference for feature in request.features_for(slot) if feature.name == "control_type_code"]
+    return result
+
+
+def validation_split(data: Dataset, last_year: int, years: Sequence[int]) -> tuple[Dataset, Dataset]:
+    """Return the windows through last_year as training data and the named later windows as the rows to predict."""
+    rows = data.rows
+    return data.subset([i for i, row in enumerate(rows) if row["window_year"] <= last_year]), data.subset(
+        [i for i, row in enumerate(rows) if row["window_year"] in years]
+    )
+
+
+def fit_validation(request: ModelRequest, slot: str, last_year: int, years: Sequence[int]) -> SlotResult:
+    """Refit one slot's specification on the windows through last_year and predict the named later windows, for validation only.
+
+    The slot tunes inside the shorter training set with its own grid, so no label of a predicted window reaches the fit.
+    The fitted pipeline is dropped: nothing here is saved, compared, promoted or counted in a research result.
+    """
+    if slot not in SLOTS:
+        raise ModelError("unknown model slot")
+    parts = validation_split(request.data, last_year, years)
+    minimum = request.config["minimum_rows"]
+    if len(parts[0].rows) < minimum["training"] or len(parts[1].rows) < minimum["holdout"]:
+        raise ModelError(f"insufficient validation rows: training={len(parts[0].rows)}, predicted={len(parts[1].rows)}")
+    operation = replace(request, deadline=request.deadline.within(request.config["slots"][slot]["budget_seconds"]))
+    try:
+        result = _fit_slot(operation, slot, False, parts)
+    except NotConverged as error:
+        result = SlotResult(slot, "not_converged", str(error))
+    except (NotEstimable, np.linalg.LinAlgError) as error:
+        result = SlotResult(slot, "not_estimable", str(error))
+    result.pipeline = None
     return result
 
 

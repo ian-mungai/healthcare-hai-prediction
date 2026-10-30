@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date
 from functools import partial
@@ -37,8 +37,8 @@ def rejects(call: Callable[[], Any], reason: str) -> None:
         raise AssertionError(f"missing rejection: {reason}")
 
 
-def request() -> Any:
-    """Build synthetic hospital panels and small, explicitly non-native analysis settings."""
+def request(years: Sequence[int] = range(2020, 2024), hospitals: int = 48) -> Any:
+    """Build synthetic hospital panels over the given window years and small, explicitly non-native analysis settings."""
     from scripts.training.models.common import SLOTS, Dataset, Deadline, Feature, ModelRequest
 
     rng = np.random.default_rng(726)
@@ -48,9 +48,9 @@ def request() -> Any:
         Feature("feature_matrix_hospital:extra", "number", "C001", "hospital"),
     )
     rows = []
-    for hospital in range(48):
+    for hospital in range(hospitals):
         effect = (hospital % 6 - 2.5) * 0.2
-        for year in range(2020, 2024):
+        for year in years:
             process, cmi, extra = rng.normal(size=3)
             rows.append(
                 {
@@ -469,18 +469,18 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             )
 
     def hac_join() -> None:
+        plan = hac_validation.HacPlan(2023, 2025, 2021, (2023,))
         predictions = tuple({"spine_key": f"{990000 + i}:2023", "predicted": float(i), "observed": 0.0} for i in range(8))
         flags = tuple({"spine_key": f"{990000 + i}:2023", "fiscal_year": 2025, "value_number": int(i >= 6), "alignment_status": "aligned"} for i in range(7))
-        output = hac_validation.validate_hac(predictions, flags, {2023: 2025}, Deadline.after(10))
+        output = hac_validation.validate_hac(predictions, flags, plan, Deadline.after(10))
         require(output["status"] == "fitted", "explicit HAC program-year mapping was not used")
         require(output["missing_flags"] == 1 and output["matched_hospitals"] == 7, "missing HAC flags became negative flags")
         require(output["auc"] == 1.0 and output["top_quartile_flagged_share"] == 0.5, "HAC ranking or quartile is wrong")
-        require(
-            hac_validation.validate_hac(predictions, (), {2023: 2025}, Deadline.after(10))["status"] == "not_run", "missing HAC source must not fail training"
-        )
-        require(hac_validation.validate_hac(predictions, flags, {2023: 2024}, Deadline.after(10))["status"] == "not_run", "wrong program year joined")
-        rejects(lambda: hac_validation.validate_hac(predictions, (*flags, flags[0]), {2023: 2025}, Deadline.after(10)), "duplicate HAC")
-        rejects(lambda: hac_validation.validate_hac(predictions, flags, {}, Deadline.after(10)), "year mapping")
+        require(hac_validation.validate_hac(predictions, (), plan, Deadline.after(10))["status"] == "not_run", "missing HAC source must not fail training")
+        other = hac_validation.HacPlan(2023, 2024, 2021, (2023,))
+        require(hac_validation.validate_hac(predictions, flags, other, Deadline.after(10))["status"] == "not_run", "wrong program year joined")
+        rejects(lambda: hac_validation.validate_hac(predictions, (*flags, flags[0]), plan, Deadline.after(10)), "duplicate HAC")
+        rejects(lambda: hac_validation.plan_validation({2023: 8, 2022: 8, 2021: 8}, {}, {2025: (2022, 2023)}), "year mapping")
 
     def shared_missing_indicators() -> None:
         changed_rows = tuple(dict(row, process=None, extra=None) if int(row["ccn"]) % 6 == 0 else dict(row) for row in req.data.rows)

@@ -22,7 +22,13 @@ ACTIONS = ("guard", "version_extract", "fit", "mediation", "hac_validate", "log_
 MODULES: dict[str, tuple[str, ...]] = {
     "guard": ("scripts.training.guards", "scripts.training.targets", "scripts.training.step_records"),
     "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records", "scripts.training.job_actions", "scripts.training.job_inputs"),
-    "fit": ("scripts.training.models.suite", "scripts.training.bundle", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "fit": (
+        "scripts.training.models.suite",
+        "scripts.training.hac_validation",
+        "scripts.training.bundle",
+        "scripts.training.job_actions",
+        "scripts.training.job_inputs",
+    ),
     "mediation": ("scripts.training.mediation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "hac_validate": ("scripts.training.hac_validation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "log_run": ("scripts.training.run_tracking", "scripts.training.dvc_baseline", "scripts.training.job_actions", "scripts.training.job_inputs"),
