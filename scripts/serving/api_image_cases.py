@@ -35,7 +35,7 @@ def call(port: int, method: str, path: str, body: bytes | None = None, headers: 
         connection.request(method, path, body=body, headers=headers or {})
         response = connection.getresponse()
         raw = response.read()
-        return response.status, dict(response.getheaders()), json.loads(raw) if raw else None
+        return response.status, {name.lower(): value for name, value in response.getheaders()}, json.loads(raw) if raw else None
     finally:
         connection.close()
 
@@ -46,7 +46,7 @@ def call_chunked(port: int, pieces: list[bytes], headers: dict[str, str]) -> tup
         connection.request("POST", "/v1/predict", body=iter(pieces), headers=headers, encode_chunked=True)
         response = connection.getresponse()
         raw = response.read()
-        return response.status, dict(response.getheaders()), json.loads(raw) if raw else None
+        return response.status, {name.lower(): value for name, value in response.getheaders()}, json.loads(raw) if raw else None
     finally:
         connection.close()
 
@@ -95,7 +95,7 @@ def case_http(c: Checker) -> None:
         try:
             good = {"hai_type": base.HAI, "ccn": "AAA001", "window_year": 2022}
             status, headers, body = post(port, good)
-            c.check("a valid request answers 200 with the request id header", status == 200 and headers.get("X-Request-ID") == body["request_id"])
+            c.check("a valid request answers 200 with the request id header", status == 200 and headers.get("x-request-id") == body["request_id"])
             c.check("no key answers 401", post(port, good, None)[0] == 401)
             c.check("a wrong key answers 401", post(port, good, "sk-test-wrong-key-12345")[0] == 401)
             c.check("a malformed ccn answers 422", post(port, good | {"ccn": "AAA"})[0] == 422)
