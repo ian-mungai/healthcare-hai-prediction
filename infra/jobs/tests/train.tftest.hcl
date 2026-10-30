@@ -17,6 +17,7 @@ variables {
   }
   aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
+  mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
   log_group_name                        = "example_project_jobs_dev"
 }
 
@@ -168,7 +169,7 @@ run "train_container_records_its_image_digest" {
   }
 }
 
-run "train_secrets_reach_only_the_extract_step" {
+run "train_secrets_reach_only_the_extract_and_train_steps" {
   command = plan
 
   variables {
@@ -177,13 +178,24 @@ run "train_secrets_reach_only_the_extract_step" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[0].secrets == [] && jsondecode(output.train_container_definitions)[1].secrets == [] && jsondecode(output.train_container_definitions)[2].secrets == [] && jsondecode(output.train_container_definitions)[4].secrets == [] &&
+      jsondecode(output.train_container_definitions)[0].secrets == [] && jsondecode(output.train_container_definitions)[1].secrets == [] && jsondecode(output.train_container_definitions)[2].secrets == [] &&
       jsondecode(output.train_container_definitions)[3].secrets == [
         { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
         { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
       ]
     )
-    error_message = "Only the extract step receives the catalog reader pair, and no step receives a writer or administrator credential."
+    error_message = "Only the extract step receives the catalog reader pair and only the train step receives the MLflow login. No step receives a writer or administrator credential of the lakehouse."
+  }
+
+  assert {
+    condition = (
+      jsondecode(output.train_container_definitions)[4].secrets == [
+        { name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/mlflow_admin_password" },
+      ] &&
+      contains(jsondecode(output.train_container_definitions)[4].environment, { name = "MLFLOW_TRACKING_USERNAME", value = "admin" }) &&
+      !strcontains(jsondecode(output.train_container_definitions)[4].command[0], "MLFLOW_TRACKING_PASSWORD")
+    )
+    error_message = "The train step logs in to MLflow with the administrator account. The password comes from the secret store and never appears in the command."
   }
 
   assert {
@@ -192,8 +204,8 @@ run "train_secrets_reach_only_the_extract_step" {
   }
 
   assert {
-    condition     = toset(output.train_secret_flow.containers_checked) == toset(["train/extract"])
-    error_message = "The shared check follows the one container that receives a secret."
+    condition     = toset(output.train_secret_flow.containers_checked) == toset(["train/extract", "train/train"])
+    error_message = "The shared check follows the two containers that receive a secret."
   }
 
   assert {
@@ -288,6 +300,17 @@ run "other_layer_role_is_refused" {
   }
 
   expect_failures = [var.train_roles]
+}
+
+run "other_mlflow_password_name_is_refused" {
+  command = plan
+
+  variables {
+    train_enabled              = true
+    mlflow_admin_password_name = "/example_project/aws_polaris_reader_client_secret"
+  }
+
+  expect_failures = [var.mlflow_admin_password_name]
 }
 
 run "wrong_log_group_is_refused" {

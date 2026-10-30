@@ -297,9 +297,9 @@ def terraform_names(root: Path) -> dict[str, bool]:
         "the source check matches every kind of block of the Secrets Manager and Parameter Store types": all(
             SECRET_RESOURCE.search(f'{kind} "{name}" "x" {{}}') for kind in ("resource", "data", "ephemeral") for name in (*family, *parameters)
         ),
-        "the 15 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
-        "the 15 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 16,
-        "the policy files grant the module's names: four shared keys read only, 16 parameters read and the 15 managed ones written": secret_store.policy_names(
+        "the 16 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
+        "the 16 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 17,
+        "the policy files grant the module's names: four shared keys read only, 17 parameters read and the 16 managed ones written": secret_store.policy_names(
             root / secret_store.VARIABLES
         )
         == {

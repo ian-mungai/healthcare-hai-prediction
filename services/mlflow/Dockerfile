@@ -7,10 +7,13 @@ COPY requirements.txt /opt/mlflow/requirements.txt
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/mlflow/requirements.txt
 
+COPY --chmod=0444 start_server.py /opt/mlflow/start_server.py
+
 ENV PATH=/opt/venv/bin:${PATH}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MLFLOW_DISABLE_TELEMETRY=true DO_NOT_TRACK=true
 
-# Run as an unprivileged user. The task definition sets the entry point and the server options, a read-only root and a temporary /tmp.
+# Run as an unprivileged user. The task definition runs /opt/mlflow/start_server.py with the server options, a read-only root and a temporary /tmp.
+# The script starts the server with basic authentication and no default permission.
 RUN useradd --create-home --uid 10005 mlflow
 USER 10005
 WORKDIR /opt/mlflow

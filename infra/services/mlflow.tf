@@ -12,7 +12,7 @@ locals {
       memory                 = 640
       memoryReservation      = 384
       stopTimeout            = 60
-      entryPoint             = ["mlflow", "server"]
+      entryPoint             = ["python", "-I", "/opt/mlflow/start_server.py"]
       command = [
         "--host", "0.0.0.0",
         "--port", tostring(local.mlflow_port),
@@ -25,17 +25,22 @@ locals {
         { name = "AWS_REGION", value = var.aws_region },
         { name = "DO_NOT_TRACK", value = "true" },
         { name = "HOME", value = "/tmp" },
+        { name = "MLFLOW_ADMIN_USERNAME", value = "admin" },
+        { name = "MLFLOW_AUTH_DATABASE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow_auth" },
         { name = "MLFLOW_BACKEND_STORE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow" },
         { name = "MLFLOW_DISABLE_TELEMETRY", value = "true" },
       ]
-      secrets      = [{ name = "PGPASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] }]
+      secrets = [
+        { name = "PGPASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] },
+        { name = "MLFLOW_ADMIN_PASSWORD", valueFrom = local.secret_arn["mlflow_admin_password"] },
+      ]
       portMappings = [{ containerPort = local.mlflow_port, hostPort = local.mlflow_port, protocol = "tcp" }]
       linuxParameters = {
         capabilities = { add = [], drop = ["ALL"] }
         tmpfs        = [{ containerPath = "/tmp", size = 256, mountOptions = ["nosuid"] }]
       }
       healthCheck = {
-        command     = ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${local.mlflow_port}/health', timeout=2).close()"]
+        command     = ["CMD", "python", "-c", "import sys, urllib.error, urllib.request\ntry:\n urllib.request.urlopen('http://127.0.0.1:${local.mlflow_port}/health', timeout=2).close()\nexcept urllib.error.HTTPError as error:\n sys.exit(0 if error.code == 401 else 1)"]
         interval    = 15
         timeout     = 5
         retries     = 10

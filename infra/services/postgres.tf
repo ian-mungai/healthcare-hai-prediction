@@ -23,6 +23,7 @@ locals {
     SELECT 'CREATE ROLE mlflow LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'mlflow') \gexec
     ALTER ROLE mlflow PASSWORD :'mlflow_password';
     SELECT 'CREATE DATABASE mlflow OWNER mlflow ENCODING ''UTF8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mlflow') \gexec
+    SELECT 'CREATE DATABASE mlflow_auth OWNER mlflow ENCODING ''UTF8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mlflow_auth') \gexec
   EOT
 
   postgres_databases_end = <<-EOT

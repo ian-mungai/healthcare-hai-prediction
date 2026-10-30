@@ -29,7 +29,7 @@ Two one-shot task definitions run from the same cluster by hand, with no service
 
 The reservations of the always-on containers add up to 7232 MiB (8128 with Marquez) of the 10752 MiB budget. The budget is the host's 16384 MiB minus 5632 MiB kept for the operating system, the ECS agent and the later services (MLflow, prediction API, Streamlit, Prometheus, Grafana). The limits are first estimates, not measurements. Terraform refuses a plan whose reservations exceed the budget or whose limits leave under 2 GiB for the system.
 
-Only Polaris (8181) and Redis (6379) listen on a non-loopback interface. MLflow (5100) does too while `mlflow_enabled` is true. The foundation security group opens them to the job tasks only. MLflow has no sign-in, so that rule is its only gate. Stop MLflow with `mlflow_enabled = false` and an apply: the service goes, the database and the artifacts stay. MLflow gets a 640 MiB limit and one worker. The limits of all services must leave 2 GiB free on the host. With Marquez on, only 640 MiB of limit remains. Every other listener is on 127.0.0.1: reach the Airflow and Marquez interfaces with an SSM port-forwarding session, with no inbound rule.
+Only Polaris (8181) and Redis (6379) listen on a non-loopback interface. MLflow (5100) does too while `mlflow_enabled` is true. The foundation security group opens them to the job tasks only. MLflow asks for a login on every request and grants nothing by default, because every service of the host shares the host network and a loopback listener is open to all of them. The security group is the second gate. Stop MLflow with `mlflow_enabled = false` and an apply: the service goes, the database and the artifacts stay. MLflow gets a 640 MiB limit and one worker. The limits of all services must leave 2 GiB free on the host. With Marquez on, only 640 MiB of limit remains. Every other listener is on 127.0.0.1: reach the Airflow and Marquez interfaces with an SSM port-forwarding session, with no inbound rule.
 
 Services that bind every interface by default and how each is held to loopback (checked against the 3.3.2 and Quarkus sources):
 
@@ -85,6 +85,7 @@ Every secret is a Parameter Store SecureString parameter, read by the execution 
 | `marquez_db_password_name` | `/healthcare_hai_prediction/marquez_db_password` | Postgres role `marquez`, Marquez |
 | `airflow_fernet_key_name`, `airflow_jwt_secret_name`, `airflow_api_secret_key_name` | `/healthcare_hai_prediction/airflow_fernet_key`, `_jwt_secret`, `_api_secret_key` | Airflow |
 | `mlflow_db_password_name` | `/healthcare_hai_prediction/mlflow_db_password` | Postgres role `mlflow` (created while MLflow is on), MLflow |
+| `mlflow_admin_password_name` | `/healthcare_hai_prediction/mlflow_admin_password` | The MLflow administrator account. Only the MLflow service, the training task and the owner hold it |
 | `redis_password_name` | `/healthcare_hai_prediction/redis_password` | Redis and the Feast clients |
 | `polaris_root_secret_name` | `/healthcare_hai_prediction/polaris_root_secret` | The Polaris bootstrap task |
 

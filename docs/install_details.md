@@ -129,8 +129,8 @@ No script performs the following setup steps. Do them by hand:
    `postgres_password_name`) with its full name as default. A name starts with a
    slash and has up to 15 parts of letters, digits and underscores. It never
    starts with `aws` or `ssm` (the AWS naming rules for a hierarchy). The `ssm`
-   policy file grants the project profile `ssm:GetParameter` on the 16 parameter
-   ARNs and `ssm:PutParameter` on the 15 managed ones. It grants nothing else. It grants no
+   policy file grants the project profile `ssm:GetParameter` on the 17 parameter
+   ARNs and `ssm:PutParameter` on the 16 managed ones. It grants nothing else. It grants no
    `kms` action (the key policy of the AWS managed key admits the account's
    principals through Parameter Store), no `DescribeParameters`, no
    `GetParametersByPath` and no wildcard. A parameter ARN is

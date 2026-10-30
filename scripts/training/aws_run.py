@@ -8,7 +8,8 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
 - ``prepare`` (training image): checks the archive hash again, records the code identity in ``snapshot_training.json`` and the validated parameters in
   ``training_parameters.json``, then runs the ``guard`` action.
 - ``extract`` (feature store image): runs the extraction against the catalog and the Feast registry of the data bucket.
-- ``train`` (training image): runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
+- ``train`` (training image): logs in to MLflow with MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD, because the server grants nothing without a login.
+  It then runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
 
 Each action writes to ``<work>/in/<action>``, where the next action reads it, as the local renderer mounts them. A phase checks the completion records of
 the steps an action needs before it starts that action. A rerun in the same workspace resumes: a completed step is verified and not run again. A rerun in a
@@ -264,6 +265,8 @@ def train(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     uri = os.environ.get("MLFLOW_TRACKING_URI", "")
     if not TRACKING_URI.fullmatch(uri):
         raise RunRefused(f"MLFLOW_TRACKING_URI must be http://<private IPv4 address>:{mlflow_service.PORT}. It is {uri or 'not set'}")
+    for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
+        required(name)
     os.environ.setdefault("DVC_REMOTE_URL", f"s3://{bucket()}/dvc/")
     task_environment(work)
     check_prerequisites(work, run, TRAIN_STEPS[0])
