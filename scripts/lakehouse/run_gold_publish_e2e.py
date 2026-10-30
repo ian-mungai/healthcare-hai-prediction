@@ -404,7 +404,7 @@ def contract_check(report: Path) -> list[dict[str, Any]]:
     columns = {fact.name: {c.name for c in fact.columns} for fact in contract.facts} | {t.name: {c.name for c in t.columns} for t in contract.bridges}
     missing = [n for n, key in plan.tables.items() if n in columns and not set(key) <= columns[n]]
     return [
-        step("the plan names exactly the contract's 70 tables", set(plan.tables) == set(expected) and len(plan.tables) == 70),
+        step("the plan names exactly the contract's 71 tables", set(plan.tables) == set(expected) and len(plan.tables) == 71),
         step("every merge key equals the contract's grain, dimension key or bridge grain", dict(plan.tables) == expected),
         step("every key column of a fact or bridge is one of the table's contract columns", not missing, missing=missing),
         step("the namespaces are gold_e2e for publish_fixture and gold for real", dict(plan.namespaces) == {"publish_fixture": "gold_e2e", "real": "gold"}),
@@ -412,6 +412,7 @@ def contract_check(report: Path) -> list[dict[str, Any]]:
         *identifier_rule_steps(),
         *plan_boundary_steps(),
         *silver_read_steps(),
+        *model_check_steps(),
     ]
 
 
@@ -484,6 +485,71 @@ def silver_read_steps() -> list[dict[str, Any]]:
             problems=wired,
         ),
         step("the silver publish contract lists tables", len(live) > 50, published=len(live)),
+    ]
+
+
+def model_check_steps() -> list[dict[str, Any]]:
+    """Defects the gold fixture build found late, caught here without Docker: an unpublished silver read, a test name nothing defines and a stale suite."""
+    import shutil
+    import tempfile
+
+    from scripts.lakehouse import gold_checks
+
+    silver = frozenset({"int_kept", "int_left_out"})
+    published = frozenset({"int_kept"})
+    reads = gold_checks.gold_read_problems
+    refused = "dim_g reads the silver model int_left_out, which the silver publish contract does not publish"
+    generic, singular = frozenset({"dimension_membership"}), frozenset({"assert_period_order"})
+
+    def bound(tests: list[Any], where: str = "model") -> list[str]:
+        document = {"models": [{"name": "dim_g", "columns": [{"name": "k", "data_tests": tests}]}]}
+        if where == "model":
+            document = {"models": [{"name": "dim_g", "data_tests": tests}]}
+        return gold_checks.test_binding_problems({"dbt/models/gold/g.yml": document}, generic, singular)
+
+    contract = gold_checks.load_contract()
+    stale = Path(tempfile.mkdtemp(prefix="gold_suites_"))
+    try:
+        shutil.copytree(gold_checks.SUITES, stale, dirs_exist_ok=True)
+        (stale / "gold_keys.json").write_text((stale / "gold_keys.json").read_text() + " ")
+        stale_problems = gold_checks.suites_problems(contract, stale)
+    finally:
+        shutil.rmtree(stale, ignore_errors=True)
+    live = gold_checks.model_problems()
+    return [
+        step(
+            "a gold model that names a published silver model has no unpublished read",
+            reads({"dim_g": "select 1 from {{ ref('int_kept') }}"}, silver, published) == [],
+        ),
+        step(
+            "a gold model that names an unpublished silver model is refused",
+            reads({"dim_g": "select 1 from {{ ref('int_left_out') }}"}, silver, published) == [refused],
+        ),
+        step(
+            "a name in a model's list of sources counts as a read",
+            reads({"dim_g": "{% set s = [{'model': 'int_left_out'}] %}"}, silver, published) == [refused],
+        ),
+        step("a gold model that names no silver model reads none", reads({"dim_g": "select 1 from {{ ref('dim_other') }}"}, silver, published) == []),
+        step(
+            "a singular test listed under data_tests is refused",
+            len(bound(["assert_period_order"])) == 1 and "singular test" in bound(["assert_period_order"])[0],
+        ),
+        step(
+            "a column test that nothing defines is refused",
+            len(bound(["no_such_test"], "column")) == 1 and "no generic test" in bound(["no_such_test"], "column")[0],
+        ),
+        step(
+            "a defined generic test, a built-in test and a package test are accepted",
+            bound(["dimension_membership", {"unique": {}}, "dbt_utils.equal_rowcount"]) == [],
+        ),
+        step("a dict entry is checked by its name", len(bound([{"assert_period_order": {}}])) == 1),
+        step("the dbt tree reads only published silver models and lists only defined tests", live == [], problems=live),
+        step(
+            "a suite file changed by one byte is reported as stale",
+            stale_problems == ["suite gold_keys differs from what the contract generates"],
+            problems=stale_problems,
+        ),
+        step("the gold suites equal what the contract generates", gold_checks.suites_problems(contract, gold_checks.SUITES) == []),
     ]
 
 
@@ -995,8 +1061,8 @@ def publish_offline(session: Session, report: Path) -> list[dict[str, Any]]:
     manifest = json.loads((publish_dir / "export" / "manifest.json").read_text()) if (publish_dir / "export" / "manifest.json").is_file() else {"tables": {}}
     steps.append(
         step(
-            "gold_export: the consumer exports the 70 tables on the expected digest",
-            exported.ok and accept_ok and len(manifest["tables"]) == 70,
+            "gold_export: the consumer exports the 71 tables on the expected digest",
+            exported.ok and accept_ok and len(manifest["tables"]) == 71,
             exit=exported.exit_code,
         )
     )
@@ -1026,7 +1092,7 @@ def publish_offline(session: Session, report: Path) -> list[dict[str, Any]]:
         present = {p.name for p in namespace_folder.iterdir()} if namespace_folder.is_dir() else set()
         if index < 4:
             steps.append(
-                step(f"after {name}: publish_runs does not exist in the catalog", "publish_runs" not in present and len(present) >= 70, tables=len(present))
+                step(f"after {name}: publish_runs does not exist in the catalog", "publish_runs" not in present and len(present) >= 71, tables=len(present))
             )
         else:
             steps.append(step("after commit: publish_runs exists", "publish_runs" in present))

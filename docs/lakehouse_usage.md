@@ -429,6 +429,7 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.bridge_references --check          # bridges and recipes match the gold contract and the registry
 .venv/bin/python -m scripts.lakehouse.run_gold_e2e                     # gold on fixtures; --real adds two pinned real builds; report: data/e2e/gold/
 .venv/bin/python -m scripts.lakehouse.gold_checks check-suites          # the gold suites match the gold contract
+.venv/bin/python -m scripts.lakehouse.gold_checks check-models          # gold models read published silver models only; YAML lists only tests dbt can bind
 .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # pin bronze in data/analytics/dbt/runs/<run_id>/pins.json
 .venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # fails when a pinned table moved
 .venv/bin/python -m scripts.lakehouse.catalog job pins_e2e                # the pin's scenarios on a throwaway catalog; report: data/e2e/pins/

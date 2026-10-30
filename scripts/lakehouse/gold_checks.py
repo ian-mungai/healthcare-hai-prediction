@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Collection, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ CONTRACT = REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"
 SILVER_COLUMNS = REPO_ROOT / "data_contracts/lakehouse/silver_columns.json"
 SILVER_PUBLISH = REPO_ROOT / "data_contracts/lakehouse/silver_publish.json"
 SUITES = REPO_ROOT / "data_contracts/great_expectations/gold"
+DBT = REPO_ROOT / "dbt"
 UNKNOWN = "<unknown>"
 NUMERIC_TYPES = frozenset({"DOUBLE", "FLOAT", "BIGINT", "INTEGER", "SMALLINT", "HUGEINT", "TINYINT"})
 # One SQL text per query keeps the container's argument length small.
@@ -677,6 +679,64 @@ def unpublished_silver_problems(manifest: dict[str, Any], published: Collection[
     return problems + [f"{name} is published but no silver model has that name" for name in sorted(set(published) - set(silver.values()))]
 
 
+QUOTED_NAME = re.compile(r"""['"]([A-Za-z0-9_]+)['"]""")
+TEST_DEFINITION = re.compile(r"{%-?\s*test\s+([A-Za-z0-9_]+)")
+BUILT_IN_TESTS = frozenset({"unique", "not_null", "accepted_values", "relationships"})
+
+
+def gold_read_problems(gold_sql: dict[str, str], silver: Collection[str], published: Collection[str]) -> list[str]:
+    """Gold models whose text names a silver model that the silver publish contract does not publish.
+
+    This is the text form of ``unpublished_silver_problems`` for a check without a dbt manifest: a ``ref()`` argument or a quoted name in a model's list of
+    sources is a read. The manifest check in the gold E2E stays the decisive one.
+    """
+    return [
+        f"{name} reads the silver model {model}, which the silver publish contract does not publish"
+        for name, text in sorted(gold_sql.items())
+        for model in sorted(set(QUOTED_NAME.findall(text)) & set(silver) - set(published))
+    ]
+
+
+def listed_tests(document: Any) -> Iterator[str]:
+    """The name of each test a model YAML lists under ``data_tests`` or ``tests``, at model and column level."""
+    if isinstance(document, dict):
+        for key, value in document.items():
+            if key in {"data_tests", "tests"} and isinstance(value, list):
+                for item in value:
+                    yield from [item] if isinstance(item, str) else [name for name in item if isinstance(name, str)] if isinstance(item, dict) else []
+            else:
+                yield from listed_tests(value)
+    elif isinstance(document, list):
+        for item in document:
+            yield from listed_tests(item)
+
+
+def test_binding_problems(documents: dict[str, Any], generic: Collection[str], singular: Collection[str]) -> list[str]:
+    """Test names in model YAML that dbt cannot bind. A singular test binds by its file in ``dbt/tests`` and is never listed; a listed name must be a built-in
+    test, a package test or a ``{% test %}`` macro."""
+    problems = []
+    for path, document in sorted(documents.items()):
+        for name in listed_tests(document):
+            if name in BUILT_IN_TESTS or "." in name or name in generic:
+                continue
+            reason = "a singular test binds by its file in dbt/tests and is not listed in YAML" if name in singular else "no generic test has that name"
+            problems.append(f"{path}: {name}: {reason}" if name not in singular else f"{path}: {name} is a singular test: {reason}")
+    return problems
+
+
+def model_problems(dbt: Path = DBT, published: Collection[str] | None = None) -> list[str]:
+    """Offline reads of the dbt tree: gold models name only published silver models, and model YAML lists only tests dbt can bind."""
+    import yaml  # the host checks need it; the in-container readers of this module do not
+
+    silver = {path.stem for path in (dbt / "models/silver").rglob("*.sql")}
+    gold = {path.stem: path.read_text() for path in (dbt / "models/gold").rglob("*.sql")}
+    problems = gold_read_problems(gold, silver, published_silver() if published is None else published)
+    generic = {name for path in (dbt / "macros").rglob("*.sql") for name in TEST_DEFINITION.findall(path.read_text())}
+    singular = {path.stem for path in (dbt / "tests").rglob("*.sql")}
+    documents = {str(path.relative_to(dbt)): yaml.safe_load(path.read_text()) for path in sorted((dbt / "models").rglob("*.yml"))}
+    return problems + test_binding_problems(documents, generic, singular)
+
+
 def lineage_problems(contract: Contract, manifest: dict[str, Any], published: Collection[str]) -> list[str]:
     nodes = gold_nodes(manifest)
     problems = unpublished_silver_problems(manifest, published)
@@ -971,7 +1031,14 @@ def main() -> int:
     check = commands.add_parser("check-suites", help="fail when the suite files differ from the contract")
     check.add_argument("--contract", type=Path, default=CONTRACT)
     check.add_argument("--suites", type=Path, default=SUITES)
+    commands.add_parser("check-models", help="fail when a gold model reads an unpublished silver model or model YAML lists a test dbt cannot bind")
     args = parser.parse_args()
+    if args.command == "check-models":
+        found = model_problems()
+        for problem in found:
+            sys.stderr.write(f"{problem}\n")
+        sys.stdout.write(f"dbt models: {len(found)} problems\n")
+        return 1 if found else 0
     contract = load_contract(args.contract)
     if args.command == "write-suites":
         written = write_suites(contract, args.out)

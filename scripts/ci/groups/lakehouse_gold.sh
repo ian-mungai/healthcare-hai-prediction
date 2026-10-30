@@ -20,6 +20,8 @@ lakehouse_gold_checks() {
   timed "lakehouse_gold: training targets E2E" "$python_bin" -m scripts.training.run_targets_e2e
   # The gold Great Expectations suites must match the gold contract they are generated from.
   timed "lakehouse_gold: suites check" "$python_bin" -m scripts.lakehouse.gold_checks check-suites
+  # Gold models read only published silver models and model YAML lists only tests dbt can bind, before the Docker build finds out.
+  timed "lakehouse_gold: models check" "$python_bin" -m scripts.lakehouse.gold_checks check-models
   timed "lakehouse_gold: publish contract E2E" "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
   timed "lakehouse_gold: catalog registration E2E" "$python_bin" -m scripts.lakehouse.run_catalog_registration_e2e --out "$quality_output/catalog_registration" --mutations
   timed "lakehouse_gold: model metadata check" "$python_bin" -m scripts.quality.model_metadata

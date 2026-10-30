@@ -374,7 +374,7 @@
     "scripts/lakehouse/feature_columns.py": 5,
     "scripts/lakehouse/feature_sources.py": 3,
     "scripts/lakehouse/geography_file_periods.py": 5,
-    "scripts/lakehouse/gold_checks.py": 1,
+    "scripts/lakehouse/gold_checks.py": 6,
     "scripts/lakehouse/gold_publish.py": 1,
     "scripts/lakehouse/ownership_release_periods.py": 1,
     "scripts/lakehouse/package_fixture.py": 2,
