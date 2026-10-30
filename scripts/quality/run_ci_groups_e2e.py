@@ -17,6 +17,9 @@ the caller's index, staged diff and working files survive. The report goes to
 data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
 the run fails when a file under test changes while it runs.
 
+The reuse, shard and gate stage cases are the check group reuse_gate_checks (hosted job CI Reuse and Gate E2E): ``--reuse-only`` and ``--gate-stage-only``
+run them, ``--selection-only`` (Local CI Core) leaves them out and a run without a mode runs all.
+
 Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim check)
 and ``acquisition-checks``, every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is
 in a hosted partition that the pre-push plan runs. Pre-push cases build small repositories with stand-ins for the commands: the plan selects the range with
@@ -164,6 +167,7 @@ WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
     "core": CORE,
     "launcher": ["launcher"],
+    "reuse_gate": ["reuse_gate_checks"],
     "bronze": LAYERS[:1],
     "silver": LAYERS[1:2],
     "gold": LAYERS[2:3],
@@ -172,7 +176,7 @@ PART_GROUPS = {
     "feature_columns": LAYERS[3:],
     "feature_store": LAYERS[3:],
     "core+layers": WITH_LAYERS,
-    "all": [*WITH_LAYERS, "launcher", "acquisition", "repository_hooks"],
+    "all": [*WITH_LAYERS, "launcher", "reuse_gate_checks", "acquisition", "repository_hooks"],
 }
 PASS_LINES = {part: "All local CI checks passed" for part in PART_GROUPS} | {"launcher": "The launcher part passed."}
 LAKEHOUSE_SCRIPT = ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"]
@@ -1279,7 +1283,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "unclassified_path_runs_all_in_part_all",
             ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "all"],
-            [*WITH_LAYERS, "launcher"],
+            [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
             "unclassified",
         ),
         selection_case(
@@ -2676,6 +2680,7 @@ BODY_SELECTION = {
     "sql_style": ["repository_code_checks", "sql_style"],
     "terraform_checks": ["repository_code_checks", "terraform_checks"],
     "launcher": ["repository_code_checks", "launcher"],
+    "reuse_gate_checks": ["repository_code_checks", "launcher", "reuse_gate_checks"],
 }
 
 
@@ -2702,13 +2707,20 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         }
     ]
     for group, wanted in BODY_SELECTION.items():
-        part = "all" if group == "launcher" else "core+layers"
+        part = "all" if group in {"launcher", "reuse_gate_checks"} else "core+layers"
         cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
     cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
     cases.append(
-        staged_edit_case(work, "dispatcher_edit_selects_every_group_in_part_all", "scripts/run_ci.sh", [*WITH_LAYERS, "launcher"], "all", "selects every group")
+        staged_edit_case(
+            work,
+            "dispatcher_edit_selects_every_group_in_part_all",
+            "scripts/run_ci.sh",
+            [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
+            "all",
+            "selects every group",
+        )
     )
     cases.append(
         selection_case(
@@ -4039,7 +4051,7 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
-def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
+def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
     """The pre-push run selects the groups of the pushed range as hosted CI does, escalates to the full scope for selector and CI script changes, and
     every step has a deadline that fails visibly."""
     results = [escalation_case(scratch, f"pre_push_escalates_{index}", path, "full") for index, path in enumerate(ESCALATING_PATHS)]
@@ -4152,7 +4164,8 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
         planted_case("acquisition_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_kinds, 'SERIAL_KINDS = frozenset({"ci_hooks"})')),
         planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [steps]")),
     ]
-    results += gate_stage_cases(scratch)
+    if gate_stage:
+        results += gate_stage_cases(scratch)
     return (
         results + hook_and_tree_cases(scratch) + acquisition_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + entry_cases() + docs_cases()
     )
@@ -4628,6 +4641,41 @@ def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     code, log = reuse_dry_run(work, out, "reuse_bad_value", {"HAI_CI_REUSE": "sometimes"}, scratch / "reuse_bad_records", record=False)
     results.append(
         {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main or off" in log and "TIMED" not in log}
+    )
+    return results
+
+
+REUSE_GATE_CASES = ("--reuse-only", "--gate-stage-only")
+
+
+def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
+    """The reuse, shard and gate stage cases are the check group reuse_gate_checks: their own part and hosted job, not a command of the Core part."""
+    path = "scripts/quality/ci_reuse.py"
+    results = [
+        selection_case(
+            work, "reuse_gate_part_selects_only_the_reuse_gate_group", ["--scope", "paths", "--path", path, "--part", "reuse_gate"], ["reuse_gate_checks"]
+        ),
+        selection_case(
+            work,
+            "core_part_leaves_the_reuse_gate_group_out",
+            ["--scope", "paths", "--path", path, "--part", "core"],
+            ["python_lint", "repository_code_checks", "configuration_checks"],
+        ),
+    ]
+    body = (ROOT / GROUP_FILES / "reuse_gate_checks.sh").read_text(encoding="utf-8")
+    core = (ROOT / GROUP_FILES / "repository_code_checks.sh").read_text(encoding="utf-8")
+    jobs = workflow_document()["jobs"]
+    steps = [step.get("env", {}) for step in jobs["reuse_gate"]["steps"] if step.get("env", {}).get("CI_PART") == "reuse_gate"]
+    required = json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8"))["required_pull_request_jobs"]
+    results.append(
+        {
+            "case": "reuse_and_gate_stage_cases_run_in_their_own_group_and_hosted_job",
+            "passed": all(f"run_ci_groups_e2e {flag}" in body and f"run_ci_groups_e2e {flag}" not in core for flag in REUSE_GATE_CASES)
+            and "run_ci_groups_e2e --selection-only" in core
+            and len(steps) == 1
+            and jobs["reuse_gate"]["name"] == "CI Reuse and Gate E2E"
+            and "CI Reuse and Gate E2E" in required,
+        }
     )
     return results
 
@@ -5464,8 +5512,10 @@ def main() -> int:
             results.append(scratch_cleanup_interrupt_case(scratch))
             results += selection_cases(work)
             results += fast_hook_cases(scratch)
-            results += pre_push_cases(work, scratch)
-            results += reuse_cases(work, out, scratch)
+            results += pre_push_cases(work, scratch, gate_stage=not selection_only)
+            results += reuse_group_cases(work)
+            if not selection_only:
+                results += reuse_cases(work, out, scratch)
             results += runner_stage_cases(scratch)
             results += speed_static_cases(scratch)
             if not selection_only:
@@ -5505,6 +5555,8 @@ def main() -> int:
         "body_file_unreadable_*",
         "staged_body_edit_runs_only_its_group_items",
         "real_run_*",
+        "reuse_*",
+        "gate_stage_*",
     ]
     mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only or reuse_only else {"mode": "full"}
     report = {"started": out.name, **mode, "code": identity, "cases": results, "passed": len(results) - len(failed), "total": len(results), "failed": failed}

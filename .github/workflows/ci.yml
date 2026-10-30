@@ -174,7 +174,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 25.3 min, mean 24.9 min.
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 25.3 min, mean 24.9 min. The reuse, shard and gate stage cases of the CI groups E2E moved to the job
+    # CI Reuse and Gate E2E; this job runs only the selection cases of that E2E.
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -211,6 +212,34 @@ jobs:
             data/e2e/orchestration_broker/
           if-no-files-found: warn
           retention-days: 14
+
+  reuse_gate:
+    name: CI Reuse and Gate E2E
+    needs: plan
+    if: ${{ needs.plan.outputs.reuse != 'true' }}
+    runs-on: ubuntu-24.04
+    # Estimate (no hosted run yet): the reuse, shard and gate stage cases of the CI groups E2E took 88 s and 10 s on the Mac (Oct 30 2026, load 8; about 3 minutes
+    # hosted), and the setup and the gates add about 4. They moved out of Local CI Core, which took 25.9 of its 30 minutes. Resize from the first complete hosted run.
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Set up the checks
+        uses: ./.github/actions/setup
+
+      - name: Run the CI groups reuse and gate stage E2Es
+        env:
+          CI_PART: reuse_gate
+          CI_SCOPE: range
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
+        run: bash scripts/run_ci.sh
 
   lakehouse:
     name: Lakehouse ${{ matrix.layer }} Checks

@@ -161,6 +161,12 @@
       "^scripts/quality/(launcher_inputs|source_reads)\\.py$",
       "^config/quality/launcher_inputs\\.json$",
       "^scripts/ci/groups/launcher\\.sh$"
+    ],
+    "reuse_gate_checks": [
+      "^scripts/quality/(ci_[a-z0-9_]+|run_ci_[a-z0-9_]+|pre_push)\\.py$",
+      "^config/quality/ci_jobs\\.json$",
+      "^scripts/acquisition/(run_checks_[a-z0-9_]+\\.sh|shards\\.py)$",
+      "^scripts/ci/groups/reuse_gate_checks\\.sh$"
     ]
   },
   "full_only": [
