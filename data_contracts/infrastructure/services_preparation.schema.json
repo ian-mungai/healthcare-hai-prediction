@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reviewed services preparation inputs",
+  "description": "Nonsecret inputs of the services stack that the platform outputs and the committed defaults do not supply, bound to a reviewed byte digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "root", "variables"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "root": {"const": "services"},
+    "variables": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mlflow_enabled": {"type": "boolean"},
+        "mlflow_task_role_arn": {"type": "string", "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_mlflow_task_(dev|prod)$"},
+        "mlflow_host_ip": {"type": "string", "pattern": "^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$"},
+        "mlflow_artifact_bucket": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"}
+      }
+    }
+  }
+}

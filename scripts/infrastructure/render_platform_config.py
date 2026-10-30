@@ -11,10 +11,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
+from scripts.infrastructure.render_ecs_target import TargetError, read_capture_with_digest
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration, verify_project_identity, write_or_check
 from scripts.process import TimeoutExpired, run_command
 
 PLATFORM_DIRECTORY = REPO_ROOT / "infra" / "platform"
+SERVICES_PREPARATION_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/services_preparation.schema.json"
 TERRAFORM_SECONDS = 120
 PLATFORM_KEYS = ("aws_profile", "aws_region", "environment", "expected_account_id", "project_name")
 SERVICES_PLATFORM_KEYS = (
@@ -84,6 +88,24 @@ def services_values(storage: dict[str, str]) -> dict[str, Any]:
     return values
 
 
+def services_preparation(path: Path | None, sha256: str | None) -> dict[str, Any]:
+    """Read the nonsecret reviewed services inputs (the MLflow switch and its addresses) only when their exact bytes match the reviewed digest."""
+    if path is None and sha256 is None:
+        return {}
+    if path is None or sha256 is None:
+        raise ConfigurationError("Supply both the preparation input path and preparation SHA-256.")
+    try:
+        document, actual = read_capture_with_digest(path)
+    except TargetError as error:
+        raise ConfigurationError(str(error)) from None
+    if sha256 != actual:
+        raise ConfigurationError("The preparation SHA-256 differs from the reviewed bytes. No Terraform action was run.")
+    schema = json.loads(SERVICES_PREPARATION_SCHEMA.read_text(encoding="utf-8"))
+    if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
+        raise ConfigurationError("The preparation contract is invalid for the services root. No Terraform action was run.")
+    return dict(document["variables"])
+
+
 def services_image_values(directory: Path) -> dict[str, object]:
     """Read the separately recorded image digests for saved-plan comparison without rewriting the record."""
     try:
@@ -118,6 +140,8 @@ def main() -> None:
     parser.add_argument("--stack", choices=("platform", "services"), default="platform")
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--preparation-inputs", type=Path, help="services only: the reviewed nonsecret inputs file")
+    parser.add_argument("--preparation-sha256", help="services only: the SHA-256 of the reviewed inputs file")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true", help="Verify that the project profile authenticates as the derived policy user.")
     arguments = parser.parse_args()
@@ -125,7 +149,10 @@ def main() -> None:
     directory = REPO_ROOT / "infra" / stack
     try:
         storage, _ = load_configuration(arguments.env_file)
+        if stack != "services" and (arguments.preparation_inputs or arguments.preparation_sha256):
+            raise ConfigurationError("Preparation inputs are allowed only with --stack services.")
         values: dict[str, Any] = services_values(storage) if stack == "services" else platform_values(storage)
+        values.update(services_preparation(arguments.preparation_inputs, arguments.preparation_sha256))
         if arguments.check_plan:
             if stack == "platform":
                 # Platform plan inspection keeps its original environment and error messages.

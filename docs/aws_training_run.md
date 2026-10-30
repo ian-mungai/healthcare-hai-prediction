@@ -35,7 +35,7 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 4. `infra/platform`: add `mlflow`, `training` and `feature_store` to the ECR repositories and `mlflow` to the log groups.
 5. Images: build the `mlflow`, `training` and `feature_store` images and push them. See "Images" below. Then record the digests with `scripts.infrastructure.push_images record`.
 6. Secrets: put the values of the `mlflow_db_password` and `mlflow_admin_password` parameters with `scripts/infrastructure/secret_store.py`. Use new random values. MLflow reads the administrator password only when it first creates the account. To change it later, change it through the MLflow user interface first and then the parameter.
-7. `infra/services`: set `mlflow_enabled = true`, `mlflow_task_role_arn` (the `mlflow_task` ARN from the `training_roles` output), `mlflow_host_ip` (the private address of the host) and `mlflow_artifact_bucket`. Then restart the Postgres service once so its short database container creates the `mlflow` role and database.
+7. `infra/services`: write a nonsecret reviewed inputs file with `schema_version` 1, `root` `services` and the variables `mlflow_enabled` (true), `mlflow_task_role_arn` (the `mlflow_task` ARN from the `training_roles` output), `mlflow_host_ip` (the private address of the host) and `mlflow_artifact_bucket`. The schema is `data_contracts/infrastructure/services_preparation.schema.json`. Plan and apply with `bash scripts/infrastructure/terraform.sh --services --preparation-inputs <FILE> --preparation-sha256 <SHA256>`. Then restart the Postgres service once so its short database container creates the `mlflow` and `mlflow_auth` databases.
 8. `infra/jobs`: write the nonsecret reviewed inputs file (`schema_version` 1, `root` `jobs`, the variables `train_enabled`, `train_images`, `train_roles`, `train_resources`, `mlflow_admin_password_name` and `log_group_name` as `data_contracts/infrastructure/jobs_preparation.schema.json` defines them). `train_images` holds the repository URL and digest of the `training` and `feature_store` images. `train_roles` holds the `execution` and `train_task` ARNs from the IAM outputs. Plan and apply with `bash scripts/infrastructure/terraform.sh --jobs --preparation-inputs <FILE> --preparation-sha256 <SHA256>`, as `docs/ecs_target_contract.md` shows.
 
 ## Images
@@ -107,7 +107,7 @@ The MLflow service adds no instance. It runs beside the catalog on the host that
 Stop steps, in this order:
 
 1. The task stops itself when its last container ends. Check with `aws ecs describe-tasks` that no `job_train` task still runs.
-2. Stop the MLflow service: in `infra/services`, set `mlflow_enabled = false` and apply the shown plan. It removes the service and its task definition link. The database on the host volume and the artifacts in `mlflow/` stay.
+2. Stop the MLflow service: in `infra/services`, plan and apply again without the reviewed inputs file. A file that sets `mlflow_enabled` to false works too. The apply removes the service and its task definition link. The database on the host volume and the artifacts in `mlflow/` stay.
 3. Turn the host off as for the rest of the control plane, with `aws autoscaling set-desired-capacity ... --desired-capacity 0`. Verify through `describe-services` and `describe-auto-scaling-groups` that nothing billable still runs.
 4. Turn the job endpoints off: in `infra/iam`, set `job_endpoints_enabled = false` and apply the shown plan. It removes the gateway endpoint, the four interface endpoints and their rules. Verify that none is left:
 

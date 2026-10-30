@@ -36,8 +36,11 @@ while [[ $# -gt 0 ]]; do
     *) break ;;
   esac
 done
-if [[ -n "$preparation_inputs" || -n "$preparation_sha256" || "$identity_probe" == true ]]; then
-  [[ "$stack" == jobs ]] || { printf 'Preparation inputs and the identity probe are allowed only with --jobs.\n' >&2; exit 2; }
+if [[ "$identity_probe" == true ]]; then
+  [[ "$stack" == jobs ]] || { printf 'The identity probe is allowed only with --jobs.\n' >&2; exit 2; }
+fi
+if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
+  [[ "$stack" == jobs || "$stack" == services ]] || { printf 'Preparation inputs are allowed only with --jobs or --services.\n' >&2; exit 2; }
 fi
 if [[ ( -n "$preparation_inputs" && -z "$preparation_sha256" ) || ( -z "$preparation_inputs" && -n "$preparation_sha256" ) ]]; then
   printf 'Supply both --preparation-inputs and --preparation-sha256.\n' >&2
@@ -80,6 +83,9 @@ if [[ "$stack" == platform || "$stack" == services ]]; then
   directory="$directory/$stack"
   renderer=scripts.infrastructure.render_platform_config
   render_args=(--stack "$stack")
+  if [[ "$stack" == services && -n "$preparation_inputs" ]]; then
+    render_args+=(--preparation-inputs "$preparation_inputs" --preparation-sha256 "$preparation_sha256")
+  fi
 fi
 if [[ "$stack" == jobs ]]; then
   directory="$directory/jobs"
