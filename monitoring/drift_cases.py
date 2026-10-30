@@ -52,6 +52,7 @@ class Fixture:
     null_feature: str | None = None
     drop_from_current: str | None = None
     drop_from_reference: str | None = None
+    cat_as_number_in_current: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -63,12 +64,14 @@ def column_sql(name: str, shifted: bool) -> str:
     return f"{unit} + 0.5" if shifted else unit
 
 
-def write_matrix(path: Path, rows: int, year_of: str, shifted: tuple[str, ...], null_feature: str | None, drop: str | None) -> None:
+def write_matrix(path: Path, rows: int, year_of: str, shifted: tuple[str, ...], null_feature: str | None, drop: str | None, numeric_cat: bool = False) -> None:
     columns = []
     for name in FEATURES:
         if name == drop:
             continue
         expression = "NULL::DOUBLE" if name == null_feature else column_sql(name, name in shifted)
+        if numeric_cat and name == "f_cat":
+            expression = "(hash('f_cat' || i::VARCHAR) % 3)::DOUBLE"
         columns.append(f"{expression} AS {name}")
     projection = f"'k' || i::VARCHAR AS spine_key, {year_of} AS window_year, (hash('label' || i::VARCHAR) % 1000) / 500.0 AS label_value, {', '.join(columns)}"
     duckdb.sql("SELECT range AS i FROM range(?)", params=[rows]).project(projection).write_parquet(str(path))
@@ -78,7 +81,15 @@ def write_inputs(folder: Path, fixture: Fixture) -> dict[str, Path]:
     start = fixture.reference_newest_year - 2
     reference, current = folder / "reference.parquet", folder / "current.parquet"
     write_matrix(reference, fixture.reference_rows, f"{start} + i // ({fixture.reference_rows} // 3 + 1)", (), None, fixture.drop_from_reference)
-    write_matrix(current, fixture.current_rows, str(fixture.current_year), fixture.shifted, fixture.null_feature, fixture.drop_from_current)
+    write_matrix(
+        current,
+        fixture.current_rows,
+        str(fixture.current_year),
+        fixture.shifted,
+        fixture.null_feature,
+        fixture.drop_from_current,
+        fixture.cat_as_number_in_current,
+    )
     paths = {"reference-matrix": reference, "current-matrix": current}
     for name, hai_type, population, extra in (
         ("reference-manifest", fixture.hai_type, fixture.population, {"newest_window_year": fixture.reference_newest_year}),
@@ -236,6 +247,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("refuses_mixed_hai_types", refused("hai_type_mismatch", Fixture(hai_type="HAI_1", current_hai_type="HAI_2"))),
         ("refuses_a_feature_missing_from_current", refused("feature_missing", Fixture(drop_from_current="f_num_b"), "f_num_b")),
         ("refuses_a_feature_missing_from_reference", refused("feature_missing", Fixture(drop_from_reference="f_cat"), "f_cat")),
+        ("refuses_a_feature_of_another_type", refused("feature_type_differs", Fixture(cat_as_number_in_current=True), "f_cat")),
         ("refuses_an_all_missing_feature", refused("feature_all_missing", Fixture(null_feature="f_num_a"), "f_num_a")),
         ("refuses_an_empty_feature_list", refused("features_empty", Fixture(features=()))),
         ("names_the_missing_dependency", evidently_missing),
