@@ -2362,7 +2362,37 @@ run "streamlit_offering_an_unserved_type_is_refused" {
   command = plan
 
   variables {
-    streamlit_hai_types = "HAI_2"
+    streamlit_enabled       = true
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+    streamlit_hai_types     = "HAI_2"
+    model_api_enabled       = true
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  expect_failures = [var.streamlit_hai_types]
+}
+
+run "streamlit_off_does_not_check_the_api_types" {
+  command = plan
+
+  variables {
+    model_api_hai_types = "HAI_2"
+  }
+
+  assert {
+    condition     = !contains(keys(aws_ecs_task_definition.service), "streamlit")
+    error_message = "A page that is off must not constrain the types a valid API serves."
+  }
+}
+
+run "streamlit_with_repeated_types_is_refused" {
+  command = plan
+
+  variables {
+    streamlit_hai_types = "HAI_1,HAI_1"
   }
 
   expect_failures = [var.streamlit_hai_types]
