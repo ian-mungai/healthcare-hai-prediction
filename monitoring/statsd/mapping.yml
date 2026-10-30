@@ -1,0 +1,59 @@
+# StatsD exporter mapping for Airflow, which sends its metrics with the prefix airflow. Timers arrive in milliseconds and the exporter reports seconds. The last
+# rule drops everything else, so no unlisted Airflow metric adds series and the series count stays bounded by the DAG and task names.
+defaults:
+  match_type: glob
+  observer_type: histogram
+  histogram_options:
+    buckets: [5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 14400, 28800]
+
+mappings:
+  - match: "airflow.dagrun.duration.success.*"
+    name: "airflow_dagrun_duration_seconds"
+    labels:
+      dag_id: "$1"
+      state: "success"
+
+  - match: "airflow.dagrun.duration.failed.*"
+    name: "airflow_dagrun_duration_seconds"
+    labels:
+      dag_id: "$1"
+      state: "failed"
+
+  - match: "airflow.dag.*.*.duration"
+    name: "airflow_task_duration_seconds"
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+
+  - match: "airflow.ti.finish.*.*.*"
+    name: "airflow_task_instance_finished_total"
+    match_metric_type: counter
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+      state: "$3"
+
+  - match: "airflow.scheduler_heartbeat"
+    name: "airflow_scheduler_heartbeat_total"
+    match_metric_type: counter
+
+  - match: "airflow.dag_processing.import_errors"
+    name: "airflow_dag_processing_import_errors"
+    match_metric_type: gauge
+
+  - match: "airflow.executor.running_tasks"
+    name: "airflow_executor_running_tasks"
+    match_metric_type: gauge
+
+  - match: "airflow.executor.queued_tasks"
+    name: "airflow_executor_queued_tasks"
+    match_metric_type: gauge
+
+  - match: "airflow.executor.open_slots"
+    name: "airflow_executor_open_slots"
+    match_metric_type: gauge
+
+  - match: "."
+    match_type: regex
+    action: drop
+    name: "dropped"

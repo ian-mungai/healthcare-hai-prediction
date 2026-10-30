@@ -1,0 +1,12 @@
+# Loads every dashboard file in /etc/grafana/dashboards (the monitoring/grafana/dashboards folder of the checkout) and keeps the UI from changing them.
+apiVersion: 1
+
+providers:
+  - name: hai
+    folder: HAI
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/dashboards

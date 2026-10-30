@@ -1,0 +1,69 @@
+# Alert rules. No Alertmanager runs on the host, so an alert shows as firing in Prometheus and in Grafana and sends no message.
+groups:
+  - name: hai_airflow
+    rules:
+      - alert: AirflowSchedulerSilent
+        expr: sum(increase(airflow_scheduler_heartbeat_total[10m])) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: The Airflow scheduler sent no heartbeat for 10 minutes.
+
+      - alert: AirflowDagRunFailed
+        expr: sum by (dag_id) (increase(airflow_dagrun_duration_seconds_count{state="failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A DAG run failed in the last hour.
+
+      - alert: AirflowTaskFailed
+        expr: sum by (dag_id, task_id) (increase(airflow_task_instance_finished_total{state="failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A task failed in the last hour.
+
+      - alert: AirflowDagImportErrors
+        expr: airflow_dag_processing_import_errors > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A DAG file fails to import.
+
+  - name: hai_monitoring
+    rules:
+      - alert: StatsdExporterDown
+        expr: up{job="statsd_exporter"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Prometheus cannot scrape the StatsD exporter, so Airflow metrics are lost.
+
+  - name: hai_api
+    rules:
+      - alert: ApiDown
+        expr: up{job="hai_api"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot scrape the model API. Expected until the API runs on the host.
+
+      - alert: ApiErrorRateHigh
+        expr: sum(rate(hai_api_requests_total{status=~"5.."}[5m])) / sum(rate(hai_api_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5 percent of API requests ended in a server error for 10 minutes.
+
+      - alert: ApiLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(hai_api_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The 95th percentile API latency exceeded 1 second for 10 minutes.
