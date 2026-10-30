@@ -222,13 +222,16 @@ run "secrets_reach_only_the_phases_that_need_them" {
         contains(["pin", "verify", "feast"], container.name) ? [
           { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
           { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
-          ] : (container.name == "publish" ? [
+          ] : (layer == "silver" && container.name == "build" ? [
+            { name = "DBT_ENV_SECRET_POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
+            { name = "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
+            ] : container.name == "publish" ? [
             { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_id" },
             { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_secret" },
         ] : [])
       )
     ])])
-    error_message = "The reader pair reaches only the pin, verify and feast phases, the layer's own writer pair reaches only its publish phase and no other phase holds a credential."
+    error_message = "The reader pair reaches the pin, verify and feast phases and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and no other phase holds a credential."
   }
 
   assert {
@@ -237,8 +240,31 @@ run "secrets_reach_only_the_phases_that_need_them" {
   }
 
   assert {
-    condition     = toset(output.layer_secret_flow.containers_checked) == toset(["layer_silver/pin", "layer_silver/verify", "layer_silver/publish", "layer_gold/pin", "layer_gold/publish", "layer_features/pin", "layer_features/publish", "layer_features/feast"])
+    condition     = toset(output.layer_secret_flow.containers_checked) == toset(["layer_silver/pin", "layer_silver/build", "layer_silver/verify", "layer_silver/publish", "layer_gold/pin", "layer_gold/publish", "layer_features/pin", "layer_features/publish", "layer_features/feast"])
     error_message = "The shared check follows every container that receives a secret."
+  }
+}
+
+run "every_layer_container_names_its_duckdb_spill_folder_and_cap" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
+      for container in jsondecode(output.layer_container_definitions[layer]) : (
+        [for item in container.environment : item.value if item.name == "HAI_DUCKDB_TEMP_DIRECTORY"] == ["/workspace/duckdb_spill"] &&
+        [for item in container.environment : item.value if item.name == "HAI_DUCKDB_MAX_TEMP_BYTES"] == ["64424509440"]
+      )
+    ])])
+    error_message = "The task refuses a DuckDB build without an absolute spill folder and a positive byte cap, so every layer container names both, and the cap stays below the scratch volume."
+  }
+
+  assert {
+    condition     = tonumber(one([for item in jsondecode(output.layer_container_definitions["silver"])[2].environment : item.value if item.name == "HAI_DUCKDB_MAX_TEMP_BYTES"])) < 100 * 1073741824
+    error_message = "The spill cap must be smaller than the 100 GiB of scratch storage the default layer shape holds."
   }
 }
 
