@@ -22,7 +22,7 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
@@ -39,6 +39,7 @@ locals {
     "airflow_triggerer"     = "airflow"
     "marquez_api"           = "marquez"
     "marquez_web"           = "marquez"
+    "model_api"             = "airflow"
     "host_prepare"          = "airflow"
     "polaris_bootstrap"     = "polaris"
   }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {})
@@ -69,7 +70,7 @@ locals {
     restartAttemptPeriod = 60
   }
 
-  secret_names = {
+  secret_names = merge({
     postgres_password      = var.postgres_password_name
     airflow_db_password    = var.airflow_db_password_name
     marquez_db_password    = var.marquez_db_password_name
@@ -81,7 +82,7 @@ locals {
     mlflow_db_password     = var.mlflow_db_password_name
     mlflow_admin_password  = var.mlflow_admin_password_name
     broker_token           = var.broker_token_name
-  }
+  }, local.model_api_secret_names)
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value
   # enters the plan or the state. The variable validation guarantees the leading slash.
@@ -151,6 +152,15 @@ locals {
           volumes       = { code_repo = local.code_path, broker_state = local.broker_state_path }
         }
       } : key => service if var.broker_enabled
+    },
+    {
+      for key, service in {
+        model_api = {
+          task_role_arn = var.model_api_task_role_arn
+          containers    = local.model_api_containers
+          volumes       = {}
+        }
+      } : key => service if var.model_api_enabled
     }
   )
 
