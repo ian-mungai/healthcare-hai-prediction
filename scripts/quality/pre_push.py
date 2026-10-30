@@ -73,6 +73,7 @@ OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
 NO_REUSE = {"HAI_CI_REUSE": "off"}
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
+    "CI_TIMING_FILE",
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
