@@ -137,6 +137,8 @@ jobs:
 
       - name: Set up the checks
         uses: ./.github/actions/setup
+        with:
+          lint-tools: ${{ matrix.group == 'code' }}
 
       - name: Check commit messages
         if: ${{ matrix.group == 'privacy' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000')) }}

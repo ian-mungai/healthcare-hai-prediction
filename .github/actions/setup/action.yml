@@ -6,6 +6,11 @@ description: Terraform, Python, Node.js, Go and the pinned project tools every C
 # check-jsonschema use the pip cache (pip checks every hash again on a cache hit). The native tools (gitleaks, TFLint, trivy,
 # OSV-Scanner, zizmor, typos and the rest) are downloaded from the pins of config/quality_tools.json on every run and checked
 # by SHA-256 before they are written to .tools/bin; nothing restored from a cache is trusted without that check.
+inputs:
+  lint-tools:
+    description: Also install the Python lint tools and the AWS ruleset of TFLint, which only the hook group that runs those linters needs.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -61,12 +66,20 @@ runs:
         .venv/bin/python scripts/quality/install_tools.py
         .venv/bin/python -m scripts.quality.install_markdownlint
         .venv/bin/python -m scripts.quality.install_sqlfluff
-        .venv/bin/python -m scripts.quality.install_lint_tools
-        # The AWS ruleset of the tflint hook: TFLint verifies the release checksums and signature of the plugin pinned in .tflint.hcl.
-        .tools/bin/tflint --init --config .tflint.hcl
         # The launcher E2E renders dbt_deps jobs from the pinned local package archive, which Git does not track.
         if ! .venv/bin/python -m scripts.lakehouse.dbt_package_archive verify; then
           .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
         fi
         mkdir -p "$HOME/.terraform.d/plugin-cache"
         echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+
+    - name: Install the lint tools
+      if: ${{ inputs.lint-tools == 'true' }}
+      shell: bash
+      env:
+        # Without a token, the GitHub API limit on a shared runner address stops the plugin download.
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        .venv/bin/python -m scripts.quality.install_lint_tools
+        # The AWS ruleset of the tflint hook: TFLint verifies the release checksums and signature of the plugin pinned in .tflint.hcl.
+        .tools/bin/tflint --init --config .tflint.hcl
