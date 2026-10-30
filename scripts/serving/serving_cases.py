@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import tempfile
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -24,7 +25,7 @@ from typing import Any
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
-from scripts.serving import canary, deploy, keys, limiter, manifests, metrics, predictions, replay, service
+from scripts.serving import canary, deploy, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -526,10 +527,8 @@ def case_deploy_order(c: Checker) -> None:
         c.check("a retry of the rollback changes nothing", rollback_run(RUN_2).status == "unchanged" and w.store.read_active(HAI) == after_rollback)
         later = canary_run(RUN_3, "5", 20)
         c.check("a new run still deploys after the refusal", later.status == "written" and later.deployment.candidate_version == "5")
-        c.check(
-            "each deployment is numbered one above the one it replaced",
-            [d.sequence for d in (canary.Deployment.parse(w.store.read_active(HAI).body),)] == [3] if w.store.read_active(HAI) else False,
-        )
+        newest = w.store.read_active(HAI)
+        c.check("each deployment is numbered one above the one it replaced", newest is not None and canary.Deployment.parse(newest.body).sequence == 3)
         c.check("a retry of the oldest deploy is still refused", refused(lambda: canary_run(RUN_1)))
         c.check("the production alias was never written", w.registry.alias_writes == 0)
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
@@ -631,6 +630,83 @@ def case_candidate_feature_errors(c: Checker) -> None:
         outage = [ask(w, key).status for key in canary_keys[:5]]
         c.check("a store that is loading gives 503 for canary requests", outage == [503] * 5)
         c.check("a store outage does not eject the canary", w.api.health().body[HAI]["candidate"] == CANDIDATE)
+
+
+class SlowWriter:
+    """A stand-in for the PyIceberg append: it waits for ``release`` and then commits, as a slow commit does after the caller gave up."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.committed: list[str] = []
+        self.calls = 0
+        self.fail: Exception | None = None
+        self.blocking = True
+
+    def __call__(self, rows: Sequence[Mapping[str, Any]], timeout: float) -> None:
+        self.calls += 1
+        self.started.set()
+        if self.blocking:
+            self.release.wait(10)
+        if self.fail is not None:
+            raise self.fail
+        self.committed.extend(str(row["request_id"]) for row in rows)
+
+
+def sink_rows(*names: str) -> list[dict[str, Any]]:
+    return [{"request_id": name} for name in names]
+
+
+def case_sink_late_commit(c: Checker) -> None:
+    """After an append timeout the one worker keeps its place, a late commit is remembered and not sent again, and the worker has an owned shutdown."""
+    environ = {"POLARIS_URI": "http://127.0.0.1:1/api/catalog", "POLARIS_CLIENT_ID": "writer", "POLARIS_CLIENT_SECRET": "x"}
+    writer = SlowWriter()
+    sink = iceberg_sink.IcebergSink(environ, writer=writer)
+    timed_out = False
+    try:
+        sink.append(sink_rows("a", "b", "c"), 0.2)
+    except TimeoutError:
+        timed_out = True
+    c.check("a slow commit ends in a timeout for the caller", timed_out and writer.started.is_set())
+    second = False
+    try:
+        sink.append(sink_rows("a", "b", "c", "d"), 0.2)
+    except TimeoutError:
+        second = True
+    c.check("a second append is refused while the first still runs, with no second writer", second and writer.calls == 1)
+    writer.release.set()
+    c.check("the late commit finishes within a deadline", sink.wait_idle(5.0))
+    sink.append(sink_rows("a", "b", "c", "d"), 1.0)
+    c.check("the retry sends only the row the late commit did not cover", writer.committed == ["a", "b", "c", "d"] and writer.calls == 2)
+    sink.append(sink_rows("e"), 1.0)
+    c.check("a later append sends only its own rows", writer.committed == ["a", "b", "c", "d", "e"])
+    failing = SlowWriter()
+    failing.blocking = False
+    failing.fail = OSError("synthetic commit failure")
+    other = iceberg_sink.IcebergSink(environ, writer=failing)
+    raised = False
+    try:
+        other.append(sink_rows("x"), 1.0)
+    except OSError:
+        raised = True
+    failing.fail = None
+    other.append(sink_rows("x"), 1.0)
+    c.check("a failed commit is raised and its rows are sent again", raised and failing.committed == ["x"])
+    c.check("close reports a clean stop when nothing runs", sink.close(1.0) is True)
+    closed = False
+    try:
+        sink.append(sink_rows("f"), 1.0)
+    except RuntimeError:
+        closed = True
+    c.check("a closed sink refuses new appends", closed)
+    stuck = SlowWriter()
+    hanging = iceberg_sink.IcebergSink(environ, writer=stuck)
+    with contextlib.suppress(TimeoutError):
+        hanging.append(sink_rows("g"), 0.1)
+    c.check("close reports a worker that does not stop within its deadline", hanging.close(0.2) is False)
+    c.check("a stuck worker is a daemon thread, so it cannot hold the process open", hanging.worker_is_daemon())
+    stuck.release.set()
+    c.check("the stuck worker ends once released", hanging.wait_idle(5.0))
 
 
 def refused(call: Callable[[], object]) -> bool:
@@ -937,6 +1013,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
     "predictions_append": (case_predictions, "iceberg"),
+    "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
