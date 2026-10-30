@@ -1178,6 +1178,15 @@ HOSTED_ENTRY_POINTS = {
         ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
         ("scripts.infrastructure.run_aws_tasks_e2e", ("scripts/infrastructure/run_aws_tasks_e2e.py", "scripts/infrastructure/aws_tasks.py")),
         ("scripts.infrastructure.aws_tasks_plants", ("scripts/infrastructure/aws_tasks_plants.py", "scripts/infrastructure/aws_tasks.py")),
+        (
+            "scripts.infrastructure.run_iam_preflight_e2e",
+            (
+                "scripts/infrastructure/run_iam_preflight_e2e.py",
+                "scripts/infrastructure/iam_preflight.py",
+                "scripts/infrastructure/iam_preflight_policies.py",
+                "scripts/infrastructure/iam_preflight_stand_in.py",
+            ),
+        ),
     ),
     "lakehouse_gold_writer_setup": (
         (

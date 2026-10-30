@@ -372,3 +372,17 @@ protection are preserved. Synthetic E2E checks verify that the four exceptions
 do not suppress other resources or the versioning control. Passing static
 checks with these exceptions does not establish that deferred controls exist.
 No AWS changes implementing these four deferred controls have been applied.
+
+## IAM preflight
+
+Before an attended AWS step, the owner runs one read-only check that each project role holds the grants the project needs:
+
+```sh
+.venv/bin/python -m scripts.infrastructure.iam_preflight
+```
+
+The command reads the profile, region and account from `.env` and confirms that the profile authenticates as its same-named user. Then it calls `iam simulate-principal-policy` once for each row of `config/aws/iam_preflight_checks.json`. Each row names a role, an action, a resource and, where the policy has a condition, the condition keys. It prints one `PASS` or `FAIL` line per row and exits with 1 if any row fails. Only an `allowed` decision passes. A denied simulation call, a missing role, an answer that is not understood and a call that outlives its deadline (30 seconds for a call, 600 for the run) are failures with a message, never passes. Exit status 2 means the setup is wrong. The check makes no change in AWS.
+
+The project profile needs `iam:SimulatePrincipalPolicy` on the project roles. The statement `SimulateProjectRoles` in `infra/iam/policies/healthcare_hai_prediction_iam_policy.json` grants it. It takes effect after the owner applies the policies with `infra/iam/scripts/manage_policies.py`.
+
+`.venv/bin/python -m scripts.infrastructure.iam_preflight_policies` checks the table offline. It renders the policies that the IAM stack attaches to each role and evaluates every row, so a role change that removes a listed grant fails without AWS. A row with `pending_fix` records a grant that is known to be missing. The offline check keeps it denied and asks for the field to be removed once the role gains the grant. `scripts.infrastructure.run_iam_preflight_e2e` runs both commands against a stand-in `aws` that answers from the rendered policies, with planted defects. The stand-in models the policy files and not IAM itself.

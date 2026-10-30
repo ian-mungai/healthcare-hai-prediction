@@ -20,5 +20,6 @@ configuration_checks() {
   timed "configuration_checks: DVC training baseline E2E" "$python_bin" -m scripts.training.run_dvc_baseline_e2e
   timed "configuration_checks: task cleanup E2E" "$python_bin" -m scripts.infrastructure.run_aws_tasks_e2e
   timed "configuration_checks: task cleanup plants" "$python_bin" -m scripts.infrastructure.aws_tasks_plants
+  timed "configuration_checks: IAM preflight E2E" "$python_bin" -m scripts.infrastructure.run_iam_preflight_e2e --output-directory "$quality_output/iam_preflight"
   timed "configuration_checks: pytest with coverage" "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
 }

@@ -36,5 +36,6 @@ aws-account scripts/orchestration/ecs_broker_fake.py -- a synthetic all-zeros ac
 aws-account infra/iam/tests/broker.tftest.hcl -- synthetic all-ones account IDs in mocked broker IAM tests; not the project's account
 aws-account scripts/infrastructure/broker_policy_cases.py -- a synthetic all-ones account ID in the broker policy cases; not the project's account
 aws-account infra/jobs/tests/promote.tftest.hcl -- synthetic all-ones account IDs in mocked promotion task tests; not the project's account
+aws-account scripts/infrastructure/iam_preflight_policies.py -- a synthetic all-ones account ID for the offline preflight run; not the project's account
 aws-account infra/jobs/tests/layers.tftest.hcl -- synthetic all-ones account IDs in mocked layer task definition tests; not the project account
 aws-account infra/iam/tests/job_layer_runs.tftest.hcl -- synthetic all-ones account IDs in mocked layer run IAM tests; not the project account
