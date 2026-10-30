@@ -163,6 +163,32 @@ def mounted_folder_missing(root: Path) -> dict[str, bool]:
     return reported(root, lambda tree: shutil.rmtree(tree / "monitoring/statsd"), "monitoring/statsd")
 
 
+def scrape_job_without_targets(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, 'targets: ["127.0.0.1:9102"]', "targets: []"), "job statsd_exporter must scrape 127.0.0.1:9102")
+
+
+def scrape_job_with_another_target(root: Path) -> dict[str, bool]:
+    return reported(
+        root, lambda tree: edit(tree, SCRAPE, 'targets: ["127.0.0.1:8000"]', 'targets: ["127.0.0.1:8001"]'), "job hai_api must scrape 127.0.0.1:8000"
+    )
+
+
+def scheduler_alert_misses_a_silent_start(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, ALERTS, " or absent(airflow_scheduler_heartbeat_total)", ""),
+        "AirflowSchedulerSilent must also fire when no heartbeat series exists",
+    )
+
+
+def dropped_panel_reads_the_unmapped_counter(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, DASHBOARD, 'statsd_exporter_events_actions_total{action=\\"drop\\"}', "statsd_exporter_events_unmapped_total"),
+        "statsd_exporter_events_unmapped_total",
+    )
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "committed_files_pass": committed_files_pass,
     "dashboard_metric_typo": dashboard_metric_typo,
@@ -184,4 +210,8 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "counter_without_total_suffix": counter_without_total_suffix,
     "mapping_is_not_yaml": mapping_is_not_yaml,
     "mounted_folder_missing": mounted_folder_missing,
+    "scrape_job_without_targets": scrape_job_without_targets,
+    "scrape_job_with_another_target": scrape_job_with_another_target,
+    "scheduler_alert_misses_a_silent_start": scheduler_alert_misses_a_silent_start,
+    "dropped_panel_reads_the_unmapped_counter": dropped_panel_reads_the_unmapped_counter,
 }

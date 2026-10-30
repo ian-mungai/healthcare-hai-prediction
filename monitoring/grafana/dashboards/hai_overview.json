@@ -624,7 +624,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "rate(statsd_exporter_events_unmapped_total[5m])",
+          "expr": "rate(statsd_exporter_events_actions_total{action=\"drop\"}[5m])",
           "legendFormat": ""
         }
       ],

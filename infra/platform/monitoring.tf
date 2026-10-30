@@ -4,7 +4,7 @@
 resource "aws_cloudwatch_log_group" "platform" {
   #checkov:skip=CKV_AWS_338:Seven-day retention is the owner-accepted budget design; logs are not the record of any result.
   #checkov:skip=CKV_AWS_158:Log groups use CloudWatch's default encryption; a customer-managed key adds cost the budget does not cover.
-  for_each = var.log_groups
+  for_each = local.log_groups
 
   name              = format(local.name, each.key)
   retention_in_days = var.log_retention_days

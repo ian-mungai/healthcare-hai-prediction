@@ -9,6 +9,10 @@ provider "aws" {
 }
 
 locals {
+  # The monitoring foundation exists only while its flag is true, so a false flag leaves the stack as it was.
+  ecr_repositories = var.monitoring_enabled ? setunion(var.ecr_repositories, ["prometheus", "grafana", "statsd_exporter"]) : var.ecr_repositories
+  log_groups       = var.monitoring_enabled ? setunion(var.log_groups, ["monitoring"]) : var.log_groups
+
   # The Project tag holds the project name as it is, the value the data bucket carries too. Every create of the project
   # profile must send it with exactly this key and value, so the cost budget (in the IAM stack) counts the resource.
   project_tag = var.project_name

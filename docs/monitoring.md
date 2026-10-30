@@ -76,13 +76,13 @@ To measure, read the memory of each container during a silver and a gold run (`d
 - **Grafana:** keeps only its small database and sessions on the data volume. Dashboards come from files and it stores no samples.
 - **Container logs:** go to the `monitoring` CloudWatch log group, which keeps seven days.
 
-Worst case on the data volume is about 2 GB for Prometheus plus the Grafana database.
+Plan for about 2 GB on the data volume for Prometheus plus the Grafana database. This is a target, not a hard cap: retention deletes only whole blocks, so the write-ahead log, recent samples and a running compaction can pass it for a time.
 
 ## Owner steps
 
 Nothing here is applied or pushed by the code change. Each step is the owner's, under the project profile unless noted.
 
-1. **Foundation:** plan and apply the platform stack (three ECR repositories `prometheus`, `grafana` and `statsd_exporter` plus the `monitoring` log group) and the IAM stack (the execution role may read the Grafana password parameter and the project user may create it).
+1. **Foundation:** set `monitoring_enabled = true` in the platform variable file, then plan and apply the platform stack (three ECR repositories `prometheus`, `grafana` and `statsd_exporter` plus the `monitoring` log group) and the IAM stack (the execution role may read the Grafana password parameter and the project user may create it).
 2. **Password:** create the Grafana password once. The command prints only whether it created the parameter:
 
    ```sh
