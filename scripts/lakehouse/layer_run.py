@@ -18,8 +18,12 @@ its candidate snapshot before the commit, the commit record against the candidat
 write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin, and the pin must name exactly the
 configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold). Two extra checks run beside them: the staged code objects keep
 their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast`` run only for a run that passed them. Any failed
-check exits 1 and names the phase. A retry of one run repeats every step on the same keys
-and snapshot IDs and writes no second publication.
+check exits 1 and names the phase.
+
+A run ID is used once. The first real pin writes ``lakehouse/layer_runs/<layer>/<run>/state/pinned.json`` only if it does not exist. A second pin of the
+same run ID fails with a named error before it writes anything shared. An interrupted run is not resumed: it restarts under a new run ID after the owner has
+checked the abandoned catalog branch. A dry run takes no run ID and leaves no state, so it never blocks the real run. A later phase may be repeated in
+the workspace of the same task.
 
 The whole task has a deadline, the one the broker table gives the job, counted from the start time the init container writes to
 ``<work>/task_started``. A hand-started task has no broker to stop it, so every phase runs under what is left of that deadline and fails by name when
@@ -48,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
-from scripts.lakehouse import pins, provenance
+from scripts.lakehouse import code_archive, pins, provenance
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
 
@@ -207,6 +211,23 @@ def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
     raise StepError(f"the version listing of {prefix} is larger than {LIST_PAGES} pages: refusing to compare a partial listing")
 
 
+def claim_run(job: Job, bucket: str, client: Any) -> None:
+    """Take the run ID, once. The first pin of a real run writes ``state/pinned.json`` under the run's prefix only if no such object exists, so a second
+    task for the same run ID is refused here, before it unpacks, pins or writes anything shared. An interrupted run is not resumed: it restarts under a new
+    run ID after the owner has checked the abandoned catalog branch."""
+    key = f"{UPLOAD_PREFIX}/{job.layer}/{job.run}/state/pinned.json"
+    body = json.dumps({"run_id": job.run, "layer": job.layer, "mode": job.mode}, sort_keys=True) + "\n"
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*")
+    except client.exceptions.ClientError as error:
+        if error.response["Error"]["Code"] not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise
+        raise StepError(
+            f"run {job.run} already has state in the bucket ({key}). A used run ID is never resumed: "
+            "check the abandoned catalog branch, then start a new run ID"
+        ) from None
+
+
 def check_input_versions(job: Job, bucket: str, client: Any) -> None:
     """The input prefix holds the same versions as when the pin phase listed it: nothing added, replaced or deleted during the run."""
     recorded = identity(job).get("input_listing")
@@ -273,12 +294,24 @@ def bundle(job: Job, archive: Path, code_sha256: str, evidence: dict[str, Any] |
     (job.folder / "layer_run.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
 
+def check_input_run(job: Job) -> None:
+    """Gold and features pin a committed run of the layer below, which the caller must name. Checked before the run ID is claimed."""
+    if job.layer != "silver" and not RUN_ID.fullmatch(job.input_run):
+        raise StepError(f"the {job.layer} pin needs the input run ID (INPUT_RUN_ID or --input-run)")
+
+
+def check_archive(archive: Path, code_sha256: str) -> None:
+    """Refuse an archive the pin cannot use before the run ID is claimed, so a bad artifact does not consume the approved ID."""
+    try:
+        code_archive.check(archive, expected=code_sha256)
+    except (code_archive.ArchiveError, OSError, tarfile.TarError) as error:
+        raise StepError(f"code_archive: {error}") from None
+
+
 def pin(job: Job) -> None:
     if job.layer == "silver":
         run_module(job, "scripts.lakehouse.pins", ["pin", "--run", job.run])
         return
-    if not RUN_ID.fullmatch(job.input_run):
-        raise StepError(f"the {job.layer} pin needs the input run ID (INPUT_RUN_ID or --input-run)")
     record = job.folder / PIN_FILE[job.layer]
     common = ["--run", job.run, "--mode", job.mode, "--source-run", job.input_run]
     if job.layer == "gold":
@@ -687,9 +720,13 @@ def mark_dry(job: Job) -> None:
 
 def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     if phase == "pin":
+        check_input_run(job)
+        check_archive(args.archive or args.work / "code.tar.gz", args.code_sha256)
         evidence = None
         if args.bucket and job.mode == "real" and job.local is None:
             client = s3_client()
+            if not job.dry_run:
+                claim_run(job, args.bucket, client)
             evidence = {
                 "input_objects": staged_objects(client, args.bucket, job.run),
                 "input_listing": input_listing(client, args.bucket, input_prefix(job)),

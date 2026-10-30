@@ -1290,6 +1290,7 @@
     "scripts/lakehouse/catalog_journal.py",
     "scripts/lakehouse/catalog_migration_cases.py",
     "scripts/lakehouse/checksums.py",
+    "scripts/lakehouse/code_archive.py",
     "scripts/lakehouse/county_change_seed.py",
     "scripts/lakehouse/cutover_route.py",
     "scripts/lakehouse/dbt.sh",
