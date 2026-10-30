@@ -1,0 +1,116 @@
+{
+  "limits": [
+    "The outcome windows are assumed to be calendar years. This comes from the spine model and was not checked against the staged HAI windows.",
+    "The FY 2026 and FY 2027 periods come from QualityNet pages and a search summary. The CMS PDFs for those years returned an error when fetched and have not been read.",
+    "The FY 2015 to FY 2021 periods come from one QualityNet table, with no second source.",
+    "Public flags for FY 2027 are not confirmed. A search summary gives its review period as Sep 10 to Oct 9 2026. If the flag table has none, the validation reports them as missing.",
+    "The PSI 90 period of FY 2025 differs between QualityNet and a CMS contractor slide deck. The mapping uses only the NHSN period, which both sources give as 1/1/22 to 12/31/23."
+  ],
+  "mapping": {
+    "2015": 2017,
+    "2016": 2018,
+    "2017": 2019,
+    "2018": 2020,
+    "2019": 2021,
+    "2022": 2024,
+    "2023": 2025,
+    "2024": 2026,
+    "2025": 2027
+  },
+  "nhsn_periods": {
+    "2015": {
+      "end": "2013-12-31",
+      "psi_90": "7/1/11 to 6/30/13",
+      "start": "2012-01-01"
+    },
+    "2016": {
+      "end": "2014-12-31",
+      "psi_90": "7/1/12 to 6/30/14",
+      "start": "2013-01-01"
+    },
+    "2017": {
+      "end": "2015-12-31",
+      "psi_90": "7/1/13 to 6/30/15",
+      "start": "2014-01-01"
+    },
+    "2018": {
+      "end": "2016-12-31",
+      "psi_90": "7/1/14 to 9/30/15",
+      "start": "2015-01-01"
+    },
+    "2019": {
+      "end": "2017-12-31",
+      "psi_90": "10/1/15 to 6/30/17",
+      "start": "2016-01-01"
+    },
+    "2020": {
+      "end": "2018-12-31",
+      "psi_90": "7/1/16 to 6/30/18",
+      "start": "2017-01-01"
+    },
+    "2021": {
+      "end": "2019-12-31",
+      "psi_90": "7/1/17 to 6/30/19",
+      "start": "2018-01-01"
+    },
+    "2022": {
+      "end": "2019-12-31",
+      "psi_90": "7/1/18 to 12/31/19",
+      "start": "2019-01-01"
+    },
+    "2023": {
+      "end": "2021-12-31",
+      "psi_90": "N/A",
+      "start": "2021-01-01"
+    },
+    "2024": {
+      "end": "2022-12-31",
+      "psi_90": "1/1/21 to 6/30/22",
+      "start": "2022-01-01"
+    },
+    "2025": {
+      "end": "2023-12-31",
+      "psi_90": "7/1/21 to 6/30/23",
+      "start": "2022-01-01"
+    },
+    "2026": {
+      "end": "2024-12-31",
+      "psi_90": "7/1/22 to 6/30/24",
+      "start": "2023-01-01"
+    },
+    "2027": {
+      "end": "2025-12-31",
+      "psi_90": "7/1/23 to 6/30/25",
+      "start": "2024-01-01"
+    },
+    "2028": {
+      "end": "2026-12-31",
+      "psi_90": "7/1/24 to 6/30/26",
+      "start": "2025-01-01"
+    }
+  },
+  "omitted_window_years": {
+    "2020": "No program year's NHSN period ends in 2020: CMS excluded all CY 2020 data.",
+    "2021": "FY 2023 (NHSN period 1/1/21 to 12/31/21) has no hospital scores or flags: CMS did not calculate measure scores for any hospital for FY 2023."
+  },
+  "rule": "An outcome window year maps to the HAC Reduction Program year whose CDC NHSN HAI performance period ends in that calendar year (program year = window year + 2).",
+  "schema": 1,
+  "sources": [
+    {
+      "covers": "Program year table FY 2015 to FY 2027 with footnotes on CY 2020 and CY 2021 exclusions and the FY 2023 pause",
+      "url": "https://qualitynet.cms.gov/publicgateway/public/inpatient/hac/measures"
+    },
+    {
+      "covers": "FY 2027 and FY 2028 periods and the two-year period advanced by one year each program year",
+      "url": "https://qualitynet.cms.gov/publicgateway/public/inpatient/hac"
+    },
+    {
+      "covers": "Key program dates for FY 2022 to FY 2024 (read in full from the PDF text)",
+      "url": "https://www.cms.gov/files/document/fy-23-hacrp-key-dates-matrix.pdf"
+    },
+    {
+      "covers": "FY 2025 overview slides: NHSN period 1/1/22 to 12/31/23 (its PSI 90 period differs from the QualityNet table)",
+      "url": "https://www.qualityreportingcenter.com/globalassets/iqr2024events/vbp-08202024/hsag_fy2025_hacrphrrp-overview_august2024_vfinal508.pdf"
+    }
+  ]
+}

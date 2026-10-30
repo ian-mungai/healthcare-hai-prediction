@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "limits": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "mapping": {
+      "additionalProperties": {
+        "maximum": 2100,
+        "minimum": 2000,
+        "type": "integer"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[0-9]{4}$"
+      },
+      "type": "object"
+    },
+    "nhsn_periods": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "pattern": "^[0-9]{4}-12-31$",
+            "type": "string"
+          },
+          "psi_90": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "start": {
+            "pattern": "^[0-9]{4}-01-01$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "psi_90"
+        ],
+        "type": "object"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[0-9]{4}$"
+      },
+      "type": "object"
+    },
+    "omitted_window_years": {
+      "additionalProperties": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^[0-9]{4}$"
+      },
+      "type": "object"
+    },
+    "rule": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": 1
+    },
+    "sources": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "covers": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "url": {
+            "pattern": "^https://",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "covers"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "mapping",
+    "nhsn_periods",
+    "rule",
+    "omitted_window_years",
+    "limits",
+    "sources"
+  ],
+  "title": "HAC year mapping",
+  "type": "object"
+}

@@ -47,6 +47,12 @@
       ]
     },
     {
+      "schema": "data_contracts/training/hac_year_mapping.schema.json",
+      "files": [
+        "config/training/hac_year_mapping.json"
+      ]
+    },
+    {
       "schema": "data_contracts/training/models.schema.json",
       "files": [
         "config/training/models.json"
