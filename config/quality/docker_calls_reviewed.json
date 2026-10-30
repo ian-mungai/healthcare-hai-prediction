@@ -327,7 +327,7 @@
         "scripts/lakehouse/cutover_route.py": "sha256:c61da0d4b6585c2f6358b0e58ec2aaf235b4a4966fda74ca2125c24e69032299",
         "scripts/lakehouse/mac_route_probe.py": "sha256:32233ee8f47f7fa2933c3b6a9c11e3d86c8619666bb509b6120a3ac421d08b52",
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
-        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:17c2671f748b729688fa72f3f330287ee3537b4976301373c9d7ce4d95c4fb32",
+        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:e2638d0e9b634a1828f62d7ccbae152f7abd756fd1ba1d20af68c9a3141dabf2",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
         "scripts/lakehouse/run_launcher_e2e.py": "sha256:0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
@@ -1322,11 +1322,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2257,
+      "line": 2258,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d46f0cf931c6eef0994f13214b49df07e63b6dc4c261f580931b26b4e3748926",
+      "file_sha256": "0bc28187b2d65c30797f7e6e4283427be9510ad4d1328fbceac77b9352b00679",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:744f41bdaa240935706eb40203b3a2cda180fd47c6fc59d0a89b27f056cd488e",
@@ -1340,11 +1340,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2309,
+      "line": 2310,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d46f0cf931c6eef0994f13214b49df07e63b6dc4c261f580931b26b4e3748926",
+      "file_sha256": "0bc28187b2d65c30797f7e6e4283427be9510ad4d1328fbceac77b9352b00679",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:744f41bdaa240935706eb40203b3a2cda180fd47c6fc59d0a89b27f056cd488e",
