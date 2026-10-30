@@ -81,7 +81,7 @@ def aws_environment(**changes: str | None) -> dict[str, str]:
     """The job environment of an AWS Feast job as the job definition would give it (synthetic values)."""
     environ: dict[str, str] = {
         "FEAST_PROFILE": "aws",
-        "POLARIS_URI": "http://127.0.0.1:9/api/catalog",
+        "POLARIS_URI": PORT_OF_NOTHING,
         "POLARIS_CLIENT_ID": "reader-id-1",
         "POLARIS_CLIENT_SECRET": SENTINEL,
         "FEAST_REDIS_HOST": "redis.example.internal",
@@ -634,6 +634,10 @@ def case_fa13(c: Checker) -> None:
     c.check(
         "every variable of the AWS file is one the profile sets",
         set(reads.VARIABLE.findall(text)) <= set(reads.VARIABLE.findall(feast_job.SETTINGS_FILE.read_text())),
+    )
+    c.check(
+        "the variables of the AWS file are exactly the ones the session sets",
+        {first or second for first, second in reads.VARIABLE.findall(text)} == set(feast_aws.YAML_VARIABLES),
     )
     c.check("the AWS file holds no password or host literal", "password=${REDIS_PASSWORD}" in text and "${FEAST_REDIS_HOST}" in text)
     c.check("both profiles use the one definitions module", (feast_job.REPO / "definitions.py").is_file() and not list(feast_job.REPO.glob("definitions_*.py")))
