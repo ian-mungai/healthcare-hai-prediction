@@ -2332,6 +2332,8 @@ def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
         "scripts/quality/ci_groups.py",
         "config/quality/ci_groups.json",
         "config/quality/launcher_inputs.json",
+        "config/lakehouse/bronze_tables.json",
+        "config/lakehouse/aws_bronze_grants.json",
         *BODY_FILES,
     ]
     names += [path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/infrastructure").glob("*.sh")]
