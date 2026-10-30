@@ -1,9 +1,9 @@
 """Mirror published Iceberg tables into read-only Glue registrations for Athena. Polaris stays the catalog and the source of truth.
 
-After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``. For each table that ``config/lakehouse/athena_mirror.json`` lists, the
-mirror makes one Glue table whose ``metadata_location`` is the metadata file that Polaris reports as current. A repeat with the same file writes
-nothing. Only mode ``real`` and the configured layers are mirrored, so bronze, test namespaces and the runs table never reach Glue. The configured
-tables must be Public in the dbt model metadata (``violations``). The mirror never raises: a failure comes back in the report.
+After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``. For every table that the publish contract names, Public and Confidential
+alike, the mirror makes one Glue table whose ``metadata_location`` is the metadata file that Polaris reports as current. A repeat with the same file
+writes nothing. Only mode ``real`` and the gold layer of ``config/lakehouse/athena_mirror.json`` are mirrored, so silver, features, bronze, test
+namespaces and the runs table never reach Glue (``violations``). The mirror never raises: a failure comes back in the report.
 
 ``python -m scripts.lakehouse.glue_mirror check --layer gold`` compares each registration with Polaris and exits 1 on any difference. It writes nothing.
 """
@@ -22,10 +22,11 @@ from typing import Any, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "config/lakehouse/athena_mirror.json"
+CONTRACTS = {"gold": REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"}
+MIRRORED_LAYERS = ("gold",)
 POINTER = re.compile(r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/(?:[^/]+/)*metadata/[^/]+\.metadata\.json")
 CURRENT_METADATA_FILE = "SELECT file FROM {table}.metadata_log_entries ORDER BY timestamp DESC LIMIT 1"
 TABLE_NAME = re.compile(r"[a-z][a-z0-9_]{0,127}")
-PUBLIC = "Public"
 LOCATION_CUT = "/metadata/"
 
 
@@ -37,7 +38,6 @@ class MirrorError(RuntimeError):
 class Layer:
     namespace: str
     database: str
-    tables: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -78,25 +78,25 @@ class SparkSource:
 
 def load_config(path: Path = CONFIG) -> MirrorConfig:
     document = json.loads(path.read_text())
-    layers = {name: Layer(item["namespace"], item["database"], tuple(item["tables"])) for name, item in document["layers"].items()}
+    layers = {name: Layer(item["namespace"], item["database"]) for name, item in document["layers"].items()}
     return MirrorConfig(document["enabled"] is True, document["mirror_marker"], layers)
 
 
-def violations(config: MirrorConfig, classes: Mapping[str, str], contract: Mapping[str, set[str]]) -> list[str]:
-    """Why the configured tables may not be mirrored: a layer outside silver and gold, a table outside the publish contract or one that is not Public."""
+def violations(config: MirrorConfig) -> list[str]:
+    """Why the config may not be used: a layer other than gold, or a namespace other than the layer's own (a test namespace, for example)."""
     found: list[str] = []
     for layer, spec in config.layers.items():
-        if layer not in ("silver", "gold") or spec.namespace != layer:
-            found.append(f"layer {layer} may not be mirrored: only the silver and gold namespaces")
-            continue
-        for table in spec.tables:
-            if not TABLE_NAME.fullmatch(table):
-                found.append(f"{layer}.{table} is not a plain table name")
-            elif table not in contract.get(layer, set()):
-                found.append(f"{layer}.{table} is not a table of the {layer} publish contract")
-            elif classes.get(table) != PUBLIC:
-                found.append(f"{layer}.{table} is classified {classes.get(table)}, not {PUBLIC}")
+        if layer not in MIRRORED_LAYERS:
+            found.append(f"layer {layer} may not be mirrored: only {', '.join(MIRRORED_LAYERS)}")
+        elif spec.namespace != layer:
+            found.append(f"layer {layer} names namespace {spec.namespace}, not {layer}")
     return found
+
+
+def contract_tables(layer: str) -> list[str]:
+    """Every table the layer's publish contract names, which is every table the layer publishes."""
+    document = json.loads(CONTRACTS[layer].read_text())
+    return sorted(document["publish"]["tables"])
 
 
 def tables_to_mirror(config: MirrorConfig, layer: str, mode: str, published: Sequence[str]) -> tuple[list[str], str]:
@@ -108,8 +108,8 @@ def tables_to_mirror(config: MirrorConfig, layer: str, mode: str, published: Seq
         return [], f"mode {mode} is a test mode"
     if spec is None or spec.namespace != layer:
         return [], f"namespace {layer} is not mirrored"
-    wanted = [table for table in spec.tables if table in published]
-    return wanted, "" if wanted else f"no configured table of {layer} was published"
+    wanted = list(dict.fromkeys(published))
+    return wanted, "" if wanted else f"the {layer} publish named no table"
 
 
 def explain(error: Exception) -> str:
@@ -134,6 +134,8 @@ def current(glue: Any, database: str, table: str) -> dict[str, Any] | None:
 
 def register(config: MirrorConfig, spec: Layer, table: str, source: Source, glue: Any) -> str:
     """Create or move one registration; returns created, updated or unchanged."""
+    if not TABLE_NAME.fullmatch(table):
+        raise MirrorError("the table name is not a plain lower-case name")
     pointer = source.pointer(table)
     if pointer is None:
         raise MirrorError("Polaris reports no metadata file for the table")
@@ -187,11 +189,11 @@ def mirror(config: MirrorConfig, layer: str, mode: str, published: Sequence[str]
     return report
 
 
-def check(config: MirrorConfig, layer: str, source: Source, glue: Any) -> dict[str, Any]:
-    """Compare each configured table's Glue pointer with Polaris's. Reads only."""
+def check(config: MirrorConfig, layer: str, source: Source, glue: Any, tables: Sequence[str]) -> dict[str, Any]:
+    """Compare the Glue pointer of each published table with Polaris's. Reads only."""
     spec = config.layers[layer]
     outcomes: dict[str, str] = {}
-    for table in spec.tables:
+    for table in tables:
         try:
             wanted = source.pointer(table)
             found = current(glue, spec.database, table)
@@ -209,11 +211,13 @@ def check(config: MirrorConfig, layer: str, source: Source, glue: Any) -> dict[s
     return {"ok": all(outcome == "match" for outcome in outcomes.values()), "tables": outcomes}
 
 
-def main(argv: Sequence[str] | None = None, source: Source | None = None, glue: Any = None, config: MirrorConfig | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None, source: Source | None = None, glue: Any = None, config: MirrorConfig | None = None, tables: Sequence[str] | None = None
+) -> int:
     """The ``check`` command. Without a source and a Glue client it builds them: Spark on the Polaris catalog and boto3 under the task's own role."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("check",))
-    parser.add_argument("--layer", required=True, choices=("silver", "gold"))
+    parser.add_argument("--layer", required=True, choices=MIRRORED_LAYERS)
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     config = config or load_config()
     spark = None
@@ -227,7 +231,7 @@ def main(argv: Sequence[str] | None = None, source: Source | None = None, glue: 
             import boto3
 
             glue = boto3.Session(region_name=os.environ["AWS_REGION"]).client("glue")
-        result = check(config, args.layer, source, glue)
+        result = check(config, args.layer, source, glue, tables if tables is not None else contract_tables(args.layer))
     finally:
         if spark is not None:
             spark.stop()

@@ -10,6 +10,7 @@ import argparse
 import contextlib
 import io
 import json
+import re
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
@@ -21,7 +22,6 @@ from botocore.exceptions import ClientError
 
 from scripts.lakehouse import glue_mirror, gold_publish
 from scripts.lakehouse.gold_publish_record import PublishError
-from scripts.quality.model_metadata import load_yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -106,12 +106,12 @@ def table_of(glue: FakeGlue, name: str = PILOT) -> dict[str, Any]:
 
 def case_first_publish_registers() -> Check:
     glue = FakeGlue()
-    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT, CONFIDENTIAL], FakeSource({PILOT: FIRST}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", [PILOT, CONFIDENTIAL], FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST}), glue)
     table = glue.tables.get(("hai_mirror_gold", PILOT), {})
     parameters = table.get("Parameters", {})
     return {
-        "one_table_created": glue.writes() == [("create_table", "hai_mirror_gold", PILOT)],
-        "reported_ok": report.get("status") == "ok" and report.get("tables") == {PILOT: "created"},
+        "every_published_table_created": glue.writes() == [("create_table", "hai_mirror_gold", PILOT), ("create_table", "hai_mirror_gold", CONFIDENTIAL)],
+        "reported_ok": report.get("status") == "ok" and report.get("tables") == {PILOT: "created", CONFIDENTIAL: "created"},
         "points_at_polaris_file": parameters.get("metadata_location") == FIRST,
         "marked_iceberg_and_mirror": parameters.get("table_type") == "ICEBERG" and parameters.get("hai_mirror") == "true",
         "location_is_table_folder": table.get("StorageDescriptor", {}).get("Location") == f"s3://{BUCKET}/lakehouse/gold/{PILOT}",
@@ -204,12 +204,12 @@ def case_hook_never_fails_the_publish() -> Check:
 
 def case_hook_repeat_is_a_no_op() -> Check:
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
-        ctx, glue, source = context(Path(directory)), FakeGlue(), FakeSource({PILOT: FIRST})
+        ctx, glue, source = context(Path(directory)), FakeGlue(), FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST})
         first = gold_publish.mirror_after_commit(ctx, source=source, glue=glue, config=enabled())
         glue.calls.clear()
         again = gold_publish.mirror_after_commit(ctx, source=source, glue=glue, config=enabled())
         return {
-            "first_created": first.get("tables") == {PILOT: "created"},
+            "first_created": first.get("tables") == {PILOT: "created", CONFIDENTIAL: "created"},
             "repeat_writes_nothing": glue.writes() == [],
             "repeat_unchanged": again.get("status") == "unchanged",
         }
@@ -244,15 +244,27 @@ def case_bronze_and_other_layers_touch_nothing() -> Check:
     }
 
 
-def case_unlisted_tables_are_ignored() -> Check:
+def case_confidential_gold_table_is_mirrored() -> Check:
     glue = FakeGlue()
-    glue_mirror.mirror(
-        enabled(), "gold", "real", [PILOT, CONFIDENTIAL, "dim_hospital"], FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST, "dim_hospital": FIRST}), glue
-    )
-    silver = glue_mirror.mirror(enabled(), "silver", "real", ["int_acs_county_values"], FakeSource({"int_acs_county_values": FIRST}), glue)
+    published = [PILOT, CONFIDENTIAL, "dim_hospital"]
+    report = glue_mirror.mirror(enabled(), "gold", "real", published, FakeSource({name: FIRST for name in published}), glue)
     return {
-        "only_the_listed_table": sorted({call[2] for call in glue.calls}) == [PILOT],
-        "silver_lists_none": silver.get("status") == "skipped" and not any(call[1] == "hai_mirror_silver" for call in glue.calls),
+        "all_three_created": sorted(table for (_, table) in glue.tables) == sorted(published),
+        "confidential_dimension_created": ("create_table", "hai_mirror_gold", CONFIDENTIAL) in glue.calls,
+        "reported_ok": report.get("status") == "ok",
+    }
+
+
+def case_other_layers_touch_nothing() -> Check:
+    glue = FakeGlue()
+    reports = {
+        layer: glue_mirror.mirror(enabled(), layer, "real", ["int_acs_county_values"], FakeSource({"int_acs_county_values": FIRST}), glue)
+        for layer in ("silver", "features", "bronze")
+    }
+    return {
+        "no_call": glue.calls == [],
+        "every_layer_skipped": all(report.get("status") == "skipped" for report in reports.values()),
+        "no_silver_database_in_config": "silver" not in glue_mirror.load_config().layers,
     }
 
 
@@ -277,39 +289,53 @@ def case_other_pointers_are_refused() -> Check:
     return checks
 
 
-def dbt_classes() -> dict[str, str]:
-    classes: dict[str, str] = {}
-    for path in sorted((REPO_ROOT / "dbt/models").rglob("*.yml")):
-        for model in (load_yaml(str(path), path.read_text())[0] or {}).get("models", []):
-            classes[model["name"]] = str((model.get("meta") or {}).get("classification"))
-    return classes
-
-
-def case_config_lists_only_public_contract_tables() -> Check:
-    config, classes = glue_mirror.load_config(), dbt_classes()
-    contract = json.loads((REPO_ROOT / "data_contracts/lakehouse/gold_contract.json").read_text())["publish"]["tables"]
-    silver = json.loads((REPO_ROOT / "data_contracts/lakehouse/silver_publish.json").read_text())["publish"]["tables"]
-    planted = replace(config, layers={"gold": replace(config.layers["gold"], tables=(PILOT, CONFIDENTIAL))})
+def case_config_scope_is_gold_only() -> Check:
+    config = glue_mirror.load_config()
+    gold = config.layers["gold"]
     return {
-        "the_pilot_is_listed": config.layers["gold"].tables == (PILOT,),
-        "real_config_has_no_violation": glue_mirror.violations(config, classes, {"gold": set(contract), "silver": set(silver)}) == [],
-        "confidential_table_is_flagged": any(CONFIDENTIAL in line for line in glue_mirror.violations(planted, classes, {"gold": set(contract)})),
-        "unknown_table_is_flagged": any(
-            "no_such_table" in line
-            for line in glue_mirror.violations(
-                replace(config, layers={"gold": replace(config.layers["gold"], tables=("no_such_table",))}), classes, {"gold": set(contract)}
-            )
+        "only_gold_is_configured": list(config.layers) == ["gold"] and gold.namespace == "gold",
+        "real_config_has_no_violation": glue_mirror.violations(config) == [],
+        "silver_is_flagged": any(
+            "silver" in line for line in glue_mirror.violations(replace(config, layers={**config.layers, "silver": replace(gold, namespace="silver")}))
         ),
-        "bronze_layer_is_flagged": any(
-            "bronze" in line for line in glue_mirror.violations(replace(config, layers={"bronze": config.layers["gold"]}), classes, {})
+        "features_is_flagged": any(
+            "features" in line for line in glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features")}))
         ),
+        "test_namespace_is_flagged": any(
+            "gold_e2e" in line for line in glue_mirror.violations(replace(config, layers={"gold": replace(gold, namespace="gold_e2e")}))
+        ),
+        "no_class_filter_left": not hasattr(glue_mirror, "PUBLIC") and "tables" not in json.loads(glue_mirror.CONFIG.read_text())["layers"]["gold"],
+    }
+
+
+def source_files(pattern: str) -> dict[str, str]:
+    return {str(path.relative_to(REPO_ROOT)): path.read_text() for path in sorted((REPO_ROOT / "infra").rglob(pattern)) if ".terraform" not in path.parts}
+
+
+def case_reader_access_is_one_role_for_one_user() -> Check:
+    template = (REPO_ROOT / "infra/iam/owner_policies/athena_reader.json").read_text()
+    stack = (REPO_ROOT / "infra/iam/athena_mirror.tf").read_text()
+    terraform = source_files("*.tf")
+    users = [name for name, text in terraform.items() if "aws_iam_role_policy.athena_reader" in text or "aws_iam_role.athena_reader" in text]
+    attachments = re.findall(r'resource "(aws_iam_[a-z_]*attachment|aws_iam_policy)" "(\w+)"', stack)
+    roles = re.findall(r'resource "aws_iam_role" "(\w+)"', stack)
+    return {
+        "reader_policy_names_no_principal": not re.search(r'"(Principal|NotPrincipal|NotAction|NotResource)"', template),
+        "reader_policy_only_allows": template.count('"Effect": "Allow"') == template.count('"Effect"'),
+        "reader_role_used_only_by_its_stack_file": users == ["infra/iam/athena_mirror.tf"],
+        "no_attachment_or_managed_policy": attachments == [],
+        "one_role_reaches_the_reader_policy": roles == ["athena_reader"],
+        "no_resource_policy_or_public_path": not re.search(
+            r'resource "(aws_glue_resource_policy|aws_s3_bucket_policy|aws_s3_bucket_public_access_block|aws_lakeformation_\w+)"', stack
+        )
+        and '"*"' not in template,
     }
 
 
 def run_check(arguments: Sequence[str], source: FakeSource, glue: FakeGlue) -> tuple[int, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = glue_mirror.main(arguments, source=source, glue=glue, config=enabled())
+        code = glue_mirror.main(arguments, source=source, glue=glue, config=enabled(), tables=[PILOT])
     return code, out.getvalue() + err.getvalue()
 
 
@@ -339,10 +365,12 @@ CASES: dict[str, Callable[[], Check]] = {
     "disabled_touches_nothing": case_disabled_touches_nothing,
     "test_namespace_touches_nothing": case_test_namespace_touches_nothing,
     "bronze_and_other_layers_touch_nothing": case_bronze_and_other_layers_touch_nothing,
-    "unlisted_tables_are_ignored": case_unlisted_tables_are_ignored,
+    "confidential_gold_table_is_mirrored": case_confidential_gold_table_is_mirrored,
+    "other_layers_touch_nothing": case_other_layers_touch_nothing,
     "foreign_table_is_refused": case_foreign_table_is_refused,
     "other_pointers_are_refused": case_other_pointers_are_refused,
-    "config_lists_only_public_contract_tables": case_config_lists_only_public_contract_tables,
+    "config_scope_is_gold_only": case_config_scope_is_gold_only,
+    "reader_access_is_one_role_for_one_user": case_reader_access_is_one_role_for_one_user,
     "check_compares_the_two_pointers": case_check_compares_the_two_pointers,
 }
 
