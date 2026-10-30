@@ -17,6 +17,10 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:autoscaling:eu-west-1:111111111111:autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/example_project_host_dev" }
   }
 
+  mock_resource "aws_iam_policy" {
+    defaults = { arn = "arn:aws:iam::111111111111:policy/example_project_athena_reader_dev" }
+  }
+
   mock_resource "aws_athena_workgroup" {
     defaults = { arn = "arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror" }
   }
@@ -54,27 +58,28 @@ run "athena_mirror_defaults_to_off" {
       output.athena_mirror_contract.prepared == false &&
       length(aws_glue_catalog_database.athena_mirror) == 0 &&
       length(aws_athena_workgroup.athena_mirror) == 0 &&
-      length(aws_iam_policy.athena_reader) == 0 &&
+      length(aws_iam_role.athena_reader) == 0 &&
+      length(aws_iam_role_policy.athena_reader) == 0 &&
       length(aws_iam_role_policy.athena_mirror_writer) == 0
     )
     error_message = "The Athena mirror creates no database, workgroup, policy or grant until the switch is set."
   }
 }
 
-run "prepared_mirror_has_two_databases_and_a_limited_workgroup" {
+run "prepared_mirror_has_one_gold_database_and_a_limited_workgroup" {
   command = plan
   variables {
     athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
   }
 
   assert {
     condition = (
-      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold"]) &&
-      aws_glue_catalog_database.athena_mirror["silver"].name == "hai_mirror_silver" &&
+      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["gold"]) &&
       aws_glue_catalog_database.athena_mirror["gold"].name == "hai_mirror_gold" &&
-      aws_glue_catalog_database.athena_mirror["gold"].tags.DataClassification == "Public"
+      aws_glue_catalog_database.athena_mirror["gold"].tags.DataClassification == "Confidential"
     )
-    error_message = "One Glue database per mirrored layer, named by the tracked config and tagged with the class of what it lists."
+    error_message = "One Glue database for the gold layer only, named by the tracked config and tagged Confidential because it lists every gold table."
   }
 
   assert {
@@ -94,16 +99,17 @@ run "prepared_mirror_has_two_databases_and_a_limited_workgroup" {
   }
 }
 
-run "writer_grants_cover_only_the_listed_tables_of_their_own_layer" {
+run "gold_writer_grants_cover_only_the_gold_mirror_database" {
   command = plan
   variables {
     athena_mirror_prepared     = true
+    athena_owner_user          = "example_owner"
     job_writer_layers_prepared = true
   }
 
   assert {
     condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["gold"])
-    error_message = "Only a layer that lists a table gets a grant, and never bronze, features, the qualification role or the project user."
+    error_message = "Only the gold writer gets a grant, and never silver, bronze, features, the qualification role or the project user."
   }
 
   assert {
@@ -114,10 +120,10 @@ run "writer_grants_cover_only_the_listed_tables_of_their_own_layer" {
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["gold"].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
         "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/bridge_county_neighbor",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
       ])
     )
-    error_message = "The gold writer may read a database and read, create and update exactly the listed table, with no delete and no other database."
+    error_message = "The gold writer may read its database and read, create and update tables in it only, with no delete and no other database."
   }
 }
 
@@ -125,50 +131,147 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
   command = plan
   variables {
     athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
   }
 
   assert {
     condition = (
-      length(aws_iam_policy.athena_reader) == 1 &&
-      aws_iam_policy.athena_reader[0].name == "example_project_athena_reader_dev"
+      length(aws_iam_role.athena_reader) == 1 &&
+      aws_iam_role.athena_reader[0].name == "example_project_athena_reader_dev" &&
+      aws_iam_role_policy.athena_reader[0].role == aws_iam_role.athena_reader[0].name
     )
-    error_message = "A prepared mirror creates one unattached reader policy."
+    error_message = "A prepared mirror with a named owner creates one reader role that carries the reader policy inline."
   }
 
   assert {
-    condition = alltrue([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement :
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
       s.Effect == "Allow" && !anytrue([for a in s.Action : endswith(a, "*")]) && !anytrue([for r in s.Resource : r == "*"])
     ])
     error_message = "The reader policy has no wildcard action and no all-resources grant."
   }
 
   assert {
-    condition     = toset(flatten([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement : [for a in s.Action : a if startswith(a, "glue:")]])) == toset(["glue:GetDatabase", "glue:GetTable"])
+    condition     = toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for a in s.Action : a if startswith(a, "glue:")]])) == toset(["glue:GetDatabase", "glue:GetTable"])
     error_message = "The reader may read Glue registrations and nothing else in Glue."
   }
 
   assert {
-    condition     = toset(flatten([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:athena:")]])) == toset(["arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror"])
+    condition     = toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:athena:")]])) == toset(["arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror"])
     error_message = "Athena actions are limited to the mirror workgroup."
   }
 
   assert {
     condition = (
-      toset(flatten([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:glue:") && !endswith(r, ":catalog")]])) == toset([
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:glue:") && !endswith(r, ":catalog")]])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/bridge_county_neighbor",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
       ])
     )
-    error_message = "Glue reads are limited to the mirror databases and tables that the config lists."
+    error_message = "Glue reads are limited to the gold mirror database and its tables."
   }
 
   assert {
     condition = (
-      toset(flatten([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) ==
-      toset(["arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/bridge_county_neighbor*"]) &&
-      toset(flatten([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
-      !anytrue([for s in jsondecode(aws_iam_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) ==
+      toset(["arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*"]) &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
+      !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the listed tables' folders, writes reach only the results prefix, and nothing deletes."
+    error_message = "Data reads reach only the gold namespace, writes reach only the results prefix, and nothing deletes."
   }
+}
+
+run "reader_policy_names_no_principal_and_no_wider_resource" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
+  }
+
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
+      s.Effect == "Allow" && !contains(keys(s), "Principal") && !contains(keys(s), "NotPrincipal") && !contains(keys(s), "NotAction") && !contains(keys(s), "NotResource")
+    ])
+    error_message = "The reader policy is an identity policy with Allow statements only and names no principal."
+  }
+
+  assert {
+    condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource])) == toset([
+      "arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror",
+      "arn:aws:glue:eu-west-1:111111111111:catalog",
+      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
+      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+      "arn:aws:s3:::example-project-ci-bucket",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
+      "arn:aws:s3:::example-project-ci-bucket/athena/results/*",
+    ])
+    error_message = "The reader policy reaches exactly the mirror workgroup, database, gold folders, results prefix and bucket, nothing wider."
+  }
+}
+
+run "reader_access_needs_a_named_owner" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+  }
+
+  assert {
+    condition     = var.athena_owner_user == "" && length(aws_iam_role.athena_reader) == 0 && length(aws_iam_role_policy.athena_reader) == 0
+    error_message = "Until the owner names a user, no role or policy gives anyone Athena access."
+  }
+}
+
+run "reader_role_trusts_only_the_owner_user" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
+  }
+
+  assert {
+    condition = jsondecode(aws_iam_role.athena_reader[0].assume_role_policy) == {
+      Version = "2012-10-17"
+      Statement = [{
+        Effect    = "Allow"
+        Action    = "sts:AssumeRole"
+        Principal = { AWS = "arn:aws:iam::111111111111:user/example_owner" }
+      }]
+    }
+    error_message = "The reader role trusts exactly the one user the owner names, with no service, wildcard or other account."
+  }
+
+  assert {
+    condition     = aws_iam_role.athena_reader[0].max_session_duration == 3600
+    error_message = "A reader session lasts one hour."
+  }
+}
+
+run "reader_role_needs_the_mirror_switch" {
+  command = plan
+  variables {
+    athena_owner_user = "example_owner"
+  }
+
+  assert {
+    condition     = length(aws_iam_role.athena_reader) == 0 && length(aws_iam_role_policy.athena_reader) == 0
+    error_message = "Naming a user creates nothing while the mirror is not prepared."
+  }
+}
+
+run "reject_wildcard_owner_user" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "*"
+  }
+  expect_failures = [var.athena_owner_user]
+}
+
+run "reject_owner_user_with_a_path" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "team/example_owner"
+  }
+  expect_failures = [var.athena_owner_user]
 }

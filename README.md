@@ -190,7 +190,7 @@ The features layer is published to Iceberg namespace `features` (`features_e2e` 
 
 Publication verification is pending. Fixture runs use a test registry and a local Iceberg catalog. Silver, gold and features writes follow the run mode. `publish_fixture` runs write only under `lakehouse/silver_e2e/`, `lakehouse/gold_e2e/` and `lakehouse/features_e2e/`. `real` runs write only under `lakehouse/silver/`, `lakehouse/gold/` and `lakehouse/features/`. The launcher refuses any other silver, gold or features write.
 
-Local builds use DuckDB. Athena reads published Public tables through read-only AWS Glue registrations that each publish updates after its commit. Polaris stays the catalog (`config/lakehouse/athena_mirror.json`, off until the owner applies the Athena mirror stack). Asset scheduling stays disabled. `gold_maintenance_dag` retains the registered snapshot sets when it maintains gold.
+Local builds use DuckDB. Athena reads every published gold table, for the owner's review, through read-only AWS Glue registrations that each publish updates after its commit. Polaris stays the catalog (`config/lakehouse/athena_mirror.json`, off until the owner applies the Athena mirror stack). Asset scheduling stays disabled. `gold_maintenance_dag` retains the registered snapshot sets when it maintains gold.
 
 ## License
 
