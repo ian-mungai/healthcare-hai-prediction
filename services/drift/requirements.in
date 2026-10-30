@@ -7,3 +7,5 @@
 evidently==0.7.23
 duckdb==1.5.6
 jsonschema==4.26.0
+# Evidently 0.7.23 imports a pandas internal that pandas 3 removed.
+pandas<3
