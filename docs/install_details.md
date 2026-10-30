@@ -65,11 +65,11 @@ name carries `# dynamic: <where>`. The dependency check reads both markers.
 
 The installers place the tools as follows:
 
-- Gitleaks, TFLint and trivy install only into the ignored `.tools/` directory. Their versions and
+- Gitleaks, TFLint, trivy, OSV-Scanner, zizmor and typos install only into the ignored `.tools/` directory. Their versions and
   publisher SHA-256 values are pinned in `config/quality_tools.json`.
 - The Python lint tools (import-linter, check-jsonschema) install into `.tools/` with `scripts.quality.install_lint_tools` from hash-pinned
-  requirements. The tools typos, zizmor and OSV-Scanner come from Homebrew at the pinned versions. The trivy of the `trivy-config` hook comes from
-  Homebrew too (`docs/quality_checks.md`, Linters beside lint_sources).
+  requirements (`docs/quality_checks.md`, Linters beside lint_sources). A check prefers the `.tools/bin` binary of OSV-Scanner, zizmor and typos and
+  otherwise uses the Homebrew binary at the pinned version. There is one trivy, the one in `.tools/bin`.
 - The markdownlint hook's `markdownlint-cli2` installs into `.tools/markdownlint-cli2` with `npm ci`
   from the lockfile in `scripts/quality/markdownlint/`. The lockfile pins the integrity hash of each package. The tool needs Node.js 22 or later.
 - The `sqlfluff` hook's SQLFluff and its dbt templater install into `.tools/sqlfluff` from the hash-pinned

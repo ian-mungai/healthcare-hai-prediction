@@ -49,9 +49,14 @@ def pin(name: str) -> dict[str, Any]:
 
 
 def program(name: str) -> str:
-    """Return the path of a pinned tool after checking that it runs at exactly the pinned version."""
+    """Return the path of a pinned tool after checking that it runs at exactly the pinned version.
+
+    A release binary that ``scripts/quality/install_tools.py`` verified into ``.tools/bin`` wins (the hosted runner has only that one); the pinned
+    Homebrew or virtual-environment executable is the local fallback.
+    """
     entry = pin(name)
-    path = Path(entry["executable"])
+    released = ROOT / ".tools/bin" / name
+    path = released if released.is_file() else Path(entry["executable"])
     path = path if path.is_absolute() else ROOT / path
     if not path.is_file():
         install = f"brew install {entry['formula']}" if entry["installer"] == "homebrew" else f".venv/bin/python -m {entry['installer'][:-3].replace('/', '.')}"
@@ -124,7 +129,7 @@ def tflint() -> int:
 
 def trivy_config() -> int:
     """``trivy config`` on infra/ with its embedded checks; variable files and state are skipped by name and never read."""
-    binary = program("trivy-config")
+    binary = native("trivy")
     with tempfile.TemporaryDirectory(prefix="hai_trivy_") as cache:
         arguments = ["config", "infra", "--skip-check-update", "--cache-dir", cache, *TRIVY_SKIPS, "--quiet", "--format", "json"]
         result = run_command(binary, arguments, cwd=ROOT, env=clean_environment(), timeout=180)

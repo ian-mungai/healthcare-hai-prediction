@@ -317,7 +317,7 @@
       "dependencies": {
         "orchestration/catalog_authority.py": "sha256:d95f4d288a2e775fda4a1514ba91cf01db12950df93e3f601a6485dcfc066bf4",
         "orchestration/catalog_transport.py": "sha256:33d043e4a3e526824b73108c290429958fc2fc016bde30ca82a7640fa2ce98f8",
-        "orchestration/launcher.py": "sha256:239f08e0d87ba34605d0c38be1c977c42989ea60cd9951192785c791125c64e2",
+        "orchestration/launcher.py": "sha256:3b0b2f4d6502d68e687063728eed1344fbd4f55248cb3c87e4f363ad388a576f",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/infrastructure/secret_store.py": "sha256:d7a0120e1927af00a67cf975729fbf961d20739cfaa094adde6284b0652d6e0a",
@@ -329,7 +329,7 @@
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
         "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:17c2671f748b729688fa72f3f330287ee3537b4976301373c9d7ce4d95c4fb32",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:36f422ea8f9100bf1da787b8091ce7909a7a4d1939b57c8da00dc9a5987523c4",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:d2a2ac3ffcd1fdcc684c22cef756cdb08dd0739a656abe4968858f895a878520",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
@@ -342,7 +342,7 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:239f08e0d87ba34605d0c38be1c977c42989ea60cd9951192785c791125c64e2",
+        "orchestration/launcher.py": "sha256:3b0b2f4d6502d68e687063728eed1344fbd4f55248cb3c87e4f363ad388a576f",
         "scripts/infrastructure/secret_store.py": "sha256:d7a0120e1927af00a67cf975729fbf961d20739cfaa094adde6284b0652d6e0a",
         "scripts/lakehouse/bronze.py": "sha256:1a529185a3d0c753de78dc1281342d21a5157746d24f2449c8409d6db15cdea7",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -363,7 +363,7 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:239f08e0d87ba34605d0c38be1c977c42989ea60cd9951192785c791125c64e2",
+        "orchestration/launcher.py": "sha256:3b0b2f4d6502d68e687063728eed1344fbd4f55248cb3c87e4f363ad388a576f",
         "scripts/infrastructure/secret_store.py": "sha256:d7a0120e1927af00a67cf975729fbf961d20739cfaa094adde6284b0652d6e0a",
         "scripts/lakehouse/bronze.py": "sha256:1a529185a3d0c753de78dc1281342d21a5157746d24f2449c8409d6db15cdea7",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -384,7 +384,7 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:239f08e0d87ba34605d0c38be1c977c42989ea60cd9951192785c791125c64e2",
+        "orchestration/launcher.py": "sha256:3b0b2f4d6502d68e687063728eed1344fbd4f55248cb3c87e4f363ad388a576f",
         "scripts/infrastructure/secret_store.py": "sha256:d7a0120e1927af00a67cf975729fbf961d20739cfaa094adde6284b0652d6e0a",
         "scripts/lakehouse/bronze.py": "sha256:1a529185a3d0c753de78dc1281342d21a5157746d24f2449c8409d6db15cdea7",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -403,10 +403,10 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "36f422ea8f9100bf1da787b8091ce7909a7a4d1939b57c8da00dc9a5987523c4",
+      "file_sha256": "d2a2ac3ffcd1fdcc684c22cef756cdb08dd0739a656abe4968858f895a878520",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
-        "orchestration/launcher.py": "sha256:239f08e0d87ba34605d0c38be1c977c42989ea60cd9951192785c791125c64e2",
+        "orchestration/launcher.py": "sha256:3b0b2f4d6502d68e687063728eed1344fbd4f55248cb3c87e4f363ad388a576f",
         "orchestration/mlflow_service.py": "sha256:56c24c4f1bbb4c9679f6cede9e7648a910bd7e7223dbe14df3f6435aa8dee368",
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
@@ -445,8 +445,8 @@
       "occurrences": 1,
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:239f08e0d87ba34605d0c38be1c977c42989ea60cd9951192785c791125c64e2",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:36f422ea8f9100bf1da787b8091ce7909a7a4d1939b57c8da00dc9a5987523c4",
+        "orchestration/launcher.py": "sha256:3b0b2f4d6502d68e687063728eed1344fbd4f55248cb3c87e4f363ad388a576f",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:d2a2ac3ffcd1fdcc684c22cef756cdb08dd0739a656abe4968858f895a878520",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -473,13 +473,14 @@
     },
     {
       "path": "scripts/quality/static_checks.py",
-      "line": 145,
+      "line": 147,
       "code_sha256": "6f1a30c3aa77ac7a428f4a29379d7000945c01f753cb614c445e9e82eb039436",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "fa9ab7d9af6186663f6c0fb0fdc0e7bc598440a38dcf21cc48eb3f85307615a0",
+      "file_sha256": "e8249c9a2df7855ce65237b478b9ade3593b63b7ad8b85ae4e4165ff425dbbf4",
       "dependencies": {
-        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a"
       },
       "reason": "runs the Terraform check table built in the same function: terraform, tflint, checkov through sys.executable -m and trivy",
       "lines": [
@@ -611,11 +612,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 146,
+      "line": 157,
       "code_sha256": "04c06b7303d92911d832b3b9c112a8f64085320728d615867f21063678745014",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
+      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -623,11 +624,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 150,
+      "line": 161,
       "code_sha256": "37e86a837af86f100fc191ac9c394a5b53ca706deedc0e337748466a7a55d7e6",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
+      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -635,11 +636,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 173,
+      "line": 184,
       "code_sha256": "5153c28e335132f17886d69826d733a4fac8f775b179e97ae4d1ad1e0ba2528e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
+      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -647,11 +648,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 192,
+      "line": 203,
       "code_sha256": "31f8dd394225de0536b48c47435e8da927c12e7a0021123867cb07b1fd01e48e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
+      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -659,11 +660,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 212,
+      "line": 223,
       "code_sha256": "d40b7f65cacfada8124817951806e3a41dbd8b6aa8454118024581749e2bb2ff",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
+      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -1460,11 +1461,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 130,
+      "line": 135,
       "code_sha256": "3c1db58758fa280711417fd7eea03b1ee88c5a1ea273e2052fee5273122552ab",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1474,11 +1475,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 205,
+      "line": 210,
       "code_sha256": "478caea49b5dd93154bf67735409e484acfec34b75d8ecf9b33f87afc7d307f0",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1488,11 +1489,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 228,
+      "line": 233,
       "code_sha256": "831f64d116d631a36a334c8f75c6233ccefce5da6a9f9c687e17968e1590a9d4",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1502,11 +1503,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 109,
+      "line": 114,
       "code_sha256": "9f88f77491fde0080d2298e91d17d0b5340fbece7f221e626d6d9929b1afcadc",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1516,11 +1517,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 196,
+      "line": 201,
       "code_sha256": "a1100cb9424da73e39c705ef806304231e3beaba326329e2e7bfaf7e74c49007",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1530,11 +1531,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 59,
+      "line": 64,
       "code_sha256": "a4736163dd24a98efbc0a8995774f6408df81be0bd71fe2e6d41c1476095bf44",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1544,11 +1545,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 176,
+      "line": 181,
       "code_sha256": "a4f1d6bc19e5785326a616a20679827641615f37b9fe86b9a8813006cf2eea08",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
@@ -1558,11 +1559,11 @@
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 153,
+      "line": 158,
       "code_sha256": "fb77582ae6d93075c1388387ffe73ec7cbd55170287f2d665c472e1b3b2112d0",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "81772edfcaf96236afc28a039a85797d2ac71d4a0b1c1bba853a211c0d6e949e",
+      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/lint_sources.py": "sha256:c9a03df2698d699789abe3b6e4a15264b3137e325145fad7c4d19d02dc3a324a",
