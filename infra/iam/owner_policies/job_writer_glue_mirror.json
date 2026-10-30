@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadMirrorDatabase",
+      "Effect": "Allow",
+      "Action": ["glue:GetDatabase"],
+      "Resource": ["${CATALOG_ARN}", "${DATABASE_ARN}"]
+    },
+    {
+      "Sid": "RegisterListedTables",
+      "Effect": "Allow",
+      "Action": ["glue:GetTable", "glue:CreateTable", "glue:UpdateTable"],
+      "Resource": ${REGISTRATION_ARNS}
+    }
+  ]
+}
