@@ -120,6 +120,22 @@ run "train_commands_and_environment" {
   }
 }
 
+run "train_container_records_its_image_digest" {
+  command = plan
+
+  variables {
+    train_enabled = true
+  }
+
+  assert {
+    condition = (
+      contains(jsondecode(output.train_container_definitions)[3].environment, { name = "TRAINING_IMAGE_DIGEST", value = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }) &&
+      alltrue([for container in slice(jsondecode(output.train_container_definitions), 0, 3) : !contains([for variable in container.environment : variable.name], "TRAINING_IMAGE_DIGEST")])
+    )
+    error_message = "The train container carries the digest of the training image, which the run key records. The other containers do not."
+  }
+}
+
 run "train_secrets_reach_only_the_extract_step" {
   command = plan
 
