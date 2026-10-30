@@ -169,20 +169,30 @@ def live_reader(root: Path, environ: MutableMapping[str, str], features_run: str
         environ["FEAST_REDIS_HOST"] = "localhost"
         # Feast validates online settings on offline reads. This placeholder grants no Redis access.
         environ["REDIS_PASSWORD"] = hashlib.sha256(b"offline-read-only").hexdigest()
-        if environ.get("FEAST_NAMESPACE") == "features":
-            stack.enter_context(reads.private_pyiceberg_home(environ["AWS_REGION"], environ))
-            token = reads.polaris_token(reads.POLARIS_ENDPOINT, environ.pop("POLARIS_CLIENT_ID"), environ.pop("POLARIS_CLIENT_SECRET"))
+        selected = None if features_run == "latest" else features_run
+        catalog: Any = None
+        if environ.get("FEAST_NAMESPACE") == "features" and environ.get("FEAST_PROFILE") == "aws":
+            # An AWS task reaches Polaris at the host's private address and S3 through the gateway endpoint, so it has no Docker host name and no egress proxy.
+            endpoint = importlib.import_module("scripts.features.feast_aws").check_endpoint(environ.get("POLARIS_URI", ""))
+            token = reads.polaris_token(endpoint, environ.pop("POLARIS_CLIENT_ID"), environ.pop("POLARIS_CLIENT_SECRET"))
             environ["FEAST_POLARIS_TOKEN"] = token
-            environ["FEAST_CATALOG_ENDPOINT"] = reads.POLARIS_ENDPOINT
+            environ["FEAST_CATALOG_ENDPOINT"] = endpoint
+            catalog = reads.open_catalog(reads.CatalogSettings("real", "features", "rest", endpoint=endpoint, token=token))
         else:
-            settings = reads.catalog_settings(environ, "publish_fixture")
-            environ["FEAST_SQL_CATALOG_URI"] = settings.sql_uri
-            environ["FEAST_SQL_WAREHOUSE"] = settings.sql_warehouse
-            (Path(environ["FEAST_RUN_FOLDER"]) / "feast").mkdir(parents=True, exist_ok=True)
+            if environ.get("FEAST_NAMESPACE") == "features":
+                stack.enter_context(reads.private_pyiceberg_home(environ["AWS_REGION"], environ))
+                token = reads.polaris_token(reads.POLARIS_ENDPOINT, environ.pop("POLARIS_CLIENT_ID"), environ.pop("POLARIS_CLIENT_SECRET"))
+                environ["FEAST_POLARIS_TOKEN"] = token
+                environ["FEAST_CATALOG_ENDPOINT"] = reads.POLARIS_ENDPOINT
+            else:
+                settings = reads.catalog_settings(environ, "publish_fixture")
+                environ["FEAST_SQL_CATALOG_URI"] = settings.sql_uri
+                environ["FEAST_SQL_WAREHOUSE"] = settings.sql_warehouse
+                (Path(environ["FEAST_RUN_FOLDER"]) / "feast").mkdir(parents=True, exist_ok=True)
         schema_path = root / "data_contracts/features/feature_schema.json"
         schema, digest = reads.read_schema(schema_path)
-        selected = None if features_run == "latest" else features_run
-        catalog = history.default_catalog(environ, selected)
+        if catalog is None:
+            catalog = history.default_catalog(environ, selected)
         yield FeatureReader(catalog, environ["FEAST_NAMESPACE"], environ, schema_path, reads, history, schema, digest)
 
 

@@ -15,7 +15,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import code_digest
-from scripts.features import training_extract
+from scripts.features import publication_reads, training_extract
 from scripts.process import run_command
 from scripts.training import guards, promotion_check
 from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
@@ -261,6 +261,7 @@ def extract_cases(cases: Any, folder: Path) -> None:
         arguments, env = seen[0]
         require(arguments[arguments.index("--run-dir") + 1] == str(fixture.folder / "in/extract"), f"arguments: {arguments}")
         require(env["FEAST_NAMESPACE"] == "features" and env["FEAST_CATALOG_TYPE"] == "rest", f"namespace: {env.get('FEAST_NAMESPACE')}")
+        require(env["FEAST_PROFILE"] == "aws", f"profile: {env.get('FEAST_PROFILE')}")
         require(env["FEAST_REGISTRY_PATH"] == f"s3://{BUCKET}/lakehouse/feast/registry.pb", f"registry: {env.get('FEAST_REGISTRY_PATH')}")
         require([item["step"] for item in lines_of(out) if "step" in item] == ["extract"], f"steps: {out}")
 
@@ -280,6 +281,62 @@ def extract_cases(cases: Any, folder: Path) -> None:
             code, _, error = call("extract", "--run", RUN, "--mode", "real", "--work", str(fixture.folder))
         require(code != 0 and "POLARIS_URI" in error, f"{code} {error}")
 
+    def reader_environment(**changes: str) -> dict[str, str]:
+        values = {
+            "FEAST_NAMESPACE": "features",
+            "FEAST_CATALOG_TYPE": "rest",
+            "FEAST_PROFILE": "aws",
+            "POLARIS_URI": "http://10.0.1.20:8181/api/catalog",
+            "POLARIS_CLIENT_ID": "reader-id",
+            "POLARIS_CLIENT_SECRET": "reader-secret",
+            "AWS_REGION": "us-west-2",
+            "FEAST_RUN_FOLDER": str(folder / "reader_tmp"),
+        }
+        return {**values, **changes}
+
+    def aws_reader() -> None:
+        exchanged: list[str] = []
+        opened: list[Any] = []
+        issued = "issued-value"
+        environ = reader_environment()
+
+        def exchange(endpoint: str, client: str, secret: str) -> str:
+            exchanged.append(endpoint)
+            return issued
+
+        def open_catalog(settings: Any, loader: Any = None) -> Any:
+            opened.append(settings)
+            return object()
+
+        with (
+            mock.patch.object(publication_reads, "polaris_token", side_effect=exchange),
+            mock.patch.object(publication_reads, "open_catalog", side_effect=open_catalog),
+            training_extract.live_reader(REAL, environ, "latest") as reader,
+        ):
+            require(reader.namespace == "features", f"namespace: {reader.namespace}")
+        require(exchanged == ["http://10.0.1.20:8181/api/catalog"], f"the token came from another endpoint: {exchanged}")
+        require(
+            len(opened) == 1 and opened[0].endpoint == exchanged[0] and opened[0].token == issued and opened[0].catalog_type == "rest",
+            f"catalog settings: {opened}",
+        )
+        require("POLARIS_CLIENT_ID" not in environ and "POLARIS_CLIENT_SECRET" not in environ, "the reader pair stayed in the environment")
+        require("PYICEBERG_HOME" not in environ, "the Mac egress proxy settings file was written")
+
+    def local_profile_keeps_the_docker_endpoint() -> None:
+        environ = reader_environment(FEAST_PROFILE="local")
+        with (
+            mock.patch.object(publication_reads, "polaris_token", return_value="token"),
+            mock.patch.object(publication_reads, "private_pyiceberg_home"),
+            mock.patch.object(publication_reads, "open_catalog", side_effect=AssertionError("a private address opened the Docker-profile catalog")),
+        ):
+            try:
+                with training_extract.live_reader(REAL, environ, "latest"):
+                    raise ValueError("the Docker profile accepted a private catalog address")
+            except publication_reads.ReadError as error:
+                require("POLARIS_URI" in str(error), str(error))
+
+    cases.check("aws_run_extract_reader_uses_the_private_catalog_address", aws_reader)
+    cases.check("aws_run_extract_reader_keeps_the_docker_endpoint_for_the_local_profile", local_profile_keeps_the_docker_endpoint)
     cases.check("aws_run_extract_reads_the_real_namespace_and_registry", namespace)
     cases.check("aws_run_extract_needs_the_guard", needs_guard)
     cases.check("aws_run_extract_needs_the_catalog_address", needs_catalog)

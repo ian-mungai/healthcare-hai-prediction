@@ -227,6 +227,7 @@ def extract(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     task_environment(work)
     os.environ.update(
         {
+            "FEAST_PROFILE": "aws",
             "FEAST_NAMESPACE": "features" if mode == "real" else "features_e2e",
             "FEAST_CATALOG_TYPE": "rest",
             "FEAST_REGISTRY_PATH": f"s3://{bucket()}/lakehouse/feast/registry.pb",
