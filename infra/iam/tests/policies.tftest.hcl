@@ -797,7 +797,7 @@ run "lakehouse_roles" {
 }
 
 # The policy files take their secret and parameter names from the defaults of these variables (scripts/infrastructure/secret_store.py reads
-# variables.tf), so these lists are the grouping the files depend on: the shared keys read only, the 15 project parameters read, the 14 managed ones written.
+# variables.tf), so these lists are the grouping the files depend on: the shared keys read only, the 16 project parameters read, the 15 managed ones written.
 run "project_secret_names" {
   command = plan
 
@@ -811,15 +811,15 @@ run "project_secret_names" {
       for name in [
         "postgres_password", "polaris_root_secret", "polaris_reader_client_id", "polaris_reader_client_secret", "polaris_gold_client_id",
         "polaris_gold_client_secret", "polaris_silver_client_id", "polaris_silver_client_secret", "airflow_db_password", "airflow_fernet_key",
-        "airflow_jwt_secret", "airflow_api_secret_key", "marquez_db_password", "redis_password",
+        "airflow_jwt_secret", "airflow_api_secret_key", "marquez_db_password", "redis_password", "mlflow_db_password",
       ] : "/healthcare_hai_prediction/${name}"
     ]
-    error_message = "The managed parameters are exactly the 14 project parameters under /healthcare_hai_prediction/, none of them the Airflow administrator password."
+    error_message = "The managed parameters are exactly the 15 project parameters under /healthcare_hai_prediction/, none of them the Airflow administrator password."
   }
 
   assert {
     condition     = output.project_secret_names.read_parameters == concat(["/healthcare_hai_prediction/airflow_admin"], output.project_secret_names.managed_parameters)
-    error_message = "Parameter read access is the Airflow administrator password and the 14 managed parameters: 15 names."
+    error_message = "Parameter read access is the Airflow administrator password and the 15 managed parameters: 16 names."
   }
 
   assert {

@@ -72,6 +72,7 @@ PARAMETERS = (
     "airflow_fernet_key",
     "airflow_jwt_secret",
     "marquez_db_password",
+    "mlflow_db_password",
     "polaris_gold_client_id",
     "polaris_gold_client_secret",
     "polaris_reader_client_id",

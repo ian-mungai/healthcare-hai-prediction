@@ -244,7 +244,7 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
         statement_resources(documents, "ssm", "WriteManagedProjectParameters") == [prefix + name for name in declared["MANAGED_PARAMETER_NAME"]],
         "the write set must be the managed variable defaults",
     )
-    check(len(declared["READ_PARAMETER_NAME"]) == 15 and len(declared["MANAGED_PARAMETER_NAME"]) == 14, "15 parameters are read and 14 are written")
+    check(len(declared["READ_PARAMETER_NAME"]) == 16 and len(declared["MANAGED_PARAMETER_NAME"]) == 15, "16 parameters are read and 15 are written")
     check(
         "/healthcare_hai_prediction/airflow_admin" in declared["READ_PARAMETER_NAME"]
         and "/healthcare_hai_prediction/airflow_admin" not in declared["MANAGED_PARAMETER_NAME"],
