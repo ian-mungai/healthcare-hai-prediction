@@ -95,6 +95,8 @@
     ],
     "orchestration_checks": [
       "^scripts/orchestration/",
+      "^scripts/serving/",
+      "^data_contracts/serving/",
       "^orchestration/",
       "^dags/",
       "^tests/orchestration/",

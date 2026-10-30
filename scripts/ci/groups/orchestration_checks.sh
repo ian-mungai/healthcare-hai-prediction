@@ -30,6 +30,7 @@ orchestration_checks() {
   timed "orchestration_checks: supervisor E2E" "$python_bin" -m scripts.orchestration.run_supervisor_e2e
   timed "orchestration_checks: transform broker E2E" "$python_bin" -m scripts.orchestration.run_transform_broker_e2e
   # The offline checks skip the built Airflow image, which a CI runner does not have.
+  timed "orchestration_checks: model API E2E" "$python_bin" -B -m scripts.serving.run_serving_checks --output "$quality_output/serving_checks"
   timed "orchestration_checks: offline checks" "$python_bin" -m scripts.orchestration.offline_checks --no-image
   timed "orchestration_checks: failing first check" "$python_bin" -m scripts.orchestration.run_failing_first --check
 }
