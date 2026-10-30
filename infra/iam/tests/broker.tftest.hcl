@@ -216,6 +216,38 @@ run "named_families_widen_the_grant_by_name_only" {
   }
 }
 
+run "promote_family_reuses_the_train_role" {
+  command = plan
+
+  variables {
+    broker_job_families = ["promote", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_promote:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train:*",
+      ] &&
+      [for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+      ]
+    )
+    error_message = "The promote job has its own task definition and tag and passes the training task role, with no new role."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadStagedRunRecords"
+      ][0] == [
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/code.sha256",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/promotion_approval.json",
+    ]
+    error_message = "The broker reads the staged code digest and the promotion approval of a run and no other object."
+  }
+}
+
 run "no_statement_holds_a_wildcard_action_or_resource_except_list_tasks" {
   command = plan
 

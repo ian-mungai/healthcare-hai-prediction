@@ -1996,3 +1996,25 @@ run "broker_secrets_reach_no_argument_log_or_dump" {
     error_message = "The shared check follows the token in the broker container and in the scheduler."
   }
 }
+
+run "broker_accepts_the_promote_family" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train", "promote"]
+    }
+  }
+
+  assert {
+    condition     = contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : "${item.name}=${item.value}"], "BROKER_FAMILIES=train,promote")
+    error_message = "The broker enables the promote job when it is named."
+  }
+}
