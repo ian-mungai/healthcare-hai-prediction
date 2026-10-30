@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LayerInputObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${INPUT_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListLayerInputPrefixes",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${INPUT_LIST_PREFIXES}}}
+    }
+  ]
+}

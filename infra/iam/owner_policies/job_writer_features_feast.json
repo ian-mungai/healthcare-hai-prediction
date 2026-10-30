@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FeastRegistryObject",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": ${REGISTRY_OBJECT_ARNS}
+    },
+    {
+      "Sid": "RedisPasswordParameter",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter"],
+      "Resource": ${REDIS_PARAMETER_ARNS}
+    }
+  ]
+}
