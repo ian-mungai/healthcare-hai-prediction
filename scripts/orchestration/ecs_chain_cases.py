@@ -6,6 +6,7 @@ with the DAG's own macros, so the run IDs and settings a trigger would send are 
 
 from __future__ import annotations
 
+import json
 import re
 import runpy
 import sys
@@ -19,7 +20,7 @@ from unittest import mock
 import jinja2
 
 from scripts.orchestration.ecs_adapter_cases import require
-from scripts.orchestration.ecs_broker import CHAIN_LAYERS, derived_run_id
+from scripts.orchestration.ecs_broker import CHAIN_LAYERS, derived_run_id, load_jobs
 
 ROOT = Path(__file__).resolve().parents[2]
 BRONZE = "20261030T090000Z-b0b0b0b0"
@@ -127,7 +128,7 @@ def broker_and_dag_derive_the_same_run_ids() -> None:
 def chain_runs_in_order_after_the_gate() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
-    require(list(nodes) == ["chain_gate", "run_silver", "run_gold", "run_features", "run_drift"], f"wrong tasks: {list(nodes)}")
+    require(list(nodes) == ["chain_gate", "run_silver", "run_gold", "run_features", "run_drift", "start_metadata"], f"wrong tasks: {list(nodes)}")
     order = ["chain_gate", "run_silver", "run_gold", "run_features", "run_drift"]
     for before, after in zip(order, order[1:], strict=False):
         require(nodes[after].upstream == [nodes[before]], f"{after} does not follow only {before}")
@@ -200,6 +201,45 @@ def named_child_dags_exist_and_accept_the_settings() -> None:
     require(not problems, "; ".join(problems))
 
 
+def metadata_start_follows_drift_and_never_blocks_the_chain() -> None:
+    loaded = load_dag()
+    nodes = {node.task_id: node for node in loaded["operators"]}
+    node = nodes.get("start_metadata")
+    if node is None:
+        raise AssertionError("the chain has no start_metadata task")
+    settings = node.settings
+    require(node.upstream == [nodes["run_drift"]], "the catalog start does not follow only the drift layer")
+    require(not any(node in other.upstream for other in loaded["operators"]), "a task follows the catalog start, so its failure could hold up the chain")
+    require(settings["trigger_dag_id"] == "metadata_ingest_dag", f"wrong DAG: {settings['trigger_dag_id']}")
+    require(settings["wait_for_completion"] is False, "the chain waits for the catalog task, so a failed catalog task would fail the chain")
+    require(settings["skip_when_already_exists"] is True and settings["reset_dag_run"] is False, "a retried bronze run may restart the catalog start")
+    run = str(loaded["metadata_run_id"](BRONZE))
+    require(RUN_ID.fullmatch(run) is not None, f"the catalog run id is not a valid run id: {run}")
+    layer_ids = {str(loaded["chain_run"](layer, BRONZE)) for layer, _, _ in loaded["CHAIN"]}
+    require(run not in layer_ids, "the catalog run id repeats a layer run id")
+    require(
+        run == str(loaded["metadata_run_id"](BRONZE)) and run != str(loaded["metadata_run_id"](OTHER_BRONZE)), "the catalog run id is not stable per bronze run"
+    )
+    require(render(loaded, settings["trigger_run_id"], BRONZE) == f"chain__metadata_ingest_dag__{run}", "wrong catalog DAG run ID")
+    conf = {key: render(loaded, value, BRONZE) for key, value in settings["conf"].items()}
+    require(conf == {"run_id": run, "mode": "real"}, f"catalog settings: {conf}")
+
+
+def broker_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
+    document = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())
+    job = document["jobs"].get("metadata")
+    if job is None:
+        raise AssertionError("the broker table has no metadata job")
+    require(document["steps"].get("metadata_run") == "metadata", "the step metadata_run does not name the metadata job")
+    require(job.get("chain") is True, "the catalog job may start before the first publishes are signed")
+    require(job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"]}, f"wrong containers: {job['containers']}")
+    terraform = (ROOT / "infra/jobs/openmetadata.tf").read_text()
+    default = re.search(r'variable "openmetadata_lifetime_seconds".*?default\s*=\s*([0-9]+)', terraform, re.S)
+    require(default is not None and job["deadline_seconds"] == int(default.group(1)) + 900, "the broker deadline is not the task lifetime plus 900 seconds")
+    require('run_step("metadata_run")' in (ROOT / "dags/metadata_ingest_dag.py").read_text(), "the catalog DAG does not submit metadata_run")
+    require(load_jobs(ROOT)["jobs"]["metadata"] == job, "the broker does not load the metadata job")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "derived_ids_are_valid_and_stable": derived_ids_are_valid_and_stable,
     "broker_and_dag_derive_the_same_run_ids": broker_and_dag_derive_the_same_run_ids,
@@ -208,4 +248,6 @@ CASES: dict[str, Callable[[], None]] = {
     "a_retried_bronze_run_names_the_same_runs": a_retried_bronze_run_names_the_same_runs,
     "waits_have_explicit_deadlines": waits_have_explicit_deadlines,
     "named_child_dags_exist_and_accept_the_settings": named_child_dags_exist_and_accept_the_settings,
+    "metadata_start_follows_drift_and_never_blocks_the_chain": metadata_start_follows_drift_and_never_blocks_the_chain,
+    "broker_table_runs_the_catalog_step_as_a_bounded_chain_job": broker_table_runs_the_catalog_step_as_a_bounded_chain_job,
 }
