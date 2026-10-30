@@ -156,6 +156,7 @@ The E2E runners can also run on their own. Each runner that takes an output dire
 .venv/bin/python -m scripts.infrastructure.run_aws_tasks_e2e
 .venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e
 .venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations
+.venv/bin/python -m scripts.lakehouse.run_glue_mirror_e2e --out <new_directory>
 ```
 
 Each run writes its report under `data/e2e/`. The configuration E2E writes under `data/e2e/configuration/`, the policy E2E under `data/e2e/policies/` and the quality E2E under `data/e2e/quality/`.
@@ -189,7 +190,7 @@ The features layer is published to Iceberg namespace `features` (`features_e2e` 
 
 Publication verification is pending. Fixture runs use a test registry and a local Iceberg catalog. Silver, gold and features writes follow the run mode. `publish_fixture` runs write only under `lakehouse/silver_e2e/`, `lakehouse/gold_e2e/` and `lakehouse/features_e2e/`. `real` runs write only under `lakehouse/silver/`, `lakehouse/gold/` and `lakehouse/features/`. The launcher refuses any other silver, gold or features write.
 
-Local builds use DuckDB. Athena access through an AWS Glue catalog mirror belongs to the final AWS migration stage. Asset scheduling stays disabled. `gold_maintenance_dag` retains the registered snapshot sets when it maintains gold.
+Local builds use DuckDB. Athena reads published Public tables through read-only AWS Glue registrations that each publish updates after its commit. Polaris stays the catalog (`config/lakehouse/athena_mirror.json`, off until the owner applies the Athena mirror stack). Asset scheduling stays disabled. `gold_maintenance_dag` retains the registered snapshot sets when it maintains gold.
 
 ## License
 

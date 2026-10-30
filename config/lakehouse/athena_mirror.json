@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "note": "Athena reads published silver and gold through read-only Glue registrations. Polaris stays the catalog. A table is mirrored only when it is listed here, and each listed table must be Public in the dbt model metadata.",
+  "enabled": false,
+  "mirror_marker": "hai_mirror",
+  "layers": {
+    "silver": {"namespace": "silver", "database": "hai_mirror_silver", "tables": []},
+    "gold": {"namespace": "gold", "database": "hai_mirror_gold", "tables": ["bridge_county_neighbor"]}
+  },
+  "workgroup": {
+    "name": "hai_mirror",
+    "bytes_scanned_limit": 1073741824,
+    "results_prefix": "athena/results/",
+    "results_expire_days": 7
+  }
+}
