@@ -39,3 +39,5 @@ aws-account infra/jobs/tests/promote.tftest.hcl -- synthetic all-ones account ID
 aws-account scripts/infrastructure/iam_preflight_policies.py -- a synthetic all-ones account ID for the offline preflight run; not the project's account
 aws-account infra/jobs/tests/layers.tftest.hcl -- synthetic all-ones account IDs in mocked layer task definition tests; not the project account
 aws-account infra/iam/tests/job_layer_runs.tftest.hcl -- synthetic all-ones account IDs in mocked layer run IAM tests; not the project account
+aws-account infra/iam/tests/drift.tftest.hcl -- synthetic all-ones account IDs in mocked drift IAM tests; not the project's account
+aws-account infra/jobs/tests/drift.tftest.hcl -- synthetic all-ones account IDs in drift task definition plans and refusal cases. These are not the project account.
