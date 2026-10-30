@@ -1179,7 +1179,7 @@ HOSTED_ENTRY_POINTS = {
         ("scripts.infrastructure.run_aws_tasks_e2e", ("scripts/infrastructure/run_aws_tasks_e2e.py", "scripts/infrastructure/aws_tasks.py")),
         ("scripts.infrastructure.aws_tasks_plants", ("scripts/infrastructure/aws_tasks_plants.py", "scripts/infrastructure/aws_tasks.py")),
         (
-            "scripts.infrastructure.run_iam_preflight_e2e",
+            'scripts.infrastructure.run_iam_preflight_e2e --output-directory "$quality_output/iam_preflight"',
             (
                 "scripts/infrastructure/run_iam_preflight_e2e.py",
                 "scripts/infrastructure/iam_preflight.py",
