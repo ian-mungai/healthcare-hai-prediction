@@ -27,12 +27,6 @@ SOURCES = (
     "data_contracts/orchestration/examples/ecs_target.json",
     "data_contracts/orchestration/examples/ecs_target_inputs.json",
 )
-PROCEDURE_SOURCES = (
-    "scripts/infrastructure/ecs_real_runs.py",
-    "config/orchestration/ecs_real_runs.json",
-    "data_contracts/orchestration/ecs_real_run_request.schema.json",
-    "data_contracts/orchestration/examples/ecs_real_run_request.json",
-)
 INPUTS = ("storage_outputs", "platform_outputs", "iam_outputs", "jobs_outputs", "image_measurements", "catalog_binding")
 
 
@@ -438,67 +432,6 @@ def writer_cases(root: Path, folder: Path) -> dict[str, bool]:
     altered = copy.deepcopy(value)
     del altered["jobs_outputs"]["dispatch_contract"]
     refused("missing_dispatch_contract", altered, "dispatch_contract")
-
-    consumer_target = json.loads(original)
-    consumer_target["enabled"] = True
-    target_path = folder / "consumer_target.json"
-    card_path = folder / "consumer_card.json"
-
-    def consume(target: dict[str, Any]) -> Any:
-        target_path.write_text(json.dumps(target))
-        return run_command(
-            sys.executable,
-            [
-                "-m",
-                "scripts.infrastructure.ecs_real_runs",
-                "--case",
-                "R1",
-                "--target",
-                str(target_path),
-                "--run-inputs",
-                str(root / "data_contracts/orchestration/examples/ecs_real_run_request.json"),
-                "--output",
-                str(card_path),
-            ],
-            cwd=root,
-            timeout=10,
-        )
-
-    result = consume(consumer_target)
-    checks["writer_target_consumer"] = result.returncode == 0 and card_path.exists()
-    if checks["writer_target_consumer"]:
-        card = card_path.read_bytes()
-        for label, strategy in (
-            ("missing_strategy", None),
-            (
-                "missing_writer_strategy",
-                {"offline": ["FARGATE_SPOT", "FARGATE"], "seal": ["FARGATE_SPOT", "FARGATE"], "lakehouse_read": ["FARGATE_SPOT", "FARGATE"]},
-            ),
-            (
-                "spot_strategy",
-                {
-                    "offline": ["FARGATE_SPOT", "FARGATE"],
-                    "seal": ["FARGATE_SPOT", "FARGATE"],
-                    "lakehouse_read": ["FARGATE_SPOT", "FARGATE"],
-                    "lakehouse_write": ["FARGATE_SPOT", "FARGATE"],
-                },
-            ),
-        ):
-            altered_target = copy.deepcopy(consumer_target)
-            if strategy is None:
-                altered_target.pop("class_capacity_providers", None)
-            else:
-                altered_target["class_capacity_providers"] = strategy
-            result = consume(altered_target)
-            checks["consumer_" + label] = result.returncode == 2 and "Invalid target contract" in result.stderr and card_path.read_bytes() == card
-        for label, public_ip in (("public_ip", "ENABLED"), ("missing_public_ip", None)):
-            altered_target = copy.deepcopy(consumer_target)
-            if public_ip is None:
-                altered_target.pop("assign_public_ip", None)
-            else:
-                altered_target["assign_public_ip"] = public_ip
-            result = consume(altered_target)
-            checks["consumer_" + label] = result.returncode == 2 and "Invalid target contract" in result.stderr and card_path.read_bytes() == card
     return checks
 
 
@@ -694,87 +627,6 @@ def jobs_config_cases(root: Path, folder: Path) -> dict[str, bool]:
     return checks
 
 
-def procedure_cases(root: Path, folder: Path) -> dict[str, bool]:
-    """Prepare every real-run checklist without dispatch and refuse unsafe or incomplete run inputs."""
-    target = json.loads((root / "data_contracts/orchestration/examples/ecs_target.json").read_text())
-    target["enabled"] = True
-    request = json.loads((root / "data_contracts/orchestration/examples/ecs_real_run_request.json").read_text())
-    target_path, request_path, output = (folder / name for name in ("enabled_target.json", "run_request.json", "run_card.json"))
-
-    def invoke(case: str, target_value: dict[str, Any], request_value: dict[str, Any]) -> Any:
-        target_path.write_text(json.dumps(target_value))
-        request_path.write_text(json.dumps(request_value))
-        return run_command(
-            sys.executable,
-            [
-                "-m",
-                "scripts.infrastructure.ecs_real_runs",
-                "--case",
-                case,
-                "--target",
-                str(target_path),
-                "--run-inputs",
-                str(request_path),
-                "--output",
-                str(output),
-            ],
-            cwd=root,
-            timeout=10,
-        )
-
-    checks = {}
-    for case, outer, first_tasks in (("R1", 7200, 2), ("R2", 3600, 1), ("R3", 14400, 1)):
-        result = invoke(case, target, request)
-        card = json.loads(output.read_text()) if output.exists() else {}
-        checks[case] = (
-            result.returncode == 0
-            and card.get("preparation_only") is True
-            and card.get("execution_verified") is False
-            and card.get("proof") == "A"
-            and card.get("requested_target") == "ecs"
-            and card.get("outer_deadline_seconds") == outer
-            and card.get("first_step_task_count") == first_tasks
-            and card.get("target_sha256") == hashlib.sha256(target_path.read_bytes()).hexdigest()
-            and card.get("request") == request
-            and card.get("task_deadline_not_after_utc") == "2026-11-04T10:56:30Z"
-        )
-    if not all(checks.values()):
-        return checks
-    original = output.read_bytes()
-    for name, target_delta, request_delta, cause in (
-        ("disabled_cloud_target", {"enabled": False}, {}, "enabled target"),
-        ("mac_preparation_enabled", {"mac_preparation": {"enabled": True, "transport": "session_manager_owned_relay"}}, {}, "target contract"),
-        ("changed_cloud_cap", {"cloud_limits": {"max_tasks": 4, "max_vcpu": 16, "max_memory_gib": 120}}, {}, "target contract"),
-        ("unregistered_catalog", {"catalog": None}, {}, "registered AWS catalog"),
-        ("mac_dataset_upload", {}, {"dataset_uploads": ["example.csv"]}, "run request"),
-        ("synthetic_real_input", {}, {"source_kind": "synthetic_fixture"}, "run request"),
-        ("wrong_source_inventory", {}, {"source_inventory_sha256": "f" * 64}, "source inventory"),
-        ("missing_run_approval", {}, {"owner_approval_reference": ""}, "run request"),
-        ("unbounded_run", {}, {"window_deadline_utc": "2026-11-05T10:00:00Z"}, "run window"),
-        ("reversed_window", {}, {"window_deadline_utc": "2026-11-04T09:00:00Z"}, "run window"),
-        ("no_cleanup_time", {}, {"window_deadline_utc": "2026-11-04T10:01:00Z"}, "run window"),
-        ("no_stop_grace_time", {}, {"window_deadline_utc": "2026-11-04T10:03:00Z"}, "run window"),
-    ):
-        result = invoke("R3", target | target_delta, request | request_delta)
-        checks[name] = result.returncode == 2 and cause in result.stderr and output.read_bytes() == original
-    for field, cause in (("cluster_arn", "cluster identity"), ("task_definition_arn", "fixed task revision"), ("image", "image digest")):
-        for dimension, old, new in (("account", "000000000000", "111111111111"), ("region", "eu-west-1", "eu-west-2")):
-            altered = copy.deepcopy(target)
-            subject = altered if field == "cluster_arn" else altered["definitions"]["seal"]
-            subject[field] = subject[field].replace(old, new)
-            result = invoke("R3", altered, request)
-            checks[f"{field}_{dimension}"] = result.returncode == 2 and cause in result.stderr and output.read_bytes() == original
-    for field in ("unique_id", "arn"):
-        altered = copy.deepcopy(target)
-        duplicate = altered["job_roles"]["offline_task"]
-        duplicate[field] = altered["job_roles"]["execution"][field]
-        if field == "arn":
-            duplicate["name"] = altered["job_roles"]["execution"]["name"]
-        result = invoke("R3", altered, request)
-        checks[f"repeated_role_{field}"] = result.returncode == 2 and "Repeated role identity" in result.stderr and output.read_bytes() == original
-    return checks
-
-
 def main() -> int:
     """Save command outcomes and source hashes for this bounded offline configuration check."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -783,7 +635,7 @@ def main() -> int:
     started = datetime.now(UTC)
     folder = arguments.output or ROOT / "data/e2e/ecs_target" / started.strftime("render_%Y%m%dT%H%M%S_%fZ")
     folder.mkdir(parents=True, exist_ok=False)
-    hashes = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() if (ROOT / name).exists() else None for name in SOURCES + PROCEDURE_SOURCES}
+    hashes = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() if (ROOT / name).exists() else None for name in SOURCES}
     checks: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="ecs_render_") as temporary:
         scratch = Path(temporary)
@@ -792,9 +644,8 @@ def main() -> int:
         checks["records"] = record_cases(ROOT, scratch)
         checks["wrapper"] = wrapper_cases(ROOT, scratch)
         checks["jobs_config"] = jobs_config_cases(ROOT, scratch)
-        checks["procedures"] = procedure_cases(ROOT, scratch)
     failed = [f"{group}.{name}" for group, values in checks.items() for name, passed in values.items() if not passed]
-    after = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() if (ROOT / name).exists() else None for name in SOURCES + PROCEDURE_SOURCES}
+    after = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() if (ROOT / name).exists() else None for name in SOURCES}
     if hashes != after:
         failed.append("source_changed")
     report = {

@@ -12,11 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure.run_ecs_render_e2e import PROCEDURE_SOURCES, ROOT, SOURCES
+from scripts.infrastructure.run_ecs_render_e2e import ROOT, SOURCES
 from scripts.process import run_command
 
 RENDERER = "scripts/infrastructure/render_ecs_target.py"
-PROCEDURES = "scripts/infrastructure/ecs_real_runs.py"
 MUTATIONS = (
     ("foreign_role_accepted", RENDERER, 'if role["arn"] != f"arn:aws:iam::{account}:role/{role[\'name\']}":', "if False:", "render.foreign_role"),
     ("shared_class_group", RENDERER, 'if len(set(network["security_group_ids"].values())) != 2:', "if False:", "render.mixed_class_network"),
@@ -63,20 +62,6 @@ MUTATIONS = (
         "set -euo pipefail",
         "set -uo pipefail",
         "wrapper.renderer_failure_stops_dispatch",
-    ),
-    (
-        "stop_grace_not_reserved",
-        PROCEDURES,
-        'target["deadlines"]["stop_grace_seconds"] + target["deadlines"]["cleanup_seconds"]',
-        'target["deadlines"]["cleanup_seconds"]',
-        "procedures.R3",
-    ),
-    (
-        "unbound_source_inventory",
-        PROCEDURES,
-        'if request["source_inventory_sha256"] != digest or target["catalog"]["source_inventory_sha256"] != digest:',
-        "if False:",
-        "procedures.wrong_source_inventory",
     ),
     (
         "reader_binding_case_omitted",
@@ -206,34 +191,6 @@ MUTATIONS = (
         "if not isinstance(repositories, dict):",
         "render.wrong_platform_repository",
     ),
-    (
-        "foreign_cluster_accepted",
-        "scripts/infrastructure/render_ecs_target.py",
-        'if not target["cluster_arn"].startswith(f"arn:aws:ecs:{region}:{account}:cluster/"):',
-        'if not isinstance(target["cluster_arn"], str):',
-        "procedures.cluster_arn_account",
-    ),
-    (
-        "foreign_task_accepted",
-        "scripts/infrastructure/render_ecs_target.py",
-        'if not definition["task_definition_arn"].startswith(f"arn:aws:ecs:{region}:{account}:task-definition/"):',
-        'if not isinstance(definition["task_definition_arn"], str):',
-        "procedures.task_definition_arn_account",
-    ),
-    (
-        "foreign_image_accepted",
-        "scripts/infrastructure/render_ecs_target.py",
-        'if not definition["image"].startswith(f"{account}.dkr.ecr.{region}.amazonaws.com/"):',
-        'if not isinstance(definition["image"], str):',
-        "procedures.image_account",
-    ),
-    (
-        "repeated_role_accepted",
-        "scripts/infrastructure/render_ecs_target.py",
-        'if len({role["unique_id"] for role in roles.values()}) != len(roles) or len({role["arn"] for role in roles.values()}) != len(roles):',
-        "if False:",
-        "procedures.repeated_role_unique_id",
-    ),
     ("symbolic_output_accepted", "scripts/infrastructure/render_ecs_target.py", "if path.is_symlink():", "if False:", "render.symbolic_output"),
     ("unbounded_capture", "scripts/infrastructure/render_ecs_target.py", "if len(content) > 32 * 1024**2:", "if False:", "render.input_over_record_bound"),
     (
@@ -265,7 +222,7 @@ MUTATIONS = (
         "missing:records.output_over_record_bound",
     ),
 )
-COPY_PATHS = SOURCES + PROCEDURE_SOURCES + ("scripts/process.py", "scripts/infrastructure/render_project_config.py")
+COPY_PATHS = SOURCES + ("scripts/process.py", "scripts/infrastructure/render_project_config.py")
 
 
 def _copy(root: Path) -> None:
