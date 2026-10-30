@@ -1927,6 +1927,28 @@ run "broker_with_public_host_address_is_refused" {
   expect_failures = [var.broker_jobs]
 }
 
+run "broker_accepts_the_bronze_family" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id         = "subnet-0example1"
+      security_group_id = "sg-0example1"
+      log_group_name    = "example_project_jobs_dev"
+      bucket_name       = "example-project-data-dev"
+      host_ip           = "10.0.1.20"
+      families          = ["train", "bronze"]
+    }
+  }
+
+  assert {
+    condition     = contains(keys(aws_ecs_service.service), "broker") && strcontains(aws_ecs_task_definition.service["broker"].container_definitions, "bronze")
+    error_message = "The broker accepts the bronze family and passes it to the broker container."
+  }
+}
+
 run "broker_with_unknown_family_is_refused" {
   command = plan
 

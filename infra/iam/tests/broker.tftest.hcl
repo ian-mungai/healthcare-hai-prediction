@@ -347,3 +347,50 @@ run "metadata_family_passes_the_catalog_role" {
     error_message = "The metadata job has its own task definition and tag and passes the read-only catalog role."
   }
 }
+
+run "no_bronze_request_grant_without_the_bronze_family" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.broker_bronze_request) == 0
+    error_message = "Without the bronze family the broker role holds no read grant on a staged bronze request."
+  }
+}
+
+run "the_bronze_family_adds_its_definition_its_role_and_one_request_read" {
+  command = plan
+
+  variables {
+    broker_job_families = ["bronze", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_bronze:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train:*",
+      ] &&
+      [for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_write_bronze_task_dev",
+      ]
+    )
+    error_message = "The bronze family adds its own task definition and the bronze writer role, and no other layer's role."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.broker_bronze_request[0].role == aws_iam_role.broker_task[0].name &&
+      jsondecode(aws_iam_role_policy.broker_bronze_request[0].policy).Statement == [
+        {
+          Sid      = "ReadBronzeRequest"
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/bronze_request.json"
+        }
+      ]
+    )
+    error_message = "The broker reads exactly the staged bronze request key of a run, with one get action."
+  }
+}
