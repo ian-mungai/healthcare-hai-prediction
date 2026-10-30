@@ -169,6 +169,12 @@
       "installer": "homebrew",
       "formula": "typos-cli",
       "executable": "/opt/homebrew/bin/typos"
+    },
+    "check-jsonschema": {
+      "version": "0.39.0",
+      "installer": "scripts/quality/install_lint_tools.py",
+      "requirements": "scripts/quality/lint_requirements/check_jsonschema.txt",
+      "executable": ".tools/check-jsonschema/bin/check-jsonschema"
     }
   }
 }

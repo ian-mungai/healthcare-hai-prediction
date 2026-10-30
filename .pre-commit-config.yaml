@@ -223,6 +223,15 @@ repos:
         language: system
         types: [text]
         stages: [pre-commit]
+      - id: check-jsonschema
+        # Workflows and actions against the bundled GitHub schemas, every *.schema.json against its metaschema and the contracts mapped in config/quality/json_schemas.json;
+        # check-jsonschema is installed by scripts/quality/install_lint_tools.py.
+        name: Workflows and JSON contracts satisfy their schemas (check-jsonschema)
+        entry: .venv/bin/python -m scripts.quality.lint_tools check-jsonschema
+        language: system
+        pass_filenames: false
+        files: ^(\.github/(workflows|actions)/.*\.ya?ml|.*\.schema\.json|config/quality/json_schemas\.json|config/(orchestration|training|acquisition)/.*\.json|data_contracts/(training|orchestration)/.*\.json)$
+        stages: [pre-commit]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata
