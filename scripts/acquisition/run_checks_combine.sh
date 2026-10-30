@@ -19,6 +19,7 @@ if [[ "$expect" == "run" ]]; then
   timed "acquisition combine: ruff" "$python_bin" -m ruff check --no-respect-gitignore scripts/acquisition tests/test_source_registry.py
   timed "acquisition combine: mypy" "$python_bin" -m scripts.quality.typecheck --runtime acquisition --check-untyped-defs --disallow-untyped-defs
   timed "acquisition combine: source registry" "$python_bin" -m scripts.acquisition.source_registry
+  timed "acquisition combine: source verification log" "$python_bin" -m scripts.acquisition.source_verification_log --check
   timed "acquisition combine: shards E2E" "$python_bin" -m scripts.acquisition.run_shards_e2e
 fi
 timed "acquisition combine: gate expecting $expect" "$python_bin" -m scripts.acquisition.shards gate --directory "$directory" --count "${ACQUISITION_SHARD_COUNT:-4}" \
