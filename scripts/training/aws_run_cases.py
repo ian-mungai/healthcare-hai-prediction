@@ -282,7 +282,7 @@ class FakeObjects:
         Path(Filename).write_bytes(self.source.read_bytes())
 
 
-def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN) -> tuple[int, str]:
+def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN, tools: Path | None = None) -> tuple[int, str]:
     """Run the fetch script in this process against the stand-in client and return its exit code and standard error."""
     spec = importlib.util.spec_from_file_location("fetch_code", FETCH)
     if spec is None or spec.loader is None:
@@ -291,7 +291,7 @@ def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN) -> tupl
     spec.loader.exec_module(module)
     err = io.StringIO()
     with environment(CODE_SHA256=sha, RUN_ID=run), contextlib.redirect_stderr(err):
-        return int(module.main(objects, work)), err.getvalue()
+        return int(module.main(objects, work, tools or work / "no_tools")), err.getvalue()
 
 
 def fetch_cases(cases: Any, folder: Path) -> None:
@@ -357,6 +357,24 @@ def fetch_cases(cases: Any, folder: Path) -> None:
         code, error = fetch(work, sha, FakeObjects(key, hostile))
         require(code != 0 and "unpack" in error and not (folder / "escaped.txt").exists() and not (work.parent / "escaped.txt").exists(), f"{code} {error}")
 
+    def links_dvc() -> None:
+        archive, sha = source("linked")
+        work = folder / "linked_work"
+        work.mkdir()
+        tools = folder / "image_dvc"
+        (tools / "bin").mkdir(parents=True)
+        (tools / "bin/dvc").write_text("#!/bin/sh\n")
+        code, error = fetch(work, sha, FakeObjects(key, archive), tools=tools)
+        require(code == 0, f"fetch failed: {error}")
+        require(
+            (work / "code/.tools/dvc/bin/dvc").is_file() and (work / "code/.tools/dvc").resolve() == tools.resolve(),
+            "the image's DVC is not where the job looks",
+        )
+        require(code_digest.file_entries(work / "code") == code_digest.file_entries(folder / "linked/code"), "the tool link changed the code digest")
+        code, error = fetch(work, sha, FakeObjects(key, archive), tools=tools)
+        require(code == 0, f"the rerun failed: {error}")
+
+    cases.check("aws_fetch_links_the_image_dvc_where_the_job_looks", links_dvc)
     cases.check("aws_fetch_downloads_verifies_and_unpacks", fetched)
     cases.check("aws_fetch_rerun_downloads_nothing", rerun)
     cases.check("aws_fetch_refuses_changed_archive", changed_archive)
