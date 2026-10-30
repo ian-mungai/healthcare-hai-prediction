@@ -363,7 +363,7 @@ def marquez_routes() -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
     }
 
     def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
-        if path == "/api/v1/namespaces":
+        if path.startswith("/api/v1/namespaces?"):
             return 200, {"namespaces": [{"name": "file"}]}
         if path.startswith("/api/v1/namespaces/file/datasets"):
             return 200, {"datasets": [{"name": "silver/hospital"}, {"name": "gold/dim_hospital"}]}
@@ -432,6 +432,83 @@ def marquez_step_fails_visibly_when_marquez_is_down() -> None:
     require(code == 1 and edges == [] and "marquez" in err.lower(), (code, err))
 
 
+def paged_marquez_routes(namespaces: int, datasets: int, ignore_offset: bool = False) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
+    """A Marquez stand-in that pages its listings by limit and offset. The only connected pair sits at the end of the last page of the last namespace."""
+    names = [f"ns{index:03d}" for index in range(namespaces)] + ["file"]
+    rows = [f"filler/set_{index:03d}" for index in range(datasets - 2)] + ["silver/late_a", "gold/late_b"]
+    graph = {
+        "graph": [
+            {
+                "id": "job:file:late_job",
+                "type": "JOB",
+                "inEdges": [{"origin": "dataset:file:silver/late_a", "destination": "job:file:late_job"}],
+                "outEdges": [{"origin": "job:file:late_job", "destination": "dataset:file:gold/late_b"}],
+            }
+        ]
+    }
+
+    def window(items: list[Any], query: str) -> list[Any]:
+        values = dict(part.split("=") for part in query.split("&") if "=" in part)
+        limit, offset = int(values.get("limit", "100")), 0 if ignore_offset else int(values.get("offset", "0"))
+        return items[offset : offset + limit]
+
+    def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        base, _, query = path.partition("?")
+        if base == "/api/v1/namespaces":
+            return 200, {"namespaces": [{"name": name} for name in window(names, query)]}
+        if base == "/api/v1/namespaces/file/datasets":
+            return 200, {"datasets": [{"name": name} for name in window(rows, query)], **({} if ignore_offset else {"totalCount": len(rows)})}
+        if base.startswith("/api/v1/namespaces/") and base.endswith("/datasets"):
+            return 200, {"datasets": [], "totalCount": 0}
+        if base == "/api/v1/lineage":
+            return 200, graph if "late_a" in query else {"graph": []}
+        return 404, {}
+
+    return route
+
+
+def marquez_step_pages_namespaces_and_datasets_to_the_end() -> None:
+    edges: list[dict[str, Any]] = []
+    with serving(paged_marquez_routes(205, 202)) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
+        token = Path(folder) / "token"
+        token.write_text(BEARER_VALUE)
+        args = ["--marquez", marquez.url, "--om-base", om.url + "/api", "--token-file", str(token), "--config", str(INGESTION / "marquez.json")]
+        code, out, err = run_marquez(args)
+    require(code == 0 and len(edges) == 1, f"the edge beyond the first pages was dropped: exit {code}, edges {len(edges)}, {out.strip()} {err.strip()}")
+
+
+def marquez_step_stops_at_its_deadline_when_paging_never_ends() -> None:
+    edges: list[dict[str, Any]] = []
+    with serving(paged_marquez_routes(1, 300, ignore_offset=True)) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
+        token = Path(folder) / "token"
+        token.write_text(BEARER_VALUE)
+        args = [
+            "--marquez",
+            marquez.url,
+            "--om-base",
+            om.url + "/api",
+            "--token-file",
+            str(token),
+            "--config",
+            str(INGESTION / "marquez.json"),
+            "--deadline-seconds",
+            "3",
+        ]
+        started = time.monotonic()
+        code, _, err = run_marquez(args)
+    require(
+        code == 1 and time.monotonic() - started < 30 and "deadline" in err.lower(), f"an endless listing must end at the deadline: exit {code}, {err.strip()}"
+    )
+
+
+def polaris_and_marquez_configs_use_the_same_database_name() -> None:
+    catalog = load("polaris")["source"]["serviceConnection"]["config"]["catalog"]
+    require(
+        catalog.get("databaseName") == load("marquez")["database"],
+        f"the Iceberg catalog database name is {catalog.get('databaseName')!r} and the mapper looks for {load('marquez')['database']!r}",
+    )
+
+
 def bounded_environment(root: Path, deadline_in: int) -> dict[str, str]:
     """The environment of one wrapper run: a deadline file the given number of seconds from now, an abort file path, a 1 second poll and a 3 second grace."""
     (root / "deadline").write_text(f"{int(time.time()) + deadline_in}\n")
@@ -487,6 +564,49 @@ def bounded_wrapper_extra_seconds_outlive_the_server_deadline() -> None:
         done = run_command("sh", ["scripts/infrastructure/openmetadata_bounded_run.sh", "4", "sleep", "300"], cwd=REPO, env=env, timeout=60)
         took = time.monotonic() - started
     require(done.returncode == 0 and 5 <= took < 20, (done.returncode, took))
+
+
+def bounded_wrapper_exits_zero_when_stopped_after_the_deadline() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        env = bounded_environment(Path(folder), 2)
+        done = run_command(
+            "sh",
+            ["scripts/infrastructure/openmetadata_bounded_run.sh", "300", "sh", "-c", "sleep 4; kill -TERM $PPID; exec sleep 300"],
+            cwd=REPO,
+            env=env,
+            timeout=60,
+        )
+    require(done.returncode == 0, f"a sibling stopped by ECS after the deadline must exit 0, got {done.returncode}")
+
+
+def bounded_wrapper_fails_when_stopped_before_the_deadline() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        env = bounded_environment(Path(folder), 600)
+        done = run_command(
+            "sh",
+            ["scripts/infrastructure/openmetadata_bounded_run.sh", "300", "sh", "-c", "sleep 1; kill -TERM $PPID; exec sleep 300"],
+            cwd=REPO,
+            env=env,
+            timeout=60,
+        )
+    require(done.returncode == 1, f"a stop before the deadline is a failure, got {done.returncode}")
+
+
+def migrate_script_writes_the_abort_marker_after_its_last_try() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        env = {**bounded_environment(Path(folder), 600), "OM_MIGRATE_TRIES": "2", "OM_MIGRATE_SLEEP": "1"}
+        done = run_command("sh", ["scripts/infrastructure/openmetadata_migrate.sh", "false"], cwd=REPO, env=env, timeout=60)
+        marker = Path(folder) / "abort"
+        require(done.returncode == 1, f"the exhausted migration must fail, got {done.returncode}")
+        require(marker.exists() and "migration" in marker.read_text(), "the exhausted migration must write the abort marker")
+
+
+def migrate_script_passes_a_migration_that_succeeds_on_a_later_try() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        env = {**bounded_environment(Path(folder), 600), "OM_MIGRATE_TRIES": "3", "OM_MIGRATE_SLEEP": "1"}
+        script = 'test -e "$OM_MARKER" || { touch "$OM_MARKER"; exit 1; }'
+        done = run_command("sh", ["scripts/infrastructure/openmetadata_migrate.sh", "sh", "-c", script], cwd=REPO, env=env, timeout=60)
+        require(done.returncode == 0 and not (Path(folder) / "abort").exists(), f"a later success must pass without an abort, got {done.returncode}")
 
 
 def catalog_policy_reads_metadata_files_and_nothing_else() -> None:
@@ -610,7 +730,7 @@ def images_file_names_exactly_the_images_the_task_definition_takes() -> None:
         require(entry["upstream"] and "@sha256:" not in entry["upstream"] and entry["push_by"] == "digest", entry)
 
 
-def project_policies_pass_the_catalog_role_and_the_remote_host_document() -> None:
+def project_policies_pass_the_catalog_role_and_only_the_catalog_forward_document() -> None:
     from infra.iam.scripts.render_policy import render_template, terraform_names
     from scripts.infrastructure.policy_evaluator import Request, decide
 
@@ -626,7 +746,8 @@ def project_policies_pass_the_catalog_role_and_the_remote_host_document() -> Non
     spare = {name: "/example_project/spare" for text in texts for name in re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", text) if name not in values}
     documents = [render_template(text, values, {**terraform_names(), **spare}) for text in texts]
     role = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
-    forward = "arn:aws:ssm:us-west-2::document/AWS-StartPortForwardingSessionToRemoteHost"
+    forward = "arn:aws:ssm:us-west-2:111111111111:document/example_project_catalog_forward_dev"
+    generic = "arn:aws:ssm:us-west-2::document/AWS-StartPortForwardingSessionToRemoteHost"
     tasks = {"iam:PassedToService": ("ecs-tasks.amazonaws.com",)}
     require(
         any(decide([document], Request("iam:PassRole", role, tasks)).allowed for document in documents),
@@ -636,13 +757,26 @@ def project_policies_pass_the_catalog_role_and_the_remote_host_document() -> Non
         not any(decide([document], Request("iam:PassRole", role, {"iam:PassedToService": ("ec2.amazonaws.com",)})).allowed for document in documents),
         "only ECS tasks may receive it",
     )
-    require(any(decide([document], Request("ssm:StartSession", forward)).allowed for document in documents), "the remote-host forward document must be allowed")
+    require(
+        any(decide([document], Request("ssm:StartSession", forward)).allowed for document in documents), "the project catalog forward document must be allowed"
+    )
+    require(
+        not any(decide([document], Request("ssm:StartSession", generic)).allowed for document in documents),
+        "the general remote-host forward must not be granted",
+    )
     other = "arn:aws:ssm:us-west-2::document/AWS-StartInteractiveCommand"
     require(not any(decide([document], Request("ssm:StartSession", other)).allowed for document in documents), "no other session document may be added")
 
 
 CASES: list[Callable[[], None]] = [
-    project_policies_pass_the_catalog_role_and_the_remote_host_document,
+    marquez_step_pages_namespaces_and_datasets_to_the_end,
+    marquez_step_stops_at_its_deadline_when_paging_never_ends,
+    polaris_and_marquez_configs_use_the_same_database_name,
+    bounded_wrapper_exits_zero_when_stopped_after_the_deadline,
+    bounded_wrapper_fails_when_stopped_before_the_deadline,
+    migrate_script_writes_the_abort_marker_after_its_last_try,
+    migrate_script_passes_a_migration_that_succeeds_on_a_later_try,
+    project_policies_pass_the_catalog_role_and_only_the_catalog_forward_document,
     images_file_names_exactly_the_images_the_task_definition_takes,
     real_configs_have_no_profiler_or_sampling,
     every_profiler_or_sampling_mutant_is_refused,

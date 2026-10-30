@@ -135,6 +135,7 @@ locals {
   om_repo    = "${path.module}/../.."
   om_extra   = 120
   om_bounded = file("${local.om_repo}/scripts/infrastructure/openmetadata_bounded_run.sh")
+  om_migrate = file("${local.om_repo}/scripts/infrastructure/openmetadata_migrate.sh")
   # Files the init step writes into the workspace, so the task runs the tracked scripts and configuration unchanged and a change to either makes a new revision.
   om_files = {
     "bin/openmetadata_ingest.py"    = file("${local.om_repo}/scripts/infrastructure/openmetadata_ingest.py")
@@ -154,10 +155,12 @@ locals {
     ],
     [for name, text in local.om_files : "printf '%s' '${base64gzip(text)}' | base64 -d | gunzip > /workspace/${name}"],
     [
-      "chown 10001:10001 /run/om",
+      # Sticky and open, so the database user, the server user and the ingestion user can each create files here (the abort marker and the token) and none can remove another's.
+      "chmod 1777 /run/om",
       "chown 999:999 /data/pg",
       "chown 1000:1000 /data/os",
-      "chown -R 10001:10001 /workspace /tmp",
+      "chmod 1777 /tmp",
+      "chown -R 10001:10001 /workspace",
     ]
   ))
   om_db_prelude = "DB_USER_PASSWORD=$(cat /run/om/db_password); export DB_USER_PASSWORD"
@@ -207,10 +210,10 @@ locals {
       {
         name        = "migrate", image = "server", user = "1000:1000", essential = false, writable = true, after = [["init", "SUCCESS"]], secrets = [], workdir = null
         environment = local.om_server_environment
-        entry       = ["sh", "-c", "${local.om_db_prelude}\ni=0\nuntil ${join(" ", var.openmetadata_commands.migrate)}; do\n  i=$((i + 1))\n  [ \"$i\" -lt 30 ] || exit 1\n  sleep 10\ndone"]
+        entry       = concat(["sh", "-c", "${local.om_db_prelude}\n${local.om_migrate}", "openmetadata_migrate"], var.openmetadata_commands.migrate)
       },
       {
-        name        = "server", image = "server", user = "1000:1000", essential = false, writable = true, after = [["migrate", "SUCCESS"]], secrets = [], workdir = null
+        name        = "server", image = "server", user = "1000:1000", essential = true, writable = true, after = [["migrate", "SUCCESS"]], secrets = [], workdir = null
         environment = local.om_server_environment
         entry       = concat(["sh", "-c", "${local.om_db_prelude}\n${local.om_bounded}", "openmetadata_bounded_run", "0"], var.openmetadata_commands.server)
       },

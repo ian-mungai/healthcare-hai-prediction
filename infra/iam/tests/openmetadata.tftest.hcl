@@ -51,6 +51,11 @@ run "default_prepares_no_catalog_role" {
   }
 
   assert {
+    condition     = length(aws_ssm_document.catalog_forward) == 0
+    error_message = "The default plan must hold no catalog forward document, so the grant for it works for nothing."
+  }
+
+  assert {
     condition     = !contains(keys(output.job_roles), "openmetadata_task") && length(output.openmetadata_roles) == 0
     error_message = "The default plan must hold no catalog role."
   }
@@ -130,6 +135,30 @@ run "prepared_role_reads_catalog_metadata_only" {
       length(aws_vpc_security_group_egress_rule.openmetadata_marquez) == 0
     )
     error_message = "Only the container host may reach the catalog UI port, and the Marquez port stays closed until asked for."
+  }
+}
+
+run "prepared_forward_document_fixes_port_and_destination" {
+  command = plan
+
+  variables {
+    openmetadata_prepared = true
+  }
+
+  assert {
+    condition = (
+      aws_ssm_document.catalog_forward[0].name == "example_project_catalog_forward_dev" &&
+      aws_ssm_document.catalog_forward[0].document_type == "Session" &&
+      jsondecode(aws_ssm_document.catalog_forward[0].content).sessionType == "Port" &&
+      jsondecode(aws_ssm_document.catalog_forward[0].content).properties.portNumber == "8585" &&
+      !contains(keys(jsondecode(aws_ssm_document.catalog_forward[0].content).parameters), "portNumber")
+    )
+    error_message = "The catalog forward document fixes the destination port at 8585 and takes no port from the caller."
+  }
+
+  assert {
+    condition     = can(regex("^\\^[0-9]+\\\\.[0-9]+", jsondecode(aws_ssm_document.catalog_forward[0].content).parameters.host.allowedPattern))
+    error_message = "The destination host is limited by a pattern that starts with the first two octets of the platform network."
   }
 }
 

@@ -14,12 +14,14 @@ import http.client
 import json
 import re
 import sys
+import time
 import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 PAGE = 200
+MAX_PAGES = 10000
 
 
 class Unreachable(Exception):
@@ -41,18 +43,31 @@ def call(method: str, url: str, body: Mapping[str, Any] | None, headers: Mapping
         connection.close()
 
 
-def dataset_ids(marquez: str, timeout: float) -> list[str]:
-    """Every Marquez dataset as a lineage node id, ``dataset:<namespace>:<name>``."""
-    status, reply = call("GET", f"{marquez}/api/v1/namespaces", None, {}, timeout)
-    if status != 200:
-        raise Unreachable("marquez namespaces")
-    found: list[str] = []
-    for namespace in reply.get("namespaces", []):
-        name = namespace["name"]
-        status, page = call("GET", f"{marquez}/api/v1/namespaces/{urllib.parse.quote(name, safe='')}/datasets?limit={PAGE}", None, {}, timeout)
+def listing(marquez: str, path: str, key: str, timeout: float, limit_at: float) -> list[dict[str, Any]]:
+    """Every row of a paged Marquez listing, read until a short page or the reported total. Passing ``limit_at`` (a monotonic time) raises ``Unreachable``."""
+    rows: list[dict[str, Any]] = []
+    separator = "&" if "?" in path else "?"
+    for _ in range(MAX_PAGES):
+        if time.monotonic() >= limit_at:
+            raise Unreachable("the listing did not end before the deadline")
+        status, page = call("GET", f"{marquez}{path}{separator}limit={PAGE}&offset={len(rows)}", None, {}, timeout)
         if status != 200:
-            raise Unreachable("marquez datasets")
-        found.extend(f"dataset:{name}:{item['name']}" for item in page.get("datasets", []))
+            raise Unreachable(path)
+        batch = page.get(key, [])
+        rows.extend(batch)
+        total = page.get("totalCount")
+        if len(batch) < PAGE or (isinstance(total, int) and len(rows) >= total):
+            return rows
+    raise Unreachable("the listing did not end within the page limit")
+
+
+def dataset_ids(marquez: str, timeout: float, limit_at: float) -> list[str]:
+    """Every Marquez dataset as a lineage node id, ``dataset:<namespace>:<name>``, over all pages of namespaces and of datasets."""
+    found: list[str] = []
+    for namespace in listing(marquez, "/api/v1/namespaces", "namespaces", timeout, limit_at):
+        name = namespace["name"]
+        for item in listing(marquez, f"/api/v1/namespaces/{urllib.parse.quote(name, safe='')}/datasets", "datasets", timeout, limit_at):
+            found.append(f"dataset:{name}:{item['name']}")
     return found
 
 
@@ -87,15 +102,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--token-file", type=Path, default=Path("/run/om/ingestion_token"))
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=10)
+    parser.add_argument("--deadline-seconds", type=float, default=300)
     options = parser.parse_args(argv)
     settings = json.loads(options.config.read_text())
     auth = {"Authorization": f"Bearer {options.token_file.read_text().strip()}", "Content-Type": "application/json"}
     try:
         pairs: set[tuple[str, str]] = set()
-        for node in dataset_ids(options.marquez, options.timeout_seconds):
+        limit_at = time.monotonic() + options.deadline_seconds
+        for node in dataset_ids(options.marquez, options.timeout_seconds, limit_at):
             pairs |= job_edges(options.marquez, node, options.timeout_seconds)
     except Unreachable as error:
-        sys.stderr.write(f"openmetadata_marquez: marquez did not answer ({error})\n")
+        sys.stderr.write(f"openmetadata_marquez: marquez did not answer ({error}) or its listing hit the deadline\n")
         return 1
     added = unmapped = absent = 0
     identifiers: dict[str, str | None] = {}

@@ -82,6 +82,41 @@ resource "aws_vpc_security_group_ingress_rule" "openmetadata_ui" {
   referenced_security_group_id = aws_security_group.host.id
 }
 
+# The owner forwards a local port to the catalog task through this project session document and no other. The port is fixed in the document and the caller chooses
+# only the destination address, which must lie in the platform network. The document exists only while the catalog is prepared, and the project user's policy names
+# it by ARN, so the grant does nothing while the flag is false. The general AWS remote-host document is not granted.
+resource "aws_ssm_document" "catalog_forward" {
+  count = var.openmetadata_prepared ? 1 : 0
+
+  name          = format(local.platform_name, "catalog_forward")
+  document_type = "Session"
+  tags          = local.project_tags
+  content = jsonencode({
+    schemaVersion = "1.0"
+    description   = "Forward a local port to the catalog UI of the on-demand catalog task. The destination port is fixed at 8585 and the destination lies in the platform network."
+    sessionType   = "Port"
+    parameters = {
+      host = {
+        type           = "String"
+        description    = "Private address of the catalog task."
+        allowedPattern = "^${join("\\.", slice(split(".", split("/", aws_vpc.platform.cidr_block)[0]), 0, 2))}\\.[0-9]{1,3}\\.[0-9]{1,3}$"
+      }
+      localPortNumber = {
+        type           = "String"
+        description    = "Local port to listen on."
+        allowedPattern = "^[0-9]{1,5}$"
+        default        = "8585"
+      }
+    }
+    properties = {
+      portNumber      = "8585"
+      type            = "LocalPortForwarding"
+      host            = "{{ host }}"
+      localPortNumber = "{{ localPortNumber }}"
+    }
+  })
+}
+
 resource "aws_vpc_security_group_egress_rule" "host_to_openmetadata_ui" {
   count = var.openmetadata_prepared ? 1 : 0
 
