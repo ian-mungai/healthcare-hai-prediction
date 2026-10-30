@@ -145,16 +145,25 @@
     },
     "drift": {
       "deadline_seconds": 7200,
-      "log_container": "drift",
+      "log_container": "publish",
       "containers": {
         "fetch": [
           "RUN_ID",
           "CODE_SHA256"
         ],
-        "drift": [
+        "baseline": [
           "RUN_ID",
-          "POLARIS_URI",
           "MLFLOW_TRACKING_URI"
+        ],
+        "current": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "check": [
+          "RUN_ID"
+        ],
+        "publish": [
+          "RUN_ID"
         ]
       },
       "chain": true
@@ -189,6 +198,7 @@
     "cross_layer_checks": "gold",
     "drift_final_gate_accepted": null,
     "drift_final_gate_rejected": null,
+    "drift_run": "drift",
     "extract": "train",
     "feast_apply": "features",
     "feast_materialize": "features",

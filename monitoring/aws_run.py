@@ -194,6 +194,18 @@ def prepare_environment(bucket: str) -> None:
         os.environ.setdefault("DVC_REMOTE_URL", f"s3://{bucket}/dvc/")
 
 
+def prepare_feature_reader(bucket: str, work: Path) -> None:
+    """Set the variables of the AWS feature reader before the current phase opens it, the same ones the training extract sets. Without them the reader takes
+    its fixture branch and refuses the real namespace."""
+    from scripts.features import training_extract
+
+    if not BUCKET.fullmatch(bucket):
+        raise CheckError("dependency_missing", "the current window reader needs the feature image and DATA_BUCKET_NAME for the registry path", 3)
+    folder = work / "tmp"
+    folder.mkdir(parents=True, exist_ok=True)
+    os.environ.update(training_extract.aws_reader_environment(bucket, str(folder)))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("phase", choices=PHASES)
@@ -214,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.phase == "baseline":
                 result = baseline_phase(open_store(), arguments.work, arguments.run)
             elif arguments.phase == "current":
+                prepare_feature_reader(arguments.bucket, arguments.work)
                 result = current_phase(arguments.root, current_window.open_reader(stack, arguments.root, arguments.features_run), arguments.work, arguments.run)
             elif arguments.phase == "check":
                 result = check_phase(arguments.work, arguments.run, config=arguments.config)

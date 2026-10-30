@@ -157,3 +157,23 @@ run "promote_invalid_shape_is_refused" {
 
   expect_failures = [var.promote_resources]
 }
+
+run "promote_containers_follow_the_broker_table" {
+  command = plan
+
+  variables {
+    train_enabled   = true
+    promote_enabled = true
+  }
+
+  assert {
+    condition = (
+      toset([for container in jsondecode(output.promote_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.containers)) &&
+      alltrue([for container in jsondecode(output.promote_container_definitions) : (
+        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.containers[container.name])
+      )]) &&
+      contains([for container in jsondecode(output.promote_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.log_container)
+    )
+    error_message = "The container names, their empty variables and the log container equal the broker job table, so every override the broker sends names a container of the task and fills what it needs."
+  }
+}

@@ -7,6 +7,7 @@ phase runs as the real command, since it reads only files. A check that needs Ev
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib
 import io
@@ -281,6 +282,73 @@ def main_prepares_the_environment_of_the_dvc_and_mlflow_clients(folder: Path) ->
     return problems if kept == "s3://another/dvc/" else [*problems, "a caller's DVC remote was replaced"]
 
 
+TASK_READER_VARIABLES = {
+    "DATA_BUCKET_NAME": "bucket-for-tests",
+    "POLARIS_URI": "http://10.0.1.20:8181/api/catalog",
+    "POLARIS_CLIENT_ID": "reader-id",
+    "POLARIS_CLIENT_SECRET": "reader-secret",
+    "AWS_REGION": "us-west-2",
+    "AWS_EXECUTION_ENV": "AWS_ECS_FARGATE",
+}
+
+
+def current_phase_prepares_the_aws_feature_reader(folder: Path) -> Problems:
+    """The task definition sets none of the FEAST variables, so the phase must set them before it opens the reader, as the training extract does."""
+    work = prepared_workspace(folder, current_year=2021)
+    seen: dict[str, str] = {}
+
+    def capture(stack: Any, root: Path, features_run: str) -> object:
+        seen.update(os.environ)
+        raise aws_run().CheckError("stop_here", "the environment was captured", 9)
+
+    with (
+        mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
+        mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", capture),
+    ):
+        aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
+    expected = {
+        "FEAST_PROFILE": "aws",
+        "FEAST_NAMESPACE": "features",
+        "FEAST_CATALOG_TYPE": "rest",
+        "FEAST_REGISTRY_PATH": "s3://bucket-for-tests/lakehouse/feast/registry.pb",
+    }
+    problems = [f"{name} is {seen.get(name)!r}, expected {value!r}" for name, value in expected.items() if seen.get(name) != value]
+    if not seen.get("FEAST_RUN_FOLDER"):
+        problems.append("FEAST_RUN_FOLDER is not set")
+    return problems
+
+
+def current_phase_environment_selects_the_aws_branch_of_the_real_reader(folder: Path) -> Problems:
+    """The real reader chooses its branch from the environment. With the phase's environment it must take the AWS branch and check the catalog address."""
+    from scripts.features import feast_aws, publication_reads, training_extract
+
+    work = prepared_workspace(folder, current_year=2021)
+    visited: list[str] = []
+
+    def check_endpoint(value: str) -> str:
+        visited.append(value)
+        return value
+
+    def stop(stack: Any, root: Path, features_run: str) -> object:
+        with (
+            contextlib.ExitStack() as inner,
+            mock.patch.object(feast_aws, "check_endpoint", check_endpoint),
+            mock.patch.object(publication_reads, "polaris_token", side_effect=RuntimeError("token exchange reached")),
+        ):
+            try:
+                inner.enter_context(training_extract.live_reader(root, os.environ, features_run))
+            except RuntimeError as error:
+                visited.append(str(error))
+        raise aws_run().CheckError("stop_here", "the reader branch was observed", 9)
+
+    with (
+        mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
+        mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", stop),
+    ):
+        aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
+    return [] if visited == [TASK_READER_VARIABLES["POLARIS_URI"], "token exchange reached"] else [f"the reader did not take the AWS branch: {visited}"]
+
+
 def cli_names_missing_clients(phase: str, needle: str) -> Callable[[Path], Problems]:
     def case(folder: Path) -> Problems:
         work = folder / "work"
@@ -324,6 +392,8 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("task_publish_refuses_a_monitored_type_without_a_record", publish_refuses_a_monitored_type_without_a_record),
         ("task_publish_refuses_a_record_of_another_run", publish_refuses_a_record_of_another_run),
         ("task_main_prepares_the_dvc_and_mlflow_environment", main_prepares_the_environment_of_the_dvc_and_mlflow_clients),
+        ("task_current_phase_prepares_the_aws_feature_reader", current_phase_prepares_the_aws_feature_reader),
+        ("task_current_phase_environment_selects_the_aws_reader_branch", current_phase_environment_selects_the_aws_branch_of_the_real_reader),
         ("task_baseline_cli_names_missing_mlflow", cli_names_missing_clients("baseline", "mlflow")),
         ("task_current_cli_names_the_feature_image", cli_names_missing_clients("current", "feature")),
         ("task_publish_cli_refuses_a_bad_bucket_name", publish_cli_refuses_a_bad_bucket_name),
