@@ -2,7 +2,8 @@
 
 Run from the repository root: ``.venv/bin/python -m monitoring.run_drift_e2e``. Every case starts the real command as a child process on a temporary copy of
 the tracked configuration and judges the exit code, the message and the files it leaves. Planted defects must fail for their own cause, so each rejection case
-names the key the check must report. Results go to ``data/e2e/drift/<UTC>/report.json``.
+names the key the check must report. The cases come from monitoring/drift_cases.py, monitoring/reader_cases.py, monitoring/aws_cases.py,
+monitoring/broker_cases.py and monitoring/dag_cases.py. Results go to ``data/e2e/drift/<UTC>/report.json``.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from monitoring import aws_cases, dag_cases, drift_cases, reader_cases
+from monitoring import aws_cases, broker_cases, dag_cases, drift_cases, reader_cases
 from scripts.process import SubprocessError, run_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,7 +94,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
     config: list[tuple[str, Callable[[Path], Problems]]] = [("tracked_config_passes", tracked_config_passes), ("copy_passes", copy_passes)]
     config += [(f"config_rejects_{name}", rejection(mutate, key)) for name, mutate, key in CONFIG_REJECTIONS]
     config += [("config_rejects_malformed_file", unreadable_configuration), ("config_rejects_missing_file", missing_configuration)]
-    return config + drift_cases.cases() + reader_cases.cases() + aws_cases.cases() + dag_cases.cases()
+    return config + drift_cases.cases() + reader_cases.cases() + aws_cases.cases() + broker_cases.cases() + dag_cases.cases()
 
 
 def main() -> int:
