@@ -119,6 +119,9 @@ def command_cases(root: Path, folder: Path) -> dict[str, bool]:
         altered["jobs_outputs"][field]["value"]["unexpected_definition"] = altered["jobs_outputs"][field]["value"]["seal"]
     refused("extra_definition", altered, "exactly the five read definitions")
     altered = copy.deepcopy(fixture)
+    altered["jobs_outputs"]["container_definitions"]["value"]["unexpected_definition"] = altered["jobs_outputs"]["container_definitions"]["value"]["seal"]
+    refused("definition_maps_differ", altered, "exactly the five read definitions")
+    altered = copy.deepcopy(fixture)
     altered["jobs_outputs"]["execution_digests"]["value"]["unexpected_definition/job"] = "f" * 64
     refused("extra_execution_pin", altered, "execution pins")
     altered = copy.deepcopy(fixture)

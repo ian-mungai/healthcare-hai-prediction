@@ -178,11 +178,11 @@ MUTATIONS = (
         "render.extra_execution_pin",
     ),
     (
-        "extra_definition_accepted",
+        "definition_maps_differ_accepted",
         "scripts/infrastructure/render_ecs_target.py",
-        ' or any(set(maps[name]) != set(DEFINITIONS) for name in maps if name != "execution_digests")',
+        ' or any(set(maps[name]) != selected for name in maps if name != "execution_digests")',
         "",
-        "render.extra_definition",
+        "render.definition_maps_differ",
     ),
     (
         "wrong_platform_repository_accepted",
