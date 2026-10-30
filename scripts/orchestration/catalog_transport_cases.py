@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 from orchestration.catalog_transport import PLUGIN_VERSION, CatalogTransport, TransportSpec
 from orchestration.worker_recovery import Recovery, WorkerLedger
 from scripts.orchestration.sdk_standins import Scenario, WorkerStandin
-from scripts.process import CompletedProcess, run_command
+from scripts.process import CompletedProcess, TimeoutExpired, run_command
 from scripts.process_group import Snapshot, group_state, process_snapshot, stop_owned
 
 ROUTE_CASES = (
@@ -49,6 +49,9 @@ ROUTE_CASES = (
     "relay_live_conflict",
 )
 CASES = ("normal", "half_close", "reverse_half_close", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
+# A case whose socket state must not leak into or from the others runs in its own process after them. relay_start_failure fails in a full run and passes alone.
+ISOLATED_CASES = ("relay_start_failure",)
+CASE_SECONDS = 90
 BODY = b'{"catalog":"synthetic"}'
 # Both payloads exceed the relay buffer (1 MiB) plus the loopback socket buffers, so a relay that drops or reorders bytes under backpressure fails.
 UPLOAD = bytes(range(256)) * 8192
@@ -345,10 +348,30 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
         "elapsed_s": time.monotonic() - started,
         "groups": [{"pid": handle.pid, "pgid": handle.pgid, "state": group_state(handle.pgid)} for handle in transport.handles],
         "registry": str(scratch / "registry"),
+        "pid": os.getpid(),
         "cleanup": "done" if confirmed and absent else "unconfirmed",
     }
     if row["cleanup"] != "done":
         raise TransportCleanupUnconfirmed(row)
+    return row
+
+
+def isolated_case(name: str, folder: Path) -> dict[str, Any]:
+    """Run one case in a new process and return its row. The row proves the process differs from this one."""
+    output = folder / f"isolated_{name}" / "report.json"
+    started = time.monotonic()
+    try:
+        run_command(
+            sys.executable, ["-B", "-m", "scripts.orchestration.catalog_transport_cases", "--case", name, "--output", str(output)], timeout=CASE_SECONDS
+        )
+        rows = json.loads(output.read_text())["cases"]
+    except (OSError, ValueError, KeyError, TimeoutExpired):
+        rows = []
+    row: dict[str, Any] = (
+        rows[0] if len(rows) == 1 and rows[0].get("case") == name else {"case": name, "checks": {}, "cleanup": "unconfirmed", "pid": os.getpid()}
+    )
+    row["checks"]["ran_in_its_own_process_after_the_others"] = row.get("pid") != os.getpid() and "checks" in row and bool(row["checks"])
+    row["isolated_elapsed_s"] = time.monotonic() - started
     return row
 
 
@@ -502,7 +525,8 @@ def _startup_refusal(
         if name == "relay_start_failure":
             occupied = resources.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
             occupied.bind(("127.0.0.1", spec.relay_port))
-            occupied.listen(1)
+            # The failed start leaves its own probe connections in the backlog; a backlog of 1 dropped this check's probe.
+            occupied.listen(16)
         refusal = None
         try:
             transport.start(spec, deadline=lifetime, ready_deadline=readiness)
@@ -525,9 +549,16 @@ def _startup_refusal(
             if occupied is not None:
                 occupied.settimeout(0.5)
                 with socket.create_connection(("127.0.0.1", spec.relay_port), timeout=0.5) as probe:
-                    accepted, address = occupied.accept()
-                    with accepted:
-                        checks["occupied_socket_remains_listener"] = address == probe.getsockname() and accepted.getsockname() == ("127.0.0.1", spec.relay_port)
+                    # The failed start may have left its own readiness probe in the backlog: take connections until the one this probe made.
+                    while True:
+                        try:
+                            accepted, address = occupied.accept()
+                        except TimeoutError:
+                            break
+                        with accepted:
+                            if address == probe.getsockname():
+                                checks["occupied_socket_remains_listener"] = accepted.getsockname() == ("127.0.0.1", spec.relay_port)
+                                break
             bind_error = None
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as contender:
                 try:
@@ -815,6 +846,7 @@ def _route_case(name: str, folder: Path) -> dict[str, Any]:
         "events": observed,
         "groups": [{"pid": handle.pid, "pgid": handle.pgid, "state": group_state(handle.pgid)} for handle in transport.handles],
         "registry": str(scratch / "registry"),
+        "pid": os.getpid(),
         "cleanup": "done" if confirmed and absent else "unconfirmed",
     }
     if row["cleanup"] != "done":
@@ -860,8 +892,10 @@ def main() -> int:
     results = []
     mutations: list[dict[str, Any]] = []
     try:
-        for case in CASES if args.case == "all" else (args.case,):
+        for case in tuple(name for name in CASES if name not in ISOLATED_CASES) if args.case == "all" else (args.case,):
             results.append(run_case(case, folder))
+        if args.case == "all":
+            results += [isolated_case(case, folder) for case in ISOLATED_CASES]
         if args.mutations:
             mutations = mutation_checks(folder)
     except TransportCleanupUnconfirmed as error:
