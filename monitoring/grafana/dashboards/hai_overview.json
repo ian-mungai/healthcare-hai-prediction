@@ -1,0 +1,639 @@
+{
+  "uid": "hai_overview",
+  "title": "HAI overview",
+  "description": "DAG, job and API health from Airflow StatsD metrics and the model API.",
+  "tags": [
+    "hai"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "DAG",
+      "id": 1,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "DAG run success rate, last 24 hours",
+      "description": "Share of finished DAG runs that succeeded. Empty until a DAG run finishes after metrics are on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum(increase(airflow_dagrun_duration_seconds_count{state=\"success\"}[24h])) / sum(increase(airflow_dagrun_duration_seconds_count[24h]))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "DAG runs finished per hour, by DAG and state",
+      "description": "Counts of finished runs. A failed state is a failed DAG run.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum by (dag_id, state) (increase(airflow_dagrun_duration_seconds_count[1h]))",
+          "legendFormat": "{{dag_id}} {{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "DAG run duration, 95th percentile",
+      "description": "Time from start to finish of successful runs, by DAG.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, dag_id) (rate(airflow_dagrun_duration_seconds_bucket{state=\"success\"}[6h])))",
+          "legendFormat": "{{dag_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Scheduler heartbeats per minute",
+      "description": "Falls to zero when the scheduler stops.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum(rate(airflow_scheduler_heartbeat_total[5m])) * 60",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "DAG files that fail to import",
+      "description": "Should stay at zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum(airflow_dag_processing_import_errors)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Executor tasks",
+      "description": "Running and queued tasks and free slots of the local executor.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "airflow_executor_running_tasks",
+          "legendFormat": "running"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "airflow_executor_queued_tasks",
+          "legendFormat": "queued"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "airflow_executor_open_slots",
+          "legendFormat": "open slots"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Jobs",
+      "id": 8,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Job duration by task, 95th percentile",
+      "description": "Time a task takes in Airflow. The Spark, training and promotion jobs run behind these tasks, so this is the duration the DAG waits for each job.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, dag_id, task_id) (rate(airflow_task_duration_seconds_bucket[6h])))",
+          "legendFormat": "{{dag_id}} {{task_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Tasks finished per hour, by state",
+      "description": "Counts of finished tasks by final state.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum by (state) (increase(airflow_task_instance_finished_total[1h]))",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "API",
+      "id": 11,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "API requests per second, by route",
+      "description": "Needs the model API to expose hai_api_requests_total on 127.0.0.1:8000.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum by (route) (rate(hai_api_requests_total[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "API server error share",
+      "description": "Share of requests with a 5xx status.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum(rate(hai_api_requests_total{status=~\"5..\"}[5m])) / sum(rate(hai_api_requests_total[5m]))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "API latency, 95th percentile",
+      "description": "Request duration by route.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(hai_api_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Monitoring",
+      "id": 15,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Scrape targets up",
+      "description": "One per job. A zero means Prometheus cannot reach that target.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 36
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "up",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Prometheus store size",
+      "description": "Blocks on disk against the retention size limit set in Terraform.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 36
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "prometheus_tsdb_storage_blocks_bytes",
+          "legendFormat": "blocks"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "prometheus_tsdb_retention_limit_bytes",
+          "legendFormat": "size limit"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "StatsD events dropped by the mapping",
+      "description": "Events the mapping file does not list. A steady rise means Airflow sends metrics the dashboard does not use.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 36
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "rate(statsd_exporter_events_unmapped_total[5m])",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

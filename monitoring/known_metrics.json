@@ -1,0 +1,18 @@
+{
+  "note": "Metrics that the dashboard and the alerts may name besides the ones monitoring/statsd/mapping.yml produces. Each entry says who emits it, so the check can tell a typo from a metric nothing sends.",
+  "prometheus": {
+    "emitted_by": "Prometheus itself, scraped as the prometheus job",
+    "metrics": ["prometheus_tsdb_storage_blocks_bytes", "prometheus_tsdb_retention_limit_bytes", "up"]
+  },
+  "statsd_exporter": {
+    "emitted_by": "the StatsD exporter itself, scraped as the statsd_exporter job",
+    "metrics": ["statsd_exporter_events_unmapped_total"]
+  },
+  "hai_api": {
+    "emitted_by": "the model API, scraped as the hai_api job on 127.0.0.1:8000. The API does not exist yet: it must expose these names and labels, or the contract here changes.",
+    "metrics": {
+      "hai_api_requests_total": {"type": "counter", "labels": ["route", "method", "status"]},
+      "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]}
+    }
+  }
+}
