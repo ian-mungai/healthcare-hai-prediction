@@ -19,7 +19,7 @@ The job broker is the only path from an Airflow DAG to work on AWS. It keeps the
 
 The table `config/orchestration/ecs_broker_jobs.json` names the job of each DAG step. A step with no job (acquire, seal, release and the gates) answers at once. The first step of a job starts its task and the later steps join it, because the containers of one job share a workspace. A job passes only when every container exits 0 and every acceptance container appears in the task report. A job that runs past its deadline is stopped.
 
-The `train` job exists today. Four jobs need task definitions first: `silver`, `gold`, `features`, `drift`. They also need the layer driver. The `promote` job has its task definition in `infra/jobs` (set by `promote_enabled`) and uses the training task role. A family name stays out of `broker_job_families` until its task definition exists.
+The `train`, `silver`, `gold`, `features` and `promote` jobs have task definitions behind flags that default to false. The `promote` job uses the training task role and is set by `promote_enabled`. The `drift` job still needs its own task definition and role. A job name stays out of `broker_job_families` until its task definition and role exist.
 
 ## Apply order
 
@@ -60,6 +60,38 @@ aws s3 cp /tmp/promotion_approval.json s3://<DATA_BUCKET>/lakehouse/run_stage/<R
 ```
 
 Use `"scope": "rollback"` for a rollback. The record must name the run, the DAG, the operation, the HAI type and the model version of the request. Its date must not be after today. Any other field or value is refused. The record covers one run, so each promotion needs its own. Register the task definition in `infra/jobs` with `promote_enabled = true` after `train_enabled`. Name `promote` in the families of the IAM and services stacks. Then trigger `model_promotion_dag` in Airflow with the same run ID, HAI type and version. Training runs need no approval record.
+
+## Layer jobs
+
+Each of the `silver`, `gold` and `features` jobs is one Fargate task. The first container (`init`) hands the two volumes to the job user, as for training. Then the containers of the job table run in order, each after the success of the one before. Each runs one phase of `scripts/lakehouse/layer_run.py`, so the code that runs is the archive the run staged.
+
+| Job | Phases in order | Reads | Writes |
+| --- | --- | --- | --- |
+| `silver` | fetch, pin, build, validate, verify, export, publish, upload | bronze through the reader pair | silver tables and its run prefix |
+| `gold` | fetch, pin, build, validate, export, publish, upload | the silver run named by `INPUT_RUN_ID` | gold tables, catalog backups and its run prefix |
+| `features` | fetch, pin, build, validate, export, publish, feast | the gold run named by `INPUT_RUN_ID` | features tables, the Feast registry object |
+
+The publish phase runs the publish acceptance checks and exits non-zero on any failure. Before the commit, every table's row count and content fingerprint must equal its candidate snapshot. The candidates must also be exactly the contract's tables. After the commit, the commit record must name every candidate snapshot ID and follow the backup that followed the reconcile. The `publish_runs` row is the last catalog write of the publish step. The upload and feast phases refuse a run whose records fail these checks. A retry of the same run repeats the steps on the same keys and writes no second publication.
+
+Apply the layer jobs in this order. Each apply is the owner's.
+
+1. `infra/iam` (administrator profile): set `job_writer_layers_prepared = true` and `job_layer_runs_prepared = true`, then plan and apply. The roles read only their input layer. Silver and gold put objects under `lakehouse/layer_runs/<layer>/` only. Features reads and writes the one Feast registry object and reads the Redis password parameter.
+2. Put each layer's catalog client pair in the secret store, as for the writer roles.
+3. `infra/jobs`: set `layer_jobs_enabled = true` and `layer_jobs = ["silver"]` first, with the image digests, the role ARNs from the `job_roles` output, `writer_parameter_names` and the jobs log group. Add `gold` and `features` after the silver publish passes. For features, set `layer_feast_redis_host`. The output `layer_run_tasks` lists the variables of each container.
+4. Add the family to `broker_job_families` in `infra/iam` and apply, then add it to `broker_jobs` in `infra/services`.
+
+### Dry run
+
+A dry run runs the phases up to export for real, because they write only the task's own folder. The publish phase then reads the catalog without writing and prints the plan of the real publish: each table with rows to write, whether it exists, rows added and deleted, the `publish_runs` row, the backup name and the run branch. It saves nothing to the bucket, the upload phase uploads nothing and the feast phase does nothing. Read the plan in the jobs log group, stream `<layer>/publish/<task id>`. The line that starts with `DRY_RUN_PLAN` and a space holds the whole plan as JSON.
+
+Set the override `LAYER_DRY_RUN=1` on every container of a hand-started task. The first dry phase marks the run folder, so a later phase without the override stays dry.
+
+```sh
+OVERRIDES=$(for n in fetch pin build validate verify export publish upload; do jq -n --arg n "$n" --arg r "$RUN_ID" --arg c "$CODE_SHA256" --arg p "$POLARIS_URI" \
+  '{name:$n,environment:[{name:"RUN_ID",value:$r},{name:"CODE_SHA256",value:$c},{name:"POLARIS_URI",value:$p},{name:"LAYER_DRY_RUN",value:"1"}]}'; done | jq -s '{containerOverrides:.}')
+```
+
+Use the containers of the job instead of this silver list. Pass `--overrides "$OVERRIDES"` to the run-task call.
 
 ## Sign the first publishes
 
@@ -102,5 +134,8 @@ aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUS
 - Whether the memory-backed folder in the scheduler is writable by the Airflow user.
 - Whether `RunTask` returns the same task for a repeated client token after that task stopped.
 - Whether the Airflow trigger operator renders the run ID templates as the offline Jinja check does.
-- The task definitions and layer driver of the silver, gold, features and drift jobs.
 - The `promote` task and phase against a real MLflow server: the offline cases use a file based registry stand-in.
+- Any layer job on AWS. The driver ran only against stand-ins of the Spark, analytics, quality and Feast modules. The read-only plan module `publish_plan.py` never ran.
+- Whether the Spark image carries boto3 for the fetch phase. Whether the quality and analytics images can run the driver's imports.
+- Whether the task role reads of the input layer and the Feast registry are enough. Whether the Feast phase reaches the host Redis from the lakehouse network.
+- The `drift` task definition and role.
