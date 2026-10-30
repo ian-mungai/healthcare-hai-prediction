@@ -64,7 +64,10 @@
                   "INPUT_RUN_ID",
                   "BRONZE_TABLES",
                   "BRONZE_TARGET",
-                  "BRONZE_DRY_RUN"
+                  "BRONZE_DRY_RUN",
+                  "BRONZE_REQUEST_SHA256",
+                  "BRONZE_INVENTORY_SHA256",
+                  "HAI_DEADLINE_UTC"
                 ]
               }
             }

@@ -22,6 +22,7 @@
     "input_run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
     "target": {"enum": ["auto", "ecs", "docker"]},
     "training": {"type": "object"},
+    "dispatch": {"type": "object", "additionalProperties": {"type": "string"}, "description": "The values fixed once at the intent: the checked bronze request and the absolute task deadline"},
     "job": {"type": ["string", "null"], "description": "The job family, or null for a control step"},
     "job_key": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}:[a-z][a-z0-9_]{1,40}:[0-9]{1,2}$"},
     "task_arn": {"type": "string", "minLength": 1, "maxLength": 300},

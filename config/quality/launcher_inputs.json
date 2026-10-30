@@ -1280,6 +1280,7 @@
     "scripts/lakehouse/bronze_inventory.py",
     "scripts/lakehouse/bronze_metadata.py",
     "scripts/lakehouse/bronze_namespace_cases.py",
+    "scripts/lakehouse/bronze_pin.py",
     "scripts/lakehouse/bronze_run.py",
     "scripts/lakehouse/bronze_scan.py",
     "scripts/lakehouse/bronze_writer.py",

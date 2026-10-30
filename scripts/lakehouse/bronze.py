@@ -1083,6 +1083,15 @@ def drop_removed_job(config: dict[str, Any], dictionary_namespace: str = DICTION
     return 0
 
 
+def metadata_tables(config: dict[str, Any], names: list[str], namespace: str) -> list[str]:
+    """The tables whose metadata must be complete. Production needs the whole committed map. The qualification namespace needs only the selected tables."""
+    if namespace == "bronze_e2e":
+        return list(names)
+    if namespace == config["namespace"]:
+        return [table["table"] for table in config["tables"]]
+    raise BronzeError(f"{namespace}: scoped metadata is for the bronze_e2e qualification namespace only")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Load the chosen group or tables into the Polaris catalog and write a counts-only report."""
     from scripts.lakehouse.session import job_memory, spark_session
@@ -1103,7 +1112,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bucket", help="source bucket supplied by the AWS run binding")
     parser.add_argument("--task-role", action="store_true", help="use the AWS task identity without a local profile")
     parser.add_argument("--qualification-tables", help="comma-separated loaded tables for removal on the two test twins only")
+    parser.add_argument("--inventory", type=Path, help="read only the manifest and object versions of this pinned source inventory")
+    parser.add_argument("--selected-metadata", action="store_true", help="bronze_e2e only: publish metadata for the selected tables instead of the full map")
     args = parser.parse_args(argv)
+    if args.selected_metadata and args.namespace != "bronze_e2e":
+        parser.error("--selected-metadata is valid only with --namespace bronze_e2e")
     if args.diagnose and (not args.bootstrap_all or args.copies_only):
         parser.error("--diagnose requires --bootstrap-all and excludes --copies-only")
     if args.repair_tables is not None and (not args.bootstrap_all or args.copies_only or args.diagnose):
@@ -1137,8 +1150,13 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("bronze: unknown group or table\n")
         return 1
     bucket = args.bucket if args.bucket is not None else str(json.loads(DEPLOYMENT.read_text())["data_bucket_name"])
-    storage = S3Storage(task_role=args.task_role)
-    from scripts.lakehouse import bronze_metadata, dictionary
+    storage: Storage = S3Storage(task_role=args.task_role)
+    from scripts.lakehouse import bronze_metadata, bronze_pin, dictionary
+
+    inventory = bronze_pin.read_inventory(args.inventory.read_bytes()) if args.inventory else None
+    if inventory is not None:
+        storage = bronze_pin.PinnedStorage(storage, inventory)
+    everything = metadata_tables(config, names, config["namespace"]) if args.selected_metadata else [table["table"] for table in config["tables"]]
 
     spark = spark_session("bronze", memory=job_memory())
     dictionaries: dict[str, int] = {}
@@ -1151,8 +1169,10 @@ def main(argv: list[str] | None = None) -> int:
         canonical_observations = {(row["table_name"], row["sha256"]): row["observation_id"] for row in previous if row["kind"] == "object"}
         published_observations = {row["observation_id"] for row in previous if row["kind"] == "observation"}
         inputs, unselected = discover(storage, bucket, config, names, load_retired(), canonical_keys, canonical_observations, published_observations)
+        if inventory is not None:
+            bronze_pin.verify_replay(inventory, inputs)
         if args.diagnose:
-            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, [table["table"] for table in config["tables"]])
+            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, everything)
             path = REPORT_ROOT / "diagnostic.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n")
@@ -1160,7 +1180,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps({"report": str(path), "passed": diagnostic["passed"], "failing_checksum_count": diagnostic["failing_checksum_count"]}) + "\n"
             )
             return 0 if diagnostic["passed"] else 1
-        metadata = bronze_metadata.build(names, inputs, unselected, previous, [table["table"] for table in config["tables"]])
+        metadata = bronze_metadata.build(names, inputs, unselected, previous, everything)
         bronze_metadata.validate_successor(previous, metadata)
         load_inputs = [item for item in inputs if item["table"] in repair_names] if repair_names else inputs
         summary = {} if args.copies_only or (args.bootstrap_all and not repair_names) else load_objects(spark, load_inputs, storage, config["namespace"])
