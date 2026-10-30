@@ -14,7 +14,8 @@ from run folder files, so a phase runs only on the exact output of the phase bef
 folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/runs/<run ID>``.
 
 ``publish`` runs the publish steps of the layer and the acceptance checks of the first publish (rows and content fingerprints of every table against
-its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). ``upload`` and
+its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it) and two evidence
+checks: the staged input objects still have the versions the pin phase recorded, and the backup stored in the bucket equals its record. ``upload`` and
 ``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. A retry of one run repeats every step on the same keys
 and snapshot IDs and writes no second publication.
 
@@ -25,6 +26,7 @@ first dry phase marks the run folder, so a later phase without the flag stays dr
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -48,6 +50,8 @@ PHASES = {
 STEP_SECONDS = 4 * 3600
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
 UPLOAD_PREFIX = "lakehouse/layer_runs"
+STAGE_PREFIX = "lakehouse/run_stage"
+STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb")  # the code copy, the bulk input extracts and the build file the sealed copy repeats
 DRY_ENV = "LAYER_DRY_RUN"
 DRY_MARKER = "dry_run"  # in the run folder: once a task has a dry phase, every later phase of it is dry
@@ -123,7 +127,36 @@ def input_digests(job: Job) -> tuple[str, str | None]:
     return (pin, None) if job.layer == "silver" else (pin, digest_file(job.folder / INPUT_FOLDER[job.layer] / "manifest.json"))
 
 
-def bundle(job: Job, archive: Path, code_sha256: str) -> None:
+def staged_objects(client: Any, bucket: str, run: str) -> dict[str, dict[str, Any]]:
+    """The version, entity tag and size of each staged input object, as the bucket reports them now."""
+    found = {}
+    for name in STAGED_INPUTS:
+        head = client.head_object(Bucket=bucket, Key=f"{STAGE_PREFIX}/{run}/inputs/{name}")
+        found[name] = {"version_id": head.get("VersionId", ""), "etag": head["ETag"], "bytes": head["ContentLength"]}
+    return found
+
+
+def check_input_objects(job: Job, bucket: str, client: Any) -> None:
+    """The staged input objects are the ones the pin phase recorded, version by version."""
+    recorded = identity(job).get("input_objects")
+    if not recorded:
+        raise StepError("the pin phase recorded no versions of the staged input objects")
+    if staged_objects(client, bucket, job.run) != recorded:
+        raise StepError("a staged input object changed after the pin phase")
+
+
+def check_stored_backup(job: Job, bucket: str, client: Any) -> None:
+    """The catalog backup in the bucket is the one the backup record names, byte for byte, and belongs to this run."""
+    prefix = publish_contract(job).backup_prefix
+    backup = read_record(job.publish_folder, "backup.json")[0]
+    if not prefix:
+        raise StepError("the layer's publish contract names no backup prefix")
+    stored = client.get_object(Bucket=bucket, Key=f"{prefix}{backup['name']}")["Body"].read()
+    if hashlib.sha256(stored).hexdigest() != backup.get("backup_sha256") or json.loads(stored).get("run_id") != job.run:
+        raise StepError("the stored backup differs from the backup record or belongs to another run")
+
+
+def bundle(job: Job, archive: Path, code_sha256: str, objects: dict[str, dict[str, Any]] | None = None) -> None:
     """Check the archive digest, unpack it, copy the dbt project and packages into the snapshot layout and record the code identity."""
     if not SHA256.fullmatch(code_sha256) or digest_file(archive) != code_sha256:
         raise StepError("code.tar.gz does not match the expected SHA-256")
@@ -137,8 +170,10 @@ def bundle(job: Job, archive: Path, code_sha256: str) -> None:
     shutil.rmtree(snapshot, ignore_errors=True)
     for name, source in (("project", "dbt"), ("packages", "dbt_packages")):
         shutil.copytree(job.code / source, snapshot / name)
-    record = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "code_sha256": code_sha256, "git_revision": revision}
+    record: dict[str, Any] = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "code_sha256": code_sha256, "git_revision": revision}
     record["source_sha256"] = provenance.tree_digest(snapshot)
+    if objects:
+        record["input_objects"] = objects
     (job.folder / "layer_run.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
 
@@ -323,7 +358,7 @@ def write_bucket_file(bucket: str) -> None:
 
 
 def accept_reconcile(job: Job) -> None:
-    """Decision 31 item 2 before any commit: rows and content fingerprints of exactly the candidate snapshots equal the export, table by table."""
+    """Before any commit: rows and content fingerprints of exactly the candidate snapshots equal the export, table by table."""
     folder = job.publish_folder
     manifest = read_record(folder, "export/manifest.json")[0]
     candidates, candidates_sha = read_record(folder, "candidates.json")
@@ -347,7 +382,7 @@ def accept_reconcile(job: Job) -> None:
 
 
 def accept_commit(job: Job) -> None:
-    """Decision 31 item 3: the commit record is committed, follows the backup that followed the reconcile, and names every candidate snapshot ID."""
+    """After the commit: the commit record is committed, follows the backup that followed the reconcile, and names every candidate snapshot ID."""
     folder = job.publish_folder
     candidates = read_record(folder, "candidates.json")[0]
     reconcile, reconcile_sha = read_record(folder, "reconcile.json")
@@ -374,16 +409,20 @@ def run_publish(job: Job, arguments: Sequence[str | Path]) -> None:
         run_module(job, "scripts.features.features_publish", arguments)
 
 
-def publish(job: Job, bucket: str) -> None:
+def publish(job: Job, bucket: str, client: Any = None) -> None:
     sha, _ = sealed(job)
     accepted = accepted_result(job, sha)
     if job.mode == "real":
         write_bucket_file(bucket)
     common = ["--run", job.run, "--mode", job.mode]
+    if client is not None:
+        check_input_objects(job, bucket, client)
     for step in ("candidates", "reconcile", "backup", "commit"):
         run_publish(job, [step, *common, "--sealed-sha256", sha, "--accepted-result-sha256", accepted, "--publish-dir", job.publish_folder, *job.local_flags])
         if step == "reconcile":
             accept_reconcile(job)
+        if step == "backup" and client is not None:
+            check_stored_backup(job, bucket, client)
         if step == "commit":
             accept_commit(job)
     if job.layer in RECORD_FILE:
@@ -550,7 +589,8 @@ def mark_dry(job: Job) -> None:
 
 def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     if phase == "pin":
-        bundle(job, args.archive or args.work / "code.tar.gz", args.code_sha256)
+        objects = staged_objects(s3_client(), args.bucket, job.run) if args.bucket and job.mode == "real" and job.local is None else None
+        bundle(job, args.archive or args.work / "code.tar.gz", args.code_sha256, objects)
         pin(job)
     elif phase == "upload" and job.dry_run:
         sys.stdout.write(json.dumps({"dry_run": True, "uploaded": 0, "would_upload": len(uploadable(job))}) + "\n")
@@ -561,7 +601,7 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     elif phase == "upload":
         sys.stdout.write(json.dumps({"uploaded": upload(job, args.bucket, s3_client())}) + "\n")
     elif phase == "publish":
-        publish(job, args.bucket)
+        publish(job, args.bucket, s3_client() if job.mode == "real" and job.local is None else None)
     else:
         {"build": build, "validate": validate, "verify": verify, "export": export, "feast": feast}[phase](job)
 
