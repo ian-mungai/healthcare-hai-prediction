@@ -160,6 +160,18 @@ class FeatureReader:
         return result
 
 
+def aws_reader_environment(bucket: str, run_folder: str, mode: str = "real") -> dict[str, str]:
+    """The variables that make ``live_reader`` take its AWS branch: the real ``features`` namespace through the REST catalog and the registry in the data
+    bucket. The task definition sets none of them, so every AWS phase that opens the reader sets them first."""
+    return {
+        "FEAST_PROFILE": "aws",
+        "FEAST_NAMESPACE": "features" if mode == "real" else "features_e2e",
+        "FEAST_CATALOG_TYPE": "rest",
+        "FEAST_REGISTRY_PATH": f"s3://{bucket}/lakehouse/feast/registry.pb",
+        "FEAST_RUN_FOLDER": run_folder,
+    }
+
+
 @contextlib.contextmanager
 def live_reader(root: Path, environ: MutableMapping[str, str], features_run: str) -> Iterator[FeatureReader]:
     """Open the accepted fixture SQL or authenticated Polaris reader without a second data path."""

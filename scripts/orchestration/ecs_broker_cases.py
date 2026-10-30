@@ -34,6 +34,7 @@ GOLD_RUN = "20261030T100000Z-90d0c0de"
 FEATURES_RUN = "20261030T100000Z-feed5eed"
 BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
 PROMOTE_RUN = "20261030T110000Z-9a9a9a9a"
+DRIFT_RUN = "20261030T120000Z-d71f70a1"
 SIGNED = json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN})
 DIGEST = "ab" * 32
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
@@ -48,7 +49,7 @@ class Rig:
         self.signed = signed
         self.ecs, self.logs, self.s3 = FakeEcs(), FakeLogs(), FakeS3()
         self.s3.objects[f"lakehouse/run_stage/{RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
-        for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN):
+        for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN):
             self.s3.objects[f"lakehouse/run_stage/{run}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         self.clock = [1_800_000_000.0]
         self.families = families
@@ -491,6 +492,20 @@ def promotion_needs_the_owners_approval() -> None:
         require(values["promote"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", "the promote container has no MLflow address")
 
 
+def drift_dag_step_reaches_the_drift_job() -> None:
+    """The step the drift DAG sends is ``drift_run``, the template of the broker table. The real selector must map it to the drift job."""
+    params = {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}
+    with rig() as current, dag_runtime(current, "drift_monitoring_dag", params) as run_step:
+        require(run_step("drift_run") == "succeeded", "the drift DAG step did not pass")
+        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+        names = [item["name"] for item in sent["overrides"]["containerOverrides"]]
+        require(
+            sent["taskDefinition"] == "example_dev_job_drift" and names == ["fetch", "baseline", "current", "check", "publish"],
+            f"the drift step overrides containers that the task does not have: {names}",
+        )
+        require(len(current.ecs.tasks) == 1, "the drift step started more than one task")
+
+
 def promotion_runs_through_the_dag_runtime() -> None:
     params = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "local"}
     with rig() as current, dag_runtime(current, "model_promotion_dag", params) as run_step:
@@ -565,6 +580,7 @@ CASES: dict[str, Callable[[], None]] = {
     "refused_stop_does_not_cancel": refused_stop_does_not_cancel,
     "chain_layers_use_the_bronze_run_digest": chain_layers_use_the_bronze_run_digest,
     "promotion_needs_the_owners_approval": promotion_needs_the_owners_approval,
+    "drift_dag_step_reaches_the_drift_job": drift_dag_step_reaches_the_drift_job,
     "promotion_runs_through_the_dag_runtime": promotion_runs_through_the_dag_runtime,
     "another_promotion_is_not_approved": another_promotion_is_not_approved,
     "training_needs_no_promotion_approval": training_needs_no_promotion_approval,

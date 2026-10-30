@@ -253,15 +253,7 @@ def extract(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     check_prerequisites(work, run, "extract")
     required("POLARIS_URI")
     task_environment(work)
-    os.environ.update(
-        {
-            "FEAST_PROFILE": "aws",
-            "FEAST_NAMESPACE": "features" if mode == "real" else "features_e2e",
-            "FEAST_CATALOG_TYPE": "rest",
-            "FEAST_REGISTRY_PATH": f"s3://{bucket()}/lakehouse/feast/registry.pb",
-            "FEAST_RUN_FOLDER": os.environ["TMPDIR"],
-        }
-    )
+    os.environ.update(importlib.import_module("scripts.features.training_extract").aws_reader_environment(bucket(), os.environ["TMPDIR"], mode))
     folder = work / "in" / "extract"
     folder.mkdir(parents=True, exist_ok=True)
     resumed = (folder / "extract.done.json").exists()
