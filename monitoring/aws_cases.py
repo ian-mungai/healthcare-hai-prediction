@@ -11,9 +11,11 @@ import hashlib
 import importlib
 import io
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from monitoring import drift_cases, reader_cases
 from monitoring.drift_check import HAI_TYPES, CheckError
@@ -248,6 +250,31 @@ def publish_refuses_a_record_of_another_run(folder: Path) -> Problems:
     return ["a record of another run was published"]
 
 
+def main_prepares_the_environment_of_the_dvc_and_mlflow_clients(folder: Path) -> Problems:
+    """The phase command points DVC at the bucket's dvc/ prefix and turns telemetry off, as the training task does, unless the caller set a value."""
+    work = prepared_workspace(folder, current_year=2021)
+    with mock.patch.dict(os.environ, {"DATA_BUCKET_NAME": "bucket-for-tests"}, clear=False):
+        for name in ("DVC_REMOTE_URL", "DVC_NO_ANALYTICS", "MLFLOW_HTTP_REQUEST_MAX_RETRIES"):
+            os.environ.pop(name, None)
+        aws_run().main(["check", f"--run={RUN}", f"--work={work}"])
+        seen = {name: os.environ.get(name) for name in ("DVC_REMOTE_URL", "DVC_NO_ANALYTICS", "MLFLOW_HTTP_REQUEST_MAX_RETRIES")}
+        os.environ["DVC_REMOTE_URL"] = "s3://another/dvc/"
+        aws_run().main(["check", f"--run={RUN}", f"--work={work}"])
+        kept = os.environ["DVC_REMOTE_URL"]
+        for name in (
+            "DVC_REMOTE_URL",
+            "DVC_NO_ANALYTICS",
+            "MLFLOW_HTTP_REQUEST_MAX_RETRIES",
+            "MLFLOW_DISABLE_TELEMETRY",
+            "DO_NOT_TRACK",
+            "MLFLOW_HTTP_REQUEST_TIMEOUT",
+        ):
+            os.environ.pop(name, None)
+    expected = {"DVC_REMOTE_URL": "s3://bucket-for-tests/dvc/", "DVC_NO_ANALYTICS": "1", "MLFLOW_HTTP_REQUEST_MAX_RETRIES": "0"}
+    problems = [] if seen == expected else [f"the environment is {seen}"]
+    return problems if kept == "s3://another/dvc/" else [*problems, "a caller's DVC remote was replaced"]
+
+
 def cli_names_missing_clients(phase: str, needle: str) -> Callable[[Path], Problems]:
     def case(folder: Path) -> Problems:
         work = folder / "work"
@@ -290,6 +317,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("task_publish_with_no_records_still_marks_the_run", publish_with_no_records_still_marks_the_run),
         ("task_publish_refuses_a_monitored_type_without_a_record", publish_refuses_a_monitored_type_without_a_record),
         ("task_publish_refuses_a_record_of_another_run", publish_refuses_a_record_of_another_run),
+        ("task_main_prepares_the_dvc_and_mlflow_environment", main_prepares_the_environment_of_the_dvc_and_mlflow_clients),
         ("task_baseline_cli_names_missing_mlflow", cli_names_missing_clients("baseline", "mlflow")),
         ("task_current_cli_names_the_feature_image", cli_names_missing_clients("current", "feature")),
         ("task_publish_cli_refuses_a_bad_bucket_name", publish_cli_refuses_a_bad_bucket_name),
