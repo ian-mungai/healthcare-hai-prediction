@@ -86,7 +86,10 @@ def run_task_request() -> None:
     require(request["taskDefinition"] == "example_dev_job_train" and request["count"] == 1, "wrong task definition or count")
     require(request["capacityProviderStrategy"] == [{"capacityProvider": "FARGATE", "weight": 1}], "the capacity provider is not on-demand Fargate")
     require(network["assignPublicIp"] == "DISABLED" and network["subnets"] == ["subnet-0example"], "wrong network")
-    require(request["propagateTags"] == "TASK_DEFINITION" and {"key": "Project", "value": "example"} in request["tags"], "tags are not propagated")
+    require(
+        request["propagateTags"] == "TASK_DEFINITION" and request["tags"] == [{"key": "Project", "value": "example"}, {"key": "HaiJob", "value": "train"}],
+        "wrong tags",
+    )
     require(names == ["fetch", "train"], "overrides name a container that was not asked for")
     require(0 < len(request["clientToken"]) <= 64 and request["startedBy"].startswith("hai-"), "no client token or startedBy")
 
@@ -184,7 +187,11 @@ def tail_reads_the_container_stream() -> None:
 def client_timeouts() -> None:
     config = ecs_adapter.client_config()
     require(isinstance(config, Config), "no client configuration")
-    require(config.connect_timeout == 5 and config.read_timeout == 10 and config.retries == {"max_attempts": 2, "mode": "standard"}, "calls have no deadline")
+    options = vars(config)
+    require(
+        options["connect_timeout"] == 5 and options["read_timeout"] == 10 and options["retries"] == {"max_attempts": 2, "mode": "standard"},
+        "calls have no deadline",
+    )
 
 
 CASES: dict[str, Callable[[], None]] = {

@@ -134,7 +134,7 @@ class EcsAdapter:
                 },
                 propagateTags="TASK_DEFINITION",
                 enableECSManagedTags=True,
-                tags=[{"key": "Project", "value": self.settings.project_tag}],
+                tags=[{"key": "Project", "value": self.settings.project_tag}, {"key": "HaiJob", "value": family}],
                 startedBy=started_by,
                 clientToken=digest,
             )

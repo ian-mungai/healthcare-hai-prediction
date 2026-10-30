@@ -862,6 +862,23 @@ def job_project_cases() -> Iterator[Case]:
         for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
             yield Case(f"training pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
         yield Case(f"training pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
+    yield Case(
+        "broker pass: broker_task to ECS tasks",
+        request("iam:PassRole", role("broker_task"), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+        True,
+        "PassBrokerRole",
+    )
+    for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+        yield Case(
+            f"broker pass: broker_task to {service}", request("iam:PassRole", role("broker_task"), extra={"iam:PassedToService": service}, region=None), False
+        )
+    yield Case("broker pass: broker_task without a service", request("iam:PassRole", role("broker_task"), region=None), False)
+    for name in ("broker_task_extra", "broker", "job_broker_task"):
+        yield Case(
+            f"broker pass: refuse {name}",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            False,
+        )
     for name in ("job_train_task_extra", "mlflow_task_extra", "job_train", "mlflow"):
         yield Case(
             f"training pass: refuse {name}",
@@ -1655,6 +1672,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def job_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassReadJobRoles")["Condition"]
 
+    def broker_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "iam", "PassBrokerRole")["Condition"]
+
     def training_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassTrainingRoles")["Condition"]
 
@@ -1738,6 +1758,8 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 "training pass: refuse job_train_task_extra",
                 job_resource("iam", "PassTrainingRoles", 0, role("job_train_task*")),
             ),
+            "broker PassRole resource widened": ("broker pass: refuse broker_task_extra", job_resource("iam", "PassBrokerRole", 0, role("broker_task*"))),
+            "broker PassRole service condition removed": ("broker pass: broker_task without a service", broker_pass_without_service_condition),
             "training PassRole service condition removed": ("training pass: job_train_task without a service", training_pass_without_service_condition),
             "layer PassRole writer-family wildcard": (
                 "job pass: refuse job_write_other_task",
