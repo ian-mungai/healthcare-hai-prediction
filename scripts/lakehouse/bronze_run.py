@@ -33,10 +33,10 @@ from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse import bronze, provenance
+from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch
 from scripts.process import TimeoutExpired, run_command
 
 PHASES = ("pin", "load", "check")
-NAMESPACES = {"real": ("bronze", "bronze_dictionary"), "qualify": ("bronze_e2e", "bronze_dictionary_e2e")}
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 REPORT_FOLDER = bronze.REPORT_ROOT
 STEP_SECONDS = 4 * 3600
@@ -44,7 +44,6 @@ RECORD = "bronze_run.json"
 DRY_MARKER = "dry_run"
 PLAN_FILE = "dry_run_plan.json"
 PLAN_PREFIX = "DRY_RUN_PLAN "
-IDENTIFIER = re.compile(r"[a-z][a-z0-9_]*")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 SHA256 = re.compile(r"[a-f0-9]{64}")
 DRY_VALUES = ("1", "true", "yes")
@@ -97,24 +96,8 @@ def table_map(code: Path) -> dict[str, Any]:
     return bronze.load_table_map(code / TABLE_MAP)
 
 
-def check_dispatch(tables: str, target: str, config: dict[str, Any]) -> tuple[str, ...]:
-    """The two dispatch values, accepted only when the target is named, every table is in the table map and a qualification run stays in one collection."""
-    if target not in NAMESPACES:
-        raise StepError(f"the target must be one of {', '.join(NAMESPACES)}, not {target!r}")
-    names = tables.split(",") if tables else []
-    if not names:
-        raise StepError("at least one table is required")
-    if any(not IDENTIFIER.fullmatch(name) for name in names):
-        raise StepError("table names are lowercase identifiers separated by commas")
-    if len(set(names)) != len(names):
-        raise StepError("the table list repeats a table")
-    mapped = {entry["table"]: entry for entry in config["tables"]}
-    unknown = [name for name in names if name not in mapped]
-    if unknown:
-        raise StepError(f"{unknown[0]} is not a table of the table map")
-    if target == "qualify" and len({mapped[name]["collection"] for name in names}) != 1:
-        raise StepError("a qualification run loads the tables of one collection")
-    return tuple(names)
+def collections_of(config: dict[str, Any]) -> dict[str, str]:
+    return {entry["table"]: entry["collection"] for entry in config["tables"]}
 
 
 def archive_revision(archive: Path, code_sha256: str) -> str:
@@ -241,13 +224,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             (folder / DRY_MARKER).unlink(missing_ok=True)
         elif (folder / DRY_MARKER).exists():
             dry = True
-        names = check_dispatch(args.tables or os.environ.get("BRONZE_TABLES", ""), args.target or os.environ.get("BRONZE_TARGET", ""), table_map(work / "code"))
-        job = Job(args.run, work, args.bucket, names, args.target or os.environ.get("BRONZE_TARGET", ""), dry)
+        target = args.target or os.environ.get("BRONZE_TARGET", "")
+        names = check_dispatch(args.tables or os.environ.get("BRONZE_TABLES", ""), target, collections_of(table_map(work / "code")))
+        job = Job(args.run, work, args.bucket, names, target, dry)
         if dry:
             job.folder.mkdir(parents=True, exist_ok=True)
             (job.folder / DRY_MARKER).write_text("this task is a dry run: no phase may write to the catalog or the bucket\n")
         dispatch(job, args.phase, args)
-    except (StepError, bronze.BronzeError, OSError, ValueError, KeyError, tarfile.TarError) as error:
+    except (StepError, DispatchError, bronze.BronzeError, OSError, ValueError, KeyError, tarfile.TarError) as error:
         sys.stderr.write(f"bronze_run: step {args.phase} (run {args.run}) failed: {error}\n")
         return 1
     return 0

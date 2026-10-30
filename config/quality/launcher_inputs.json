@@ -1276,6 +1276,7 @@
     "scripts/lakehouse/bridge_references.py",
     "scripts/lakehouse/bronze.py",
     "scripts/lakehouse/bronze_cutover.py",
+    "scripts/lakehouse/bronze_dispatch.py",
     "scripts/lakehouse/bronze_inventory.py",
     "scripts/lakehouse/bronze_metadata.py",
     "scripts/lakehouse/bronze_namespace_cases.py",
