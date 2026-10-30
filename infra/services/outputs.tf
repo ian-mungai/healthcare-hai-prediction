@@ -61,3 +61,13 @@ output "task_definition_settings" {
     }
   }
 }
+
+output "monitoring" {
+  description = "Whether the monitoring task is planned, its ports on the host loopback, its memory limits in MiB and its retention. Reach Grafana and Prometheus through the Session Manager tunnel."
+  value = {
+    enabled    = var.monitoring_enabled
+    ports      = { grafana = 3001, prometheus = 9090, statsd_exporter_web = 9102, statsd_udp = 9125 }
+    memory_mib = var.monitoring_memory_mib
+    retention  = { days = var.prometheus_retention_days, size_mb = var.prometheus_retention_size_mb }
+  }
+}

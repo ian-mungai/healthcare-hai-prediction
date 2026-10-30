@@ -22,28 +22,31 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
 
+  # The monitoring containers are added only while monitoring_enabled is true, so the default plan needs no monitoring log group.
   container_component = merge({
-    "postgres"              = "postgres"
-    "postgres_databases"    = "postgres"
-    "redis"                 = "redis"
-    "polaris"               = "polaris"
-    "airflow_migrate"       = "airflow"
-    "airflow_apiserver"     = "airflow"
-    "airflow_scheduler"     = "airflow"
-    "airflow_dag_processor" = "airflow"
-    "airflow_triggerer"     = "airflow"
-    "marquez_api"           = "marquez"
-    "marquez_web"           = "marquez"
-    "model_api"             = "airflow"
-    "streamlit"             = "airflow"
-    "host_prepare"          = "airflow"
-    "polaris_bootstrap"     = "polaris"
-  }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {})
+    "postgres"                         = "postgres"
+    "postgres_databases"               = "postgres"
+    "redis"                            = "redis"
+    "polaris"                          = "polaris"
+    "airflow_migrate"                  = "airflow"
+    "airflow_apiserver"                = "airflow"
+    "airflow_scheduler"                = "airflow"
+    "airflow_dag_processor"            = "airflow"
+    "airflow_triggerer"                = "airflow"
+    "marquez_api"                      = "marquez"
+    "marquez_web"                      = "marquez"
+    "model_api"                        = "airflow"
+    "streamlit"                        = "airflow"
+    "host_prepare"                     = "airflow"
+    "polaris_bootstrap"                = "polaris"
+    }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {}, {
+    for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter"] : name => "monitoring" if var.monitoring_enabled
+  })
 
   log_configuration = {
     for container, component in local.container_component : container => {
@@ -83,6 +86,7 @@ locals {
     mlflow_db_password     = var.mlflow_db_password_name
     mlflow_admin_password  = var.mlflow_admin_password_name
     broker_token           = var.broker_token_name
+    grafana_admin_password = var.grafana_admin_password_name
   }, local.model_api_secret_names, local.streamlit_secret_names)
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value
@@ -171,6 +175,15 @@ locals {
           volumes       = {}
         }
       } : key => service if var.streamlit_enabled
+    },
+    {
+      for key, service in {
+        monitoring = {
+          task_role_arn = var.control_plane_task_role_arn
+          containers    = local.monitoring_containers
+          volumes       = local.monitoring_volumes
+        }
+      } : key => service if var.monitoring_enabled
     }
   )
 

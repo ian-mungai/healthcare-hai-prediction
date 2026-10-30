@@ -116,7 +116,7 @@ variable "control_plane_task_role_arn" {
 }
 
 variable "log_group_names" {
-  description = "Foundation output: log group name for each component. The keys postgres, redis, polaris, airflow and marquez are required, and mlflow when mlflow_enabled is true; components may share a group."
+  description = "Foundation output: log group name for each component. The keys postgres, redis, polaris, airflow and marquez are required, mlflow when mlflow_enabled is true, and monitoring when monitoring_enabled is true; components may share a group."
   type        = map(string)
 
   validation {
@@ -128,18 +128,23 @@ variable "log_group_names" {
     condition     = !var.mlflow_enabled || contains(keys(var.log_group_names), "mlflow")
     error_message = "Name a log group for mlflow, or set mlflow_enabled to false."
   }
+
+  validation {
+    condition     = !var.monitoring_enabled || contains(keys(var.log_group_names), "monitoring")
+    error_message = "Name a log group for monitoring, or set monitoring_enabled to false."
+  }
 }
 
 variable "ecr_repository_urls" {
-  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, marquez and marquez_web when marquez_enabled is true, mlflow when mlflow_enabled is true, model_api when model_api_enabled is true, and streamlit when streamlit_enabled is true."
+  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, marquez and marquez_web when marquez_enabled is true, mlflow when mlflow_enabled is true, model_api when model_api_enabled is true, streamlit when streamlit_enabled is true, and prometheus, grafana and statsd_exporter when monitoring_enabled is true."
   type        = map(string)
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
-    error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs."
+    error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs, the monitoring images included when monitoring_enabled is true."
   }
 }
 
@@ -175,6 +180,11 @@ variable "image_digests" {
   validation {
     condition     = !var.streamlit_enabled || contains(keys(var.image_digests), "streamlit")
     error_message = "Supply a digest for streamlit, or set streamlit_enabled to false."
+  }
+
+  validation {
+    condition     = !var.monitoring_enabled || alltrue([for image in ["prometheus", "grafana", "statsd_exporter"] : contains(keys(var.image_digests), image)])
+    error_message = "Supply a digest for prometheus, grafana and statsd_exporter, or set monitoring_enabled to false."
   }
 }
 
@@ -371,7 +381,7 @@ variable "host_memory_mib" {
 }
 
 variable "other_services_reserve_mib" {
-  description = "Memory in MiB that stays free of control-plane reservations: the operating system, the ECS agent and the later services (MLflow, prediction API, Streamlit, Prometheus, Grafana)."
+  description = "Memory in MiB that stays free of control-plane reservations: the operating system, the ECS agent and the later services (MLflow, prediction API, Streamlit). The monitoring containers count in the control-plane reservations when monitoring_enabled is true."
   type        = number
   default     = 5632
 
@@ -477,5 +487,73 @@ variable "polaris_root_secret_name" {
   validation {
     condition     = length(var.polaris_root_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_root_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_root_secret_name))
     error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "monitoring_enabled" {
+  description = "Run Prometheus, Grafana and the StatsD exporter as one task on the host, all on loopback, and send the Airflow metrics to the exporter. Their images are mirrored first (push_images.py plan) and their digests recorded, and the Grafana password parameter exists; this stays false until then. False plans no monitoring resource and no Airflow change."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "grafana_admin_password_name" {
+  description = "Parameter Store SecureString name of the Grafana administrator password (new secret). Only the Grafana container reads it, through the task execution role."
+  type        = string
+  default     = "/healthcare_hai_prediction/grafana_admin_password"
+
+  validation {
+    condition     = length(var.grafana_admin_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.grafana_admin_password_name)) && !can(regex("^/(?i:aws|ssm)", var.grafana_admin_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "monitoring_memory_mib" {
+  description = "Hard limit and reservation in MiB of each monitoring container. These are estimates for a few hundred series and one dashboard, not measurements: replace them after the silver and gold runs show the real peak (ECS reports task memory, and docker stats shows each container). Each limit must be at least 128 MiB for Prometheus and Grafana and 32 MiB for the exporter, and at least its reservation."
+  type = object({
+    prometheus      = object({ limit = number, reservation = number })
+    grafana         = object({ limit = number, reservation = number })
+    statsd_exporter = object({ limit = number, reservation = number })
+  })
+  default = {
+    prometheus      = { limit = 256, reservation = 128 }
+    grafana         = { limit = 256, reservation = 128 }
+    statsd_exporter = { limit = 64, reservation = 32 }
+  }
+  nullable = false
+
+  validation {
+    condition = (
+      var.monitoring_memory_mib.prometheus.limit >= 128 && var.monitoring_memory_mib.grafana.limit >= 128 && var.monitoring_memory_mib.statsd_exporter.limit >= 32
+      && var.monitoring_memory_mib.prometheus.reservation >= 1 && var.monitoring_memory_mib.grafana.reservation >= 1 && var.monitoring_memory_mib.statsd_exporter.reservation >= 1
+      && var.monitoring_memory_mib.prometheus.reservation <= var.monitoring_memory_mib.prometheus.limit
+      && var.monitoring_memory_mib.grafana.reservation <= var.monitoring_memory_mib.grafana.limit
+      && var.monitoring_memory_mib.statsd_exporter.reservation <= var.monitoring_memory_mib.statsd_exporter.limit
+    )
+    error_message = "Each limit needs at least 128 MiB (Prometheus, Grafana) or 32 MiB (the exporter), and each reservation at least 1 MiB and at most its limit."
+  }
+}
+
+variable "prometheus_retention_days" {
+  description = "Days of samples Prometheus keeps. Older blocks are deleted. The size limit below stops the store sooner when it is reached first."
+  type        = number
+  default     = 15
+  nullable    = false
+
+  validation {
+    condition     = var.prometheus_retention_days >= 1 && var.prometheus_retention_days <= 90 && floor(var.prometheus_retention_days) == var.prometheus_retention_days
+    error_message = "Use a whole number of days from 1 to 90."
+  }
+}
+
+variable "prometheus_retention_size_mb" {
+  description = "Most MB the Prometheus blocks and write-ahead log may use on the data volume. Prometheus deletes the oldest blocks once the total passes this limit."
+  type        = number
+  default     = 2048
+  nullable    = false
+
+  validation {
+    condition     = var.prometheus_retention_size_mb >= 256 && var.prometheus_retention_size_mb <= 16384 && floor(var.prometheus_retention_size_mb) == var.prometheus_retention_size_mb
+    error_message = "Use a whole number of MB from 256 to 16384."
   }
 }

@@ -27,7 +27,16 @@ locals {
 
   airflow_lineage_provider_mount = { sourceVolume = "airflow_lineage_provider", containerPath = "/opt/hai/lineage_provider", readOnly = false }
 
-  airflow_environment_map = {
+  # Airflow sends its metrics over UDP to the StatsD exporter on this host. The settings exist only while monitoring_enabled is true, so the flag off leaves the
+  # Airflow task definitions as they were.
+  airflow_statsd_environment = {
+    AIRFLOW__METRICS__STATSD_ON     = "true"
+    AIRFLOW__METRICS__STATSD_HOST   = "127.0.0.1"
+    AIRFLOW__METRICS__STATSD_PORT   = "9125"
+    AIRFLOW__METRICS__STATSD_PREFIX = "airflow"
+  }
+
+  airflow_environment_map = merge({
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION             = "true"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL                = "http://127.0.0.1:8080/execution/"
     AIRFLOW__CORE__EXECUTOR                                = "LocalExecutor"
@@ -46,7 +55,7 @@ locals {
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK                = "true"
     AIRFLOW__SCHEDULER__SCHEDULER_HEALTH_CHECK_SERVER_HOST = "127.0.0.1"
     PYTHONPATH                                             = "/opt/hai"
-  }
+  }, var.monitoring_enabled ? local.airflow_statsd_environment : {})
 
   airflow_environment = [for name, value in local.airflow_environment_map : { name = name, value = value }]
 

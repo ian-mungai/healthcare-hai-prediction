@@ -156,6 +156,30 @@
       "tag": "feast0.66.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "runs_as": "job task, extract step"
+    },
+    "prometheus": {
+      "kind": "mirror",
+      "source": "prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2",
+      "tag": "v3.15.1-arm64",
+      "local_reference": false,
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack; the busybox variant, which has the shell and wget the preparation and health check containers use",
+      "runs_as": "ECS service on the host when monitoring_enabled is true"
+    },
+    "grafana": {
+      "kind": "mirror",
+      "source": "grafana/grafana:13.2.5-ubuntu@sha256:928b94a0ac4ab5db624b36bb6da9a644b4ad9fa4a2fb4655ca8e922521c769c1",
+      "tag": "13.2.5-ubuntu-arm64",
+      "local_reference": false,
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack; the Ubuntu variant, which has the bash the health check uses",
+      "runs_as": "ECS service on the host when monitoring_enabled is true"
+    },
+    "statsd_exporter": {
+      "kind": "mirror",
+      "source": "prom/statsd-exporter:v0.31.0@sha256:1d5d341c4eb7abdd3445a3f85c3d498402b676ad29b4cf0421f5d280943871ab",
+      "tag": "v0.31.0-arm64",
+      "local_reference": false,
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack",
+      "runs_as": "ECS service on the host when monitoring_enabled is true"
     }
   }
 }
