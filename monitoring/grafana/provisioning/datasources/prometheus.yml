@@ -1,0 +1,13 @@
+# The one data source: the Prometheus on this host's loopback. Grafana and Prometheus share the host network, so 127.0.0.1 reaches it.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: hai_prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 30s

@@ -1,0 +1,25 @@
+# Prometheus on the AWS host. It listens on 127.0.0.1 only, so reach it through the Session Manager tunnel. The Terraform task (infra/services/monitoring.tf)
+# mounts this folder at /etc/prometheus, and the retention flags there bound the store.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  # Airflow sends StatsD over UDP to the exporter, which turns it into Prometheus metrics (monitoring/statsd/mapping.yml).
+  - job_name: statsd_exporter
+    static_configs:
+      - targets: ["127.0.0.1:9102"]
+
+  # The model API serves /metrics on this loopback port once it runs on the host (metrics listed in monitoring/known_metrics.json).
+  - job_name: hai_api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8000"]

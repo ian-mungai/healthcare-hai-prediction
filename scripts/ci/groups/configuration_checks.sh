@@ -12,6 +12,7 @@ configuration_checks() {
   timed "configuration_checks: broker policy cases" "$python_bin" -m scripts.infrastructure.broker_policy_cases --output "$quality_output/broker_policy"
   timed "configuration_checks: quality E2E" "$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
   timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
+  timed "configuration_checks: monitoring files E2E" "$python_bin" -m scripts.infrastructure.run_monitoring_e2e
   timed "configuration_checks: host session E2E" "$python_bin" -m scripts.infrastructure.run_host_session_e2e
   timed "configuration_checks: host session plants" "$python_bin" -m scripts.infrastructure.host_session_plants
   timed "configuration_checks: AWS catalog setup E2E" "$python_bin" -m scripts.lakehouse.run_aws_catalog_setup_e2e --out "$quality_output/aws_catalog_setup" --mutations
