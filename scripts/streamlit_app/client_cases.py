@@ -11,9 +11,11 @@ import json
 import logging
 import pickle
 import re
+import socket
 import time
 from collections.abc import Callable
 from typing import Any
+from unittest import mock
 
 from scripts.features.feast_harness import Checker
 from scripts.streamlit_app import client, stand_in_api, view
@@ -54,7 +56,7 @@ def ask(api: StandInApi, **overrides: str) -> client.Prediction | client.Failure
 
 
 def answer(**changes: Any) -> dict[str, Any]:
-    return stand_in_api.good_answer({"hai_type": "HAI_1", "ccn": CCN, "window_year": YEAR}, "r1") | changes
+    return stand_in_api.good_answer({"hai_type": "HAI_1", "ccn": CCN, "window_year": YEAR}, stand_in_api.SENT) | changes
 
 
 def case_ok(c: Checker) -> None:
@@ -234,6 +236,98 @@ def case_key_stays_private(c: Checker) -> None:
     c.check("a key with a line break is refused without printing it", message is not None and KEY not in message and "X-Evil" not in message)
 
 
+ECHO_FIELDS = ("request_id", "model_version", "features_as_of", "feature_schema_sha256", "served_by", "hai_type", "ccn")
+LONG_HEX = "0123456789abcdef" * 3
+
+
+def case_key_echo(c: Checker) -> None:
+    """A 200 answer that carries the key back is refused, so the key never reaches a page element. The sweep covers valid-looking answers too."""
+    shown: list[str] = []
+    for name in ECHO_FIELDS:
+        with StandInApi() as api:
+            api.script(Behavior(body=answer(**{name: KEY})))
+            out = ask(api)
+        c.check(f"the key in {name} of a 200 answer is refused", isinstance(out, client.Failure) and out.kind == "bad_answer")
+        shown += [repr(out)] + ([view.notice(out).title, view.notice(out).text] if isinstance(out, client.Failure) else view.prediction_lines(out))
+    body = answer(feature_schema_sha256=LONG_HEX + "0" * 16)
+    with StandInApi(key=LONG_HEX) as api:
+        api.script(Behavior(body=body))
+        out = client.predict(client.load_settings({"MODEL_API_URL": api.url, "MODEL_API_KEY": LONG_HEX}), "HAI_1", CCN, YEAR)
+    c.check(
+        "a key inside a well-formed schema hash is refused, not shown by its first 12 characters", isinstance(out, client.Failure) and out.kind == "bad_answer"
+    )
+    shown += [repr(out)] + ([view.notice(out).text] if isinstance(out, client.Failure) else view.prediction_lines(out))
+    with StandInApi(key="7") as api:
+        out = client.predict(client.load_settings({"MODEL_API_URL": api.url, "MODEL_API_KEY": "7"}), "HAI_1", CCN, YEAR)
+    c.check("a key that a displayed field contains is refused even when the field is well formed", isinstance(out, client.Failure) and out.kind == "bad_answer")
+    c.check("nothing shown holds a key", not any(KEY in text or LONG_HEX in text for text in shown))
+    with StandInApi() as api:
+        api.script(Behavior(body=answer(request_id="someone-elses-request")))
+        out = ask(api)
+    c.check("a response request id other than the one sent is refused", isinstance(out, client.Failure) and out.kind == "bad_answer")
+
+
+BAD_FORMATS: list[tuple[str, dict[str, Any]]] = [
+    ("a model version with a letter", {"model_version": "v7"}),
+    ("a model version of zero", {"model_version": "0"}),
+    ("a model version with a leading zero", {"model_version": "07"}),
+    ("a dotted model version", {"model_version": "7.1"}),
+    ("a model version over 19 digits", {"model_version": "1" * 20}),
+    ("a date in words", {"features_as_of": "yesterday"}),
+    ("a date that does not exist", {"features_as_of": "2026-13-45"}),
+    ("a date with a time", {"features_as_of": "2026-10-01T00:00:00"}),
+    ("an upper case schema hash", {"feature_schema_sha256": "AB" * 32}),
+    ("a short schema hash", {"feature_schema_sha256": "ab" * 31}),
+    ("a request id with a space", {"request_id": "a b"}),
+]
+
+
+def case_formats_and_overflow(c: Checker) -> None:
+    """Metadata must have the formats the API writes, and a number that cannot become a float is an unusable answer, not a crash."""
+    for name, change in BAD_FORMATS:
+        with StandInApi() as api:
+            api.script(Behavior(body=answer(**change)))
+            out = ask(api)
+        c.check(f"{name} is a bad answer", isinstance(out, client.Failure) and out.kind == "bad_answer")
+    plain = json.dumps(answer(prediction=0))
+    huge = (("a huge integer", 10**400), ("a huge negative integer", -(10**400)))
+    bodies = [(name, json.dumps(answer(prediction=value)).encode()) for name, value in huge]
+    bodies.append(("an integer over the digit limit", plain.replace('"prediction": 0', '"prediction": 1' + "0" * 5000).encode()))
+    for name, raw in bodies:
+        with StandInApi() as api:
+            api.script(Behavior(body=raw))
+            crashed = False
+            try:
+                huge_out = ask(api)
+            except OverflowError:
+                crashed = True
+        c.check(f"{name} is a bad answer and does not crash", not crashed and isinstance(huge_out, client.Failure) and huge_out.kind == "bad_answer")
+    with StandInApi() as api:
+        good = ask(api)
+    c.check("the API's own formats are accepted", isinstance(good, client.Prediction) and good.model_version == "7" and good.features_as_of == "2026-10-01")
+
+
+def case_resolution_deadline(c: Checker) -> None:
+    """One absolute deadline covers name resolution and connection setup, not only the exchange after the socket exists."""
+    real = socket.getaddrinfo
+
+    def slow(*arguments: Any, **options: Any) -> Any:
+        time.sleep(0.5)
+        return real(*arguments, **options)
+
+    with StandInApi() as api:
+        url = f"http://localhost:{api.port}"
+        settings = client.load_settings({"MODEL_API_URL": url, "MODEL_API_KEY": KEY, "MODEL_API_DEADLINE_SECONDS": "0.1"})
+        with mock.patch("socket.getaddrinfo", slow):
+            started = time.monotonic()
+            out = client.predict(settings, "HAI_1", CCN, YEAR)
+            elapsed = time.monotonic() - started
+        control = client.predict(client.load_settings({"MODEL_API_URL": url, "MODEL_API_KEY": KEY, "MODEL_API_DEADLINE_SECONDS": "5"}), "HAI_1", CCN, YEAR)
+    c.check("a slow name lookup ends in a timeout failure", isinstance(out, client.Failure) and out.kind == "timeout")
+    c.check(f"and the call returns near the deadline, not after the lookup (took {elapsed:.2f} s)", elapsed < 0.35)
+    c.check("the same address answers when the lookup is not slow", isinstance(control, client.Prediction))
+
+
 SETTINGS_REFUSED: list[tuple[str, dict[str, str]]] = [
     ("no key", {}),
     ("an empty key", {"MODEL_API_KEY": ""}),
@@ -347,6 +441,9 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "client_deadlines": (case_deadlines, "timeout network"),
     "client_bad_answers": (case_bad_answers, "api malformed"),
     "client_key_stays_private": (case_key_stays_private, "secret logging"),
+    "client_key_echo": (case_key_echo, "secret malformed"),
+    "client_formats_and_overflow": (case_formats_and_overflow, "malformed"),
+    "client_resolution_deadline": (case_resolution_deadline, "timeout network"),
     "client_settings": (case_settings, "configuration secret"),
     "page_words": (case_words, "claims"),
 }

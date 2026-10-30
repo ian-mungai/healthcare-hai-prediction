@@ -7,6 +7,7 @@ file. These cases need Streamlit, which the repository's host environment does n
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Callable, Iterator
@@ -19,6 +20,7 @@ from streamlit.testing.v1 import AppTest
 
 from scripts.features.feast_harness import Checker
 from scripts.streamlit_app import client, stand_in_api, view
+from scripts.streamlit_app.client_cases import answer
 from scripts.streamlit_app.stand_in_api import KEY, Behavior, StandInApi
 
 APP = Path(__file__).resolve().parent / "app.py"
@@ -98,6 +100,18 @@ def case_failures(c: Checker) -> None:
             c.check(f"{name}: the detail {detail!r} is shown", detail in " ".join(notices))
             c.check(f"{name}: no prediction is shown", not at.metric and not any("Model version" in text.value for text in at.text))
             c.check(f"{name}: no exception", not at.exception)
+    unusable: list[tuple[str, bytes | dict[str, Any]]] = [
+        ("a huge integer prediction", json.dumps(answer(prediction=10**400)).encode()),
+        ("the key echoed as the model version", answer(model_version=KEY)),
+        ("the key echoed as the request id", answer(request_id=KEY)),
+        ("a request id other than the one sent", answer(request_id="someone-elses-request")),
+    ]
+    for name, body in unusable:
+        with running() as (at, api):
+            api.script(Behavior(body=body))
+            predict(at)
+            c.check(f"{name}: one unusable-answer notice, no prediction and no exception", len(at.error) == 1 and "could not be used" in at.error[0].value)
+            c.check(f"{name}: nothing is shown as a prediction", not at.exception and not at.metric and KEY not in " ".join(shown(at)))
     with running(MODEL_API_DEADLINE_SECONDS="0.6") as (at, api):
         api.script(Behavior(hang=True))
         started = time.monotonic()
@@ -135,7 +149,11 @@ def case_key_stays_private(c: Checker) -> None:
         api.script(Behavior(body=b"junk" + KEY.encode()))
         predict(at)
         seen += shown(at)
-    c.check("the sweep read the page four times", len(seen) >= 4)
+        for echoed in ("model_version", "request_id", "feature_schema_sha256"):
+            api.script(Behavior(body=answer(**{echoed: KEY})))
+            predict(at)
+            seen += shown(at)
+    c.check("the sweep read the page seven times", len(seen) >= 7)
     c.check("the key is on no element and in no session value", not any(KEY in text for text in seen))
     c.check("the key header name is on no element", not any("x-api-key" in text.lower() for text in seen))
     c.check(

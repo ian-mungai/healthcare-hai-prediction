@@ -27,11 +27,11 @@ The page is a thin client. It gets predictions only through the API, with its ke
 
 The page shows the limits first: a portfolio demonstration on public data, not clinical guidance, not a clinical validation and no patient data. It explains the standardized infection ratio in plain words and says that it does not show how well the model performs. The page makes no claim about performance because it holds no evidence of it.
 
-An answer shows the predicted ratio and the model version that the API returned. It also shows whether the stable or the canary model answered, whether the API fell back from the canary, the date the features are as of, the first 12 characters of the feature schema hash and the request id. The page refuses an answer that is not in the documented form: a non-finite number, text where a number belongs, a model version with unsafe characters or an answer for another hospital-window than the one asked.
+An answer shows the predicted ratio and the model version that the API returned. It also shows whether the stable or the canary model answered, whether the API fell back from the canary, the date the features are as of, the first 12 characters of the feature schema hash and the request id. The page refuses an answer that is not in the form the API writes. That covers a non-finite number, a number too large to convert, text where a number belongs, metadata in another format (a whole-number model version, a date as `YYYY-MM-DD`, a 64 character lower case hexadecimal schema hash), a request id other than the one the page sent and an answer for another hospital-window than the one asked. It also refuses an answer in which any shown field holds the page's key.
 
 ## Failures
 
-Every call has one deadline, 30 seconds by default and 60 at most, set by `MODEL_API_DEADLINE_SECONDS`. A watchdog closes the socket when the deadline passes, so a slow or dripped answer cannot hold the page. The client follows no redirect and retries nothing. Each failure shows a notice with its own title.
+Every call has one deadline, 30 seconds by default and 60 at most, set by `MODEL_API_DEADLINE_SECONDS`. One absolute deadline covers the name lookup, the connection, the send, the headers and the body. A worker thread does the exchange and the page stops waiting at the deadline. It closes the socket if one exists. A worker still looking up the name sends nothing when it finishes. A lookup that never returns leaves one idle thread behind until the resolver gives up, but it cannot hold the page. The client follows no redirect and retries nothing. Each failure shows a notice with its own title.
 
 | Cause | Notice |
 | --- | --- |
@@ -50,7 +50,7 @@ The wait that the page shows is at most 3,600 seconds, whatever the header says.
 
 ## API key
 
-The page presents its own key, so the API rate limit and the prediction rows name it apart from other callers. Make the key with the project tool under its own identifier, as in [the model API](model_api.md#api-keys). The container receives the key as the environment variable `MODEL_API_KEY` from a Parameter Store SecureString parameter. The key lives in a `Credential` object that prints as hidden and cannot be pickled, so it cannot enter the session. It is on no page element and in no log line. The settings refuse a key with spaces or control characters and refuse a plain http address that is not a loopback address, so the key never crosses a network unencrypted. The Streamlit settings file sets `showErrorDetails` to `none`, so an error shows no traceback.
+The page presents its own key, so the API rate limit and the prediction rows name it apart from other callers. Make the key with the project tool under its own identifier, as in [the model API](model_api.md#api-keys). The container receives the key as the environment variable `MODEL_API_KEY` from a Parameter Store SecureString parameter. The key lives in a `Credential` object that prints as hidden and cannot be pickled, so it cannot enter the session. A server that echoes the key in a 200 answer cannot put it on the page, because the page refuses that answer. The key is on no page element and in no log line in the cases that ran offline. The page cases that check the rendered elements have not run. The settings refuse a key with spaces or control characters and refuse a plain http address that is not a loopback address, so the key never crosses a network unencrypted. The Streamlit settings file sets `showErrorDetails` to `none`, so an error shows no traceback.
 
 Anyone who can open the page through the tunnel uses the page's key and its share of the rate limit. The environment variable is readable by anyone who can inspect the container on the host.
 
@@ -90,7 +90,7 @@ The client cases run on the host and in CI. They start the stand-in API on a fre
 .venv/bin/python -B -m scripts.streamlit_app.run_streamlit_checks --output "$TMPDIR/streamlit_checks"
 ```
 
-The report says `blocked` for the page cases when Streamlit is not installed. In the page image, mount the repository read-only at `/app` and run the same module with `--require-app`, which makes a missing harness a failure.
+When Streamlit is not installed the run prints `PAGE CASES NOT RUN` on both output streams. The report then says `page_cases: NOT RUN` and its verdict is `incomplete`, not `pass`. The runner still exits zero so that a host without Streamlit can run the client cases. In the page image, mount the repository read-only at `/app` and run the same module with `--require-app`, which makes a missing harness a failure with a nonzero exit.
 
 ## Memory limits assumed
 
