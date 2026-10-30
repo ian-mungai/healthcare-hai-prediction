@@ -1303,8 +1303,8 @@ def case_selector_contracts(fixture: Fixture, scratch: Path) -> Checks:
     for name, rules in (("submission_request", 1), ("ledger_line", 3), ("snapshot_record", 1), ("input_snapshot_record", 1), ("dbt_lineage_record", 1)):
         found = selector_templates(json.loads((contracts / f"{name}.schema.json").read_text()))
         checks[f"{name}_selector_rules"] = len(found) == rules and all(item == {"pin_silver", "pin_gold"} for item in found)
-    readme = (contracts / "README.md").read_text()
-    checks["readme"] = "`input_run_id` for `pin_silver` or `pin_gold` only" in readme and "`input_run_id` only for `pin_silver` or `pin_gold`" in readme
+    allowed_templates = set().union(*selector_templates(json.loads((contracts / "submission_request.schema.json").read_text())))
+    checks["submission_request_allows_input_run_id_for_pin_silver_and_pin_gold_only"] = allowed_templates == {"pin_silver", "pin_gold"}
     return checks
 
 
