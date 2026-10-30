@@ -49,7 +49,14 @@ NESTED_FIELDS = {
         "receipt_path",
     ),
 }
-VALIDATION_ONLY = {"care-hac-cms": "External validation check only, not a predictor: circular with PSI-90 and HAI (goal card)"}
+CARE_VALIDATION = "Validation table, never a predictor (project guide, pipeline section)"
+VALIDATION_ONLY = {
+    "care-hac-cms": "External validation check only, not a predictor: circular with PSI-90 and HAI (goal card)",
+    "care-deaths-cms": CARE_VALIDATION,
+    "care-hrrp-cms": CARE_VALIDATION,
+    "care-vbp-cms": CARE_VALIDATION,
+    "care-visits-cms": CARE_VALIDATION,
+}
 REJECTED = {
     "AHRF": "Excluded: not a predictor source, because its license limits sharing. The project stores no AHRF data (goal card; project guide section 8)",
     "NHSN": "Excluded: National Healthcare Safety Network facility-level data needs a formal Data Use Agreement; rejected (goal card; guide section 8)",

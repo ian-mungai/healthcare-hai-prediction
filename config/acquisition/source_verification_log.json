@@ -1988,8 +1988,8 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "not recorded",
-      "status_reason": "No closeout capture record and no project guide row",
+      "status": "validation-only",
+      "status_reason": "Validation table, never a predictor (project guide, pipeline section)",
       "deferral_trigger": null,
       "not_recorded": [
         "evidence.capture_candidates",
@@ -1997,7 +1997,6 @@
         "evidence.receipt_path",
         "evidence.receipt_sha256",
         "evidence.unique_snapshot_ids",
-        "status",
         "verification.date"
       ]
     },
@@ -2141,8 +2140,8 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "not recorded",
-      "status_reason": "No closeout capture record and no project guide row",
+      "status": "validation-only",
+      "status_reason": "Validation table, never a predictor (project guide, pipeline section)",
       "deferral_trigger": null,
       "not_recorded": [
         "evidence.capture_candidates",
@@ -2150,7 +2149,6 @@
         "evidence.receipt_path",
         "evidence.receipt_sha256",
         "evidence.unique_snapshot_ids",
-        "status",
         "verification.date"
       ]
     },
@@ -2257,8 +2255,8 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "not recorded",
-      "status_reason": "No closeout capture record and no project guide row",
+      "status": "validation-only",
+      "status_reason": "Validation table, never a predictor (project guide, pipeline section)",
       "deferral_trigger": null,
       "not_recorded": [
         "evidence.capture_candidates",
@@ -2266,7 +2264,6 @@
         "evidence.receipt_path",
         "evidence.receipt_sha256",
         "evidence.unique_snapshot_ids",
-        "status",
         "verification.date"
       ]
     },
@@ -2296,8 +2293,8 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "not recorded",
-      "status_reason": "No closeout capture record and no project guide row",
+      "status": "validation-only",
+      "status_reason": "Validation table, never a predictor (project guide, pipeline section)",
       "deferral_trigger": null,
       "not_recorded": [
         "evidence.capture_candidates",
@@ -2305,7 +2302,6 @@
         "evidence.receipt_path",
         "evidence.receipt_sha256",
         "evidence.unique_snapshot_ids",
-        "status",
         "verification.date"
       ]
     },
