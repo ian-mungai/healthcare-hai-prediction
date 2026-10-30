@@ -53,7 +53,7 @@ def shown(at: AppTest) -> list[str]:
     """Every text the page shows, whatever the element type, plus the session values."""
     elements: list[Any] = [*at.title, *at.markdown, *at.text, *at.info, *at.warning, *at.error, *at.success, *at.metric, *at.caption, *at.exception, *at.code]
     texts = [str(element.value) for element in elements] + [str(element.label) for element in at.metric]
-    return texts + [str(at.session_state.filtered_state)]
+    return texts + [str(at.session_state)]
 
 
 def case_limits(c: Checker) -> None:
@@ -158,7 +158,7 @@ def case_key_stays_private(c: Checker) -> None:
     c.check("the key header name is on no element", not any("x-api-key" in text.lower() for text in seen))
     c.check(
         "the credential type is not stored in the session",
-        not any(isinstance(value, client.Credential) for value in [*at.session_state.filtered_state.values()]),
+        not any(isinstance(value, client.Credential) for value in at.session_state.values()),
     )
 
 
