@@ -120,6 +120,26 @@ run "only_silver_and_gold_upload_and_only_under_their_own_run_prefix" {
   }
 }
 
+run "features_may_write_only_its_run_state" {
+  command = plan
+
+  variables {
+    job_writer_layers_prepared = true
+    job_layer_runs_prepared    = true
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_iam_role_policy.job_writer_layer_state)) == toset(["features"]) &&
+      aws_iam_role_policy.job_writer_layer_state["features"].role == aws_iam_role.job_write_layer_task["features"].name &&
+      length(jsondecode(aws_iam_role_policy.job_writer_layer_state["features"].policy).Statement) == 1 &&
+      jsondecode(aws_iam_role_policy.job_writer_layer_state["features"].policy).Statement[0].Action == ["s3:PutObject"] &&
+      jsondecode(aws_iam_role_policy.job_writer_layer_state["features"].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/state/*"]
+    )
+    error_message = "Features puts only the claim object of its run: lakehouse/layer_runs/features/<run>/state/. It uploads nothing else."
+  }
+}
+
 run "only_features_may_apply_feast" {
   command = plan
 

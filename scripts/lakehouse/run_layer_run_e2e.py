@@ -19,20 +19,21 @@ import json
 import os
 import re
 import sys
-import tarfile
 import tempfile
 import time
 import traceback
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 import duckdb
 
-from scripts.lakehouse import layer_run, pins
+from scripts.lakehouse import code_archive, layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
+from scripts.process import run_command
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 SILVER_RUN = "20261030T010203Z-0a1b2c3d"
@@ -159,7 +160,8 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
             tables = pins.mapped_tables(pins_table_map())
             if "pin_tables" in DEFECTS:
                 tables = tables[1:]
-            (folder / "pins.json").write_text(json.dumps({name: "11" for name in tables}, sort_keys=True) + "\n")
+            snapshot = model("bronze_snapshot.json", "11")
+            (folder / "pins.json").write_text(json.dumps({name: snapshot for name in tables}, sort_keys=True) + "\n")
         elif not (folder / "pins.json").is_file():
             fail(module)
     elif name in ("silver_publish", "features_input", "features_publish", "gold_publish") and step in (
@@ -433,6 +435,7 @@ def reset_input_versions() -> None:
     ]
 
 
+STATE: dict[str, bytes] = {}  # the run state objects the driver writes at pin
 STORED: dict[str, bytes] = {}  # the bucket objects the stand-in publish steps write: the catalog backups
 SLOW_UPLOAD = [0.0]  # seconds the stand-in bucket takes for each upload
 STAGED_VERSION = ["1"]  # the object version of the staged code files; a case changes it to model an input replaced during the run
@@ -444,6 +447,20 @@ class FakeS3:
         time.sleep(SLOW_UPLOAD[0])
         UPLOADS.append((bucket, key))
         shared_write("upload", key=key)
+
+    class ClientError(Exception):
+        def __init__(self, code: str) -> None:
+            super().__init__(code)
+            self.response = {"Error": {"Code": code}}
+
+    exceptions = SimpleNamespace()
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes | str, IfNoneMatch: str = "") -> dict[str, Any]:
+        require(Bucket == BUCKET and Key.startswith("lakehouse/layer_runs/"), (Bucket, Key))
+        if IfNoneMatch == "*" and Key in STATE:
+            raise self.ClientError("PreconditionFailed")
+        STATE[Key] = Body.encode() if isinstance(Body, str) else Body
+        return {}
 
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         require(Bucket == BUCKET and Key.startswith("lakehouse/run_stage/"), (Bucket, Key))
@@ -468,20 +485,44 @@ class FakeS3:
         return {"Body": io.BytesIO(STORED[Key])}
 
 
-def archive(folder: Path) -> tuple[Path, str]:
-    """A ``git archive`` style tarball: the commit ID in the pax global header, the dbt project and its packages inside."""
+def commit_repository(folder: Path) -> Path:
+    """A throwaway Git repository with the files the layer tasks read from their code: the dbt project and its package lock, and the contracts."""
     source = folder / "src"
-    for name in ("dbt", "dbt_packages"):
-        (source / name).mkdir(parents=True)
-        (source / name / "marker.txt").write_text(name)
+    (source / "dbt").mkdir(parents=True)
+    (source / "dbt/dbt_project.yml").write_text("name: hai\n")
+    (source / "dbt/package-lock.yml").write_text("packages:\n  - name: dbt_utils\n    package: dbt-labs/dbt_utils\n    version: 1.4.1\nsha1_hash: x\n")
     repository = Path(__file__).resolve().parents[2]
     for relative in ("data_contracts/lakehouse/gold_contract.json", "data_contracts/lakehouse/features_publish.json"):
         (source / relative).parent.mkdir(parents=True, exist_ok=True)
         (source / relative).write_bytes((repository / relative).read_bytes())
+    identity = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid"]
+    for arguments in (["init", "-q"], ["add", "-A"], [*identity, "commit", "-q", "-m", "e2e"]):
+        done = run_command("git", arguments, cwd=source, timeout=60)
+        require(done.returncode == 0, done.stderr)
+    return source
+
+
+def plain_git_archive(folder: Path) -> tuple[Path, str]:
+    """What ``git archive`` alone makes: no installed dbt packages, so no archive that the layer pin can use."""
+    source = commit_repository(folder)
+    path = folder / "plain.tar.gz"
+    done = run_command("git", ["archive", "--format=tar.gz", f"--output={path}", "HEAD"], cwd=source, timeout=60)
+    require(done.returncode == 0, done.stderr)
+    return path, sha_of(path)
+
+
+def archive(folder: Path) -> tuple[Path, str]:
+    """The artifact of the real builder: the commit's Git archive plus the installed dbt packages, with the commit ID in the pax global header."""
+    source = commit_repository(folder)
+    packages = folder / "installed_packages"
+    (packages / "dbt_utils").mkdir(parents=True)
+    (packages / "dbt_utils/dbt_project.yml").write_text("name: dbt_utils\n")
+    git_tar = folder / "git.tar"
+    done = run_command("git", ["archive", "--format=tar", f"--output={git_tar}", "HEAD"], cwd=source, timeout=60)
+    require(done.returncode == 0, done.stderr)
     path = folder / "code.tar.gz"
-    with tarfile.open(path, "w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": REVISION}) as tar:
-        for name in ("dbt", "dbt_packages", "data_contracts"):
-            tar.add(source / name, arcname=name)
+    code_archive.compose(git_tar, packages, path)
+    code_archive.check(path, expected=sha_of(path))
     return path, sha_of(path)
 
 
@@ -495,6 +536,7 @@ class Case:
         UPLOADS.clear()
         DEFECTS.clear()
         STORED.clear()
+        STATE.clear()
         reset_input_versions()
         STAGED_VERSION[0] = "1"
         SLOW_UPLOAD[0] = 0.0
@@ -537,6 +579,7 @@ class Case:
 
 @contextlib.contextmanager
 def patched(root: Path) -> Iterator[Case]:
+    FakeS3.exceptions.ClientError = FakeS3.ClientError
     with (
         mock.patch.object(layer_run, "run_module", standin),
         mock.patch.object(layer_run, "BUCKET_FILE", root / "deployment.auto.tfvars.json"),
@@ -572,21 +615,43 @@ def case_gold_and_features_chain(case: Case) -> None:
     require(not any("/features/" in key for _, key in UPLOADS), "features uploads nothing")
 
 
-def case_retry_has_no_second_effect(case: Case) -> None:
-    require(case.chain("silver", label="first") == [0] * 7, case.err)
-    first_writes, first_uploads = len(writes()), sorted(UPLOADS)
-    first_rows = model("publish_runs.json", [])
-    # A retry in a new task starts from an empty workspace.
-    require(case.chain("silver", label="second") == [0] * 7, case.err)
-    require(model("publish_runs.json", []) == first_rows, "no second publish_runs row")
-    new = writes()[first_writes:]
-    require(all(item["kind"] in ("branch", "backup", "upload") for item in new), new)
-    require(not [item for item in new if item["kind"] in ("table", "publish_runs")], "no table or publish_runs write on the retry")
-    require(sorted(set(UPLOADS)) == sorted(set(first_uploads)), "the retry uploads the same keys")
-    # A retry of the publish phase in the same workspace also writes nothing new to the catalog.
+def case_retry_of_a_run_is_refused_at_the_pin(case: Case) -> None:
+    """A run ID that already has state in the bucket is not resumed: the review scenario, where bronze moves from snapshot 11 to 12 between two tasks."""
+    require(case.phase("silver", "pin", label="first") == 0, case.err)
+    first = json.loads((case.work("silver", "first") / "code/data/analytics/dbt/runs" / CHAIN["silver"] / "pins.json").read_text())
+    require(set(first.values()) == {"11"}, first)
+    (CATALOG[0] / "bronze_snapshot.json").write_text('"12"')
     before = len(writes())
-    require(case.phase("silver", "publish", label="second") == 0, case.err)
-    require(not [item for item in writes()[before:] if item["kind"] in ("table", "publish_runs")], "publish twice in one workspace")
+    require(case.phase("silver", "pin", label="second") != 0 and "start a new run ID" in case.err, case.err)
+    require(len(writes()) == before and len(STATE) == 1, "the refused pin wrote nothing shared")
+    require(not (case.work("silver", "second") / "code").exists(), "the refused pin unpacked and pinned nothing")
+    # The same workspace may still repeat a later phase: only a new pin is a new task.
+    for phase in ("build", "validate", "verify", "export", "publish"):
+        require(case.phase("silver", phase, label="first") == 0, case.err)
+    rows = model("publish_runs.json", [])
+    require(case.phase("silver", "publish", label="first") == 0, case.err)
+    require(model("publish_runs.json", []) == rows, "publish twice in one workspace writes no second row")
+
+
+def case_plain_git_archive_is_refused_before_the_run_id_is_claimed(case: Case) -> None:
+    plain, digest = plain_git_archive(case.root / "plain")
+    (case.work("silver") / "code.tar.gz").write_bytes(plain.read_bytes())
+    require(case.phase("silver", "pin", digest=digest) != 0 and "code_archive" in case.err, case.err)
+    require(not STATE, "a pin of an unusable archive claimed the run ID")
+    (case.work("silver") / "code.tar.gz").write_bytes(case.archive.read_bytes())
+    require(case.phase("silver", "pin") == 0 and len(STATE) == 1, "the run ID was not free after the refused archive")
+
+
+def case_builder_output_is_the_same_bytes_every_time(case: Case) -> None:
+    again, digest = archive(case.root / "again")
+    require(digest == case.digest, "the builder wrote different bytes for the same commit and packages")
+
+
+def case_dry_run_leaves_no_state_that_blocks_the_real_run(case: Case) -> None:
+    require(case.phase("silver", "pin", extra=["--dry-run"]) == 0, case.err)
+    require(not STATE, "a dry run wrote state to the bucket")
+    require(case.phase("silver", "pin", label="real") == 0 and len(STATE) == 1, case.err)
+    require(case.phase("silver", "pin", label="again") != 0 and "start a new run ID" in case.err, case.err)
 
 
 def refuses(case: Case, layer: str, phases: Sequence[str], at: str, **options: Any) -> None:
@@ -798,7 +863,10 @@ def case_phase_not_in_layer(case: Case) -> None:
 CASES: dict[str, Callable[[Case], None]] = {
     "silver chain publishes once, uploads under its run prefix": case_silver_chain,
     "gold and features chains follow silver, features uploads nothing": case_gold_and_features_chain,
-    "a retry of one run has no second effect": case_retry_has_no_second_effect,
+    "a second pin of a run ID is refused before any shared write": case_retry_of_a_run_is_refused_at_the_pin,
+    "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
+    "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,
+    "a dry run leaves no state that blocks the real run": case_dry_run_leaves_no_state_that_blocks_the_real_run,
     "a wrong code digest stops the first phase": case_wrong_code_digest,
     "gold and features refuse a missing input run": case_missing_input_run,
     "gold refuses a silver run that was never committed": case_input_run_not_published,

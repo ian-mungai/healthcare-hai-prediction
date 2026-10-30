@@ -211,6 +211,16 @@ resource "aws_iam_role_policy" "job_writer_layer_upload" {
   })
 }
 
+resource "aws_iam_role_policy" "job_writer_layer_state" {
+  for_each = { for layer, role in local.job_layer_run_prepared_roles : layer => role if layer == "features" }
+
+  name = "layer_run_state"
+  role = each.value.name
+  policy = templatefile("${path.module}/owner_policies/job_writer_layer_upload.json", {
+    UPLOAD_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/lakehouse/layer_runs/${each.key}/*/state/*"])
+  })
+}
+
 resource "aws_iam_role_policy" "job_writer_features_feast" {
   for_each = { for layer, role in local.job_layer_run_prepared_roles : layer => role if layer == "features" }
 

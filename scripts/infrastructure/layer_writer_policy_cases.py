@@ -28,6 +28,7 @@ POLICIES = (
     "bronze_writer_storage",
     "job_writer_layer_input",
     "job_writer_layer_upload",
+    "job_writer_layer_state",
     "job_writer_features_feast",
 )
 
@@ -86,6 +87,10 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
             for action in ("s3:GetObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:PutObjectAcl", "s3:AbortMultipartUpload"):
                 add(f"{layer} run upload excludes {owner} {action}", layer, action, resource, False)
             add(f"{layer} run list {owner}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"lakehouse/layer_runs/{owner}/",)})
+        for owner in (*UPLOADS, "features", "other"):
+            state = f"{BUCKET}/lakehouse/layer_runs/{owner}/run/state/pinned.json"
+            add(f"{layer} run state {owner}", layer, "s3:PutObject", state, layer == owner and owner != "other")
+            add(f"{layer} run state excludes {owner} read", layer, "s3:GetObject", state, False)
         add(f"{layer} run upload lookalike", layer, "s3:PutObject", f"{BUCKET}/lakehouse/layer_runs/{layer}_other/file", False)
         add(f"{layer} run upload other bucket", layer, "s3:PutObject", f"{OTHER_BUCKET}/lakehouse/layer_runs/{layer}/file", False)
         add(f"{layer} run upload bare prefix", layer, "s3:PutObject", f"{BUCKET}/lakehouse/layer_runs/file", False)
@@ -157,7 +162,7 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
 
 def evaluate(documents: dict[str, dict[str, Any]], collections: tuple[str, ...]) -> list[dict[str, Any]]:
     """Evaluate complete writer attachments and the complete project policy set."""
-    extras = ("layer_input", "layer_upload", "layer_feast")
+    extras = ("layer_input", "layer_upload", "layer_state", "layer_feast")
     actors = {
         **{
             layer: [
@@ -216,6 +221,8 @@ def verify(root: Path, base: dict[str, dict[str, Any]], output: Path) -> tuple[l
     for layer in UPLOADS:
         values = {"UPLOAD_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/layer_runs/{layer}/*"])}
         documents[f"layer_upload_{layer}"] = json.loads(Template((directory / "job_writer_layer_upload.json").read_text()).substitute(values))
+    values = {"UPLOAD_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/layer_runs/features/*/state/*"])}
+    documents["layer_state_features"] = json.loads(Template((directory / "job_writer_layer_upload.json").read_text()).substitute(values))
     values = {"REGISTRY_OBJECT_ARNS": json.dumps([REGISTRY]), "REDIS_PARAMETER_ARNS": json.dumps([REDIS_PARAMETER])}
     documents["layer_feast_features"] = json.loads(Template((directory / "job_writer_features_feast.json").read_text()).substitute(values))
     path = directory / "job_writer_execution.json"
