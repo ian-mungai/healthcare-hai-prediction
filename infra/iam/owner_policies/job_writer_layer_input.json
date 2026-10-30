@@ -13,6 +13,13 @@
       "Action": ["s3:ListBucket"],
       "Resource": "${BUCKET_ARN}",
       "Condition": {"StringLike": {"s3:prefix": ${INPUT_LIST_PREFIXES}}}
+    },
+    {
+      "Sid": "ListLayerInputVersions",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucketVersions"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${INPUT_LIST_PREFIXES}}}
     }
   ]
 }

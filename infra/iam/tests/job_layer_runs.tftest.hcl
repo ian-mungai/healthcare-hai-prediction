@@ -83,14 +83,18 @@ run "each_layer_reads_only_its_input_layer" {
       aws_iam_role_policy.job_writer_layer_input["gold"].role == aws_iam_role.job_write_layer_task["gold"].name &&
       aws_iam_role_policy.job_writer_layer_input["features"].role == aws_iam_role.job_write_layer_task["features"].name &&
       alltrue([for layer, source in { silver = "bronze", gold = "silver", features = "gold" } : (
-        length(jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement) == 2 &&
+        length(jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement) == 3 &&
         jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[0].Action == ["s3:GetObject"] &&
         jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/${source}/*"] &&
         jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[1].Action == ["s3:ListBucket"] &&
-        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[1].Condition.StringLike["s3:prefix"] == ["lakehouse/${source}/*"]
+        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[1].Condition.StringLike["s3:prefix"] == ["lakehouse/${source}/*"] &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Effect == "Allow" &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Action == ["s3:ListBucketVersions"] &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Condition.StringLike["s3:prefix"] == ["lakehouse/${source}/*"]
       )])
     )
-    error_message = "Silver reads bronze, gold reads silver and features reads gold. Each gets object reads and a scoped listing of that one prefix and nothing else."
+    error_message = "Silver reads bronze, gold reads silver and features reads gold. Each gets object reads, a scoped listing and a scoped version listing of that one prefix and nothing else."
   }
 }
 

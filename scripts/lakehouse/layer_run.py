@@ -14,9 +14,11 @@ from run folder files, so a phase runs only on the exact output of the phase bef
 folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/runs/<run ID>``.
 
 ``publish`` runs the publish steps of the layer and the acceptance checks of the first publish (rows and content fingerprints of every table against
-its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it) and two evidence
-checks: the staged input objects still have the versions the pin phase recorded, and the backup stored in the bucket equals its record. ``upload`` and
-``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. A retry of one run repeats every step on the same keys
+its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). Before any catalog
+write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin, and the pin must name exactly the
+configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold). Two extra checks run beside them: the staged code objects keep
+their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast`` run only for a run that passed them. Any failed
+check exits 1 and names the phase. A retry of one run repeats every step on the same keys
 and snapshot IDs and writes no second publication.
 
 The whole task has a deadline, the one the broker table gives the job, counted from the start time the init container writes to
@@ -33,6 +35,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -45,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
-from scripts.lakehouse import provenance
+from scripts.lakehouse import pins, provenance
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
 
@@ -59,6 +62,10 @@ BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path g
 UPLOAD_PREFIX = "lakehouse/layer_runs"
 JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job, as the broker enforces it
 STARTED_FILE = "task_started"  # in the work folder: the init container writes the start time of the whole task
+FINGERPRINT = re.compile(r"-?[0-9]{1,38}")  # what the publisher emits: the decimal string of a sum cast to DECIMAL(38, 0)
+BRONZE_TABLES = Path(__file__).resolve().parents[2] / "config/lakehouse/bronze_tables.json"
+INPUT_LAYER = {"silver": "bronze", "gold": "silver", "features": "gold"}  # the layer whose data each layer reads
+LIST_PAGES = 2000  # pages of the input version listing, 1000 versions each: a larger prefix is refused instead of listed in part
 STAGE_PREFIX = "lakehouse/run_stage"
 STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb")  # the code copy, the bulk input extracts and the build file the sealed copy repeats
@@ -175,6 +182,57 @@ def staged_objects(client: Any, bucket: str, run: str) -> dict[str, dict[str, An
     return found
 
 
+def input_prefix(job: Job) -> str:
+    return f"lakehouse/{INPUT_LAYER[job.layer]}/"
+
+
+def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
+    """The version listing of the layer's input prefix as one digest and a count: every version and delete marker with its ID, entity tag and size. The listing
+    is read page by page and never held whole. It is bounded by ``LIST_PAGES`` and by the task deadline, and a prefix that does not fit is refused."""
+    digest, count = hashlib.sha256(), 0
+    markers: dict[str, str] = {}
+    for _ in range(LIST_PAGES):
+        page = client.list_object_versions(Bucket=bucket, Prefix=prefix, **markers)
+        lines = [
+            f"{kind}\t{item['Key']}\t{item['VersionId']}\t{item.get('ETag', '')}\t{item.get('Size', 0)}\n"
+            for kind, items in (("V", page.get("Versions", [])), ("D", page.get("DeleteMarkers", [])))
+            for item in items
+        ]
+        for line in sorted(lines):
+            digest.update(line.encode())
+        count += len(lines)
+        if not page.get("IsTruncated"):
+            return {"prefix": prefix, "versions": count, "sha256": digest.hexdigest()}
+        markers = {"KeyMarker": page["NextKeyMarker"], "VersionIdMarker": page["NextVersionIdMarker"]}
+    raise StepError(f"the version listing of {prefix} is larger than {LIST_PAGES} pages: refusing to compare a partial listing")
+
+
+def check_input_versions(job: Job, bucket: str, client: Any) -> None:
+    """The input prefix holds the same versions as when the pin phase listed it: nothing added, replaced or deleted during the run."""
+    recorded = identity(job).get("input_listing")
+    if not recorded:
+        raise StepError("the pin phase recorded no listing of the input versions")
+    if input_listing(client, bucket, input_prefix(job)) != recorded:
+        raise StepError(f"an input version changed during the run: the listing of {recorded['prefix']} differs from the one taken at the pin")
+
+
+def check_pin_tables(job: Job) -> None:
+    """Silver: the pin names exactly the configured bronze tables. Gold: a contract check, not a comparison with the silver publish_runs row. It compares the
+    pin's table list with the tables of the silver publish contract. The row itself is readable only inside the silver pin step, so that comparison is left to
+    the hand check of the first gold run. Features has no check here: its builder compares the gold pin with the gold contract."""
+    if job.layer == "silver":
+        pinned = set(json.loads((job.folder / PIN_FILE["silver"]).read_text()))
+        wanted, source = set(pins.mapped_tables(BRONZE_TABLES)), BRONZE_TABLES.name
+    elif job.layer == "gold":
+        pinned = set(read_record(job.folder, PIN_FILE["gold"])[0].get("snapshot_set", {}))
+        wanted, source = set(publish_contract(replace(job, layer="silver")).tables), "the silver publish contract"
+    else:
+        return
+    if pinned != wanted:
+        kind = " (a contract check, not a publish_runs row comparison)" if job.layer == "gold" else ""
+        raise StepError(f"the {job.layer} pin's table list differs from {source}{kind}: missing {sorted(wanted - pinned)}, extra {sorted(pinned - wanted)}")
+
+
 def check_input_objects(job: Job, bucket: str, client: Any) -> None:
     """The staged input objects are the ones the pin phase recorded, version by version."""
     recorded = identity(job).get("input_objects")
@@ -195,7 +253,7 @@ def check_stored_backup(job: Job, bucket: str, client: Any) -> None:
         raise StepError("the stored backup differs from the backup record or belongs to another run")
 
 
-def bundle(job: Job, archive: Path, code_sha256: str, objects: dict[str, dict[str, Any]] | None = None) -> None:
+def bundle(job: Job, archive: Path, code_sha256: str, evidence: dict[str, Any] | None = None) -> None:
     """Check the archive digest, unpack it, copy the dbt project and packages into the snapshot layout and record the code identity."""
     if not SHA256.fullmatch(code_sha256) or digest_file(archive) != code_sha256:
         raise StepError("code.tar.gz does not match the expected SHA-256")
@@ -211,8 +269,7 @@ def bundle(job: Job, archive: Path, code_sha256: str, objects: dict[str, dict[st
         shutil.copytree(job.code / source, snapshot / name)
     record: dict[str, Any] = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "code_sha256": code_sha256, "git_revision": revision}
     record["source_sha256"] = provenance.tree_digest(snapshot)
-    if objects:
-        record["input_objects"] = objects
+    record |= evidence or {}
     (job.folder / "layer_run.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
 
@@ -414,7 +471,7 @@ def accept_reconcile(job: Job) -> None:
             problems.append(f"{name}: reconciled another snapshot than the candidate")
         if not entry.get("rows") == entry.get("export_rows") == entry.get("manifest_rows") == manifest["tables"][name]["rows"]:
             problems.append(f"{name}: the candidate's rows differ from the export")
-        if entry.get("fingerprint") != entry.get("export_fingerprint") or not SHA256.fullmatch(str(entry.get("fingerprint"))):
+        if entry.get("fingerprint") != entry.get("export_fingerprint") or not FINGERPRINT.fullmatch(str(entry.get("fingerprint"))):
             problems.append(f"{name}: the candidate's fingerprint differs from the export")
     if problems:
         raise StepError("publish acceptance failed: " + "; ".join(problems[:5]))
@@ -454,7 +511,9 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
     if job.mode == "real":
         write_bucket_file(bucket)
     common = ["--run", job.run, "--mode", job.mode]
+    check_pin_tables(job)
     if client is not None:
+        check_input_versions(job, bucket, client)
         check_input_objects(job, bucket, client)
     for step in ("candidates", "reconcile", "backup", "commit"):
         run_publish(job, [step, *common, "--sealed-sha256", sha, "--accepted-result-sha256", accepted, "--publish-dir", job.publish_folder, *job.local_flags])
@@ -628,8 +687,14 @@ def mark_dry(job: Job) -> None:
 
 def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     if phase == "pin":
-        objects = staged_objects(s3_client(), args.bucket, job.run) if args.bucket and job.mode == "real" and job.local is None else None
-        bundle(job, args.archive or args.work / "code.tar.gz", args.code_sha256, objects)
+        evidence = None
+        if args.bucket and job.mode == "real" and job.local is None:
+            client = s3_client()
+            evidence = {
+                "input_objects": staged_objects(client, args.bucket, job.run),
+                "input_listing": input_listing(client, args.bucket, input_prefix(job)),
+            }
+        bundle(job, args.archive or args.work / "code.tar.gz", args.code_sha256, evidence)
         pin(job)
     elif phase == "upload" and job.dry_run:
         sys.stdout.write(json.dumps({"dry_run": True, "uploaded": 0, "would_upload": len(uploadable(job))}) + "\n")

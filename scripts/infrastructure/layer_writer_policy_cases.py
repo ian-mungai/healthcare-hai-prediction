@@ -47,6 +47,7 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
             for action in WRITER_ACTIONS:
                 add(f"{layer} objects {namespace} {action}", layer, action, resource, own or (reads and action == "s3:GetObject"))
             add(f"{layer} list {namespace}", layer, "s3:ListBucket", BUCKET, own or reads, {"s3:prefix": (f"lakehouse/{namespace}/",)})
+            add(f"{layer} input versions {namespace}", layer, "s3:ListBucketVersions", BUCKET, reads, {"s3:prefix": (f"lakehouse/{namespace}/",)})
             for action in ("s3:GetObjectVersion", "s3:DeleteObjectVersion", "s3:PutObjectAcl"):
                 add(f"{layer} excludes table privilege {namespace} {action}", layer, action, resource, False)
         for namespace in PREFIXES[layer]:
@@ -90,6 +91,15 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
         add(f"{layer} run upload bare prefix", layer, "s3:PutObject", f"{BUCKET}/lakehouse/layer_runs/file", False)
         add(f"{layer} input other bucket", layer, "s3:GetObject", f"{OTHER_BUCKET}/lakehouse/{INPUTS.get(layer, 'bronze')}/file", False)
         add(f"{layer} input list other bucket", layer, "s3:ListBucket", OTHER_BUCKET, False, {"s3:prefix": (f"lakehouse/{INPUTS.get(layer, 'bronze')}/",)})
+        add(
+            f"{layer} input versions other bucket",
+            layer,
+            "s3:ListBucketVersions",
+            OTHER_BUCKET,
+            False,
+            {"s3:prefix": (f"lakehouse/{INPUTS.get(layer, 'bronze')}/",)},
+        )
+        add(f"{layer} input versions need a prefix", layer, "s3:ListBucketVersions", BUCKET, False)
         add(f"{layer} feast registry get", layer, "s3:GetObject", REGISTRY, layer == "features")
         add(f"{layer} feast registry put", layer, "s3:PutObject", REGISTRY, layer == "features")
         add(f"{layer} feast registry delete", layer, "s3:DeleteObject", REGISTRY, False)
