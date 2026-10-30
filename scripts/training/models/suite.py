@@ -274,6 +274,8 @@ def fit_validation(request: ModelRequest, slot: str, last_year: int, years: Sequ
         result = SlotResult(slot, "not_converged", str(error))
     except (NotEstimable, np.linalg.LinAlgError) as error:
         result = SlotResult(slot, "not_estimable", str(error))
+    except DeadlineExceeded:
+        result = SlotResult(slot, "not_run", "deadline")
     result.pipeline = None
     return result
 
