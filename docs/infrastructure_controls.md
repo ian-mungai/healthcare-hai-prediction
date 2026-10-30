@@ -74,7 +74,7 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 | Service | What the project profile can do | Scope |
 | --- | --- | --- |
 | `s3` | Read and write the bucket settings Terraform manages. Read, write and delete objects. Run multipart uploads | The project bucket only. The write-prefix denies and the conditional single-copy create stay. Delete only under `lakehouse/` |
-| `sts` | `AssumeRole` | The lakehouse reader and writer roles, plus the job try-writer role only with a `hai_try_*` session name |
+| `sts` | `AssumeRole` | The lakehouse reader and writer roles, the Athena reader role `<PROJECT_NAME>_athena_reader_<ENVIRONMENT>`, plus the job try-writer role only with a `hai_try_*` session name |
 | `ssm` | Read the 17 control-plane parameters, write the 16 managed ones (not the Airflow administrator password), read and write the ten AWS Polaris pair names (reader, e2e, bronze, silver and gold client ID and secret) for the AWS catalog setup, read AWS's public `/aws/service/ecs/*` parameters, start a Session Manager port-forwarding session to the project host, resume and end its own sessions | Exact parameter ARNs, taken from the defaults of the secret-name variables in `infra/iam/variables.tf` (the file lists none). No `DescribeParameters`, no path read |
 | `secretsmanager` | `GetSecretValue` and `DescribeSecret` | The four shared API keys only, named by the defaults of their variables in `infra/iam/variables.tf` |
 | `ecr` | Log in, push and pull images, create, delete, describe and set the lifecycle of repositories | `<PROJECT_NAME>_*_<ENVIRONMENT>` repositories |

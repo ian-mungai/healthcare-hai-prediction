@@ -136,8 +136,20 @@ Polaris stays the catalog and the source of truth. Athena is for the owner to re
 - **When.** The `commit` step of a publish calls the mirror after the catalog commit, also on a rerun of a committed run. The mirror compares first and writes nothing when Glue already holds the same file. A failure never fails or undoes the publish. It prints `the Glue mirror FAILED` to standard error, sets `status` in the `mirror` field of the step's JSON line and writes `mirror.json` in the publish folder. A rerun of the step retries it.
 - **Switches.** Both `enabled` in the config file and the Terraform input `athena_mirror_prepared` of the IAM stack are `false`. The owner sets `athena_mirror_prepared` in `config/aws/iam_preparation.json` (optional, `false` when absent). Until both are on, a publish makes no Glue call.
 - **Check.** `python -m scripts.lakehouse.glue_mirror check --layer gold` compares each published table's registration with Polaris and exits 1 on a missing, foreign or different pointer. It writes nothing.
-- **Private to the owner.** The prepared stack makes the gold Glue database, the workgroup and one reader role. The role trusts only the one IAM user named in `athena_owner_user` (set in ignored local input). Its inline policy names no principal and reaches only the mirror workgroup, the gold database and tables, `lakehouse/gold/` and `athena/results/`. With no user named, no role exists. Nothing is public, no resource policy is added and the stack attaches nothing to a user or a group. The user needs `sts:AssumeRole` on the role in its own policy. A gold writer role may read its database and read, create and update tables in it. Neither deletes.
+- **Private to the owner.** The prepared stack makes the gold Glue database, the workgroup and one reader role. The role trusts only the one IAM user named in `athena_owner_user`, which is the user behind the project profile. The user name stays in the owner's local `config/aws/iam_preparation.json` (optional key `athena_owner_user`, a placeholder such as `<PROJECT_USER>` in any tracked text). Its inline policy names no principal and reaches only the mirror workgroup, the gold database and tables, `lakehouse/gold/` and `athena/results/`. With no user named, no role exists. Nothing is public, no resource policy is added and the stack attaches nothing to a user or a group. The project user's `sts` policy file allows `sts:AssumeRole` on that one role only (statement `AssumeAthenaReaderOnly`). The user holds no Athena, Glue or gold data grant of its own and gets them only through the role. The statement names a role that exists only while the switch is on. A gold writer role may read its database and read, create and update tables in it. Neither deletes.
 - **Results.** The workgroup cancels a query that scans more than `bytes_scanned_limit`, enforces its own settings and writes results encrypted with SSE-S3 under `athena/results/` in the data bucket. Results can hold Confidential rows. The bucket lifecycle belongs to the storage stack, which has no expiry for that prefix yet.
+
+To turn the mirror on, the owner runs these steps in order:
+
+1. Add `"athena_mirror_prepared": true` and `"athena_owner_user": "<PROJECT_USER>"` to the local `config/aws/iam_preparation.json`. Never commit that change.
+2. Render the policies, plan and apply the `sts` policy with `infra.iam.scripts.manage_policies` (it carries the `AssumeAthenaReaderOnly` statement), then plan and apply the IAM stack.
+3. Check the assume with the project profile. It prints the role session ARN and no credential:
+
+   ```sh
+   aws sts assume-role --profile <PROJECT_PROFILE> --role-arn arn:aws:iam::<ACCOUNT_ID>:role/<PROJECT_NAME>_athena_reader_<ENVIRONMENT> --role-session-name athena_check --query AssumedRoleUser.Arn --output text
+   ```
+
+4. Set `enabled` to `true` in `config/lakehouse/athena_mirror.json` and publish gold.
 
 The E2E is `.venv/bin/python -m scripts.lakehouse.run_glue_mirror_e2e --out <new_directory>`. It uses a fake Glue client and contacts no AWS service. Only a live test proves two things. Athena must read a table that Spark 4.1.2 and Iceberg 1.11.0 wrote. Athena must also accept the registration made here. The AWS documentation names Iceberg 1.4.2.
 
