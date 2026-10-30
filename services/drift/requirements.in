@@ -1,0 +1,9 @@
+# Drift image (decision 21): the approved versions only. Transitive packages are resolved by services/drift/compile_lock.sh into requirements.txt at lock review
+# and listed there. A clash is reported, not forced.
+#
+# evidently: the dataset drift report (its legacy namespace, whose drift_by_columns result monitoring/evidently_report.py reads). The release is checked
+# against the wheel published on PyPI (SHA-256 dbba5537a644f3401b8a393008cd126e304bcf939a070a7c4399bcc5b97061f6).
+# duckdb: reads the Parquet matrices and hands the frames to Evidently. jsonschema: validates the configuration and the record.
+evidently==0.7.23
+duckdb==1.5.6
+jsonschema==4.26.0
