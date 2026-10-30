@@ -52,6 +52,14 @@ class Reply:
     headers: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Admitted:
+    """A request whose key was accepted and whose rate limit was taken. It carries the key identifier and the time the request started."""
+
+    key_id: str
+    started: float
+
+
 @dataclass
 class Slot:
     version: str
@@ -161,24 +169,44 @@ class ModelService:
         ready = all(self._active.get(h) is not None and self._active[h].stable.state == "loaded" for h in self._hai_types)
         return Reply(200 if ready else 503, body)
 
-    def predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
-        """Answer one request and count it with its duration. A failure no rule expected is counted as 500 and raised."""
+    def admit(self, api_key: str | None) -> Admitted | Reply:
+        """Check the key and take one token of its rate limit, before the body is read. A refusal is counted and returned as the reply."""
         started = self._clock()
         try:
-            reply = self._predict(api_key, request_id, payload)
+            key_id = self.keys.identify(api_key)
+            if key_id is None:
+                return self._count(refusal(401, "unauthorized"), started)
+            wait = self.limiter.check(key_id)
         except BaseException:
             self.metrics.observe("/v1/predict", "POST", "500", self._clock() - started)
             raise
+        if wait is not None:
+            return self._count(Reply(429, {"error": "rate_limited"}, {"Retry-After": str(int(wait))}), started)
+        return Admitted(key_id, started)
+
+    def reject_body(self, admitted: Admitted, status: int, error: str) -> Reply:
+        """Answer a body the adapter refused to read (too large, too slow or malformed) and count the request."""
+        return self._count(refusal(status, error), admitted.started)
+
+    def finish(self, admitted: Admitted, request_id: str | None, payload: Any) -> Reply:
+        """Answer an admitted request and count it with its duration. A failure no rule expected is counted as 500 and raised."""
+        try:
+            reply = self._predict(admitted.key_id, request_id, payload)
+        except BaseException:
+            self.metrics.observe("/v1/predict", "POST", "500", self._clock() - admitted.started)
+            raise
+        return self._count(reply, admitted.started)
+
+    def predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
+        """Admit and finish one request whose body is already read."""
+        admitted = self.admit(api_key)
+        return admitted if isinstance(admitted, Reply) else self.finish(admitted, request_id, payload)
+
+    def _count(self, reply: Reply, started: float) -> Reply:
         self.metrics.observe("/v1/predict", "POST", str(reply.status), self._clock() - started)
         return reply
 
-    def _predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
-        key_id = self.keys.identify(api_key)
-        if key_id is None:
-            return refusal(401, "unauthorized")
-        wait = self.limiter.check(key_id)
-        if wait is not None:
-            return Reply(429, {"error": "rate_limited"}, {"Retry-After": str(int(wait))})
+    def _predict(self, key_id: str, request_id: str | None, payload: Any) -> Reply:
         parsed = self._parse(payload)
         if isinstance(parsed, Reply):
             return parsed

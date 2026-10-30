@@ -6,7 +6,9 @@ describes the request and the answers from the models below, which use the same 
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any, Literal
 
 from fastapi import FastAPI, Request
@@ -17,9 +19,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from scripts.features.serving_contract_client import CCN, YEAR_MAX, YEAR_MIN
 from scripts.serving import metrics
+from scripts.serving.body import BodyBudget, BodyRefused, BodyTooSlow
 from scripts.serving.service import ModelService, Reply
 
-MAX_BODY_BYTES = 1024
 KEY_HEADER = "X-API-Key"
 REQUEST_HEADER = "X-Request-ID"
 
@@ -46,6 +48,22 @@ class PredictResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: str
+
+
+async def read_body(request: Request, budget: BodyBudget) -> bytes:
+    """Read the body piece by piece. The size limit counts the bytes received, so a body with no declared length cannot pass it. One deadline covers it."""
+    chunks: list[bytes] = []
+    stream = request.stream().__aiter__()
+    while True:
+        try:
+            async with asyncio.timeout(budget.remaining()):
+                chunk = await stream.__anext__()
+        except StopAsyncIteration:
+            return b"".join(chunks)
+        except TimeoutError:
+            raise BodyTooSlow("the body did not arrive in time") from None
+        budget.add(chunk)
+        chunks.append(chunk)
 
 
 def create_app(service: ModelService) -> FastAPI:
@@ -76,20 +94,20 @@ def create_app(service: ModelService) -> FastAPI:
         summary="Predict the infection ratio of one hospital-window",
     )
     async def predict(request: Request) -> JSONResponse:
-        key, request_id = request.headers.get(KEY_HEADER), request.headers.get(REQUEST_HEADER)
-        length = request.headers.get("content-length")
-        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
-            service.metrics.observe("/v1/predict", "POST", "413", 0.0)
-            return send(Reply(413, {"error": "body_too_large"}))
-        raw = await request.body()
-        payload: Any = None
-        if len(raw) <= MAX_BODY_BYTES:
-            try:
-                payload = json.loads(raw)
-            except ValueError:
-                payload = None
-        reply = await run_in_threadpool(service.predict, key, request_id, payload)
-        return send(reply)
+        admitted = service.admit(request.headers.get(KEY_HEADER))
+        if isinstance(admitted, Reply):
+            return send(admitted)
+        budget = BodyBudget(clock=time.monotonic)
+        try:
+            budget.declare(request.headers.get("content-length"))
+            raw = await read_body(request, budget)
+        except BodyRefused as error:
+            return send(service.reject_body(admitted, error.status, error.error))
+        try:
+            payload: Any = json.loads(raw)
+        except ValueError:
+            payload = None
+        return send(await run_in_threadpool(service.finish, admitted, request.headers.get(REQUEST_HEADER), payload))
 
     @app.get("/v1/health", response_model=None, summary="Report whether each HAI type has a loaded stable model")
     def health() -> JSONResponse:

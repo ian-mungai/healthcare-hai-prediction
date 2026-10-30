@@ -26,7 +26,7 @@ from typing import Any
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
-from scripts.serving import canary, deploy, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
+from scripts.serving import body, canary, deploy, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -744,6 +744,67 @@ def case_nonfinite(c: Checker) -> None:
         c.check("the refusal body is valid JSON", json.loads(json.dumps(reply.body, allow_nan=False)) == reply.body)
 
 
+def case_admit_before_body(c: Checker) -> None:
+    """The key check and the rate limit come before the body is read, every refusal is counted once, and the streamed body has a size and a time limit."""
+    with world(rate=600, burst=3) as w:
+        refused_ = w.api.admit(None)
+        c.check("a missing key is refused at admission with 401, before any body", isinstance(refused_, service.Reply) and refused_.status == 401)
+        c.check("a wrong key is refused alike", isinstance(w.api.admit("sk-test-wrong-key-12345"), service.Reply))
+        admitted = [w.api.admit(KEY_A) for _ in range(3)]
+        c.check("a valid key is admitted until its burst is used", all(isinstance(item, service.Admitted) for item in admitted))
+        limited = w.api.admit(KEY_A)
+        c.check("the burst ends in 429 at admission", isinstance(limited, service.Reply) and limited.status == 429 and "Retry-After" in limited.headers)
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "admission refusals are counted once each",
+            series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="401") == [2.0]
+            and series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="429") == [1.0],
+        )
+        c.check("a refused admission read no feature and reserved no room", w.reads == [] and w.api.buffer.pending() == 0)
+        granted = [item for item in admitted if isinstance(item, service.Admitted)]
+        if len(granted) != 3:
+            return
+        first, second = granted[0], granted[1]
+        reply = w.api.finish(first, None, {"hai_type": HAI, "ccn": "AAA001", "window_year": 2022})
+        c.check("an admitted request finishes with the same answer predict gives", reply.status == 200 and isinstance(reply.body.get("prediction"), float))
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "admission and finish count the request once", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="200") == [1.0]
+        )
+        cut = w.api.reject_body(second, 413, "body_too_large")
+        c.check("a refused body answers its status and is counted", cut.status == 413 and cut.body == {"error": "body_too_large"})
+        _, samples = scrape(w.api.metrics.render())
+        c.check("the refused body shows in the counter", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="413") == [1.0])
+    budget = body.BodyBudget(limit=10, seconds=5.0, clock=Clock())
+    budget.add(b"123456")
+    budget.add(b"7890")
+    c.check("a body of exactly the limit is accepted", budget.total == 10)
+    c.check("one more byte is refused as too large", raised_body(lambda: budget.add(b"x"), body.BodyTooLarge, 413))
+    c.check(
+        "a declared length over the limit is refused before any read",
+        raised_body(lambda: body.BodyBudget(limit=10, seconds=5.0, clock=Clock()).declare("11"), body.BodyTooLarge, 413),
+    )
+    c.check(
+        "a declared length that is not a number is refused",
+        raised_body(lambda: body.BodyBudget(limit=10, seconds=5.0, clock=Clock()).declare("1e3"), body.BodyInvalid, 400),
+    )
+    clock = Clock()
+    slow = body.BodyBudget(limit=100, seconds=5.0, clock=clock)
+    slow.add(b"a")
+    clock.now += 6
+    c.check("a chunk that arrives after the deadline is refused as too slow", raised_body(lambda: slow.add(b"b"), body.BodyTooSlow, 408))
+    c.check("the remaining time is clamped to the deadline", abs(body.BodyBudget(limit=1, seconds=5.0, clock=Clock()).remaining() - 5.0) < 1e-9)
+    c.check("no time left is refused too", raised_body(slow.remaining, body.BodyTooSlow, 408))
+
+
+def raised_body(call: Callable[[], object], kind: type[body.BodyRefused], status: int) -> bool:
+    try:
+        call()
+    except body.BodyRefused as error:
+        return isinstance(error, kind) and error.status == status
+    return False
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -1041,6 +1102,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "validation_and_unknown_hospital": (case_validation_and_unknown_hospital, "api"),
     "missing_feature_503": (case_missing_feature, "feast"),
     "absent_row": (case_absent_row, "feast"),
+    "admit_before_body": (case_admit_before_body, "api"),
     "split_deterministic": (case_split, "canary"),
     "version_failure_isolated": (case_version_failure, "canary"),
     "candidate_feature_errors": (case_candidate_feature_errors, "canary"),
