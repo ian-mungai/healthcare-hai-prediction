@@ -29,12 +29,13 @@ The task role reads the stage inputs, the feature tables and the Feast registry.
 Each apply is the owner's. Show the plan first and apply exactly that plan.
 
 1. `infra/iam` (administrator profile): set `training_prepared = true`. It adds the `job_train_task` and `mlflow_task` roles, their policies, the `job_training` security group and the rules for ports 8181 and 5100 on the host.
-2. `infra` (project profile): apply the `expire_replaced_mlflow_versions` lifecycle rule.
-3. `infra/platform`: add `mlflow`, `training` and `feature_store` to the ECR repositories and `mlflow` to the log groups.
-4. Images: build the `mlflow`, `training` and `feature_store` images and push them. See "Images" below. Then record the digests with `scripts.infrastructure.push_images record`.
-5. Secret: put the value of the `mlflow_db_password` parameter with `scripts/infrastructure/secret_store.py`. Use a new random value.
-6. `infra/services`: set `mlflow_enabled = true`, `mlflow_task_role_arn` (the `mlflow_task` ARN from the `training_roles` output), `mlflow_host_ip` (the private address of the host) and `mlflow_artifact_bucket`. Then restart the Postgres service once so its short database container creates the `mlflow` role and database.
-7. `infra/jobs`: set `train_enabled = true` with `train_images` and `train_roles`. `train_images` holds the repository URL and digest of the `training` and `feature_store` images.
+2. Policy scripts (administrator profile): `manage_policies plan`, then `manage_policies apply` with the typed confirmation. The project user's IAM policy now passes the `job_train_task` and `mlflow_task` roles. Without it the services and jobs applies fail on the PassRole check.
+3. `infra` (project profile): apply the `expire_replaced_mlflow_versions` lifecycle rule.
+4. `infra/platform`: add `mlflow`, `training` and `feature_store` to the ECR repositories and `mlflow` to the log groups.
+5. Images: build the `mlflow`, `training` and `feature_store` images and push them. See "Images" below. Then record the digests with `scripts.infrastructure.push_images record`.
+6. Secret: put the value of the `mlflow_db_password` parameter with `scripts/infrastructure/secret_store.py`. Use a new random value.
+7. `infra/services`: set `mlflow_enabled = true`, `mlflow_task_role_arn` (the `mlflow_task` ARN from the `training_roles` output), `mlflow_host_ip` (the private address of the host) and `mlflow_artifact_bucket`. Then restart the Postgres service once so its short database container creates the `mlflow` role and database.
+8. `infra/jobs`: set `train_enabled = true` with `train_images` and `train_roles`. `train_images` holds the repository URL and digest of the `training` and `feature_store` images.
 
 ## Images
 

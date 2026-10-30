@@ -73,6 +73,20 @@
           "iam:PassedToService": "ecs-tasks.amazonaws.com"
         }
       }
+    },
+    {
+      "Sid": "PassTrainingRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_mlflow_task_${ENVIRONMENT}"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
     }
   ]
 }
