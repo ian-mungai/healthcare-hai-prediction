@@ -280,6 +280,18 @@ run "closed_read_endpoints" {
     )
     error_message = "The reciprocal catalog rules permit only lakehouse jobs on TCP 8181. No default or public group rule is added."
   }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.job_redis.security_group_id == aws_security_group.job["lakehouse"].id &&
+      aws_vpc_security_group_egress_rule.job_redis.referenced_security_group_id == aws_security_group.host.id &&
+      aws_vpc_security_group_egress_rule.job_redis.ip_protocol == "tcp" && aws_vpc_security_group_egress_rule.job_redis.from_port == 6379 && aws_vpc_security_group_egress_rule.job_redis.to_port == 6379 &&
+      aws_vpc_security_group_ingress_rule.host_from_job_redis.security_group_id == aws_security_group.host.id &&
+      aws_vpc_security_group_ingress_rule.host_from_job_redis.referenced_security_group_id == aws_security_group.job["lakehouse"].id &&
+      aws_vpc_security_group_ingress_rule.host_from_job_redis.ip_protocol == "tcp" && aws_vpc_security_group_ingress_rule.host_from_job_redis.from_port == 6379 && aws_vpc_security_group_ingress_rule.host_from_job_redis.to_port == 6379
+    )
+    error_message = "The features job applies Feast to the host Redis, so the lakehouse group and the host also hold the reciprocal rules for TCP 6379 and nothing wider."
+  }
 }
 
 run "endpoints_disabled" {
