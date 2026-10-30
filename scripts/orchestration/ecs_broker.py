@@ -16,6 +16,7 @@ It imports no launcher and makes no Docker call. The listener binds loopback onl
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -25,7 +26,7 @@ import sys
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Protocol
@@ -35,6 +36,7 @@ from jsonschema import Draft202012Validator
 
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable, client_config
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
+from orchestration.training_approvals import PROMOTION_KEYS
 from orchestration.training_contract import JOB_LANES, parameters_for
 from scripts.orchestration.ledger import Ledger, schema_validator
 
@@ -50,6 +52,9 @@ SUBMISSION = re.compile(
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 GATE = "@gate"
+CHAIN_LAYERS = ("silver", "gold", "features", "drift")
+APPROVAL_BYTES = 4096
+APPROVAL_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 CLOSED = "the chain is closed until the first silver and gold publishes are signed"
 JOB_MODE = "real"
 TIMEOUT_EXIT = 124
@@ -117,6 +122,28 @@ def s3_digest_reader(s3: S3Reader, bucket: str) -> Callable[[str], str]:
     return read
 
 
+def s3_object_reader(s3: S3Reader, bucket: str, name: str) -> Callable[[str], str | None]:
+    """Read a small staged record of a run (``lakehouse/run_stage/<run>/inputs/<name>``), or None while the owner has not staged it."""
+
+    def read(run_id: str) -> str | None:
+        try:
+            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/{name}")["Body"].read(APPROVAL_BYTES + 1)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
+                return None
+            raise TaskUnavailable("staged_record_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("staged_record_unreadable") from None
+        return str(body.decode(errors="replace"))
+
+    return read
+
+
+def derived_run_id(parent_run: str, layer: str) -> str:
+    """The run ID of a chain layer: the parent's time stamp and eight hex digits of a hash. ``dags/bronze_chain_dag.py`` derives the same IDs."""
+    return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
+
+
 def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
     """Read the record of the signed first publishes from a Parameter Store value, or None while the parameter does not exist."""
 
@@ -165,6 +192,7 @@ class EcsBroker:
         settings: BrokerSettings,
         code_digest: Callable[[str], str],
         signed_reader: Callable[[], str | None],
+        approval_reader: Callable[[str], str | None],
         clock: Callable[[], float],
     ) -> None:
         self.ledger = Ledger(state, "ecs_ledger_line.schema.json")
@@ -175,6 +203,7 @@ class EcsBroker:
         self.settings = settings
         self.code_digest = code_digest
         self.signed_reader = signed_reader
+        self.approval_reader = approval_reader
         self.clock = clock
         self.secrets: set[str] = set()
 
@@ -207,7 +236,41 @@ class EcsBroker:
                 parameters_for(request.dag_id, request.training or {}, JOB_LANES)
             except ValueError as error:
                 raise SubmissionRefused(str(error)) from None
+        if self.jobs[job].get("approval") == "promotion":
+            self.require_promotion_approval(request)
         return job
+
+    def require_promotion_approval(self, request: SubmissionRequest) -> None:
+        """Refuse a promotion unless the owner staged a closed approval record for exactly this run, model, version and operation."""
+        try:
+            raw = self.approval_reader(request.run_id)
+        except TaskUnavailable as error:
+            raise Unavailable(str(error)) from None
+        if raw is None:
+            raise SubmissionRefused("a promotion needs the owner's approval record in the run's staged inputs")
+        parameters = parameters_for(request.dag_id, request.training or {}, JOB_LANES)
+        try:
+            body = json.loads(raw) if len(raw) <= APPROVAL_BYTES else None
+        except ValueError:
+            body = None
+        today = datetime.fromtimestamp(self.clock(), UTC).date()
+        problem = None
+        if not isinstance(body, dict) or set(body) != PROMOTION_KEYS:
+            problem = "the approval is not a closed JSON object"
+        elif body["run_id"] != request.run_id or body["dag_id"] != request.dag_id or body["scope"] != parameters["promotion_mode"]:
+            problem = "the approval names another run, DAG or operation"
+        elif body["hai_type"] != parameters["hai_type"] or body["model_version"] != parameters["model_version"]:
+            problem = "the approval names another HAI type or model version"
+        else:
+            day = body["approved_on"]
+            try:
+                valid = isinstance(day, str) and APPROVAL_DAY.fullmatch(day) is not None and date.fromisoformat(day) <= today
+            except ValueError:
+                valid = False
+            if not valid:
+                problem = "the approval date is invalid or in the future"
+        if problem is not None:
+            raise SubmissionRefused(problem)
 
     def require_signed(self) -> None:
         """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
@@ -248,13 +311,38 @@ class EcsBroker:
     def variables(self, request: SubmissionRequest, names: list[str], input_run: str | None) -> dict[str, str]:
         values = {
             "RUN_ID": lambda: request.run_id,
-            "CODE_SHA256": lambda: self.code_digest(request.run_id),
+            "CODE_SHA256": lambda: self.code_digest(self.digest_run(request.run_id)),
             "TRAINING_PARAMETERS": lambda: json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":")),
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: input_run or "latest",
         }
         return {name: values[name]() for name in names}
+
+    def chain_file(self, run_id: str) -> Path:
+        return self.ledger.folder / "chains" / f"{run_id}.json"
+
+    def digest_run(self, run_id: str) -> str:
+        """The run whose staged code a run uses: the bronze run of its chain once the chain gate named it, else the run itself."""
+        try:
+            record = json.loads(self.chain_file(run_id).read_text())
+        except (OSError, ValueError):
+            return run_id
+        return str(record["bronze_run"])
+
+    def record_chain(self, bronze_run: str) -> None:
+        """Name the bronze run in a record for each layer run that derives from it, so the layers read the bronze run's staged digest."""
+        folder = self.ledger.folder / "chains"
+        folder.mkdir(parents=True, exist_ok=True)
+        run = bronze_run
+        for layer in CHAIN_LAYERS:
+            run = derived_run_id(run, layer)
+            target, text = self.chain_file(run), json.dumps({"bronze_run": bronze_run}) + "\n"
+            if target.exists() and target.read_text() == text:
+                continue
+            temporary = target.with_suffix(".tmp")
+            temporary.write_text(text)
+            os.replace(temporary, target)
 
     def append(self, line: dict[str, Any]) -> dict[str, Any]:
         return self.ledger.append(line)
@@ -268,6 +356,8 @@ class EcsBroker:
         if errors:
             raise SubmissionRefused(f"request refused: {errors[0].message}")
         job = self.job_of(request)
+        if self.steps[request.template] == GATE:
+            self.record_chain(request.run_id)
         with self.ledger.locked(request.run_id):
             lines = self.ledger.submissions(request.run_id).get(request.submission_id)
             if lines is None:
@@ -574,6 +664,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     adapter = EcsAdapter(session.client("ecs", config=config), session.client("logs", config=config), settings)
     digest = s3_digest_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
     signed = ssm_signed_reader(session.client("ssm", config=config), required(env, "BROKER_SIGNED_PARAMETER"))
+    approvals = s3_object_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), "promotion_approval.json")
     broker = EcsBroker(
         Path(env.get("BROKER_STATE", "/var/lib/hai/broker")),
         jobs,
@@ -581,6 +672,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
         BrokerSettings(required(env, "BROKER_POLARIS_URI"), required(env, "BROKER_MLFLOW_URI")),
         digest,
         signed,
+        approvals,
         lambda: datetime.now(UTC).timestamp(),
     )
     listener = Listener(broker, "127.0.0.1", int(env.get("BROKER_PORT", "18790")), token)

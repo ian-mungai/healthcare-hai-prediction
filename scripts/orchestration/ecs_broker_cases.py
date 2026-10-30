@@ -23,7 +23,7 @@ from orchestration.client import BrokerClient, BrokerUnavailable
 from orchestration.ecs_adapter import EcsAdapter
 from orchestration.interface import Handle, State, SubmissionRefused, SubmissionRequest
 from scripts.orchestration.ecs_adapter_cases import SETTINGS, raises, require
-from scripts.orchestration.ecs_broker import BrokerSettings, EcsBroker, Listener, load_jobs, s3_digest_reader
+from scripts.orchestration.ecs_broker import BrokerSettings, EcsBroker, Listener, derived_run_id, load_jobs, s3_digest_reader, s3_object_reader
 from scripts.orchestration.ecs_broker_fake import FakeEcs, FakeLogs, FakeS3, client_error
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,10 +32,12 @@ RUN = "20261030T100000Z-abcdef01"
 SILVER_RUN = "20261030T100000Z-0badcafe"
 GOLD_RUN = "20261030T100000Z-90d0c0de"
 FEATURES_RUN = "20261030T100000Z-feed5eed"
+BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
+PROMOTE_RUN = "20261030T110000Z-9a9a9a9a"
 SIGNED = json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN})
 DIGEST = "ab" * 32
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
-JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift"})
+JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote"})
 
 
 class Rig:
@@ -46,7 +48,7 @@ class Rig:
         self.signed = signed
         self.ecs, self.logs, self.s3 = FakeEcs(), FakeLogs(), FakeS3()
         self.s3.objects[f"lakehouse/run_stage/{RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
-        for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN):
+        for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN):
             self.s3.objects[f"lakehouse/run_stage/{run}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         self.clock = [1_800_000_000.0]
         self.families = families
@@ -59,6 +61,7 @@ class Rig:
         settings = dataclasses.replace(SETTINGS, families=self.families)
         settings_broker = BrokerSettings(polaris_uri="http://10.0.0.5:8181/api/catalog", mlflow_uri="http://10.0.0.5:5100")
         digest = s3_digest_reader(self.s3, "example-bucket")
+        approvals = s3_object_reader(self.s3, "example-bucket", "promotion_approval.json")
         return EcsBroker(
             self.folder / "state",
             load_jobs(ROOT),
@@ -66,6 +69,7 @@ class Rig:
             settings_broker,
             digest,
             lambda: self.signed,
+            approvals,
             lambda: self.clock[0],
         )
 
@@ -428,6 +432,104 @@ def refused_stop_does_not_cancel() -> None:
         require(current.client.cancel(handle).state == State.CANCELLED, "the retried cancel did not end the submission")
 
 
+def chain_layers_use_the_bronze_run_digest() -> None:
+    with rig() as current:
+        silver, gold = derived_run_id(BRONZE_RUN, "silver"), derived_run_id(silver_of(BRONZE_RUN), "gold")
+        current.s3.objects[f"lakehouse/run_stage/{BRONZE_RUN}/inputs/code.sha256"] = b"cd" * 32 + b"\n"
+        before = request("pin_bronze", run=silver, dag="silver_transform_dag")
+        raises(BrokerUnavailable, partial(current.client.submit, before))
+        require(not current.ecs.calls, "a layer run started before the chain gate named its bronze run")
+        wait_for(current, current.client.submit(request("chain_gate", run=BRONZE_RUN, dag="bronze_chain_dag")))
+        wait_for(current, current.client.submit(before))
+        wait_for(current, current.client.submit(request("pin_silver", run=gold, dag="gold_transform_dag", input_run=silver)))
+        sent = [arguments for name, arguments in current.ecs.calls if name == "run_task"]
+        digests = {
+            pair["value"] for call in sent for item in call["overrides"]["containerOverrides"] for pair in item["environment"] if pair["name"] == "CODE_SHA256"
+        }
+        require(digests == {"cd" * 32}, f"a layer used another digest than the bronze run's: {digests}")
+        wait_for(current, current.client.submit(request("chain_gate", run=BRONZE_RUN, dag="bronze_chain_dag", attempt=2)))
+        require((current.folder / "state" / "chains").is_dir(), "the chain record is missing")
+
+
+def silver_of(bronze: str) -> str:
+    return derived_run_id(bronze, "silver")
+
+
+PROMOTION = {"hai_type": "HAI_1", "model_version": "3", "promotion_mode": "promote", "mlflow": "local"}
+
+
+def promotion_request(template: str = "promote", run: str = PROMOTE_RUN, **changes: Any) -> SubmissionRequest:
+    return SubmissionRequest(template, run, "real", 1, "model_promotion_dag", template, "manual__test", None, None, {**PROMOTION, **changes})
+
+
+def approve(current: Rig, run: str = PROMOTE_RUN, **changes: Any) -> None:
+    body = {
+        "run_id": run,
+        "dag_id": "model_promotion_dag",
+        "scope": "promote",
+        "approved_on": "2026-10-30",
+        "hai_type": "HAI_1",
+        "model_version": "3",
+        **changes,
+    }
+    current.s3.objects[f"lakehouse/run_stage/{run}/inputs/promotion_approval.json"] = json.dumps(body).encode()
+
+
+def promotion_needs_the_owners_approval() -> None:
+    with rig() as current:
+        raises(SubmissionRefused, partial(current.client.submit, promotion_request()))
+        require(not current.ecs.calls, "a promotion started without approval")
+        approve(current)
+        status = wait_for(current, current.client.submit(promotion_request()))
+        require(status.state == State.SUCCEEDED and len(current.ecs.tasks) == 1, f"an approved promotion did not run: {status}")
+        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
+        require(
+            sent["taskDefinition"] == "example_dev_job_promote" and json.loads(values["prepare"]["TRAINING_PARAMETERS"]) == {**PROMOTION, "mlflow": "aws"},
+            "wrong job or parameters",
+        )
+        require(values["promote"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", "the promote container has no MLflow address")
+
+
+def promotion_runs_through_the_dag_runtime() -> None:
+    params = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "local"}
+    with rig() as current, dag_runtime(current, "model_promotion_dag", params) as run_step:
+        approve(current)
+        require(run_step("acquire_run") == "succeeded" and run_step("promote") == "succeeded", "the promotion DAG steps did not pass")
+        require(len(current.ecs.tasks) == 1, "the promotion started more than one task")
+
+
+def another_promotion_is_not_approved() -> None:
+    wrong = (
+        {"model_version": "4"},
+        {"hai_type": "HAI_2"},
+        {"scope": "rollback"},
+        {"run_id": GOLD_RUN},
+        {"dag_id": "training_dag"},
+        {"approved_on": "2999-01-01"},
+        {"approved_on": "yesterday"},
+        {"extra": "field"},
+    )
+    with rig() as current:
+        for changes in wrong:
+            approve(current, **changes)
+            raises(SubmissionRefused, partial(current.client.submit, promotion_request()))
+        current.s3.objects[f"lakehouse/run_stage/{PROMOTE_RUN}/inputs/promotion_approval.json"] = b"not json"
+        raises(SubmissionRefused, partial(current.client.submit, promotion_request()))
+        approve(current)
+        raises(SubmissionRefused, partial(current.client.submit, promotion_request(model_version="4")))
+        raises(SubmissionRefused, partial(current.client.submit, promotion_request(promotion_mode="rollback")))
+        require(not current.ecs.calls, "a promotion with another approval reached the cloud")
+        approve(current, scope="rollback")
+        rollback = promotion_request(promotion_mode="rollback")
+        require(wait_for(current, current.client.submit(rollback)).state == State.SUCCEEDED, "an approved rollback did not run")
+
+
+def training_needs_no_promotion_approval() -> None:
+    with rig() as current:
+        require(wait_for(current, current.client.submit(request("guard"))).state == State.SUCCEEDED, "training waited for a promotion approval")
+
+
 def logs_hide_the_token() -> None:
     with rig() as current:
         handle = current.client.submit(request("guard"))
@@ -461,5 +563,10 @@ CASES: dict[str, Callable[[], None]] = {
     "start_from_a_later_step_uses_the_bound_input": start_from_a_later_step_uses_the_bound_input,
     "refused_stop_is_not_recorded_as_a_timeout": refused_stop_is_not_recorded_as_a_timeout,
     "refused_stop_does_not_cancel": refused_stop_does_not_cancel,
+    "chain_layers_use_the_bronze_run_digest": chain_layers_use_the_bronze_run_digest,
+    "promotion_needs_the_owners_approval": promotion_needs_the_owners_approval,
+    "promotion_runs_through_the_dag_runtime": promotion_runs_through_the_dag_runtime,
+    "another_promotion_is_not_approved": another_promotion_is_not_approved,
+    "training_needs_no_promotion_approval": training_needs_no_promotion_approval,
     "logs_hide_the_token": logs_hide_the_token,
 }

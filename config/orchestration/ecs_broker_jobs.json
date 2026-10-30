@@ -158,6 +158,27 @@
         ]
       },
       "chain": true
+    },
+    "promote": {
+      "deadline_seconds": 3600,
+      "log_container": "promote",
+      "needs_training_parameters": true,
+      "approval": "promotion",
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "prepare": [
+          "RUN_ID",
+          "CODE_SHA256",
+          "TRAINING_PARAMETERS"
+        ],
+        "promote": [
+          "RUN_ID",
+          "MLFLOW_TRACKING_URI"
+        ]
+      }
     }
   },
   "steps": {
@@ -201,6 +222,7 @@
     "pin_bronze": "silver",
     "pin_gold": "features",
     "pin_silver": "gold",
+    "promote": "promote",
     "promotion_check": "train",
     "publish_candidates": "gold",
     "read_gold": "features",
