@@ -372,7 +372,7 @@ def case_confidential_gold_table_is_mirrored() -> Check:
 def case_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
     reports = {
-        layer: glue_mirror.mirror(enabled(), layer, "real", ["int_acs_county_values"], FakeSource({"int_acs_county_values": FIRST}), glue)
+        layer: glue_mirror.mirror(enabled(), layer, "real", ids(["int_acs_county_values"]), FakeSource({"int_acs_county_values": FIRST}), glue)
         for layer in ("silver", "features", "bronze")
     }
     return {

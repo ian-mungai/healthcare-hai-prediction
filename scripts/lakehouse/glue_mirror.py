@@ -1,9 +1,10 @@
 """Mirror published Iceberg tables into read-only Glue registrations for Athena. Polaris stays the catalog and the source of truth.
 
-After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``. For every table that the publish contract names, Public and Confidential
-alike, the mirror makes one Glue table whose ``metadata_location`` is the metadata file that Polaris reports as current. A repeat with the same file
-writes nothing. Only mode ``real`` and the gold layer of ``config/lakehouse/athena_mirror.json`` are mirrored, so silver, features, bronze, test
-namespaces and the runs table never reach Glue (``violations``). The mirror never raises: a failure comes back in the report.
+After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``. For every table that the publish contract names, Public and
+Confidential alike, the mirror makes one Glue table. Its ``metadata_location`` is the metadata file of the table's committed snapshot, taken from the
+newest ``publish_runs`` row. A repeat with the same file, snapshot and run writes nothing. Only mode ``real`` and the gold layer of
+``config/lakehouse/athena_mirror.json`` are mirrored, so silver, features, bronze, test namespaces and the runs table never reach Glue
+(``violations``). The mirror never raises and stops at ``mirror_seconds``: a failure comes back in the report.
 
 ``python -m scripts.lakehouse.glue_mirror check --layer gold`` compares each registration with Polaris and exits 1 on any difference. It writes nothing.
 """
