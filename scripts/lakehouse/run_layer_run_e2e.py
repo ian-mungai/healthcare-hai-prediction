@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tarfile
 import tempfile
@@ -186,6 +187,31 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
         raise AssertionError(f"no stand-in for {module}")
 
 
+def profile_database(job: Job) -> None:
+    """Every DuckDB output of the tracked dbt profiles writes under /workspace/out. On the task that folder is the shared volume, so the database path of the
+    profile must resolve to the staging file of this run, which validation and the sealed copy read. The outputs that merge another one share its path."""
+    text = (Path(__file__).resolve().parents[2] / "dbt/profiles.yml").read_text()
+    paths: dict[str, str] = {}
+    output = ""
+    for line in text.splitlines():
+        if match := re.match(r"^    (\w+):", line):
+            output = match.group(1)
+        elif match := re.match(r"^      path: (/workspace/\S+)\s*$", line):
+            paths[output] = match.group(1)
+    require(bool(paths), "no profile output keeps its database under /workspace")
+    for name, path in paths.items():
+        here = job.code.parent / Path(path).relative_to("/workspace")
+        require(here.resolve() == (job.folder / "staging.duckdb").resolve(), f"profile {name} writes {path}, which is not this run's staging database")
+
+
+def features_source_root(project: Path) -> None:
+    """The features builder takes the parent of ``--project`` as the repository root and reads its contracts from there."""
+    from scripts.features import features_build
+
+    for relative in (features_build.CONTRACT, features_build.GOLD_PLAN):
+        require((project.parent / relative).is_file(), f"the source root {project.parent} has no {relative}")
+
+
 def build(job: Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str]) -> None:
     from scripts.lakehouse import provenance
 
@@ -201,6 +227,9 @@ def build(job: Job, module: str, arguments: Sequence[str | Path], environment: d
             fail(module)
     if job.layer == "silver" and job.mode == "real" and (environment or {}).get(provenance.VARIABLE_REQUIRED) != "1":
         fail(module)
+    profile_database(job)
+    if module.endswith("features_build"):
+        features_source_root(Path(option(arguments, "--project")))
     connection = duckdb.connect(str(folder / "staging.duckdb"))
     connection.execute("create or replace table t as select 1 as x")
     connection.close()
@@ -368,9 +397,13 @@ def archive(folder: Path) -> tuple[Path, str]:
     for name in ("dbt", "dbt_packages"):
         (source / name).mkdir(parents=True)
         (source / name / "marker.txt").write_text(name)
+    repository = Path(__file__).resolve().parents[2]
+    for relative in ("data_contracts/lakehouse/gold_contract.json", "data_contracts/lakehouse/features_publish.json"):
+        (source / relative).parent.mkdir(parents=True, exist_ok=True)
+        (source / relative).write_bytes((repository / relative).read_bytes())
     path = folder / "code.tar.gz"
     with tarfile.open(path, "w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": REVISION}) as tar:
-        for name in ("dbt", "dbt_packages"):
+        for name in ("dbt", "dbt_packages", "data_contracts"):
             tar.add(source / name, arcname=name)
     return path, sha_of(path)
 
