@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import tarfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -207,6 +208,21 @@ def train_cases(cases: Any, folder: Path) -> None:
         require(code != 0 and not out.strip() and "completed step extract" in error, f"{code} {out} {error}")
         require(not (fixture.folder / "in/version_extract").exists() and not fixture.tracking.calls, "an action ran on a changed extract")
 
+    def retry_in_a_new_task() -> None:
+        first = staged_train(folder / "retry_first")
+        code, _, error = train(first)
+        require(code == 0, f"the first task failed: {error}")
+        runs = len(first.tracking.active())
+        second = staged_train(folder / "retry_second")
+        second.tracking = first.tracking
+        shutil.copytree(first.folder / "dvc_remote", second.folder / "dvc_remote")
+        code, out, error = train(second)
+        require(code == 0, f"a retry in a new task did not resume: {error}")
+        require([item["step"] for item in lines_of(out) if "step" in item] == TRAIN_STEPS, f"steps of the retry: {out}")
+        require(
+            len(second.tracking.active()) == runs and len(second.tracking.parents()) == 1, f"the retry added runs: {len(second.tracking.active())} of {runs}"
+        )
+
     def stops_after_progress() -> None:
         fixture = staged_train(folder / "progress")
         with mock.patch.object(fixture.tracking, "create_experiment", side_effect=RuntimeError("the tracking service is down")):
@@ -233,6 +249,7 @@ def train_cases(cases: Any, folder: Path) -> None:
 
     cases.check("aws_run_train_runs_six_actions_in_order", ran)
     cases.check("aws_run_train_rerun_resumes_every_step", resumed)
+    cases.check("aws_run_train_retry_in_a_new_task_resumes_the_logged_run", retry_in_a_new_task)
     cases.check("aws_run_train_refuses_changed_extract_output", refuses_changed_extract)
     cases.check("aws_run_train_stops_after_progress_and_names_the_step", stops_after_progress)
     cases.check("aws_run_train_refuses_missing_prerequisite", refuses_prerequisite)
