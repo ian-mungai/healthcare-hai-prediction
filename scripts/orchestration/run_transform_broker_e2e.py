@@ -70,6 +70,8 @@ CONTROL_TEMPLATES = (
     "maintenance_final_gate_rejected",
     "online_store_up",
     "pin_bronze",
+    "promotion_final_gate_accepted",
+    "promotion_final_gate_rejected",
     "release_accepted",
     "release_rejected",
     "reserve_gold",
@@ -81,6 +83,15 @@ CONTROL_TEMPLATES = (
     "silver_final_gate_accepted",
     "silver_final_gate_rejected",
     "snapshot_project",
+    "snapshot_training",
+    "training_acquire_run",
+    "training_catalog_release",
+    "training_catalog_up",
+    "training_final_gate_accepted",
+    "training_final_gate_rejected",
+    "training_release_accepted",
+    "training_release_rejected",
+    "training_run_record",
     "verify_bronze",
 )
 
@@ -231,7 +242,7 @@ def prepare_finalizing(env: Env, broker: Broker, run_id: str = RUN) -> Path:
 def control_rows_schema(env: Env) -> dict[str, bool]:
     shipped = load_templates(SHIPPED)
     control_templates = sorted(name for name, t in shipped["templates"].items() if any("control" in m for m in t["modes"].values()))
-    results = {"the shipped inventory loads and holds exactly the twenty-seven control templates": control_templates == sorted(CONTROL_TEMPLATES)}
+    results = {"the shipped inventory loads and holds exactly the thirty-eight control templates": control_templates == sorted(CONTROL_TEMPLATES)}
 
     def mutated(change: Callable[[dict[str, Any]], None], fragment: str) -> bool:
         document = copy.deepcopy(shipped)
