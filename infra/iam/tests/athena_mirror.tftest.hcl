@@ -27,6 +27,18 @@ mock_provider "aws" {
 }
 
 override_resource {
+  target          = aws_security_group.job["lakehouse"]
+  override_during = plan
+  values          = { id = "sg-0000000000000lake0" }
+}
+
+override_resource {
+  target          = aws_security_group.athena_glue_endpoint[0]
+  override_during = plan
+  values          = { id = "sg-0000000000000glue0" }
+}
+
+override_resource {
   target          = aws_launch_template.host
   override_during = plan
   values          = { id = "lt-0123456789abcdef0", latest_version = 1 }
@@ -172,12 +184,15 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
 
   assert {
     condition = (
-      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) ==
-      toset(["arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*"]) &&
+      length(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) == 70 &&
+      alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : alltrue([for r in s.Resource : can(regex("^arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/[a-z_]+[*]$", r))]) if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]) &&
+      contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state*") &&
+      !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*") &&
+      !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([for r in s.Resource : startswith(r, "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs")])]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the gold namespace, writes reach only the results prefix, and nothing deletes."
+    error_message = "Data reads reach only the 70 published contract tables, never publish_runs or the whole namespace. Writes reach only the results prefix and nothing deletes."
   }
 }
 
@@ -196,16 +211,15 @@ run "reader_policy_names_no_principal_and_no_wider_resource" {
   }
 
   assert {
-    condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource])) == toset([
+    condition = toset([for r in flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]) : r if !strcontains(r, "/lakehouse/gold/")]) == toset([
       "arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror",
       "arn:aws:glue:eu-west-1:111111111111:catalog",
       "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
       "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
       "arn:aws:s3:::example-project-ci-bucket",
-      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
       "arn:aws:s3:::example-project-ci-bucket/athena/results/*",
     ])
-    error_message = "The reader policy reaches exactly the mirror workgroup, database, gold folders, results prefix and bucket, nothing wider."
+    error_message = "The reader policy reaches exactly the mirror workgroup, database, results prefix and bucket, plus the contract table folders."
   }
 }
 
@@ -274,4 +288,106 @@ run "reject_owner_user_with_a_path" {
     athena_owner_user      = "team/example_owner"
   }
   expect_failures = [var.athena_owner_user]
+}
+
+run "reader_policy_lists_no_uploads_and_stays_small" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
+  }
+
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:ListBucketMultipartUploads")])
+    error_message = "The reader cannot list multipart uploads of the whole bucket. Athena writes results with the object actions alone."
+  }
+
+  assert {
+    condition     = length(replace(replace(aws_iam_role_policy.athena_reader[0].policy, " ", ""), "\n", "")) < 10240
+    error_message = "The reader policy stays inside the 10240 character limit of an inline role policy."
+  }
+
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
+      !contains(s.Action, "s3:ListBucket") || (
+        alltrue([for p in s.Condition.StringLike["s3:prefix"] : p == "athena/results/*" || can(regex("^lakehouse/gold/[a-z_]+[*]$", p))]) && !contains(s.Condition.StringLike["s3:prefix"], "lakehouse/gold/publish_runs*")
+      )
+    ])
+    error_message = "Listing the bucket needs a prefix limited to the results folder and the contract tables."
+  }
+}
+
+run "glue_endpoint_is_absent_by_default" {
+  command = plan
+  variables {
+    job_endpoints_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_vpc_endpoint.athena_glue) == 0 && length(aws_security_group.athena_glue_endpoint) == 0
+    error_message = "No Glue endpoint exists while the mirror is not prepared."
+  }
+}
+
+run "glue_endpoint_needs_the_private_endpoints" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
+    job_endpoints_enabled  = false
+  }
+
+  assert {
+    condition     = length(aws_vpc_endpoint.athena_glue) == 0
+    error_message = "The Glue endpoint follows the reviewed private endpoint switch."
+  }
+}
+
+run "glue_endpoint_reaches_only_the_gold_writer_path" {
+  command = plan
+  variables {
+    athena_mirror_prepared = true
+    athena_owner_user      = "example_owner"
+    job_endpoints_enabled  = true
+  }
+
+  assert {
+    condition = (
+      aws_vpc_endpoint.athena_glue[0].service_name == "com.amazonaws.eu-west-1.glue" &&
+      aws_vpc_endpoint.athena_glue[0].vpc_endpoint_type == "Interface" &&
+      aws_vpc_endpoint.athena_glue[0].private_dns_enabled == true &&
+      aws_vpc_endpoint.athena_glue[0].security_group_ids == toset(["sg-0000000000000glue0"])
+    )
+    error_message = "One private Glue interface endpoint with private DNS, guarded by its own security group."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].security_group_id == "sg-0000000000000glue0" &&
+      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].referenced_security_group_id == "sg-0000000000000lake0" &&
+      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].to_port == 443 &&
+      aws_vpc_security_group_egress_rule.athena_glue_from_lakehouse[0].security_group_id == "sg-0000000000000lake0" &&
+      aws_vpc_security_group_egress_rule.athena_glue_from_lakehouse[0].referenced_security_group_id == "sg-0000000000000glue0" &&
+      aws_vpc_security_group_egress_rule.athena_glue_from_lakehouse[0].to_port == 443
+    )
+    error_message = "Only the lakehouse job group reaches the Glue endpoint, on port 443, and the endpoint group accepts nothing else."
+  }
+
+  assert {
+    condition = (
+      toset(flatten([for s in jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement : s.Action])) == toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
+      toset(flatten([for s in jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement : s.Resource])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+      ])
+    )
+    error_message = "The endpoint policy allows the four mirror actions on the gold mirror database and its tables only, nothing else of Glue."
+  }
+
+  assert {
+    condition     = jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[0].Condition == { ArnEquals = { "aws:PrincipalArn" = "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev" } }
+    error_message = "Only the gold writer role may use the endpoint for these actions."
+  }
 }
