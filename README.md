@@ -172,6 +172,7 @@ Each run writes its report under `data/e2e/`. The configuration E2E writes under
 - `docs/architecture_rendering.md`: how to render the architecture diagram.
 - `docs/ecs_target_contract.md`: the proposed ECS read target contract.
 - `docs/ecs_real_runs.md`: the proposed real AWS read checks.
+- `docs/drift_monitoring.md`: what the drift check compares, its configuration and the minimum of current rows that the owner will review.
 
 ## Data layers
 

@@ -273,6 +273,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
     return [
         ("skips_when_no_window_is_newer", skipped("no_new_window", Fixture(current_year=2021, shifted=FEATURES))),
         ("skips_when_current_rows_are_too_few", skipped("too_few_current_rows", Fixture(current_rows=10, shifted=FEATURES))),
+        ("skips_just_below_the_minimum_of_100_rows", skipped("too_few_current_rows", Fixture(current_rows=99, shifted=FEATURES))),
         (
             "skips_the_sensitivity_population",
             skipped("population_not_monitored", Fixture(population="sensitivity", current_population="sensitivity", shifted=FEATURES)),
@@ -293,6 +294,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("triggers_when_every_feature_drifts", checked(Fixture(shifted=FEATURES), True, len(FEATURES))),
         ("stays_quiet_without_drift", checked(Fixture(), False, 0)),
         ("triggers_at_exactly_half", checked(Fixture(shifted=NUMERIC[:2], features=NUMERIC), True, 2)),
+        ("checks_at_exactly_the_minimum_of_100_rows", checked(Fixture(current_rows=100, shifted=FEATURES), True, len(FEATURES))),
         ("stays_quiet_below_half", checked(Fixture(shifted=NUMERIC[:1], features=NUMERIC), False, 1)),
         ("uses_the_decided_tests_above_1000_rows", tests_are_the_decided_ones),
         ("rerun_changes_nothing", rerun_is_identical),

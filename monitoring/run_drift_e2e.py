@@ -78,6 +78,12 @@ def rejection(mutate: Mutation, key: str) -> Callable[[Path], Problems]:
     return case
 
 
+def tracked_minimum_is_the_owner_value(folder: Path) -> Problems:
+    """The owner set the minimum of current rows to 100 and reviews it when real row counts per infection type are known."""
+    value = json.loads(CONFIG.read_text())["minimum_current_rows"]
+    return [] if value == 100 else [f"minimum_current_rows is {value}, the owner's value is 100"]
+
+
 def unreadable_configuration(folder: Path) -> Problems:
     path = folder / "drift.json"
     path.write_text("{not json")
@@ -93,7 +99,11 @@ def missing_configuration(folder: Path) -> Problems:
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
     config: list[tuple[str, Callable[[Path], Problems]]] = [("tracked_config_passes", tracked_config_passes), ("copy_passes", copy_passes)]
     config += [(f"config_rejects_{name}", rejection(mutate, key)) for name, mutate, key in CONFIG_REJECTIONS]
-    config += [("config_rejects_malformed_file", unreadable_configuration), ("config_rejects_missing_file", missing_configuration)]
+    config += [
+        ("tracked_minimum_is_the_owner_value", tracked_minimum_is_the_owner_value),
+        ("config_rejects_malformed_file", unreadable_configuration),
+        ("config_rejects_missing_file", missing_configuration),
+    ]
     return config + drift_cases.cases() + reader_cases.cases() + aws_cases.cases() + broker_cases.cases() + dag_cases.cases()
 
 
