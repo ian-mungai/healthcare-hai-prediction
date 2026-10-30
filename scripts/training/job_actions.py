@@ -152,3 +152,78 @@ def run_fit(context: Any, record: Mapping[str, Any]) -> None:
             return outputs
 
         run_step(context, record, "fit", names, plan)
+
+
+def mediation_type(context: Any, config: Mapping[str, Any], hai_type: str) -> dict[str, bytes]:
+    """Estimate the PSI-90 and PSI-13 mediation of one type from its verified extract and mediator table."""
+    from scripts.training import mediation
+
+    extract = job_inputs.input_root(context.parameters) / "extract"
+    manifest, rows = job_inputs.extract_of(extract, hai_type, context.run)
+    mediators = job_inputs.auxiliary_of(extract, manifest, "mediator.parquet")
+    budget = 2 * float(config["budgets"]["bootstrap_seconds"])
+    request = job_inputs.model_request(hai_type, rows, (), config, budget, job_inputs.ROOT)
+    result = mediation.analyze_mediation(request.data, mediators, request.process_references, (request.cmi_reference,), config, request.deadline)
+    return {f"mediation_{hai_type}.json": text(result)}
+
+
+def run_mediation(context: Any, record: Mapping[str, Any]) -> None:
+    """Run the separate associational mediation analyses for every requested type."""
+    with guarded("mediation"):
+        parameters = job_inputs.parameters_of(context.parameters)
+        names = {f"mediation_{hai_type}.json" for hai_type in parameters["hai_types"]}
+
+        def plan() -> dict[str, bytes]:
+            config = job_inputs.config_of(job_inputs.ROOT)
+            outputs: dict[str, bytes] = {}
+            for hai_type in parameters["hai_types"]:
+                outputs |= mediation_type(context, config, hai_type)
+            return outputs
+
+        run_step(context, record, "mediation", names, plan)
+
+
+def year_mapping(root: Path) -> dict[int, int]:
+    """Return the reviewed outcome-year to HAC program-year map committed with the code; no offset is inferred."""
+    path = root / HAC_MAPPING
+    if not path.is_file():
+        raise InputError("hac_year_mapping_missing", f"{HAC_MAPPING} is not in the code snapshot; the reviewed year map must be committed")
+    document = job_inputs.read_json(path, "hac_year_mapping")
+    try:
+        return {int(year): int(program) for year, program in document["mapping"].items()}
+    except (KeyError, AttributeError, TypeError, ValueError):
+        raise InputError("hac_year_mapping", f"{HAC_MAPPING} needs a mapping object of whole years") from None
+
+
+def hac_type(context: Any, record: Mapping[str, Any], mapping: Mapping[int, int], hai_type: str) -> dict[str, bytes]:
+    """Rank one type's selected-model holdout against its HAC flags; the flag table is checked against the hash the fit recorded."""
+    from scripts.training import hac_validation
+    from scripts.training.models.common import Deadline
+
+    inputs = job_inputs.input_root(context.parameters)
+    try:
+        step_records.verify_done(inputs / "fit", "fit", str(record["code_digest"]))
+    except (ValueError, OSError) as error:
+        raise JobFailure("fit_changed", f"the mounted fit outputs differ from their completion record: {error}") from None
+    fit = job_inputs.read_json(inputs / "fit" / f"fit_{hai_type}.json", "fit_changed")
+    holdout = job_inputs.read_json(inputs / "fit" / f"holdout_{hai_type}.json", "fit_changed")
+    entry = {"file": "hac.parquet", "sha256": fit["inputs"]["auxiliary_sha256"]["hac.parquet"], "row_count": fit["inputs"]["auxiliary_rows"]["hac.parquet"]}
+    flags = job_inputs.table_of(inputs / "extract", entry)
+    result = hac_validation.validate_hac(holdout["predictions"], flags, mapping, Deadline.after(HAC_SECONDS))
+    return {f"hac_{hai_type}.json": text({"hai_type": hai_type, "model": holdout["model"], **result})}
+
+
+def run_hac_validate(context: Any, record: Mapping[str, Any]) -> None:
+    """Validate every requested type's fitted holdout against the HAC Reduction Program flags."""
+    with guarded("hac_validate"):
+        parameters = job_inputs.parameters_of(context.parameters)
+        names = {f"hac_{hai_type}.json" for hai_type in parameters["hai_types"]}
+
+        def plan() -> dict[str, bytes]:
+            mapping = year_mapping(job_inputs.ROOT)
+            outputs: dict[str, bytes] = {}
+            for hai_type in parameters["hai_types"]:
+                outputs |= hac_type(context, record, mapping, hai_type)
+            return outputs
+
+        run_step(context, record, "hac_validate", names, plan)

@@ -10,12 +10,13 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from datetime import date
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 from scripts.features.training_extract import canonical, content_sha256
-from scripts.training import job, job_inputs
+from scripts.training import hac_validation, job, job_inputs, mediation
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
 from scripts.training.lane_b_cases import RUN, require
 from scripts.training.model_cases import panel_standin, request
@@ -124,7 +125,7 @@ def table_entry(folder: Path, name: str, rows: list[dict[str, Any]], columns: di
 class Fixture:
     """One run folder with the mounted extract inputs, a small code root and the job's output folder."""
 
-    def __init__(self, folder: Path, *, hai_types: tuple[str, ...] = (HAI_TYPE,), mediator: bool = True, hac: bool = True) -> None:
+    def __init__(self, folder: Path, *, hai_types: tuple[str, ...] = (HAI_TYPE,), mediator: bool = True, hac: bool = True, late_mediator: bool = False) -> None:
         self.folder = prepare(folder)
         self.extract = folder / "in/extract"
         self.extract.mkdir(parents=True)
@@ -135,6 +136,7 @@ class Fixture:
         self.parameters = {"features_run": "latest", "population": "primary", "hai_types": list(hai_types), "trigger": "manual", "mlflow": "local"}
         (folder / "training_parameters.json").write_text(json.dumps(self.parameters) + "\n")
         self.code_root()
+        self.late_mediator = late_mediator
         self.write_extract(mediator=mediator, hac=hac)
 
     def code_root(self) -> None:
@@ -179,8 +181,8 @@ class Fixture:
                 "measure_control": "C300",
                 "measure": measure,
                 "value_number": float(index % 7) + 0.5 * (row["extra"] + (1 if measure == "PSI_90" else 2)),
-                "period_start": __import__("datetime").date(row["window_year"] - 1, 1, 1),
-                "period_end": __import__("datetime").date(row["window_year"] - 1, 12, 31),
+                "period_start": date(row["window_year"] - 1, 1, 1),
+                "period_end": date(row["window_year"], 3, 1) if self.late_mediator else date(row["window_year"] - 1, 12, 31),
                 "alignment_status": "aligned",
             }
             for index, row in enumerate(self.rows)
@@ -235,9 +237,12 @@ class Fixture:
             }
             (self.extract / f"manifest_{hai_type}.json").write_bytes(canonical(manifest) + b"\n")
 
-    def arguments(self, action: str) -> list[str]:
-        """Return the rendered option set for one action of this run."""
-        return arguments_for(action, self.folder)
+    def arguments(self, action: str, out: Path | None = None) -> list[str]:
+        """Return the rendered option set for one action of this run, writing to the action folder or to a mounted input folder."""
+        arguments = arguments_for(action, self.folder)
+        if out is not None:
+            arguments[arguments.index("--run-dir") + 1] = str(out)
+        return arguments
 
     def manifest(self, hai_type: str = HAI_TYPE) -> dict[str, Any]:
         """Return a type's manifest."""
@@ -262,10 +267,19 @@ def standins(fixture: Fixture) -> Iterator[None]:
         yield
 
 
-def run_action(fixture: Fixture, action: str) -> tuple[int, str, str]:
+def run_action(fixture: Fixture, action: str, out: Path | None = None) -> tuple[int, str, str]:
     """Run one action of the fixture's run through the job entry point."""
     with standins(fixture):
-        return call(fixture.arguments(action))
+        return call(fixture.arguments(action, out))
+
+
+def stage(fixture: Fixture, *actions: str) -> None:
+    """Run earlier actions into the input folders that a later action mounts."""
+    for action in actions:
+        folder = fixture.folder / "in" / action
+        folder.mkdir(parents=True, exist_ok=True)
+        code, _, error = run_action(fixture, action, folder)
+        require(code == 0, f"staging {action} failed: {error}")
 
 
 def output_of(fixture: Fixture, name: str) -> Any:
@@ -427,9 +441,142 @@ def fit_cases(cases: Any, folder: Path) -> None:
     cases.check("job_fit_second_type_missing_writes_nothing", second_type_missing)
 
 
+def mediation_cases(cases: Any, folder: Path) -> None:
+    """Run the separate PSI-90 and PSI-13 mediation analyses on the fixture extract and check the refusals."""
+
+    def written() -> None:
+        fixture = Fixture(folder / "written")
+        code, _, error = run_action(fixture, "mediation")
+        require(code == 0, f"mediation failed: {error}")
+        result = output_of(fixture, f"mediation_{HAI_TYPE}.json")
+        require(set(result["mediators"]) == {"PSI_90", "PSI_13"} and result["hai_type"] == HAI_TYPE, f"another result shape: {sorted(result)}")
+        require(all(item["status"] == "fitted" for item in result["mediators"].values()), f"a mediator did not fit: {result['mediators']}")
+        require(listing(fixture.out) == ["mediation.done.json", f"mediation_{HAI_TYPE}.json"], "mediation wrote other files")
+        verify_done(fixture.out, "mediation", DIGEST)
+
+    def retried() -> None:
+        fixture = Fixture(folder / "retried")
+        require(run_action(fixture, "mediation")[0] == 0, "the first run failed")
+        before = (fixture.out / f"mediation_{HAI_TYPE}.json").read_bytes()
+        with mock.patch.object(mediation, "analyze_mediation", side_effect=AssertionError("a completed step must not run again")):
+            code, out, error = run_action(fixture, "mediation")
+        require(code == 0 and json.loads(out)["resumed"] is True, f"the retry did not resume: {error}")
+        require((fixture.out / f"mediation_{HAI_TYPE}.json").read_bytes() == before, "a retry changed the result")
+
+    def changed_table() -> None:
+        fixture = Fixture(folder / "changed")
+        with (fixture.extract / "mediator.parquet").open("ab") as handle:
+            handle.write(b"x")
+        code, _, error = run_action(fixture, "mediation")
+        require(code == job.EXIT_FAILED and failure_of(error) == "extract_changed", f"{code} {error}")
+        require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def late_period() -> None:
+        fixture = Fixture(folder / "late", late_mediator=True)
+        code, _, error = run_action(fixture, "mediation")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mediation_refused" and "before the outcome window" in error, f"{code} {error}")
+        require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def empty_table() -> None:
+        fixture = Fixture(folder / "empty", mediator=False)
+        code, _, error = run_action(fixture, "mediation")
+        require(code == 0, f"an empty mediator table must be reported, not refused: {error}")
+        require(
+            all(item["status"] == "not_run" for item in output_of(fixture, f"mediation_{HAI_TYPE}.json")["mediators"].values()), "an empty table was fitted"
+        )
+
+    def deadline() -> None:
+        fixture = Fixture(folder / "deadline")
+        with mock.patch.object(job, "budget", return_value=0.3), mock.patch.object(mediation, "analyze_mediation", side_effect=lambda *_: time.sleep(5)):
+            code, _, error = run_action(fixture, "mediation")
+        require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
+
+    cases.check("job_mediation_writes_result_and_done", written)
+    cases.check("job_mediation_retry_resumes_completed", retried)
+    cases.check("job_mediation_refuses_changed_table", changed_table)
+    cases.check("job_mediation_refuses_mediator_inside_window", late_period)
+    cases.check("job_mediation_reports_empty_table", empty_table)
+    cases.check("job_mediation_deadline_named", deadline)
+
+
+def hac_cases(cases: Any, folder: Path) -> None:
+    """Rank the fitted holdout against the HAC flags with the committed year map and check the refusals."""
+
+    def written() -> None:
+        fixture = Fixture(folder / "written")
+        stage(fixture, "fit")
+        code, _, error = run_action(fixture, "hac_validate")
+        require(code == 0, f"hac_validate failed: {error}")
+        result = output_of(fixture, f"hac_{HAI_TYPE}.json")
+        require(result["status"] == "fitted" and result["program_year"] == 2025 and result["matched_hospitals"] > 0, f"another result: {result}")
+        verify_done(fixture.out, "hac_validate", DIGEST)
+
+    def retried() -> None:
+        fixture = Fixture(folder / "retried")
+        stage(fixture, "fit")
+        require(run_action(fixture, "hac_validate")[0] == 0, "the first run failed")
+        with mock.patch.object(hac_validation, "validate_hac", side_effect=AssertionError("a completed step must not run again")):
+            code, out, error = run_action(fixture, "hac_validate")
+        require(code == 0 and json.loads(out)["resumed"] is True, f"the retry did not resume: {error}")
+
+    def no_mapping() -> None:
+        fixture = Fixture(folder / "no_mapping")
+        stage(fixture, "fit")
+        (fixture.root / "config/training/hac_year_mapping.json").unlink()
+        code, _, error = run_action(fixture, "hac_validate")
+        require(code == job.EXIT_FAILED and failure_of(error) == "hac_year_mapping_missing", f"{code} {error}")
+        require(listing(fixture.out) == [], "a refused step wrote output")
+
+    def unmapped_year() -> None:
+        fixture = Fixture(folder / "unmapped")
+        stage(fixture, "fit")
+        (fixture.root / "config/training/hac_year_mapping.json").write_text(json.dumps({"schema": 1, "mapping": {"2019": 2021}}) + "\n")
+        code, _, error = run_action(fixture, "hac_validate")
+        require(code == job.EXIT_FAILED and failure_of(error) == "hac_validate_refused" and "year mapping" in error, f"{code} {error}")
+
+    def changed_fit() -> None:
+        fixture = Fixture(folder / "changed_fit")
+        stage(fixture, "fit")
+        (fixture.folder / "in/fit" / f"holdout_{HAI_TYPE}.json").write_text("{}\n")
+        code, _, error = run_action(fixture, "hac_validate")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_changed", f"{code} {error}")
+
+    def changed_table() -> None:
+        fixture = Fixture(folder / "changed_table")
+        stage(fixture, "fit")
+        with (fixture.extract / "hac.parquet").open("ab") as handle:
+            handle.write(b"x")
+        code, _, error = run_action(fixture, "hac_validate")
+        require(code == job.EXIT_FAILED and failure_of(error) == "extract_changed", f"{code} {error}")
+
+    def no_flags() -> None:
+        fixture = Fixture(folder / "no_flags", hac=False)
+        stage(fixture, "fit")
+        code, _, error = run_action(fixture, "hac_validate")
+        require(code == 0 and output_of(fixture, f"hac_{HAI_TYPE}.json")["status"] == "not_run", f"an empty flag table must be reported: {error}")
+
+    def deadline() -> None:
+        fixture = Fixture(folder / "deadline")
+        stage(fixture, "fit")
+        with mock.patch.object(job, "budget", return_value=0.3), mock.patch.object(hac_validation, "validate_hac", side_effect=lambda *_: time.sleep(5)):
+            code, _, error = run_action(fixture, "hac_validate")
+        require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
+
+    cases.check("job_hac_writes_result_and_done", written)
+    cases.check("job_hac_retry_resumes_completed", retried)
+    cases.check("job_hac_year_mapping_missing_named", no_mapping)
+    cases.check("job_hac_refuses_unmapped_year", unmapped_year)
+    cases.check("job_hac_refuses_changed_fit_output", changed_fit)
+    cases.check("job_hac_refuses_changed_table", changed_table)
+    cases.check("job_hac_reports_empty_flag_table", no_flags)
+    cases.check("job_hac_deadline_named", deadline)
+
+
 def scenarios(cases: Any, folder: Path) -> None:
     """Register every data-action case."""
     fit_cases(cases, folder / "fit")
+    mediation_cases(cases, folder / "mediation")
+    hac_cases(cases, folder / "hac")
 
 
 def run(only: str | None = None) -> list[dict[str, Any]]:

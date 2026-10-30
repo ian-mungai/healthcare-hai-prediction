@@ -23,8 +23,8 @@ MODULES: dict[str, tuple[str, ...]] = {
     "guard": ("scripts.training.guards", "scripts.training.targets", "scripts.training.step_records"),
     "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records"),
     "fit": ("scripts.training.models.suite", "scripts.training.job_actions", "scripts.training.job_inputs"),
-    "mediation": ("scripts.training.mediation",),
-    "hac_validate": ("scripts.training.hac_validation",),
+    "mediation": ("scripts.training.mediation", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "hac_validate": ("scripts.training.hac_validation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "log_run": (),
     "promotion_check": (),
     "promote": (),
@@ -152,7 +152,27 @@ def run_fit(context: Context) -> None:
     job_actions.run_fit(context, read_record(context))
 
 
-HANDLERS: dict[str, Callable[[Context], None]] = {"guard": run_guard, "fit": run_fit, "smoke": run_smoke}
+def run_mediation(context: Context) -> None:
+    """Estimate the PSI-90 and PSI-13 mediation for every requested HAI type."""
+    from scripts.training import job_actions
+
+    job_actions.run_mediation(context, read_record(context))
+
+
+def run_hac_validate(context: Context) -> None:
+    """Rank each fitted holdout against the HAC Reduction Program flags."""
+    from scripts.training import job_actions
+
+    job_actions.run_hac_validate(context, read_record(context))
+
+
+HANDLERS: dict[str, Callable[[Context], None]] = {
+    "guard": run_guard,
+    "fit": run_fit,
+    "mediation": run_mediation,
+    "hac_validate": run_hac_validate,
+    "smoke": run_smoke,
+}
 
 
 def budget(action: str) -> float:
