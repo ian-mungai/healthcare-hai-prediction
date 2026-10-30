@@ -482,6 +482,75 @@ def canary_deploy(w: World, percent: int) -> deploy.Outcome:
     return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=percent, mode="canary", deployment_id=RUN_2)
 
 
+class CrashingStore(manifests.FileManifestStore):
+    """A file store whose next replace of the active record fails, as a deploy that stopped between its two writes."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.crash_next_replace = False
+
+    def replace_active(self, hai_type: str, body: bytes, expected_token: str | None) -> None:
+        if self.crash_next_replace:
+            self.crash_next_replace = False
+            raise OSError("synthetic stop between the history write and the active write")
+        super().replace_active(hai_type, body, expected_token)
+
+
+def case_deploy_order(c: Checker) -> None:
+    """An older deploy that is retried never replaces a later deployment, and a deploy that stopped between its writes finishes on its retry."""
+    with world(deployment=False) as w:
+
+        def canary_run(run: str, version: str = CANDIDATE, percent: int = 10) -> deploy.Outcome:
+            return deploy.run(
+                registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=version, percent=percent, mode="canary", deployment_id=run
+            )
+
+        def rollback_run(run: str) -> deploy.Outcome:
+            return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=run)
+
+        canary_run(RUN_1)
+        rollback_run(RUN_2)
+        after_rollback = w.store.read_active(HAI)
+        c.check("the rollback is active", after_rollback is not None and canary.Deployment.parse(after_rollback.body).candidate_version is None)
+        c.check("a retry of the older canary deploy is refused", refused(lambda: canary_run(RUN_1)))
+        c.check("the refused retry left the rollback active", w.store.read_active(HAI) == after_rollback)
+        c.check("a retry of the rollback changes nothing", rollback_run(RUN_2).status == "unchanged" and w.store.read_active(HAI) == after_rollback)
+        later = canary_run(RUN_3, "5", 20)
+        c.check("a new run still deploys after the refusal", later.status == "written" and later.deployment.candidate_version == "5")
+        c.check(
+            "each deployment is numbered one above the one it replaced",
+            [d.sequence for d in (canary.Deployment.parse(w.store.read_active(HAI).body),)] == [3] if w.store.read_active(HAI) else False,
+        )
+        c.check("a retry of the oldest deploy is still refused", refused(lambda: canary_run(RUN_1)))
+        c.check("the production alias was never written", w.registry.alias_writes == 0)
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        store = CrashingStore(Path(folder))
+        registry = Registry()
+        store.crash_next_replace = True
+        stopped = False
+        try:
+            deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        except OSError:
+            stopped = True
+        c.check("a deploy that stops between its writes leaves no active record", stopped and store.read_active(HAI) is None)
+        finished = deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        active = store.read_active(HAI)
+        c.check(
+            "its retry finishes the same deployment",
+            finished.status == "written" and active is not None and canary.Deployment.parse(active.body).deployment_id == RUN_1,
+        )
+        registry.aliases["production"] = "5"
+        c.check(
+            "a retry after the production alias moved keeps the recorded stable version",
+            deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1).status
+            == "unchanged",
+        )
+        c.check(
+            "the stable version is the one recorded at the first attempt",
+            active is not None and canary.Deployment.parse(active.body).stable_version == PRODUCTION,
+        )
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -763,6 +832,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "version_failure_isolated": (case_version_failure, "canary"),
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
+    "deploy_order": (case_deploy_order, "deploy"),
     "predictions_append": (case_predictions, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
     "metrics": (case_metrics, "monitoring"),
