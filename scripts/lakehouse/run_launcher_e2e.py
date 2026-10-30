@@ -5415,7 +5415,7 @@ def training_render_checks(env: Env, config: Any, registry_id: str, rendered_tem
             (output / name).write_text("synthetic step output\n")
         write_done(output, step, record["code_digest"], names)
     mlflow_network = f"hai-{registry_id[:8]}-mlflow-net"
-    state = {
+    state: dict[str, Any] = {
         "registry_kind": "test",
         "training": {"dag_id": "training_dag", "parameters": parameters},
         "training_snapshot": {"phase": "complete", "record_sha256": hashlib.sha256((run_folder / code_digest.RECORD).read_bytes()).hexdigest()},
