@@ -63,6 +63,10 @@ class BrokerError(Exception):
     """The broker's own configuration or table is unusable."""
 
 
+class StopFailed(Exception):
+    """The cloud refused to stop a task. The submission stays unfinished and the stop can be tried again."""
+
+
 class Unavailable(Exception):
     """A later identical call can succeed: the cloud throttled, the digest is not staged yet, or a task is not readable now."""
 
@@ -137,6 +141,19 @@ def parse_submission(submission_id: str) -> tuple[str, str, str, int]:
     return found.group(1), found.group(2), found.group(3), int(found.group(4))
 
 
+def resolve_input(request: SubmissionRequest, job: str, lines: list[dict[str, Any]]) -> str | None:
+    """The input run of a job's attempt. The runtime sends it with the pin step only, so a later step takes the one the job's first step named.
+
+    A step that names another run than the job started with is refused.
+    """
+    bound = {line["input_run_id"] for line in lines if line.get("job") == job and line["attempt"] == request.attempt and "input_run_id" in line}
+    if request.input_run_id is None:
+        return next(iter(bound)) if len(bound) == 1 else None
+    if bound and bound != {request.input_run_id}:
+        raise SubmissionRefused(f"the {job} job started with another input run")
+    return request.input_run_id
+
+
 class EcsBroker:
     """Submissions recorded in a ledger and run as ECS tasks."""
 
@@ -184,7 +201,7 @@ class EcsBroker:
             self.require_signed()
         after = self.jobs[job].get("after")
         if after:
-            self.require_passed(job, after, request.input_run_id)
+            self.require_passed(job, after, self.input_of(request, job))
         if self.jobs[job].get("needs_training_parameters"):
             try:
                 parameters_for(request.dag_id, request.training or {}, JOB_LANES)
@@ -209,23 +226,33 @@ class EcsBroker:
         ):
             raise SubmissionRefused(CLOSED)
 
+    def input_of(self, request: SubmissionRequest, job: str) -> str | None:
+        """The run a job publishes from: the one named in the request, or the one the job's first step was given."""
+        with self.ledger.locked(request.run_id):
+            return resolve_input(request, job, self.ledger.read(request.run_id))
+
     def require_passed(self, job: str, after: str, input_run: str | None) -> None:
-        """Refuse a job unless the run it publishes from finished its previous job with every acceptance check passed."""
+        """Refuse a job unless the latest attempt of the previous job in the run it publishes from finished with every acceptance check passed."""
         if input_run is None:
             raise SubmissionRefused(f"the {job} job needs the {after} run it publishes from")
         with self.ledger.locked(input_run):
             lines = self.ledger.read(input_run)
-        if not any(line["event"] == "finished" and line.get("job") == after and line.get("outcome") == "succeeded" for line in lines):
-            raise SubmissionRefused(f"the {job} job needs a {after} job that passed in run {input_run}")
+        attempts: dict[int, list[dict[str, Any]]] = {}
+        for line in lines:
+            if line.get("job") == after:
+                attempts.setdefault(line["attempt"], []).append(line)
+        ended = [line for line in attempts[max(attempts)] if line["event"] in ("finished", "failed_closed")] if attempts else []
+        if not ended or not all(line["event"] == "finished" and line.get("outcome") == "succeeded" for line in ended):
+            raise SubmissionRefused(f"the {job} job needs the latest {after} attempt in run {input_run} to have passed")
 
-    def variables(self, request: SubmissionRequest, names: list[str]) -> dict[str, str]:
+    def variables(self, request: SubmissionRequest, names: list[str], input_run: str | None) -> dict[str, str]:
         values = {
             "RUN_ID": lambda: request.run_id,
             "CODE_SHA256": lambda: self.code_digest(request.run_id),
             "TRAINING_PARAMETERS": lambda: json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":")),
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
-            "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
+            "INPUT_RUN_ID": lambda: input_run or "latest",
         }
         return {name: values[name]() for name in names}
 
@@ -264,13 +291,15 @@ class EcsBroker:
             self.append({"event": "finished", **identity, "exit_code": 0, "outcome": "control"})
             return
         key = self.job_key(request, job)
-        joined = next((line for line in self.ledger.read(request.run_id) if line["event"] == "started" and line.get("job_key") == key), None)
+        everything = self.ledger.read(request.run_id)
+        joined = next((line for line in everything if line["event"] == "started" and line.get("job_key") == key), None)
         if joined is not None:
             self.append({"event": "started", **identity, "job_key": key, "task_arn": joined["task_arn"], "job_started_at": joined["job_started_at"]})
             return
         try:
             names = self.jobs[job]["containers"]
-            environment = {container: self.variables(request, list(variables)) for container, variables in names.items()}
+            input_run = resolve_input(request, job, everything)
+            environment = {container: self.variables(request, list(variables), input_run) for container, variables in names.items()}
             arn = self.adapter.start(job, key, environment)
         except TaskUnavailable as error:
             raise Unavailable(str(error)) from None
@@ -324,8 +353,13 @@ class EcsBroker:
             self.adapter.stop(task_arn, reason)
         except TaskUnavailable as error:
             raise Unavailable(str(error)) from None
-        except TaskRefused:
-            return
+        except TaskRefused as error:
+            self.log(f"stop refused ({error})")
+            raise StopFailed(f"the cloud refused to stop the task ({error}). Nothing was recorded, so the stop can be repeated") from None
+
+    def log(self, event: str) -> None:
+        with contextlib.suppress(Exception):
+            sys.stderr.write(f"broker {self.redact(event)}\n")
 
     def status_of(self, handle: Handle, line: dict[str, Any]) -> Status:
         event = line["event"]
@@ -473,6 +507,8 @@ class Listener:
                     self.answer(400, {"error": "refused", "message": broker.redact(str(exc))})
                 except Unavailable as exc:
                     self.answer(503, {"error": "unavailable", "message": broker.redact(str(exc))})
+                except StopFailed as exc:
+                    self.answer(502, {"error": "stop_failed", "message": broker.redact(str(exc))})
                 except Exception as exc:
                     record(f"internal_error {operation} {type(exc).__name__}")
                     self.answer(500, {"error": "internal"})

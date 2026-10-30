@@ -359,6 +359,75 @@ def each_chain_step_needs_the_one_before_to_have_passed() -> None:
         require(len(current.ecs.tasks) == 2, "features started after gold failed")
 
 
+def current_prerequisite_attempt_must_have_passed() -> None:
+    with rig() as current:
+        wait_for(current, current.client.submit(silver_request()))
+        current.ecs.plan = {"validate": 1}
+        again = SubmissionRequest("pin_bronze", SILVER_RUN, "real", 2, "silver_transform_dag", "pin_bronze", "manual__test", None, None, None)
+        require(wait_for(current, current.client.submit(again)).state == State.FAILED, "the second silver attempt did not fail")
+        raises(SubmissionRefused, partial(current.client.submit, gold_request()))
+        require(len(current.ecs.tasks) == 2, "gold started after the current silver attempt failed")
+        current.ecs.plan = {}
+        third = SubmissionRequest("pin_bronze", SILVER_RUN, "real", 3, "silver_transform_dag", "pin_bronze", "manual__test", None, None, None)
+        wait_for(current, current.client.submit(third))
+        require(wait_for(current, current.client.submit(gold_request())).state == State.SUCCEEDED, "a passing current attempt did not reopen the way")
+
+
+def later_gold_steps_recover_the_bound_input() -> None:
+    params = {"run_id": GOLD_RUN, "mode": "real", "silver_snapshot_run": SILVER_RUN}
+    with rig() as current, dag_runtime(current, "gold_transform_dag", params) as run_step:
+        wait_for(current, current.client.submit(silver_request()))
+        require(run_step("pin_silver") == "succeeded", "the pin step did not pass")
+        require(run_step("read_silver") == "succeeded", "a later step without the silver run was refused")
+        require(run_step("gold_build") == "succeeded" and len(current.ecs.tasks) == 2, "later steps did not join the gold job")
+        wait_for(current, current.client.submit(silver_request(FEATURES_RUN)))
+        other = gold_request(FEATURES_RUN)
+        raises(SubmissionRefused, partial(current.client.submit, other))
+        unbound = request("read_silver", run=SILVER_RUN, dag="gold_transform_dag")
+        raises(SubmissionRefused, partial(current.client.submit, unbound))
+
+
+def start_from_a_later_step_uses_the_bound_input() -> None:
+    with rig() as current:
+        wait_for(current, current.client.submit(silver_request()))
+        current.ecs.faults["run_task"] = [client_error("ThrottlingException", "RunTask")]
+        raises(BrokerUnavailable, partial(current.client.submit, gold_request()))
+        later = request("read_silver", run=GOLD_RUN, dag="gold_transform_dag")
+        wait_for(current, current.client.submit(later))
+        sent = [arguments for name, arguments in current.ecs.calls if name == "run_task"][-1]
+        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
+        require(values["pin"]["INPUT_RUN_ID"] == SILVER_RUN, f"a job started by a later step lost its silver run: {values['pin']}")
+
+
+def refused_stop_is_not_recorded_as_a_timeout() -> None:
+    with rig() as current:
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.clock[0] += 21600 + 1
+        current.ecs.faults["stop_task"] = [client_error("AccessDeniedException", "StopTask")]
+        try:
+            current.client.status(handle)
+        except BrokerUnavailable as error:
+            require("answered 502" in str(error) and "stop" in str(error), f"the stop failure is not reported: {error}")
+        else:
+            raise AssertionError("a refused stop was hidden")
+        raises(SubmissionRefused, partial(current.client.record, handle))
+        require(all(task["lastStatus"] != "STOPPED" for task in current.ecs.tasks.values()), "the task was stopped without a stop")
+        status = current.client.status(handle)
+        require(status.state == State.FAILED and status.exit_code == 124, f"the retried stop did not end the job: {status}")
+        require(all(task["lastStatus"] == "STOPPED" for task in current.ecs.tasks.values()), "the retry did not stop the task")
+
+
+def refused_stop_does_not_cancel() -> None:
+    with rig() as current:
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.ecs.faults["stop_task"] = [client_error("AccessDeniedException", "StopTask")]
+        raises(BrokerUnavailable, partial(current.client.cancel, handle))
+        require(current.client.status(handle).state in (State.PENDING, State.RUNNING), "a refused stop ended the submission")
+        require(current.client.cancel(handle).state == State.CANCELLED, "the retried cancel did not end the submission")
+
+
 def logs_hide_the_token() -> None:
     with rig() as current:
         handle = current.client.submit(request("guard"))
@@ -387,5 +456,10 @@ CASES: dict[str, Callable[[], None]] = {
     "acceptance_check_failure_stops_the_chain": acceptance_check_failure_stops_the_chain,
     "missing_acceptance_check_fails_the_job": missing_acceptance_check_fails_the_job,
     "each_chain_step_needs_the_one_before_to_have_passed": each_chain_step_needs_the_one_before_to_have_passed,
+    "current_prerequisite_attempt_must_have_passed": current_prerequisite_attempt_must_have_passed,
+    "later_gold_steps_recover_the_bound_input": later_gold_steps_recover_the_bound_input,
+    "start_from_a_later_step_uses_the_bound_input": start_from_a_later_step_uses_the_bound_input,
+    "refused_stop_is_not_recorded_as_a_timeout": refused_stop_is_not_recorded_as_a_timeout,
+    "refused_stop_does_not_cancel": refused_stop_does_not_cancel,
     "logs_hide_the_token": logs_hide_the_token,
 }
