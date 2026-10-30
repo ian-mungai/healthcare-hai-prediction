@@ -11,6 +11,7 @@ configuration_checks() {
   timed "configuration_checks: job IAM E2E" "$python_bin" -m scripts.infrastructure.run_jobs_iam_e2e --output "$quality_output/jobs_iam"
   timed "configuration_checks: broker policy cases" "$python_bin" -m scripts.infrastructure.broker_policy_cases --output "$quality_output/broker_policy"
   timed "configuration_checks: quality E2E" "$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
+  timed "configuration_checks: OpenMetadata catalog task E2E" "$python_bin" -m scripts.infrastructure.run_openmetadata_e2e --output-directory "$e2e_output/openmetadata"
   timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
   timed "configuration_checks: monitoring files E2E" "$python_bin" -m scripts.infrastructure.run_monitoring_e2e
   timed "configuration_checks: host session E2E" "$python_bin" -m scripts.infrastructure.run_host_session_e2e
