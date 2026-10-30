@@ -111,6 +111,10 @@ locals {
   EOT
   )
   layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", feast = "feature_store" }
+  # DuckDB spills to the workspace volume. The cap is 60 GiB of the 100 GiB scratch default, which leaves room for the run folder, the sealed copy and Spark's own spill.
+  layer_duckdb_spill_bytes = 60 * 1073741824
+  # The silver build reads the catalog through dbt, whose profile names the pair DBT_ENV_SECRET_POLARIS_CLIENT_ID and _SECRET so that dbt scrubs them from its logs.
+  layer_build_secrets = [for item in local.reader_parameters : { name = "DBT_ENV_SECRET_${item.name}", valueFrom = item.valueFrom }]
   layer_phase_secrets = {
     pin     = "reader"
     verify  = "reader"
@@ -160,6 +164,8 @@ locals {
             { name = "DUCKDB_MEMORY_LIMIT", value = "12GB" },
             { name = "JOB_THREADS", value = "4" },
             { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
+            { name = "HAI_DUCKDB_TEMP_DIRECTORY", value = "/workspace/duckdb_spill" },
+            { name = "HAI_DUCKDB_MAX_TEMP_BYTES", value = tostring(local.layer_duckdb_spill_bytes) },
           ],
           [for name in lookup(local.layer_run_variables[layer], step.name, []) : { name = name, value = "" }],
           step.name == "feast" ? [
@@ -168,7 +174,7 @@ locals {
             { name = "FEAST_REGISTRY_BUCKET", value = var.data_bucket_name },
           ] : []
         )
-        secrets = lookup(local.layer_phase_secrets, step.name, "") == "reader" ? local.reader_parameters : (lookup(local.layer_phase_secrets, step.name, "") == "writer" ? lookup(local.writer_parameters, local.layer_roles[layer], []) : [])
+        secrets = layer == "silver" && step.name == "build" ? local.layer_build_secrets : (lookup(local.layer_phase_secrets, step.name, "") == "reader" ? local.reader_parameters : (lookup(local.layer_phase_secrets, step.name, "") == "writer" ? lookup(local.writer_parameters, local.layer_roles[layer], []) : []))
         mountPoints = [
           { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
           { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }
