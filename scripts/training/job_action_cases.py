@@ -617,11 +617,18 @@ def fit_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_action(fixture, "fit")
         require(code == job.EXIT_FAILED and failure_of(error) == "input_missing", f"{code} {error}")
 
-    def parameters_refused() -> None:
-        fixture = Fixture(folder / "parameters")
+    def aws_lane_accepted() -> None:
+        fixture = Fixture(folder / "aws_lane")
         (fixture.folder / "training_parameters.json").write_text(json.dumps(fixture.parameters | {"mlflow": "aws"}) + "\n")
         code, _, error = run_action(fixture, "fit")
-        require(code == job.EXIT_FAILED and failure_of(error) == "parameters" and "not built" in error, f"{code} {error}")
+        require(code == 0, f"a job of the AWS lane was refused: {error}")
+        require(f"{BUNDLE}/result.json" in listing(fixture.out), "an AWS lane fit wrote no result")
+
+    def parameters_refused() -> None:
+        fixture = Fixture(folder / "parameters")
+        (fixture.folder / "training_parameters.json").write_text(json.dumps(fixture.parameters | {"mlflow": "gcp"}) + "\n")
+        code, _, error = run_action(fixture, "fit")
+        require(code == job.EXIT_FAILED and failure_of(error) == "parameters" and "mlflow must be" in error, f"{code} {error}")
 
     def targets_refused() -> None:
         fixture = Fixture(folder / "targets")
@@ -719,7 +726,8 @@ def fit_cases(cases: Any, folder: Path) -> None:
     cases.check("job_fit_refuses_manifest_of_another_run", wrong_run)
     cases.check("job_fit_refuses_manifest_of_another_type", wrong_type)
     cases.check("job_fit_missing_input_named", missing_input)
-    cases.check("job_fit_refuses_aws_parameters", parameters_refused)
+    cases.check("job_fit_accepts_aws_lane", aws_lane_accepted)
+    cases.check("job_fit_refuses_unknown_lane", parameters_refused)
     cases.check("job_fit_checks_targets_against_bridge", targets_refused)
     cases.check("job_fit_refuses_too_few_rows", too_few_rows)
     cases.check("job_fit_deadline_named", deadline)

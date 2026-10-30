@@ -104,6 +104,7 @@ def run_checks(output: Path) -> int:
             case("aws_route_refused", "not built" in str(error))
         else:
             case("aws_route_refused", False)
+        case("job_lanes_accept_aws", training_contract.parameters_for("training_dag", {**raw, "mlflow": "aws"}, training_contract.JOB_LANES)["mlflow"] == "aws")
         case("service_port", mlflow_service.PORT == 5100)
         with tempfile.TemporaryDirectory(prefix="hai_training_contract_") as temporary:
             source = Path(temporary) / "source"
