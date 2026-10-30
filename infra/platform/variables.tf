@@ -87,7 +87,7 @@ variable "ecr_repositories" {
   description = "Image names that get an ECR repository; the repository name is the project, the image and the environment."
   type        = set(string)
   default = [
-    "airflow", "analytics", "egress_proxy", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
+    "airflow", "analytics", "egress_proxy", "grafana", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "prometheus", "quality", "redis", "spark", "statsd_exporter"
   ]
 
   validation {
@@ -110,7 +110,7 @@ variable "ecr_keep_images" {
 variable "log_groups" {
   description = "Log group names for the host's services and the run tasks."
   type        = set(string)
-  default     = ["airflow", "jobs", "marquez", "polaris", "postgres", "redis"]
+  default     = ["airflow", "jobs", "marquez", "monitoring", "polaris", "postgres", "redis"]
 
   validation {
     condition     = length(var.log_groups) > 0 && alltrue([for name in var.log_groups : can(regex("^[a-z][a-z0-9_]{1,40}$", name))])

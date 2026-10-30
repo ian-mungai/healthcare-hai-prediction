@@ -115,7 +115,7 @@ run "image_repositories" {
   assert {
     condition = (
       toset(keys(aws_ecr_repository.image)) == toset([
-        "airflow", "analytics", "egress_proxy", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
+        "airflow", "analytics", "egress_proxy", "grafana", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "prometheus", "quality", "redis", "spark", "statsd_exporter"
       ]) &&
       alltrue([
         for name, repository in aws_ecr_repository.image :
@@ -201,7 +201,7 @@ run "logs_and_alert_topic" {
 
   assert {
     condition = (
-      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "marquez", "jobs"]) &&
+      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "marquez", "monitoring", "jobs"]) &&
       output.log_group_names["polaris"] == "example_project_polaris_dev" &&
       alltrue([for group in aws_cloudwatch_log_group.platform : group.retention_in_days == 7])
     )
@@ -237,7 +237,7 @@ run "role_names_match_the_iam_stack" {
       output.cluster_name == "example_project_cluster_dev" &&
       output.ec2_capacity_provider_name == "example_project_host_dev" &&
       output.data_mount_path == "/data" &&
-      length(setsubtract(toset(["postgres", "redis", "polaris", "airflow", "marquez", "marquez_web", "spark", "analytics", "quality", "polaris_admin", "egress_proxy"]), toset(keys(output.ecr_repository_urls)))) == 0
+      length(setsubtract(toset(["postgres", "redis", "polaris", "airflow", "marquez", "marquez_web", "spark", "analytics", "quality", "polaris_admin", "egress_proxy", "prometheus", "grafana", "statsd_exporter"]), toset(keys(output.ecr_repository_urls)))) == 0
     )
     error_message = "The outputs the control-plane stack reads must keep their names and values."
   }
