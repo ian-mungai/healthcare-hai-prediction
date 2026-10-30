@@ -34,6 +34,9 @@ DATASOURCE = f"{MONITORING}/grafana/provisioning/datasources/prometheus.yml"
 PROVIDER = f"{MONITORING}/grafana/provisioning/dashboards/dashboards.yml"
 DASHBOARDS = f"{MONITORING}/grafana/dashboards"
 REQUIRED_JOBS = ("prometheus", "statsd_exporter", "hai_api")
+EXPECTED_TARGETS = {"prometheus": ["127.0.0.1:9090"], "statsd_exporter": ["127.0.0.1:9102"], "hai_api": ["127.0.0.1:8000"]}
+SCHEDULER_ALERT = "AirflowSchedulerSilent"
+SCHEDULER_ABSENT = "absent(airflow_scheduler_heartbeat_total)"
 REQUIRED_ROWS = {"DAG": 3, "Jobs": 2, "API": 3}
 SEVERITIES = ("critical", "warning")
 METRIC_NAME = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
@@ -362,6 +365,15 @@ def check(root: Path = ROOT) -> list[str]:
     for required in REQUIRED_JOBS:
         if scrape is not None and required not in jobs:
             problems.append(f"{SCRAPE} has no scrape job {required}")
+    for job in (scrape or {}).get("scrape_configs", []):
+        expected = EXPECTED_TARGETS.get(str(job.get("job_name")))
+        targets = [str(target) for config in job.get("static_configs", []) for target in config.get("targets", [])]
+        if expected is not None and targets != expected:
+            problems.append(f"{SCRAPE}: job {job['job_name']} must scrape {', '.join(expected)}, not {targets}")
+    for group in (alerts or {}).get("groups", []):
+        for rule in group.get("rules", []):
+            if rule.get("alert") == SCHEDULER_ALERT and SCHEDULER_ABSENT not in str(rule.get("expr")):
+                problems.append(f"{ALERTS}: {SCHEDULER_ALERT} must also fire when no heartbeat series exists")
     if alerts is not None:
         problems.extend(alert_problems(alerts, metrics, jobs))
     datasources = (datasource or {}).get("datasources", [])

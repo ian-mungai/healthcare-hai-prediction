@@ -3,7 +3,7 @@ groups:
   - name: hai_airflow
     rules:
       - alert: AirflowSchedulerSilent
-        expr: sum(increase(airflow_scheduler_heartbeat_total[10m])) == 0
+        expr: sum(increase(airflow_scheduler_heartbeat_total[10m])) == 0 or absent(airflow_scheduler_heartbeat_total)
         for: 10m
         labels:
           severity: critical
