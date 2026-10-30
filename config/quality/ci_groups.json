@@ -171,6 +171,8 @@
   "always_except_commits": [
     "sql_style"
   ],
+  "launcher_shards": 2,
+  "launcher_shard_seconds": 1500,
   "feature_shards": {
     "sources": 8,
     "columns": 4

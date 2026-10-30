@@ -2954,11 +2954,18 @@ printf 'ACQ part=%s shard=%s count=%s dir=%s\\n' "${ACQUISITION_PART:-}" "$shard
 
 
 def dry_run(
-    work: Path, out: Path, name: str, env: dict[str, str], fail_shard: str = "", skip_shard: str = "", prepare: Callable[[Path], None] | None = None
+    work: Path,
+    out: Path,
+    name: str,
+    env: dict[str, str],
+    fail_shard: str = "",
+    skip_shard: str = "",
+    prepare: Callable[[Path], None] | None = None,
+    timing: str = "",
 ) -> tuple[int, str]:
     """Run the dispatcher with a ``timed`` that only prints the command and a stand-in acquisition entry: the order, grouping and arguments of a full run
     without running any check. ``fail_shard`` makes that shard fail and ``skip_shard`` makes it leave no folder."""
-    (work / TIMING).write_text(DRY_TIMING, encoding="utf-8")
+    (work / TIMING).write_text(timing or DRY_TIMING, encoding="utf-8")
     (work / "scripts/acquisition/run_checks.sh").write_text(DRY_ACQUISITION.replace("@FAIL@", fail_shard).replace("@SKIP@", skip_shard), encoding="utf-8")
     try:
         if prepare:
@@ -3000,6 +3007,7 @@ def local_plan_of(log: str) -> dict[str, Any]:
             f"{suite}:{count}" for suite, count in re.findall(r"^TIMED lakehouse_features: combine (sources|columns)/(\d+) ", log, re.MULTILINE)
         ),
         "hook_groups": set(re.findall(r"^TIMED repository hooks: (\w+) ", log, re.MULTILINE)),
+        "launcher_shards": set(re.findall(r"^TIMED launcher E2E shard (\d+/\d+) ", log, re.MULTILINE)),
         "groups": groups,
         "units": units,
         "shards": set(shards),
@@ -3020,6 +3028,7 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
     feature_shards: set[str] = set()
     feature_combines: set[str] = set()
     hook_groups: set[str] = set()
+    launcher_shards: set[str] = set()
     for definition in workflow["jobs"].values():
         for entry in matrix_entries(definition):
             for step in definition.get("steps", []):
@@ -3028,6 +3037,8 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
                 if command == "bash scripts/run_ci.sh" and env.get("CI_PART") not in {None, "gates"}:
                     part = env["CI_PART"]
                     groups |= set(ci_groups.groups_of(part, config)) - {"acquisition"}
+                    if env.get("LAUNCHER_SHARD"):
+                        launcher_shards.add(env["LAUNCHER_SHARD"])
                     if part == "gold":
                         units |= set((env.get("CI_UNITS") or " ".join(GOLD_UNITS)).split())
                     if part in {"feature_sources", "feature_columns"}:
@@ -3053,6 +3064,7 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
         "feature_shards": feature_shards,
         "feature_combines": feature_combines,
         "hook_groups": hook_groups,
+        "launcher_shards": launcher_shards,
     }
 
 
@@ -3060,7 +3072,7 @@ def mirror_differences(github: dict[str, Any], local: dict[str, Any]) -> dict[st
     """What differs between the GitHub jobs and the full local run; empty when the local run mirrors GitHub."""
     differences = {
         name: {"github": sorted(github[name]), "local": sorted(local[name])}
-        for name in ("groups", "units", "shards", "combine_counts", "feature_shards", "feature_combines", "hook_groups")
+        for name in ("groups", "units", "shards", "combine_counts", "feature_shards", "feature_combines", "hook_groups", "launcher_shards")
         if github[name] != local[name]
     }
     if local["shard_runs"] != len(local["shards"]) or local["combine_runs"] != 1:
@@ -3089,6 +3101,9 @@ def planted_workflows() -> dict[str, dict[str, Any]]:
     hooks = copy.deepcopy(workflow_document())
     hooks["jobs"]["hooks"]["strategy"]["matrix"]["include"].pop()
     drifts["hook_group"] = hooks
+    launcher = copy.deepcopy(workflow_document())
+    launcher["jobs"]["launcher"]["strategy"]["matrix"]["shard"].pop()
+    drifts["launcher_shard"] = launcher
     return drifts
 
 
@@ -4415,6 +4430,83 @@ def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+LAUNCHER_STUB_TIMING = """#!/usr/bin/env bash
+timed() {
+  local label="$1"
+  shift
+  if [[ "$label" == "launcher E2E shard "* ]]; then printf 'TIMED %s %s\\n' "$label" "$*"; "$@"; else printf 'TIMED %s %s\\n' "$label" "$*"; fi
+}
+timing_table() { :; }
+timing_entry() { :; }
+"""
+LAUNCHER_STUB_BODY = """#!/usr/bin/env bash
+launcher_e2e() {
+  printf 'stub launcher shard %s\\n' "${LAUNCHER_SHARD:-all}"
+  if [[ "${LAUNCHER_SHARD:-}" == "${STUB_LAUNCHER_FAIL:-none}" ]]; then return 1; fi
+  sleep "${STUB_LAUNCHER_SLEEP:-1}"
+}
+"""
+LAUNCHER_SLEEP = "40.7"
+
+
+def launcher_shard_run(work: Path, out: Path, label: str, env: dict[str, str]) -> tuple[int, str, float]:
+    def stub_body(tree: Path) -> None:
+        (tree / GROUP_FILES / "launcher.sh").write_text(LAUNCHER_STUB_BODY, encoding="utf-8")
+
+    started = time.monotonic()
+    code, log = dry_run(
+        work, out, label, {"CI_SCOPE": "full", "CI_PART": "launcher", "HAI_CI_REUSE": "off", **env}, prepare=stub_body, timing=LAUNCHER_STUB_TIMING
+    )
+    return code, log, time.monotonic() - started
+
+
+def leftover_sleepers() -> list[str]:
+    result = run_command("pgrep", ["-f", f"sleep {LAUNCHER_SLEEP}"], timeout=30)
+    return result.stdout.split()
+
+
+def launcher_shard_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    """The full local run splits the launcher E2E like the hosted matrix, runs the shards at once, bounds them and stops what they left."""
+    shards = json.loads((ROOT / "config/quality/ci_groups.json").read_text())["launcher_shards"]
+    results = []
+    code, log, seconds = launcher_shard_run(work, out, "launcher_shards_parallel", {"STUB_LAUNCHER_SLEEP": "6"})
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["launcher"] in log,
+        "every_shard_ran": all(f"stub launcher shard {index}/{shards}" in log for index in range(1, shards + 1)),
+        "shards_ran_at_once": seconds < 6 * shards + 4,
+        "logs_print_in_shard_order": log.index(f"launcher shard 1/{shards} ==") < log.index(f"launcher shard {shards}/{shards} =="),
+    }
+    results.append({"case": "local_launcher_runs_its_shards_at_once", "passed": all(checks.values()), "checks": checks, "seconds": round(seconds, 1)})
+    code, log, seconds = launcher_shard_run(work, out, "launcher_shard_fails", {"STUB_LAUNCHER_FAIL": f"{shards}/{shards}", "STUB_LAUNCHER_SLEEP": "1"})
+    checks = {
+        "exit_nonzero": code != 0,
+        "names_the_shard": f"Local CI failed in: launcher E2E shard {shards}/{shards}" in log,
+        "other_shards_ran_and_print": "stub launcher shard 1/" in log,
+        "no_pass_line": PASS_LINES["launcher"] not in log,
+    }
+    results.append({"case": "local_launcher_shard_failure_fails_the_run_and_names_the_shard", "passed": all(checks.values()), "checks": checks, "exit": code})
+    code, log, seconds = launcher_shard_run(work, out, "launcher_shard_deadline", {"STUB_LAUNCHER_SLEEP": LAUNCHER_SLEEP, "CI_LAUNCHER_LIMIT_SECONDS": "2"})
+    left = leftover_sleepers()
+    checks = {
+        "exit_nonzero": code != 0,
+        "names_the_deadline": "ran past its deadline of 2 s: stopping it" in log and "(deadline 2 s)" in log,
+        "ended_long_before_the_stub_would_have": seconds < 35,
+        "stopped_every_process": not left,
+    }
+    for pid in left:
+        run_command("kill", ["-KILL", pid], timeout=30)
+    results.append(
+        {"case": "local_launcher_shards_are_bounded_and_stopped", "passed": all(checks.values()), "checks": checks, "seconds": round(seconds, 1), "left": left}
+    )
+    code, log, seconds = launcher_shard_run(work, out, "launcher_one_shard", {"LAUNCHER_SHARD": f"2/{shards}", "STUB_LAUNCHER_SLEEP": "1"})
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["launcher"] in log,
+        "only_the_given_shard": f"stub launcher shard 2/{shards}" in log and "stub launcher shard 1/" not in log and "launcher shard 1/" not in log,
+    }
+    results.append({"case": "local_launcher_run_with_a_given_shard_runs_only_it", "passed": all(checks.values()), "checks": checks, "exit": code})
+    return results
+
+
 def reuse_dry_run(
     work: Path, out: Path, label: str, env: dict[str, str], folder: Path, record: bool = True, edit: Callable[[Path], None] | None = None
 ) -> tuple[int, str]:
@@ -4439,6 +4531,7 @@ GROUP_NAMES = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text
 def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     """The dispatcher skips the groups whose pass was recorded on main, only in a full local run, and never under the gate."""
     results = pass_record_cases(scratch)
+    results += launcher_shard_cases(work, out)
     results.append(
         planted_case(
             "gate_without_the_reuse_switch",

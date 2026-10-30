@@ -198,11 +198,87 @@ fi
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 
+failed=()
+# descendants <pid>: the pids of all processes below <pid>, deepest first.
+descendants() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null || true); do
+    descendants "$child"
+    printf '%s\n' "$child"
+  done
+}
+# stop_tree <pid>: TERM <pid> and everything below it, KILL what is left after 5 s.
+stop_tree() {
+  local members
+  members="$(descendants "$1") $1"
+  # shellcheck disable=SC2086
+  kill -TERM $members 2>/dev/null || true
+  sleep 5
+  # shellcheck disable=SC2086
+  kill -KILL $members 2>/dev/null || true
+}
+# run_launcher_shards: the launcher E2E as the hosted jobs run it, launcher_shards shards at once (launcher_shards in config/quality/ci_groups.json, the matrix of
+# .github/workflows/ci.yml). Each shard has its own log and timing file; the logs print in shard order after all shards end. One deadline of launcher_shard_seconds
+# (CI_LAUNCHER_LIMIT_SECONDS replaces it) covers the wait: past it every shard still running is stopped with its processes and the run fails with the shard names.
+run_launcher_shards() {
+  local index count="$1" limit="$2" begun=$SECONDS pending="$1" pid status label bad=()
+  local pids=() ended=() logs=() next_beat=60
+  for ((index = 1; index <= count; index++)); do
+    logs+=("$scratch/launcher_shard_$index.log")
+    timing_files+=("$scratch/launcher_shard_$index.timing")
+    CI_TIMING_FILE="$scratch/launcher_shard_$index.timing" LAUNCHER_SHARD="$index/$count" \
+      timed "launcher E2E shard $index/$count" run_group launcher launcher_e2e >"${logs[$((index - 1))]}" 2>&1 &
+    pids+=("$!")
+    ended+=(0)
+  done
+  while ((pending > 0)); do
+    for ((index = 0; index < count; index++)); do
+      if ((ended[index])); then continue; fi
+      pid="${pids[$index]}"
+      label="launcher E2E shard $((index + 1))/$count"
+      if ! kill -0 "$pid" 2>/dev/null; then
+        status=0
+        wait "$pid" || status=$?
+        if ((status != 0)); then bad+=("$label"); fi
+        ended[index]=1
+        pending=$((pending - 1))
+      elif ((SECONDS - begun > limit)); then
+        printf 'Local CI: %s ran past its deadline of %s s: stopping it.\n' "$label" "$limit" >&2
+        stop_tree "$pid"
+        wait "$pid" 2>/dev/null || true
+        bad+=("$label (deadline $limit s)")
+        ended[index]=1
+        pending=$((pending - 1))
+      fi
+    done
+    if ((pending > 0 && SECONDS - begun >= next_beat)); then
+      printf 'Local CI: %s of %s launcher shards still running after %s s.\n' "$pending" "$count" "$((SECONDS - begun))"
+      next_beat=$((next_beat + 60))
+    fi
+    if ((pending > 0)); then sleep 1; fi
+  done
+  for ((index = 0; index < count; index++)); do
+    printf '\n== launcher shard %s/%s ==\n' "$((index + 1))" "$count"
+    cat "${logs[$index]}"
+  done
+  if ((${#bad[@]})); then
+    failed+=("${bad[@]}")
+    printf '\nLocal CI failed in: %s\n' "${bad[*]}" >&2
+    exit 1
+  fi
+}
+launcher_settings="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json")); print(c["launcher_shards"], c["launcher_shard_seconds"])')"
+read -r launcher_shards launcher_shard_seconds <<<"$launcher_settings"
 if [[ "$part" != "core" ]] && is_selected launcher; then
   require_group_file launcher
   started=$SECONDS
-  timed "launcher E2E${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" run_group launcher launcher_e2e
-  record "launcher${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" $((SECONDS - started))
+  if [[ -z "${LAUNCHER_SHARD:-}" && "$launcher_shards" -gt 1 ]]; then
+    run_launcher_shards "$launcher_shards" "${CI_LAUNCHER_LIMIT_SECONDS:-$launcher_shard_seconds}"
+    record "launcher (all $launcher_shards shards)" $((SECONDS - started))
+  else
+    timed "launcher E2E${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" run_group launcher launcher_e2e
+    record "launcher${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" $((SECONDS - started))
+  fi
 fi
 if [[ "$part" == "launcher" ]]; then
   printf '\nThe launcher part passed.\n'
@@ -323,7 +399,6 @@ run_timed_item() {
   printf '%s\n' $((SECONDS - item_started)) >"$scratch/$item.seconds"
 }
 
-failed=()
 # run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration.
 run_items() {
   local item index pids=() items=("$@")
