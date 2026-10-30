@@ -67,6 +67,11 @@
       "requirements": ["services/model_api/requirements.in"],
       "code": ["scripts/serving/api.py", "scripts/serving/api_image_cases.py", "scripts/serving/iceberg_sink.py", "scripts/serving/main.py", "scripts/serving/mlflow_loader.py"]
     },
+    "streamlit_page": {
+      "reason": "The Streamlit page runs in the image that services/streamlit/Dockerfile builds. Until the owner compiles the hash-pinned lock requirements.txt with services/streamlit/compile_lock.sh, the approved versions in requirements.in are the runtime's requirements. The client, the words and the stand-in use the standard library only.",
+      "requirements": ["services/streamlit/requirements.in"],
+      "code": ["scripts/streamlit_app/app.py", "scripts/streamlit_app/app_cases.py"]
+    },
     "sqlfluff": {
       "reason": "A tool environment (.tools/sqlfluff) with no project code.",
       "requirements": ["scripts/quality/sqlfluff/requirements.txt"],
