@@ -143,6 +143,19 @@ def test_confidential_rows_hold_only_fixed_format_facts(built: dict[str, Any], l
         check(any("Confidential" in problem and "CMS_OWNERS" in problem and field in problem for problem in problems), f"free text in {field} is named")
 
 
+def test_the_index_outside_its_rows_holds_only_the_fixed_fields(built: dict[str, Any], log: dict[str, Any]) -> None:
+    for damage in (
+        lambda index: index.update(contact_name="Synthetic Example"),
+        lambda index: index["generated_from"].update(contact_name="Synthetic Example"),
+        lambda index: index.update(generated_by="Synthetic Example"),
+        lambda index: index.pop("generated_by"),
+    ):
+        damaged = copy.deepcopy(built)
+        damage(damaged)
+        problems = index_module.check_index(damaged, log, "f" * 64)
+        check(any("generated_by" in problem or "unexpected field" in problem for problem in problems), f"not refused: {damaged.keys()}")
+
+
 def test_a_class_that_differs_from_the_log_fails_the_check(built: dict[str, Any], log: dict[str, Any]) -> None:
     broken = copy.deepcopy(built)
     rows_by_id(broken)["CMS_OWNERS"]["data_class"] = "Public"

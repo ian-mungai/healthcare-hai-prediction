@@ -17,6 +17,8 @@ from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_j
 from scripts.acquisition.source_verification_log import LOG_PATH, NOT_RECORDED
 
 INDEX_PATH = REPO_ROOT / "config" / "acquisition" / "source_receipt_index.json"
+GENERATED_BY = "scripts/acquisition/source_receipt_index.py"
+ROOT_FIELDS = {"index_version", "generated_by", "generated_from", "rows"}
 DATA_ROOT = REPO_ROOT / "data" / "datasets"
 RECEIPT_FOLDERS = ("acquisition_batches", "historical_acquisition", "acquisition_recoveries", "snapshots")
 INDEX_VERSION = 1
@@ -151,7 +153,7 @@ def build_index(log: dict[str, Any], log_sha256: str, receipts: dict[str, list[R
         raise ReceiptIndexError(f"receipts name datasets that the log does not list: {', '.join(unlisted)}")
     return {
         "index_version": INDEX_VERSION,
-        "generated_by": "scripts/acquisition/source_receipt_index.py",
+        "generated_by": GENERATED_BY,
         "generated_from": {"log_sha256": log_sha256},
         "rows": [build_row(dataset_id, classes[dataset_id], receipts.get(dataset_id, [])) for dataset_id in sorted(classes)],
     }
@@ -188,7 +190,12 @@ def check_index(index: dict[str, Any], log: dict[str, Any], log_sha256: str) -> 
     problems = []
     if index.get("index_version") != INDEX_VERSION:
         problems.append(f"index_version is not {INDEX_VERSION}")
-    if index.get("generated_from", {}).get("log_sha256") != log_sha256:
+    problems.extend(f"unexpected field {field}" for field in sorted(set(index) - ROOT_FIELDS))
+    if index.get("generated_by") != GENERATED_BY:
+        problems.append(f"generated_by is not {GENERATED_BY}")
+    generated_from = index.get("generated_from", {})
+    problems.extend(f"unexpected field generated_from.{field}" for field in sorted(set(generated_from) - {"log_sha256"}))
+    if generated_from.get("log_sha256") != log_sha256:
         problems.append("stale evidence: generated_from.log_sha256 no longer matches the verification log")
     classes = {row["dataset_id"]: row["data_class"] for row in log["rows"]}
     rows = index.get("rows", [])
