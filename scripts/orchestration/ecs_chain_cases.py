@@ -34,6 +34,7 @@ class Operator:
     def __init__(self, task_id: str, **settings: Any) -> None:
         self.task_id, self.settings = task_id, settings
         self.upstream: list[Operator] = []
+        self.function: Callable[..., Any] | None = None
 
     def __rshift__(self, other: Operator) -> Operator:
         other.upstream.append(self)
@@ -59,6 +60,7 @@ def load_dag() -> dict[str, Any]:
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
             def call() -> SimpleNamespace:
                 node = Operator(**settings)
+                node.function = function
                 built.append(node)
                 return SimpleNamespace(operator=node)
 
@@ -205,14 +207,16 @@ def metadata_start_follows_drift_and_never_blocks_the_chain() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
     node = nodes.get("start_metadata")
-    if node is None:
+    if node is None or node.function is None:
         raise AssertionError("the chain has no start_metadata task")
     settings = node.settings
     require(node.upstream == [nodes["run_drift"]], "the catalog start does not follow only the drift layer")
     require(not any(node in other.upstream for other in loaded["operators"]), "a task follows the catalog start, so its failure could hold up the chain")
-    require(settings["trigger_dag_id"] == "metadata_ingest_dag", f"wrong DAG: {settings['trigger_dag_id']}")
-    require(settings["wait_for_completion"] is False, "the chain waits for the catalog task, so a failed catalog task would fail the chain")
-    require(settings["skip_when_already_exists"] is True and settings["reset_dag_run"] is False, "a retried bronze run may restart the catalog start")
+    require(
+        settings.get("trigger_rule") in (None, "all_success"),
+        "an upstream failure must still fail the chain, so the catalog start keeps the default trigger rule",
+    )
+    require(settings.get("retries") == 0, "a catalog start retry may start a second paid task")
     run = str(loaded["metadata_run_id"](BRONZE))
     require(RUN_ID.fullmatch(run) is not None, f"the catalog run id is not a valid run id: {run}")
     layer_ids = {str(loaded["chain_run"](layer, BRONZE)) for layer, _, _ in loaded["CHAIN"]}
@@ -220,9 +224,35 @@ def metadata_start_follows_drift_and_never_blocks_the_chain() -> None:
     require(
         run == str(loaded["metadata_run_id"](BRONZE)) and run != str(loaded["metadata_run_id"](OTHER_BRONZE)), "the catalog run id is not stable per bronze run"
     )
-    require(render(loaded, settings["trigger_run_id"], BRONZE) == f"chain__metadata_ingest_dag__{run}", "wrong catalog DAG run ID")
-    conf = {key: render(loaded, value, BRONZE) for key, value in settings["conf"].items()}
-    require(conf == {"run_id": run, "mode": "real"}, f"catalog settings: {conf}")
+    built: list[dict[str, Any]] = []
+    failing = {"on": False}
+
+    class Trigger:
+        def __init__(self, **built_settings: Any) -> None:
+            built.append(built_settings)
+
+        def execute(self, context: dict[str, Any]) -> None:
+            if failing["on"]:
+                raise RuntimeError("the trigger API refused the request")
+
+    patched = {"TriggerDagRunOperator": Trigger, "get_current_context": lambda: {"params": {"run_id": BRONZE, "mode": "real"}}}
+    with mock.patch.dict(node.function.__globals__, patched):
+        started = node.function()
+        first = dict(built[0])
+        failing["on"] = True
+        failed = node.function()
+    require(
+        first.get("trigger_dag_id") == "metadata_ingest_dag" and first.get("wait_for_completion") is False,
+        f"the catalog start must trigger metadata_ingest_dag without waiting: {first}",
+    )
+    require(first.get("skip_when_already_exists") is True and first.get("reset_dag_run") is False, "a retried bronze run may restart the catalog start")
+    require(first.get("trigger_run_id") == f"chain__metadata_ingest_dag__{run}", f"wrong catalog DAG run ID: {first.get('trigger_run_id')}")
+    require(first.get("conf") == {"run_id": run, "mode": "real"}, f"catalog settings: {first.get('conf')}")
+    require(isinstance(started, str) and run in started, f"the start result does not name the run: {started}")
+    require(
+        isinstance(failed, str) and "failed" in failed,
+        "a trigger error must be recorded in the result and not raised, so the chain result does not depend on the catalog",
+    )
 
 
 def broker_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
