@@ -1,6 +1,6 @@
 """Read, create and put the project's managed secrets in AWS Systems Manager Parameter Store; a value lives in memory and nowhere else.
 
-The 15 managed names are the committed defaults of the root variables in ``infra/iam/variables.tf``; ``terraform_defaults`` reads them back so a check
+The 16 managed names are the committed defaults of the root variables in ``infra/iam/variables.tf``; ``terraform_defaults`` reads them back so a check
 can compare the two. Each is a SecureString parameter named ``/healthcare_hai_prediction/<name_with_underscores>`` on the standard tier, encrypted with
 the AWS managed key ``aws/ssm``. The four shared API keys stay in Secrets Manager and this module only reads them. The project profile and region come
 from the rendered ``infra/deployment.auto.tfvars.json``. Errors name the secret and the action, never a value.
@@ -40,6 +40,7 @@ MARQUEZ_DB_PASSWORD = PREFIX + "marquez_db_password"
 AIRFLOW_ADMIN = PREFIX + "airflow_admin"
 REDIS_PASSWORD = PREFIX + "redis_password"
 MLFLOW_DB_PASSWORD = PREFIX + "mlflow_db_password"
+MLFLOW_ADMIN_PASSWORD = PREFIX + "mlflow_admin_password"
 MANAGED = (
     POSTGRES_PASSWORD,
     POLARIS_ROOT_SECRET,
@@ -56,6 +57,7 @@ MANAGED = (
     MARQUEZ_DB_PASSWORD,
     REDIS_PASSWORD,
     MLFLOW_DB_PASSWORD,
+    MLFLOW_ADMIN_PASSWORD,
 )
 READ_ONLY = (AIRFLOW_ADMIN,)
 SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
@@ -139,8 +141,8 @@ def terraform_defaults(root: Path) -> list[str]:
 def policy_names(variables: Path) -> dict[str, list[str]]:
     """The names the project user's policy files grant, read from the variable defaults and sorted: the placeholder name of each list.
 
-    ``SHARED_SECRET_NAME`` is the four Secrets Manager keys (read only), ``READ_PARAMETER_NAME`` the 16 parameters the user may read and
-    ``MANAGED_PARAMETER_NAME`` the 15 it may also put. The ten AWS Polaris pair names have their own statements and single-name placeholders.
+    ``SHARED_SECRET_NAME`` is the four Secrets Manager keys (read only), ``READ_PARAMETER_NAME`` the 17 parameters the user may read and
+    ``MANAGED_PARAMETER_NAME`` the 16 it may also put. The ten AWS Polaris pair names have their own statements and single-name placeholders.
     These variable defaults are the only source of the names: no policy file lists one.
     """
     defaults = terraform_variables(variables)
@@ -193,7 +195,7 @@ class SecretStore:
 
     @staticmethod
     def check(name: str, write: bool = False) -> None:
-        """Refuse a name outside the allowed set before a request: the 15 managed names for a write, with the read-only and shared names for a read."""
+        """Refuse a name outside the allowed set before a request: the 16 managed names for a write, with the read-only and shared names for a read."""
         allowed = MANAGED if write else (*MANAGED, *READ_ONLY, *SHARED)
         if name not in allowed:
             raise SecretStoreError(f"{name} is not a managed secret name")

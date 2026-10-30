@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import contextlib
 import hashlib
 import importlib.util
@@ -9,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import tarfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -27,6 +29,7 @@ from scripts.training.step_records import verify_done, write_done
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": [HAI_TYPE], "trigger": "manual", "mlflow": "aws"}
 TRACKING = "http://10.0.1.20:5100"
 BUCKET = "example-project-data-dev"
+LOGIN = "-".join(("synthetic", "login", "value", "0123456789"))
 TRAIN_STEPS = ["version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check"]
 
 
@@ -51,7 +54,14 @@ def lines_of(text: str) -> list[dict[str, Any]]:
 @contextlib.contextmanager
 def environment(**changes: str | None) -> Iterator[None]:
     """Give the runner the variables a task definition and a `run-task` override give it, with no ambient AWS value."""
-    values = {"DATA_BUCKET_NAME": BUCKET, "MLFLOW_TRACKING_URI": TRACKING, "TRAINING_PARAMETERS": json.dumps(PARAMETERS), "AWS_REGION": "us-west-2"}
+    values = {
+        "DATA_BUCKET_NAME": BUCKET,
+        "MLFLOW_TRACKING_URI": TRACKING,
+        "MLFLOW_TRACKING_USERNAME": "admin",
+        "MLFLOW_TRACKING_PASSWORD": LOGIN,
+        "TRAINING_PARAMETERS": json.dumps(PARAMETERS),
+        "AWS_REGION": "us-west-2",
+    }
     values.update({name: value for name, value in changes.items() if value is not None})
     with mock.patch.dict(os.environ, values):
         for name, value in changes.items():
@@ -191,6 +201,7 @@ def train_cases(cases: Any, folder: Path) -> None:
             verify_done(fixture.folder / "in" / step, step, DIGEST)
         require(len(fixture.tracking.parents()) == 1, f"parent runs: {len(fixture.tracking.parents())}")
         require(any(path.is_file() for path in (fixture.folder / "dvc_remote").rglob("*")), "nothing reached the DVC remote")
+        require(LOGIN not in out + error, "the MLflow login reached the output")
 
     def resumed() -> None:
         fixture = staged_train(folder / "resumed")
@@ -253,6 +264,18 @@ def train_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_run_train_refuses_changed_extract_output", refuses_changed_extract)
     cases.check("aws_run_train_stops_after_progress_and_names_the_step", stops_after_progress)
     cases.check("aws_run_train_refuses_missing_prerequisite", refuses_prerequisite)
+
+    def refuses_login(name: str, variable: str) -> None:
+        def case() -> None:
+            fixture = staged_train(folder / name)
+            code, out, error = train(fixture, **{variable: None})
+            require(code != 0 and variable in error and not out.strip() and LOGIN not in error, f"{code} {out} {error}")
+            require(not (fixture.folder / "in/version_extract").exists(), "an action ran before the login was checked")
+
+        cases.check(f"aws_run_train_refuses_{name}", case)
+
+    refuses_login("missing_mlflow_username", "MLFLOW_TRACKING_USERNAME")
+    refuses_login("missing_mlflow_password", "MLFLOW_TRACKING_PASSWORD")
     refuses_uri("missing_tracking_address", None)
     refuses_uri("loopback_tracking_address", "http://127.0.0.1:5100")
     refuses_uri("named_tracking_address", "http://mlflow:5100")
@@ -360,6 +383,7 @@ def extract_cases(cases: Any, folder: Path) -> None:
 
 
 FETCH = Path(__file__).resolve().parents[2] / "services/training/fetch_code.py"
+START = Path(__file__).resolve().parents[2] / "services/mlflow/start_server.py"
 
 
 class FakeObjects:
@@ -476,9 +500,80 @@ def fetch_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_fetch_refuses_a_path_leaving_the_workspace", traversal)
 
 
+def start_cases(cases: Any, folder: Path) -> None:
+    """The MLflow container starts the server with basic authentication, no default access and the administrator password only in a private file."""
+    password = "A" * 8 + "b1-" + "C" * 8
+    all_addresses = ".".join(["0"] * 4)
+    options = ["--host", all_addresses, "--port", "5100", "--workers", "1", "--serve-artifacts"]
+
+    def start(work: Path, argv: list[str], **changes: str | None) -> tuple[int, str, list[list[str]], dict[str, str]]:
+        spec = importlib.util.spec_from_file_location("start_server", START)
+        if spec is None or spec.loader is None:
+            raise ValueError("the start script is missing")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        environ = {"MLFLOW_ADMIN_PASSWORD": password, "MLFLOW_AUTH_DATABASE_URI": "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow_auth", "PATH": "/usr/bin"}
+        environ.update({name: value for name, value in changes.items() if value is not None})
+        for name, value in changes.items():
+            if value is None:
+                environ.pop(name, None)
+        launched: list[list[str]] = []
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = int(module.main(argv, environ, lambda arguments: launched.append(list(arguments)), work))
+        return code, err.getvalue(), launched, environ
+
+    def started() -> None:
+        work = folder / "started"
+        work.mkdir(parents=True)
+        code, error, launched, env = start(work, options)
+        require(code == 0 and len(launched) == 1, f"start failed: {code} {error}")
+        require(launched[0] == ["server", "--app-name", "basic-auth", *options], f"command: {launched[0]}")
+        ini = work / "mlflow_auth.ini"
+        require(stat.S_IMODE(ini.stat().st_mode) == 0o600, f"mode of the auth file: {oct(ini.stat().st_mode)}")
+        require(env["MLFLOW_AUTH_CONFIG_PATH"] == str(ini) and "MLFLOW_ADMIN_PASSWORD" not in env, "the server process kept the password in its environment")
+        parsed = configparser.ConfigParser(interpolation=None)
+        parsed.read(ini)
+        found = dict(parsed["mlflow"])
+        wanted = {
+            "default_permission": "NO_PERMISSIONS",
+            "database_uri": "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow_auth",
+            "authorization_function": "mlflow.server.auth:authenticate_request_basic_auth",
+            "admin_username": "admin",
+            "admin_password": password,
+        }
+        require(found == wanted, f"auth file: { {key: value for key, value in found.items() if key != 'admin_password'} }")
+
+    def restarted() -> None:
+        work = folder / "restarted"
+        work.mkdir(parents=True)
+        require(start(work, options)[0] == 0, "the first start failed")
+        before = (work / "mlflow_auth.ini").read_bytes()
+        require(start(work, options)[0] == 0 and (work / "mlflow_auth.ini").read_bytes() == before, "a second start changed the auth file")
+
+    def refuses(name: str, reason: str, argv: list[str] | None = None, **changes: str | None) -> None:
+        def case() -> None:
+            work = folder / name
+            work.mkdir(parents=True)
+            code, error, launched, _ = start(work, argv or options, **changes)
+            require(code != 0 and reason in error and not launched, f"{code} {error} {launched}")
+            require(not (work / "mlflow_auth.ini").exists(), "a refused start wrote the auth file")
+
+        cases.check(f"mlflow_start_{name}", case)
+
+    cases.check("mlflow_start_runs_the_server_with_basic_auth_and_a_private_password_file", started)
+    cases.check("mlflow_start_restart_keeps_the_same_file", restarted)
+    refuses("refuses_a_missing_password", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD=None)
+    refuses("refuses_a_short_password", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD="-".join(("short", "1")))
+    refuses("refuses_a_password_with_a_percent_sign", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD="%".join(("abcdefgh", "(ijklmnop)s")))
+    refuses("refuses_a_missing_database_address", "MLFLOW_AUTH_DATABASE_URI", MLFLOW_AUTH_DATABASE_URI=None)
+    refuses("refuses_a_command_that_names_its_own_app", "--app-name", argv=[*options, "--app-name", "other"])
+
+
 def scenarios(cases: Any, folder: Path) -> None:
     """Register every AWS runner case."""
     prepare_cases(cases, folder / "prepare")
     train_cases(cases, folder / "train")
     extract_cases(cases, folder / "extract")
     fetch_cases(cases, folder / "fetch")
+    start_cases(cases, folder / "start")

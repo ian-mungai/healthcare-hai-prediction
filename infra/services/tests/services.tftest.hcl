@@ -1504,6 +1504,7 @@ run "mlflow_is_off_by_default" {
       && length(aws_ecs_service.service) == 8
       && !contains(keys(output.host_ports_reachable_from_jobs), "mlflow")
       && !contains(output.parameter_names_used, var.mlflow_db_password_name)
+      && !contains(output.parameter_names_used, var.mlflow_admin_password_name)
       && !strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "mlflow")
     )
     error_message = "MLflow adds no service, no open port, no secret and no database until mlflow_enabled is true."
@@ -1565,7 +1566,7 @@ run "mlflow_service_shape" {
       && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].user == "10005:10005"
       && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].readonlyRootFilesystem
       && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].linuxParameters.capabilities.drop == ["ALL"]
-      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].entryPoint == ["mlflow", "server"]
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].entryPoint == ["python", "-I", "/opt/mlflow/start_server.py"]
     )
     error_message = "MLflow runs by digest as a non-root user on a read-only file system with every capability dropped."
   }
@@ -1585,10 +1586,33 @@ run "mlflow_service_shape" {
     condition = (
       contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_BACKEND_STORE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow" })
       && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_DISABLE_TELEMETRY", value = "true" })
-      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].secrets == [{ name = "PGPASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/mlflow_db_password" }]
+      && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_AUTH_DATABASE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow_auth" })
+      && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_ADMIN_USERNAME", value = "admin" })
+      && jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].secrets == [
+        { name = "PGPASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/mlflow_db_password" },
+        { name = "MLFLOW_ADMIN_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/mlflow_admin_password" },
+      ]
       && !strcontains(aws_ecs_task_definition.service["mlflow"].container_definitions, "postgresql+psycopg2://mlflow:")
     )
-    error_message = "The database password reaches MLflow only as a task secret, never in the URI or the command."
+    error_message = "The database password and the administrator password reach MLflow only as task secrets, never in the URI or the command."
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_ecs_task_definition.service["mlflow"].container_definitions, "--app-name")
+      && !strcontains(aws_ecs_task_definition.service["mlflow"].container_definitions, "NO_PERMISSIONS")
+      && strcontains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].healthCheck.command[3], "401")
+    )
+    error_message = "The start script owns the app name and the default permission. The health check accepts the 401 that an unauthenticated probe gets from a server that asks for a login."
+  }
+
+  assert {
+    condition = (
+      strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "CREATE DATABASE mlflow_auth OWNER mlflow")
+      && contains(output.parameter_names_used, var.mlflow_admin_password_name)
+      && output.parameter_names_used == distinct(output.parameter_names_used)
+    )
+    error_message = "The databases container also creates the mlflow_auth database, and the execution role injects the administrator password."
   }
 
   assert {
@@ -1684,4 +1708,35 @@ run "mlflow_without_log_group_is_refused" {
   }
 
   expect_failures = [var.log_group_names]
+}
+
+run "mlflow_definitions_for_review" {
+  command = plan
+
+  variables {
+    mlflow_enabled = true
+  }
+}
+
+run "mlflow_secrets_reach_no_file_argument_log_or_dump" {
+  command = plan
+
+  module {
+    source = "./tests/flow"
+  }
+
+  variables {
+    tasks       = run.mlflow_definitions_for_review.task_definition_settings
+    definitions = run.mlflow_definitions_for_review.container_definitions
+  }
+
+  assert {
+    condition     = output.violations == []
+    error_message = "A line lets the MLflow database or administrator password reach a file, a command argument, the log or the environment dump."
+  }
+
+  assert {
+    condition     = contains(output.containers_checked, "mlflow/mlflow") && contains(output.containers_checked, "postgres/postgres_databases")
+    error_message = "The shared check follows the secrets of the MLflow container and of the databases container."
+  }
 }

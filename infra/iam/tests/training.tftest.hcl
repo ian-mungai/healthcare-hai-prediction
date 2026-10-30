@@ -161,7 +161,7 @@ run "training_is_off_by_default" {
     condition = (
       length(aws_iam_role.train_task) == 0 && length(aws_iam_role.mlflow_task) == 0 && length(aws_security_group.training) == 0 &&
       length(aws_iam_role_policy.train_policy) == 0 && length(aws_iam_role_policy.mlflow_artifacts) == 0 &&
-      length(aws_iam_role_policy.train_image_pull) == 0 && length(aws_iam_role_policy.mlflow_parameter) == 0 &&
+      length(aws_iam_role_policy.train_image_pull) == 0 && length(aws_iam_role_policy.mlflow_parameter) == 0 && length(aws_iam_role_policy.train_parameter) == 0 &&
       output.training_network == null && output.training_roles == {}
     )
     error_message = "Without training_prepared the IAM root adds no role, no group and no rule for training."
@@ -223,10 +223,16 @@ run "execution_roles_get_exactly_what_the_new_tasks_inject" {
         "arn:aws:ecr:eu-west-1:111111111111:repository/example_project_training_dev",
         "arn:aws:ecr:eu-west-1:111111111111:repository/example_project_feature_store_dev",
       ] &&
-      jsondecode(aws_iam_role_policy.mlflow_parameter[0].policy).Statement[0].Resource == "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/mlflow_db_password" &&
+      jsondecode(aws_iam_role_policy.mlflow_parameter[0].policy).Statement[0].Resource == [
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/mlflow_db_password",
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/mlflow_admin_password",
+      ] &&
+      aws_iam_role_policy.train_parameter[0].role == aws_iam_role.job["execution"].name &&
+      jsondecode(aws_iam_role_policy.train_parameter[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/mlflow_admin_password"] &&
+      jsondecode(aws_iam_role_policy.train_parameter[0].policy).Statement[0].Action == "ssm:GetParameters" &&
       jsondecode(aws_iam_role_policy.mlflow_parameter[0].policy).Statement[0].Action == "ssm:GetParameters"
     )
-    error_message = "The job execution role may pull the two training images and no other new repository. The host execution role may inject the one MLflow database password."
+    error_message = "The job execution role may pull the two training images and no other new repository, and inject the one MLflow administrator password. The host execution role may inject the MLflow database password and the administrator password."
   }
 }
 

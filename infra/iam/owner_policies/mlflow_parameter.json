@@ -2,10 +2,13 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "InjectMlflowDatabasePassword",
+      "Sid": "InjectMlflowPasswords",
       "Effect": "Allow",
       "Action": "ssm:GetParameters",
-      "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MLFLOW_DB_PASSWORD_NAME}"
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MLFLOW_DB_PASSWORD_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MLFLOW_ADMIN_PASSWORD_NAME}"
+      ]
     }
   ]
 }

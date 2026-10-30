@@ -37,6 +37,7 @@ locals {
     var.marquez_db_password_name,
     var.redis_password_name,
     var.mlflow_db_password_name,
+    var.mlflow_admin_password_name,
   ]
   read_parameter_names = concat([var.airflow_admin_secret_name], local.managed_parameter_names)
 }

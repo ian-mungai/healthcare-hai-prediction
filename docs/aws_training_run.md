@@ -23,7 +23,7 @@ The task `<project>_<environment>_job_train` has five containers that share `/wo
 | `extract` | feature store | Reads one feature publication through the catalog and writes the training matrices. Only this container holds the catalog reader pair |
 | `train` | training | Runs `version_extract`, `fit`, `mediation`, `hac_validate`, `log_run` and `promotion_check` |
 
-The task role reads the stage inputs, the feature tables and the Feast registry. It reads and writes `dvc/`. It writes nothing in the lakehouse and has no access to `mlflow/`. The `train` container logs through the MLflow server at a private address on port 5100. The server proxies the artifacts into `mlflow/` of the data bucket.
+The task role reads the stage inputs, the feature tables and the Feast registry. It reads and writes `dvc/`. It writes nothing in the lakehouse and has no access to `mlflow/`. The `train` container logs in to the MLflow server at a private address on port 5100 as the administrator account. The server asks for a login on every request and grants nothing by default, because every service of the host shares the host network. The `train` container and the owner hold the one password, from Parameter Store. The server proxies the artifacts into `mlflow/` of the data bucket.
 
 ## Apply order
 
@@ -34,7 +34,7 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 3. `infra` (project profile): apply the `expire_replaced_mlflow_versions` lifecycle rule.
 4. `infra/platform`: add `mlflow`, `training` and `feature_store` to the ECR repositories and `mlflow` to the log groups.
 5. Images: build the `mlflow`, `training` and `feature_store` images and push them. See "Images" below. Then record the digests with `scripts.infrastructure.push_images record`.
-6. Secret: put the value of the `mlflow_db_password` parameter with `scripts/infrastructure/secret_store.py`. Use a new random value.
+6. Secrets: put the values of the `mlflow_db_password` and `mlflow_admin_password` parameters with `scripts/infrastructure/secret_store.py`. Use new random values. MLflow reads the administrator password only when it first creates the account. To change it later, change it through the MLflow user interface first and then the parameter.
 7. `infra/services`: set `mlflow_enabled = true`, `mlflow_task_role_arn` (the `mlflow_task` ARN from the `training_roles` output), `mlflow_host_ip` (the private address of the host) and `mlflow_artifact_bucket`. Then restart the Postgres service once so its short database container creates the `mlflow` role and database.
 8. `infra/jobs`: set `train_enabled = true` with `train_images` and `train_roles`. `train_images` holds the repository URL and digest of the `training` and `feature_store` images.
 
@@ -91,7 +91,7 @@ Run the same command with `services/mlflow/compile_lock.sh`. Review the version 
 5. Watch the log group `<project>_jobs_<environment>`. Each finished step prints one JSON line. A failure prints one JSON line that names the step. Stop a task that must not continue with `aws ecs stop-task`.
 6. A rerun uses a new task and the same run ID. DVC stores the matrix once by content and `log_run` logs each run once by its key, so a repeat adds nothing.
 
-Read the runs in the MLflow interface through a port forward to the host, as for Airflow:
+Read the runs in the MLflow interface through a port forward to the host, as for Airflow. Sign in as `admin` with the value of the `mlflow_admin_password` parameter:
 
 ```sh
 aws ssm start-session --profile <PROJECT_PROFILE> --region <REGION> --target <INSTANCE_ID> \
@@ -125,5 +125,6 @@ Stop steps, in this order:
 - The `linux/arm64` build of both new images and the DVC hashes for that platform.
 - The library versions of the model code against real data.
 - The MLflow server memory limit of 640 MiB under a real run.
+- The authentication setup against the pinned MLflow version: the settings file keys, the health route answering without a login and the training client sending its login. The offline cases cover the start script and the task definitions only.
 - Whether the endpoints alone give the task every route it needs. The job network has no NAT.
 - Every network path between the task and the host. Only the plans and policies are checked offline.

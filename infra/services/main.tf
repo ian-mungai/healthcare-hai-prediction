@@ -79,6 +79,7 @@ locals {
     redis_password         = var.redis_password_name
     polaris_root_secret    = var.polaris_root_secret_name
     mlflow_db_password     = var.mlflow_db_password_name
+    mlflow_admin_password  = var.mlflow_admin_password_name
   }
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value

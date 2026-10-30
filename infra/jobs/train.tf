@@ -45,6 +45,18 @@ variable "train_roles" {
   }
 }
 
+variable "mlflow_admin_password_name" {
+  description = "Parameter Store SecureString name of the MLflow administrator password. The train container logs in with it. Terraform references the name and never reads the value."
+  type        = string
+  default     = "/healthcare_hai_prediction/mlflow_admin_password"
+  nullable    = false
+
+  validation {
+    condition     = !var.train_enabled || var.mlflow_admin_password_name == "/${var.project_name}/mlflow_admin_password"
+    error_message = "Inject only the project MLflow administrator password parameter."
+  }
+}
+
 variable "train_resources" {
   description = "Fargate CPU units, memory MiB and ephemeral storage GiB of the training task."
   type = object({
@@ -82,7 +94,12 @@ locals {
     { name = "fetch", image = "training", script = "python -I /opt/hai/fetch_code.py", secrets = [] },
     { name = "prepare", image = "training", script = format(local.train_phase, "prepare"), secrets = [] },
     { name = "extract", image = "feature_store", script = format(local.train_phase, "extract"), secrets = local.reader_parameters },
-    { name = "train", image = "training", script = format(local.train_phase, "train"), secrets = [] },
+    {
+      name    = "train"
+      image   = "training"
+      script  = format(local.train_phase, "train")
+      secrets = [{ name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.mlflow_admin_password_name}" }]
+    },
   ]
   train_containers = var.train_enabled ? [
     for index, step in local.train_steps : {
@@ -115,7 +132,10 @@ locals {
           { name = "DUCKDB_MEMORY_LIMIT", value = "12GB" },
         ],
         [for name in lookup(local.train_run_variables, step.name, []) : { name = name, value = "" }],
-        step.name == "train" ? [{ name = "TRAINING_IMAGE_DIGEST", value = split("@", lookup(var.train_images, step.image, "invalid@invalid"))[1] }] : []
+        step.name == "train" ? [
+          { name = "TRAINING_IMAGE_DIGEST", value = split("@", lookup(var.train_images, step.image, "invalid@invalid"))[1] },
+          { name = "MLFLOW_TRACKING_USERNAME", value = "admin" },
+        ] : []
       )
       secrets = step.secrets
       mountPoints = [

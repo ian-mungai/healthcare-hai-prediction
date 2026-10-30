@@ -16,6 +16,10 @@ locals {
     dvc_baseline  = local.training_policy_documents.job_dvc_baseline
   } : {}
   training_endpoints = var.training_prepared && var.job_endpoints_enabled
+  mlflow_parameter_values = merge(local.owner_policy_values, {
+    MLFLOW_DB_PASSWORD_NAME    = var.mlflow_db_password_name
+    MLFLOW_ADMIN_PASSWORD_NAME = var.mlflow_admin_password_name
+  })
 }
 
 resource "aws_iam_role" "train_task" {
@@ -64,12 +68,20 @@ resource "aws_iam_role_policy" "train_image_pull" {
   policy = templatefile("${path.module}/owner_policies/job_train_images.json", local.job_policy_inputs)
 }
 
+resource "aws_iam_role_policy" "train_parameter" {
+  count = var.training_prepared ? 1 : 0
+
+  name   = "train_parameter"
+  role   = aws_iam_role.job["execution"].name
+  policy = templatefile("${path.module}/owner_policies/job_train_parameter.json", local.mlflow_parameter_values)
+}
+
 resource "aws_iam_role_policy" "mlflow_parameter" {
   count = var.training_prepared ? 1 : 0
 
   name   = "mlflow_parameter"
   role   = aws_iam_role.task_execution.name
-  policy = templatefile("${path.module}/owner_policies/mlflow_parameter.json", merge(local.owner_policy_values, { MLFLOW_DB_PASSWORD_NAME = var.mlflow_db_password_name }))
+  policy = templatefile("${path.module}/owner_policies/mlflow_parameter.json", local.mlflow_parameter_values)
 }
 
 resource "aws_security_group" "training" {
