@@ -9,6 +9,7 @@ the stable model, and the row records both versions.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -276,6 +277,8 @@ class ModelService:
             return None
         try:
             value = float(slot.model.predict(served.values))
+            if not math.isfinite(value):
+                raise ValueError("the model returned a number that is not finite")
         except Exception as error:
             self._failed(slot, error)
             return None

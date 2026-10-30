@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import logging
+import math
 import re
 import tempfile
 import threading
@@ -76,6 +77,7 @@ class Loader:
     def __init__(self) -> None:
         self.broken: set[str] = set()
         self.cost = 0.0
+        self.nonfinite: dict[str, float] = {}
         self.schema_hashes: dict[str, str] = {}
         self.extra_references: dict[str, tuple[str, ...]] = {}
         self.calls = 0
@@ -97,6 +99,8 @@ class Loader:
                 self.clock.now += self.cost
             if version in self.broken:
                 raise RuntimeError("synthetic prediction failure")
+            if version in self.nonfinite:
+                return self.nonfinite[version]
             return float(version) + sum(len(str(value)) for value in row.values()) / 10000
 
         references = (*online_cases.REFERENCES, *self.extra_references.get(version, ()))
@@ -709,6 +713,37 @@ def case_sink_late_commit(c: Checker) -> None:
     c.check("the stuck worker ends once released", hanging.wait_idle(5.0))
 
 
+def case_nonfinite(c: Checker) -> None:
+    """A prediction that is not a finite number is a model failure: it triggers fallback and ejection, and it is never returned or recorded."""
+    keys_ = hospital_keys(40)
+    with world(count=40, percent=50) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        w.loader.nonfinite[CANDIDATE] = math.nan
+        first = ask(w, canary_keys[0])
+        c.check(
+            "a NaN from the canary falls back to the stable model with 200",
+            first.status == 200 and first.body["model_version"] == PRODUCTION and first.body["fallback"] is True,
+        )
+        for key in canary_keys[1:3]:
+            ask(w, key)
+        c.check("three nonfinite answers eject the canary", w.api.health().body[HAI]["candidate"] == "ejected")
+        w.loader.nonfinite[CANDIDATE] = math.inf
+        c.check("an infinite answer is handled alike", ask(w, canary_keys[3]).body["model_version"] == PRODUCTION)
+        c.check("no recorded prediction is nonfinite", all(math.isfinite(row["prediction"]) for row in rows_of(w)))
+    with world(count=40, percent=50) as w:
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        stable_keys = [key for key, kind in routed.items() if kind == "stable"]
+        canary_keys = [key for key, kind in routed.items() if kind == "canary"]
+        w.loader.nonfinite[PRODUCTION] = -math.inf
+        refused_ = [ask(w, key) for key in stable_keys[:5]]
+        c.check("a nonfinite stable answer gives 503 with no prediction", all(r.status == 503 and "prediction" not in r.body for r in refused_))
+        c.check("the canary still answers its own requests", all(ask(w, key).status == 200 for key in canary_keys[:3]))
+        c.check("no row holds the nonfinite value", all(math.isfinite(row["prediction"]) for row in rows_of(w)))
+        reply = ask(w, stable_keys[0])
+        c.check("the refusal body is valid JSON", json.loads(json.dumps(reply.body, allow_nan=False)) == reply.body)
+
+
 def refused(call: Callable[[], object]) -> bool:
     try:
         call()
@@ -1009,6 +1044,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "split_deterministic": (case_split, "canary"),
     "version_failure_isolated": (case_version_failure, "canary"),
     "candidate_feature_errors": (case_candidate_feature_errors, "canary"),
+    "nonfinite_predictions": (case_nonfinite, "canary"),
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
