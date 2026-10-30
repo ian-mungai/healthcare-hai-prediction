@@ -31,6 +31,8 @@ orchestration_checks() {
   timed "orchestration_checks: transform broker E2E" "$python_bin" -m scripts.orchestration.run_transform_broker_e2e
   # The offline checks skip the built Airflow image, which a CI runner does not have.
   timed "orchestration_checks: model API E2E" "$python_bin" -B -m scripts.serving.run_serving_checks --output "$quality_output/serving_checks"
+  # The page cases need Streamlit, which the runner does not install, so the runner reports them as blocked here. They run in the page image.
+  timed "orchestration_checks: Streamlit client E2E" "$python_bin" -B -m scripts.streamlit_app.run_streamlit_checks --output "$quality_output/streamlit_checks"
   timed "orchestration_checks: offline checks" "$python_bin" -m scripts.orchestration.offline_checks --no-image
   timed "orchestration_checks: failing first check" "$python_bin" -m scripts.orchestration.run_failing_first --check
 }

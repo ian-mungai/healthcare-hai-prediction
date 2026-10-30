@@ -97,6 +97,8 @@
       "^scripts/orchestration/",
       "^scripts/serving/",
       "^data_contracts/serving/",
+      "^scripts/streamlit_app/",
+      "^services/streamlit/",
       "^orchestration/",
       "^dags/",
       "^tests/orchestration/",
