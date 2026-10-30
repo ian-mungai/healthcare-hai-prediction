@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from scripts.lakehouse import bronze, bronze_run
+from scripts.lakehouse import bronze, bronze_metadata, bronze_pin, bronze_run
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 RUN = "20261030T010203Z-0a1b2c3d"
@@ -40,6 +40,7 @@ CATALOG: list[Path] = []
 DEFECTS: set[str] = set()
 LOADS: list[list[str]] = []
 STORAGE: list[FakeStorage] = []
+STAGED: dict[str, bytes] = {}
 
 
 class FakeStorage:
@@ -124,7 +125,13 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     namespace, dictionary = values[values.index("--namespace") + 1], values[values.index("--dictionary-namespace") + 1]
     names = values[values.index("--tables") + 1].split(",")
     config = bronze.load_table_map(job.code / "config/lakehouse/bronze_tables.json")
-    inputs, _ = bronze.discover(STORAGE[0], BUCKET, config, names, bronze.RetiredObjects())
+    source: Any = STORAGE[0]
+    if "--inventory" in values:
+        inventory = bronze_pin.read_inventory(Path(values[values.index("--inventory") + 1]).read_bytes())
+        source = bronze_pin.PinnedStorage(source, inventory)
+    inputs, _ = bronze.discover(source, BUCKET, config, names, bronze.RetiredObjects())
+    if "--inventory" in values:
+        bronze_pin.verify_replay(inventory, inputs)
     tables = catalog()
     for item in inputs:
         tables.setdefault(f"{namespace}.{item['table']}", {})[item["object_key"]] = item["sha256"]
@@ -162,6 +169,23 @@ class Case:
         }
         self.out = ""
         self.err = ""
+        self.shas: tuple[str, str] | None = None
+        self.key: tuple[str, str, bool] | None = None
+
+    def stage(self, tables: str, target: str, dry: bool) -> tuple[str, str]:
+        """What the owner stages and the broker checks: the inventory of the manifest versions and the request that names its digest."""
+        self.key = (tables, target, dry)
+        names = [name for name in tables.split(",") if name]
+        config = bronze.load_table_map(self.root / "src/config/lakehouse/bronze_tables.json")
+        try:
+            inventory = bronze_pin.build_inventory(STORAGE[0], BUCKET, config, names)
+        except (bronze.BronzeError, KeyError):
+            inventory = {"version": 1, "tables": [], "manifests": [], "objects": [], "documents": []}
+        raw = bronze_pin.inventory_bytes(inventory)
+        STAGED["bronze_inventory.json"] = raw
+        request = {"tables": names, "target": target, "dry_run": dry, "inventory_sha256": hashlib.sha256(raw).hexdigest()}
+        STAGED["bronze_request.json"] = json.dumps(request).encode()
+        return hashlib.sha256(STAGED["bronze_request.json"]).hexdigest(), request["inventory_sha256"]
 
     def work(self, label: str = "w") -> Path:
         path = self.root / label
@@ -182,11 +206,17 @@ class Case:
         digest: str | None = None,
         extra: Sequence[str] = (),
         environment: dict[str, str] | None = None,
+        staged: bool = False,
     ) -> int:
+        environment = environment or {}
+        dry = "--dry-run" in extra or environment.get("BRONZE_DRY_RUN", "") in ("1", "true")
+        key = (tables or environment.get("BRONZE_TABLES", ""), target or environment.get("BRONZE_TARGET", ""), dry)
+        if not staged and (self.shas is None or (phase == "pin" and self.key != key)):
+            self.shas = self.stage(*key)
         arguments = [phase, "--run", RUN, "--work", str(self.work(label)), "--code-sha256", digest or self.digest, "--bucket", BUCKET]
-        arguments += ["--tables", tables, "--target", target, *extra]
+        arguments += ["--tables", tables, "--target", target, "--request-sha256", self.shas[0], "--inventory-sha256", self.shas[1], *extra]
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), mock.patch.dict(os.environ, environment or {}):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), mock.patch.dict(os.environ, environment):
             try:
                 code = bronze_run.main(arguments)
             except SystemExit as stop:
@@ -209,7 +239,11 @@ def patched(root: Path) -> Iterator[Case]:
     with (
         mock.patch.object(bronze_run, "run_module", loader),
         mock.patch.object(bronze_run, "storage", lambda: STORAGE[0]),
-        mock.patch.dict(os.environ, {"BRONZE_DRY_RUN": "", "BRONZE_TABLES": "", "BRONZE_TARGET": ""}),
+        mock.patch.object(bronze_run, "owner_storage", lambda: STORAGE[0]),
+        mock.patch.object(bronze_run, "read_staged", lambda run, bucket, name: STAGED[name]),
+        mock.patch.dict(
+            os.environ, {"BRONZE_DRY_RUN": "", "BRONZE_TABLES": "", "BRONZE_TARGET": "", "BRONZE_REQUEST_SHA256": "", "BRONZE_INVENTORY_SHA256": ""}
+        ),
     ):
         yield Case(root)
 
@@ -281,14 +315,19 @@ def case_dry_run_checks_the_bytes(case: Case) -> None:
     require(writes() == [] and LOADS == [], "nothing is written")
 
 
-def case_dry_run_needs_a_version(case: Case) -> None:
-    key, version = case.objects["beta_data"]
+def case_an_object_without_a_version_cannot_enter_the_inventory(case: Case) -> None:
     manifest_key = next(name for name, _ in case.storage.objects if name.endswith("beta/manifest.json"))
-    manifest = json.loads(case.storage.objects.pop((manifest_key, next(v for k, v in case.storage.objects if k == manifest_key))))
+    version = next(v for k, v in case.storage.objects if k == manifest_key)
+    manifest = json.loads(case.storage.objects.pop((manifest_key, version)))
     manifest["objects"][0]["object"]["version_id"] = ""
     case.storage.put(manifest_key, json.dumps(manifest).encode())
-    require(case.phase("pin", extra=["--dry-run"]) == 0 and case.phase("load") != 0, case.err)
-    require("no S3 version" in case.err and (key, version) in case.storage.objects, case.err)
+    config = bronze.load_table_map(case.root / "src/config/lakehouse/bronze_tables.json")
+    try:
+        bronze_pin.build_inventory(case.storage, BUCKET, config, ["beta_data"])
+    except bronze.BronzeError as error:
+        require("no S3 version" in str(error), str(error))
+    else:
+        raise AssertionError("an object without a version entered the inventory")
 
 
 def case_unknown_table_is_refused(case: Case) -> None:
@@ -355,6 +394,109 @@ def case_phase_outside_the_job(case: Case) -> None:
     require(writes() == [] and LOADS == [], "nothing runs")
 
 
+def new_capture(case: Case) -> None:
+    store(case.storage, "org_a/set_one", "alpha", "snap_a2", b"id,value\n7,z\n")
+
+
+def case_the_pin_binds_the_source_inventory(case: Case) -> None:
+    require(case.phase("pin") == 0, case.err)
+    config = bronze.load_table_map(case.root / "src/config/lakehouse/bronze_tables.json")
+    before, _ = bronze.discover(case.storage, BUCKET, config, ["alpha_data", "beta_data"], bronze.RetiredObjects())
+    new_capture(case)
+    after, _ = bronze.discover(case.storage, BUCKET, config, ["alpha_data", "beta_data"], bronze.RetiredObjects())
+    require(len(before) == 2 and len(after) == 3, "an unpinned discovery sees the new capture")
+    require(case.phase("load") == 0 and case.phase("check") == 0, case.err)
+    require(sum(len(rows) for name, rows in catalog().items() if name.startswith("bronze.")) == 2, "the load replays the pinned inventory only")
+    case.chain(label="retry")
+    require(
+        sum(len(rows) for name, rows in catalog().items() if name.startswith("bronze.")) == 2, "a retry after the capture arrived loads the same two objects"
+    )
+
+
+def case_a_dry_run_replays_the_pinned_inventory(case: Case) -> None:
+    require(case.phase("pin", extra=["--dry-run"]) == 0, case.err)
+    new_capture(case)
+    require(case.phase("load") == 0, case.err)
+    plan = json.loads(case.out.split("DRY_RUN_PLAN ", 1)[1].splitlines()[0])
+    require(plan["summary"]["objects"] == 2, plan["summary"])
+
+
+def case_a_tampered_inventory_is_refused(case: Case) -> None:
+    case.phase("pin", extra=["--dry-run"])
+    case.err = ""
+    STAGED["bronze_inventory.json"] = STAGED["bronze_inventory.json"] + b" "
+    require(case.phase("pin", extra=["--dry-run"]) != 0 and "inventory" in case.err, case.err)
+
+
+def case_an_inventory_object_missing_from_the_bucket_is_refused(case: Case) -> None:
+    require(case.phase("pin", extra=["--dry-run"]) == 0, case.err)
+    key, version = case.objects["alpha_data"]
+    del case.storage.objects[(key, version)]
+    require(case.phase("load") != 0 and key in case.err, case.err)
+    require(writes() == [] and LOADS == [], "nothing is written")
+
+
+def case_a_request_replaced_after_the_broker_checked_it_is_refused(case: Case) -> None:
+    case.shas = case.stage("alpha_data,beta_data", "qualify", True)
+    live = {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1]}
+    STAGED["bronze_request.json"] = json.dumps(live).encode()
+    require(case.phase("pin", target="qualify", extra=["--dry-run"], staged=True) != 0 and "broker checked" in case.err, case.err)
+    case.err = ""
+    case.shas = case.stage("alpha_data,beta_data", "qualify", True)
+    STAGED["bronze_request.json"] = json.dumps(live).encode()
+    require(case.phase("pin", target="real", staged=True) != 0 and "broker checked" in case.err, case.err)
+    require(writes() == [] and LOADS == [], "nothing runs")
+
+
+def case_a_dry_request_cannot_run_live(case: Case) -> None:
+    case.shas = case.stage("alpha_data,beta_data", "qualify", True)
+    arguments = ["pin", "--run", RUN, "--work", str(case.work()), "--code-sha256", case.digest, "--bucket", BUCKET, "--tables", "alpha_data,beta_data"]
+    arguments += ["--target", "qualify", "--request-sha256", case.shas[0], "--inventory-sha256", case.shas[1]]
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        code = bronze_run.main(arguments)
+    require(code != 0 and "dry run" in err.getvalue(), err.getvalue())
+
+
+def case_qualification_metadata_is_scoped_to_the_selected_tables(case: Case) -> None:
+    config = bronze.load_table_map(case.root / "src/config/lakehouse/bronze_tables.json")
+    names = ["alpha_data", "beta_data"]
+    inputs, unselected = bronze.discover(case.storage, BUCKET, config, names, bronze.RetiredObjects())
+    everything = [entry["table"] for entry in config["tables"]]
+    try:
+        bronze_metadata.build(names, inputs, unselected, [], everything)
+    except bronze_metadata.MetadataError as error:
+        require("full committed" in str(error), str(error))
+    else:
+        raise AssertionError("the first metadata publication must need the full map")
+    require(bronze.metadata_tables(config, names, "bronze_e2e") == names, "a qualification namespace is scoped")
+    require(bronze.metadata_tables(config, names, "bronze") == everything, "the production namespace keeps the full map")
+    require(len(bronze_metadata.build(names, inputs, unselected, [], bronze.metadata_tables(config, names, "bronze_e2e"))) > 0, "the scoped build works")
+    try:
+        bronze.metadata_tables(config, names, "bronze_dictionary")
+    except bronze.BronzeError:
+        pass
+    else:
+        raise AssertionError("scoped metadata is for the qualification namespace only")
+    case.phase("pin", target="qualify")
+    case.phase("load", target="qualify")
+    require("--selected-metadata" in LOADS[-1], LOADS[-1])
+    case.phase("pin", label="p")
+    case.phase("load", label="p")
+    require("--selected-metadata" not in LOADS[-1], LOADS[-1])
+
+
+def case_the_owner_stages_an_inventory_the_pin_accepts(case: Case) -> None:
+    out = case.root / "staged"
+    arguments = ["inventory", "--run", RUN, "--code", str(case.root / "src"), "--bucket", BUCKET, "--tables", "alpha_data,beta_data", "--target", "qualify"]
+    require(bronze_run.main([*arguments, "--out", str(out), "--dry-run"]) == 0, "the inventory phase failed")
+    STAGED["bronze_request.json"], STAGED["bronze_inventory.json"] = (out / "bronze_request.json").read_bytes(), (out / "bronze_inventory.json").read_bytes()
+    case.shas = (hashlib.sha256(STAGED["bronze_request.json"]).hexdigest(), hashlib.sha256(STAGED["bronze_inventory.json"]).hexdigest())
+    new_capture(case)
+    require(case.phase("pin", target="qualify", extra=["--dry-run"], staged=True) == 0, case.err)
+    require(case.phase("load", target="qualify", staged=True) == 0 and '"objects":2' in case.out.replace(" ", ""), case.err + case.out[-300:])
+
+
 CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
@@ -363,7 +505,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "BRONZE_DRY_RUN=1 and the dispatch variables start a dry run": case_dry_run_from_the_environment,
     "a dry task stays dry and a new pin starts a new task": case_dry_run_stays_dry_after_pin,
     "a dry run stops on bytes that differ from the manifest hash": case_dry_run_checks_the_bytes,
-    "a dry run stops on an object without a version": case_dry_run_needs_a_version,
+    "an object without a version cannot enter the inventory": case_an_object_without_a_version_cannot_enter_the_inventory,
     "a table outside the table map is refused at the pin": case_unknown_table_is_refused,
     "bad table lists and targets are refused at the pin": case_bad_dispatch_values_are_refused,
     "dispatch values that changed after the pin are refused": case_changed_dispatch_values_are_refused,
@@ -372,6 +514,14 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a loader failure fails the task": case_loader_failure_fails_the_task,
     "the check phase refuses a failed, missing or partial report": case_check_refuses_a_bad_report,
     "a phase outside the job exits non-zero": case_phase_outside_the_job,
+    "the pin binds the source inventory and a retry replays it": case_the_pin_binds_the_source_inventory,
+    "a dry run replays the pinned inventory": case_a_dry_run_replays_the_pinned_inventory,
+    "a tampered inventory is refused at the pin": case_a_tampered_inventory_is_refused,
+    "an inventory object missing from the bucket is refused": case_an_inventory_object_missing_from_the_bucket_is_refused,
+    "a request replaced after the broker checked it is refused": case_a_request_replaced_after_the_broker_checked_it_is_refused,
+    "a dry request cannot run live": case_a_dry_request_cannot_run_live,
+    "qualification metadata is scoped to the selected tables": case_qualification_metadata_is_scoped_to_the_selected_tables,
+    "the owner stages an inventory that the pin accepts": case_the_owner_stages_an_inventory_the_pin_accepts,
 }
 
 

@@ -21,6 +21,7 @@ does nothing. The first dry phase marks the run folder, so a later phase without
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -32,11 +33,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import bronze, provenance
+from scripts.lakehouse import bronze, bronze_pin, provenance
 from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch
 from scripts.process import TimeoutExpired, run_command
 
 PHASES = ("pin", "load", "check")
+REQUEST_FILE = "bronze_request.json"
+INVENTORY_FILE = "bronze_inventory.json"
+STAGE_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
+REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 REPORT_FOLDER = bronze.REPORT_ROOT
 STEP_SECONDS = 4 * 3600
@@ -61,6 +66,8 @@ class Job:
     tables: tuple[str, ...]
     target: str
     dry_run: bool = False
+    request_sha256: str = ""
+    inventory_sha256: str = ""
 
     @property
     def code(self) -> Path:
@@ -92,6 +99,18 @@ def storage() -> Any:
     return bronze.S3Storage(task_role=True)
 
 
+def read_staged(run: str, bucket: str, name: str) -> bytes:
+    """One staged input of the run, read with the task identity."""
+    import boto3
+
+    return bytes(boto3.client("s3").get_object(Bucket=bucket, Key=STAGE_KEY.format(run=run, name=name))["Body"].read())
+
+
+def owner_storage() -> Any:
+    """The versioned reader of the acquisition bucket, with the owner's project profile."""
+    return bronze.S3Storage(task_role=False)
+
+
 def table_map(code: Path) -> dict[str, Any]:
     return bronze.load_table_map(code / TABLE_MAP)
 
@@ -118,22 +137,70 @@ def recorded(job: Job) -> dict[str, Any]:
     record: dict[str, Any] = json.loads(path.read_text())
     if record["run_id"] != job.run or tuple(record["tables"]) != job.tables or record["target"] != job.target:
         raise StepError("the dispatch values changed after the pin phase")
+    if job.request_sha256 and job.request_sha256 != record["request_sha256"]:
+        raise StepError("the request digest changed after the pin phase")
     return record
 
 
 def pin(job: Job, archive: Path, code_sha256: str) -> None:
+    """Bind the code, the request the broker checked and the source inventory of the run."""
     revision = archive_revision(archive, code_sha256)
+    request_raw = read_staged(job.run, job.bucket, REQUEST_FILE)
+    if not SHA256.fullmatch(job.request_sha256) or hashlib.sha256(request_raw).hexdigest() != job.request_sha256:
+        raise StepError("the staged request differs from the one the broker checked")
+    request = json.loads(request_raw)
+    if not isinstance(request, dict) or set(request) != REQUEST_KEYS or type(request["dry_run"]) is not bool:
+        raise StepError("the staged request needs exactly tables, target, dry_run and inventory_sha256")
+    if tuple(request["tables"]) != job.tables or request["target"] != job.target or request["inventory_sha256"] != job.inventory_sha256:
+        raise StepError("the staged request differs from the dispatch values")
+    if request["dry_run"] and not job.dry_run:
+        raise StepError("the request is a dry run and the task is not: a dry run request cannot run live")
+    inventory_raw = read_staged(job.run, job.bucket, INVENTORY_FILE)
+    if not SHA256.fullmatch(job.inventory_sha256) or hashlib.sha256(inventory_raw).hexdigest() != job.inventory_sha256:
+        raise StepError("the staged inventory differs from the digest in the request")
+    inventory = bronze_pin.read_inventory(inventory_raw)
+    if inventory["tables"] != sorted(job.tables):
+        raise StepError("the staged inventory covers other tables than the dispatch")
     job.folder.mkdir(parents=True, exist_ok=True)
+    (job.folder / INVENTORY_FILE).write_bytes(inventory_raw)
     record = {"run_id": job.run, "code_sha256": code_sha256, "git_revision": revision, "tables": list(job.tables), "target": job.target}
+    record |= {"request_sha256": job.request_sha256, "inventory_sha256": job.inventory_sha256}
     (job.folder / RECORD).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    sys.stdout.write(f"pinned bronze run {job.run}: target {job.target}, tables {','.join(job.tables)}, code {revision[:12]}\n")
+    sys.stdout.write(
+        f"pinned bronze run {job.run}: target {job.target}, tables {','.join(job.tables)}, code {revision[:12]}, inventory {job.inventory_sha256[:12]}\n"
+    )
+
+
+def stage_inputs(code: Path, bucket: str, tables: str, target: str, dry_run: bool, out: Path) -> tuple[str, str]:
+    """Owner side: list the current sources once and write the inventory and the request that names its digest. Stage both beside the code archive."""
+    config = table_map(code)
+    names = check_dispatch(tables, target, collections_of(config))
+    inventory = bronze_pin.build_inventory(owner_storage(), bucket, config, list(names), bronze.load_retired(code / bronze.RETIRED))
+    raw = bronze_pin.inventory_bytes(inventory)
+    digest = hashlib.sha256(raw).hexdigest()
+    request = json.dumps({"tables": list(names), "target": target, "dry_run": dry_run, "inventory_sha256": digest}, sort_keys=True).encode()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / INVENTORY_FILE).write_bytes(raw)
+    (out / REQUEST_FILE).write_bytes(request)
+    sys.stdout.write(f"staged {len(inventory['objects'])} objects from {len(inventory['manifests'])} manifests: inventory {digest}\n")
+    return hashlib.sha256(request).hexdigest(), digest
+
+
+def pinned_inventory(job: Job) -> dict[str, Any]:
+    """The inventory the pin bound, read again from the run folder and checked against its recorded digest."""
+    raw = (job.folder / INVENTORY_FILE).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != recorded(job)["inventory_sha256"]:
+        raise StepError("the pinned inventory changed after the pin phase")
+    return bronze_pin.read_inventory(raw)
 
 
 def plan_load(job: Job) -> dict[str, Any]:
     """Dry-run ``load``: read the manifests and every object version, check each hash and size, then print and save the plan. Nothing shared is written."""
     config = table_map(job.code)
-    source = storage()
+    inventory = pinned_inventory(job)
+    source = bronze_pin.PinnedStorage(storage(), inventory)
     inputs, _ = bronze.discover(source, job.bucket, config, job.tables, bronze.load_retired(job.code / bronze.RETIRED))
+    bronze_pin.verify_replay(inventory, inputs)
     objects = []
     scratch = job.folder / "scratch"
     scratch.mkdir(parents=True, exist_ok=True)
@@ -158,7 +225,11 @@ def plan_load(job: Job) -> dict[str, Any]:
 
 def load(job: Job) -> None:
     namespace, dictionary = job.namespaces
+    pinned_inventory(job)
     arguments = ["--tables", ",".join(job.tables), "--namespace", namespace, "--dictionary-namespace", dictionary, "--bucket", job.bucket, "--task-role"]
+    arguments += ["--inventory", str(job.folder / INVENTORY_FILE)]
+    if job.target == "qualify":
+        arguments.append("--selected-metadata")
     run_module(job, "scripts.lakehouse.bronze", arguments)
 
 
@@ -202,14 +273,18 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("phase", choices=PHASES)
+    parser.add_argument("phase", choices=(*PHASES, "inventory"))
     parser.add_argument("--run", required=True)
     parser.add_argument("--tables", default="", help="comma-separated tables (also BRONZE_TABLES)")
     parser.add_argument("--target", default="", help="real or qualify (also BRONZE_TARGET)")
     parser.add_argument("--work", type=Path, default=Path("/workspace"))
     parser.add_argument("--archive", type=Path)
+    parser.add_argument("--code", type=Path, default=Path("."), help="inventory: the unpacked repository that holds the table map")
+    parser.add_argument("--out", type=Path, help="inventory: the folder that receives bronze_request.json and bronze_inventory.json")
     parser.add_argument("--code-sha256", default=os.environ.get("CODE_SHA256", ""))
     parser.add_argument("--bucket", default=os.environ.get("DATA_BUCKET_NAME", ""))
+    parser.add_argument("--request-sha256", default=os.environ.get("BRONZE_REQUEST_SHA256", ""), help="digest of the request the broker checked")
+    parser.add_argument("--inventory-sha256", default=os.environ.get("BRONZE_INVENTORY_SHA256", ""), help="digest of the staged source inventory")
     parser.add_argument("--dry-run", action="store_true", help="load: print and save the checked plan and write nothing (also set by BRONZE_DRY_RUN=1)")
     args = parser.parse_args(argv)
     if not RUN_ID.fullmatch(args.run):
@@ -220,13 +295,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if not args.bucket:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
+        if args.phase == "inventory":
+            if args.out is None:
+                raise StepError("the inventory phase needs --out")
+            stage_inputs(args.code, args.bucket, args.tables, args.target, dry, args.out)
+            return 0
         if args.phase == "pin":
             (folder / DRY_MARKER).unlink(missing_ok=True)
         elif (folder / DRY_MARKER).exists():
             dry = True
         target = args.target or os.environ.get("BRONZE_TARGET", "")
         names = check_dispatch(args.tables or os.environ.get("BRONZE_TABLES", ""), target, collections_of(table_map(work / "code")))
-        job = Job(args.run, work, args.bucket, names, target, dry)
+        job = Job(args.run, work, args.bucket, names, target, dry, args.request_sha256, args.inventory_sha256)
         if dry:
             job.folder.mkdir(parents=True, exist_ok=True)
             (job.folder / DRY_MARKER).write_text("this task is a dry run: no phase may write to the catalog or the bucket\n")
