@@ -16,8 +16,9 @@ from unittest import mock
 
 from orchestration import code_digest
 from scripts.features import training_extract
+from scripts.process import run_command
 from scripts.training import guards, promotion_check
-from scripts.training.job_action_cases import GUARD, HAI_TYPE, SAVED, Fixture, require, standins
+from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
 from scripts.training.job_cases import COMMIT, DIGEST
 from scripts.training.lane_b_cases import RUN
 from scripts.training.step_records import verify_done, write_done
@@ -128,6 +129,24 @@ def prepare_cases(cases: Any, folder: Path) -> None:
 
         cases.check(f"aws_run_{name}", case)
 
+    def real_tree() -> None:
+        work = folder / "real_tree"
+        work.mkdir(parents=True)
+        archive = work / "code.tar.gz"
+        done = run_command("git", ["archive", "--format=tar.gz", f"--output={archive}", "HEAD"], cwd=REAL, timeout=300)
+        require(done.returncode == 0, f"git archive failed: {done.stderr}")
+        with tarfile.open(archive) as tar:
+            commit = str(tar.pax_headers.get("comment", ""))
+            tar.extractall(work / "code", filter="data")
+        with environment(CODE_SHA256=hashlib.sha256(archive.read_bytes()).hexdigest()):
+            code, out, error = call(*arguments(work))
+        require(code == 0, f"prepare refused the committed code tree: {error}")
+        record = json.loads((work / "snapshot_training.json").read_text())
+        require(record["git_commit"] == commit and len(record["files"]) > 100, f"snapshot record: {record['git_commit']} {len(record['files'])}")
+        guard = json.loads((work / "in/guard/guard.json").read_text())
+        require(guard["git_commit"] == commit and guard["master_seed"] == 42, f"guard record: {guard}")
+
+    cases.check("aws_run_prepare_accepts_the_committed_code_tree_and_runs_the_real_guard", real_tree)
     cases.check("aws_run_prepare_records_identity_and_runs_guard", prepared)
     cases.check("aws_run_prepare_rerun_is_stable", rerun_is_stable)
     refuses("prepare_refuses_local_lane", "mlflow=aws", TRAINING_PARAMETERS=json.dumps({**PARAMETERS, "mlflow": "local"}))
