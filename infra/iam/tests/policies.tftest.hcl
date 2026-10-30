@@ -720,10 +720,11 @@ run "lakehouse_roles" {
       if statement.Sid == "ReadTableFiles"
       ]) == toset([
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
     ])
-    error_message = "The reader reads only the bronze, silver and gold prefixes."
+    error_message = "The reader reads only the bronze, bronze dictionary, silver and gold prefixes."
   }
 
   assert {
@@ -731,9 +732,9 @@ run "lakehouse_roles" {
       for statement in jsondecode(aws_iam_role_policy.lakehouse_reader.policy).Statement : toset(flatten([statement.Condition.StringLike["s3:prefix"]]))
       if statement.Sid == "ListTablePrefixes"
       ]) == toset([
-      "lakehouse/bronze", "lakehouse/bronze/*", "lakehouse/silver", "lakehouse/silver/*", "lakehouse/gold", "lakehouse/gold/*",
+      "lakehouse/bronze", "lakehouse/bronze/*", "lakehouse/bronze_dictionary", "lakehouse/bronze_dictionary/*", "lakehouse/silver", "lakehouse/silver/*", "lakehouse/gold", "lakehouse/gold/*",
     ])
-    error_message = "The reader lists only the bronze, silver and gold prefixes."
+    error_message = "The reader lists only the bronze, bronze dictionary, silver and gold prefixes."
   }
 
   assert {
