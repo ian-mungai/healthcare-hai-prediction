@@ -33,10 +33,12 @@ SOURCE_PATHS = (
     "scripts/process.py",
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/render_platform_config.py",
+    "scripts/infrastructure/render_ecs_target.py",
     "scripts/infrastructure/render_project_config.sh",
     "scripts/infrastructure/terraform.sh",
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
+    "data_contracts/infrastructure/services_preparation.schema.json",
 )
 PREPARATION_PATH = "config/aws/iam_preparation.json"
 PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
