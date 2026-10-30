@@ -143,7 +143,7 @@
       },
       "local_tag": "hai-training:3.17.0",
       "tag": "3.17.0-arm64",
-      "arm64": "base pin lists linux/arm64; the DVC lock lists Apple silicon and x86 Linux hashes, so linux/arm64 is unproven",
+      "arm64": "base pin lists linux/arm64 and the DVC lock lists Apple silicon, x86 Linux and Arm Linux hashes; the linux/arm64 build has not been run yet",
       "runs_as": "job task (decision 56)"
     },
     "feature_store": {

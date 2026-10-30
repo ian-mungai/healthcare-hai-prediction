@@ -49,7 +49,7 @@ docker run --rm --platform linux/arm64 --memory 4g --user "$(id -u):$(id -g)" -e
   sh services/training/compile_lock.sh
 ```
 
-Run the same command with `services/mlflow/compile_lock.sh`. Review the version diff of the training lock against `docs/analysis_plan.md` before the first real run. No project file pinned the model libraries before this lock. The DVC lock in `scripts/quality/dvc` lists hashes for Apple silicon and x86 Linux. The `linux/arm64` build of the training image may fail on a missing hash.
+Run the same command with `services/mlflow/compile_lock.sh`. Review the version diff of the training lock against `docs/analysis_plan.md` before the first real run. No project file pinned the model libraries before this lock. The DVC lock in `scripts/quality/dvc` lists hashes for Apple silicon, x86 Linux and Arm Linux.
 
 ## Start one run
 
@@ -122,7 +122,7 @@ Stop steps, in this order:
 ## Not proven
 
 - Whether the `init` step leaves `/workspace` and `/tmp` writable for user 10001 on Fargate. Whether Fargate accepts the dropped capability list that keeps only the owner change is also open. The offline plan test proves the definition only. It checks the order, the command, the capability list and that every writable mount of every container is one of the two volumes.
-- The `linux/arm64` build of both new images and the DVC hashes for that platform.
+- The `linux/arm64` build of both new images.
 - The library versions of the model code against real data.
 - The MLflow server memory limit of 640 MiB under a real run.
 - The authentication setup against the pinned MLflow version: the settings file keys, the health route answering without a login and the training client sending its login. The offline cases cover the start script and the task definitions only.
