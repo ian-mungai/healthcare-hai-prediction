@@ -110,7 +110,8 @@ locals {
           { name = "MKL_NUM_THREADS", value = "4" },
           { name = "DUCKDB_MEMORY_LIMIT", value = "12GB" },
         ],
-        [for name in local.train_run_variables[step.name] : { name = name, value = "" }]
+        [for name in local.train_run_variables[step.name] : { name = name, value = "" }],
+        step.name == "train" ? [{ name = "TRAINING_IMAGE_DIGEST", value = split("@", lookup(var.train_images, step.image, "invalid@invalid"))[1] }] : []
       )
       secrets = step.secrets
       mountPoints = [
