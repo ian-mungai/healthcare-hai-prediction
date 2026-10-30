@@ -10,10 +10,11 @@ locals {
   bronze_parameter_names = [var.aws_polaris_bronze_client_id_name, var.aws_polaris_bronze_client_secret_name]
   bronze_parameter_arns  = [for name in local.bronze_parameter_names : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"]
   bronze_storage_inputs = {
-    BUCKET_ARN           = local.bronze_bucket_arn
-    TABLE_OBJECT_ARNS    = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
-    TABLE_LIST_PREFIXES  = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "lakehouse/${name}/*"])
-    SOURCE_OBJECT_ARNS   = jsonencode([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${collection}/*"])
+    BUCKET_ARN          = local.bronze_bucket_arn
+    TABLE_OBJECT_ARNS   = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
+    TABLE_LIST_PREFIXES = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "lakehouse/${name}/*"])
+    # The single-copy collector stores payloads at bronze_objects/sha256/<digest>. Manifests name them, so the loader reads them by exact version.
+    SOURCE_OBJECT_ARNS   = jsonencode(concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${collection}/*"], ["${local.bronze_bucket_arn}/bronze_objects/sha256/*"]))
     SOURCE_LIST_PREFIXES = jsonencode([for collection in local.bronze_collections : "${collection}/*"])
   }
   bronze_storage_policy = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_storage_inputs)

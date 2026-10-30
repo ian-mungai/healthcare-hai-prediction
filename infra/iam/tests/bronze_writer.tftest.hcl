@@ -158,13 +158,13 @@ run "bronze_rendered_storage_scope" {
 
   assert {
     condition = (
-      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset([
+      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset(concat([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         "arn:aws:s3:::example-data-bucket/${collection}/*"
-      ]) &&
+      ], ["arn:aws:s3:::example-data-bucket/bronze_objects/sha256/*"])) &&
       jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Action == ["s3:GetObjectVersion"]
     )
-    error_message = "The rendered source objects must match every mapped collection and permit only version reads."
+    error_message = "The rendered source objects must match every mapped collection and the content-addressed payload prefix of the single-copy collector, and permit only version reads."
   }
 
   assert {
