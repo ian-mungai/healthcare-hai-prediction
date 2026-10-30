@@ -13,7 +13,7 @@ variable "bronze_live_locations" {
 }
 
 variable "bronze_qualification_collection" {
-  description = "The one existing source collection selected for qualification after the lead verifies which mapped collection is smallest."
+  description = "The one existing source collection selected for qualification after the coordinating agent verifies which mapped collection is smallest."
   type        = string
   default     = ""
   nullable    = false

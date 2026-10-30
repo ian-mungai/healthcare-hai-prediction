@@ -162,7 +162,7 @@ class BridgeSchema(NamedTuple):
     references: tuple[tuple[str, str], ...]
 
 
-# Amendment A39 item 1: the schema of bridge_measure_control as G2 built it, until the lead writes it into gold_contract.json.
+# Amendment A39 item 1: the schema of bridge_measure_control as G2 built it, until the coordinating agent writes it into gold_contract.json.
 A39_BRIDGE_MEASURE_CONTROL = BridgeSchema(
     (
         ("measure_sk", "VARCHAR"),

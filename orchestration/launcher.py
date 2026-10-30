@@ -9499,7 +9499,7 @@ class Launcher:
         return {"prepared": True}
 
     def m_training_fixture_publication(self, ctx: Ctx) -> dict[str, Any]:
-        """Bind the lead runner's synthetic publication and applied registry inside a test run."""
+        """Bind the coordinating agent's runner's synthetic publication and applied registry inside a test run."""
         self.pipeline_params(ctx, ("local_catalog", "registry"))
         run = self.run_entry(ctx)
         folder = self.cfg.runs_root / run["run_id"]

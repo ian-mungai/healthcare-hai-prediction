@@ -138,7 +138,7 @@ The stand-in E2E is `.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup
 
 ## Images
 
-All images must be `linux/arm64`. `scripts/infrastructure/push_images.py` prints the commands (it starts no program, because only the launcher may call Docker). The lead runs them and records the digests.
+All images must be `linux/arm64`. `scripts/infrastructure/push_images.py` prints the commands (it starts no program, because only the launcher may call Docker). The coordinating agent runs them and records the digests.
 
 | Image | Source | arm64 status |
 | --- | --- | --- |
@@ -151,7 +151,7 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 ## Order of the first start
 
-1. The owner applies the foundation. The lead runs the printed `push_images plan` commands and records the digests.
+1. The owner applies the foundation. The coordinating agent runs the printed `push_images plan` commands and records the digests.
 2. Place a checkout of the repository at `dag_code_path` (default `<data>/repo`). Airflow mounts the DAGs, the broker client and the lineage configuration from it read-only.
 3. Turn the host on before the first services apply:
 

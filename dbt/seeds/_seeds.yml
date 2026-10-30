@@ -790,7 +790,7 @@ seeds:
       The exact published measure-ID domains of PLACES (measureid), DRG (drg_cd), HCAHPS (hcahps_measure_id), SVI and Geographic Variation
       (column names), the Care Compare families TIMELY, MATERNAL, UNPLANNED and COMPLICATIONS (measure_id), HRRP (measure_name) and the
       MMD conditions (condition), derived from the publisher dictionaries and distinct values already in bronze (SELECT statements only).
-      Copied byte-identical from the lead's seed (1,608 rows, SHA-256 f0082754bd8ba09e0959f825f853dde0650e99d96585aa975cc6b204fd718d35); never edited here, and
+      Copied byte-identical from the coordinating agent's seed (1,608 rows, SHA-256 f0082754bd8ba09e0959f825f853dde0650e99d96585aa975cc6b204fd718d35); never edited here, and
       regenerated only by scripts/lakehouse/measure_domains.py. Wide domains (SVI, GV) list every published column, identifiers included, so
       a match proves a column exists, not that it is a measure; the bridge test also rejects the identifier columns. Release ranges order
       captures and do not give the data year.

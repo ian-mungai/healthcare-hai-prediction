@@ -158,7 +158,7 @@ def build(inp: PipelineInput, values: dict[str, str], session: RoleSession | Non
         if inp.run_mode == "fixture":
             publication = state.get("training_publication", {})
             if not publication.get("local_catalog") or not publication.get("registry"):
-                raise ValueError("fixture extraction needs the lead's synthetic publication and applied Feast registry")
+                raise ValueError("fixture extraction needs the coordinating agent's synthetic publication and applied Feast registry")
             mounts += [
                 (str(publication["local_catalog"]), "/workspace/local_catalog", True),
                 (str(publication["registry"]), "/workspace/tmp/feast/registry.pb", True),

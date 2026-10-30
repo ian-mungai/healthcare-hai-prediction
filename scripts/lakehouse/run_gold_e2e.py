@@ -47,7 +47,7 @@ BASELINES = REPO_ROOT / "data_contracts/great_expectations/baselines.json"
 GOLD_MODELS = "path:models/gold --exclude tag:features"
 BUILD_OK = ("success", "pass")
 RELEASE_COPY_TEST = "release_copy_consistency_dim_release"
-# dbt names a model-level generic test <test>_<model>_ (an empty column name leaves the trailing underscore); the lead names it without it.
+# dbt names a model-level generic test <test>_<model>_ (an empty column name leaves the trailing underscore); the coordinating agent names it without it.
 RELEASE_COPY_NAMES = frozenset({RELEASE_COPY_TEST, RELEASE_COPY_TEST + "_"})
 RELEASE_MODEL = "dim_release"
 # Amendment A39 item 2: facts whose silver model holds no rows in the fixture build, each with the reason. A fact named here may be empty in the

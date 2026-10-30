@@ -1,6 +1,6 @@
 """Plan the arm64 image build and ECR push for the AWS container host, and record the pushed digests; this script starts no program.
 
-The lead runs the printed Docker and AWS commands, because only the launcher may call Docker. Three commands, run from the repository root:
+The coordinating agent runs the printed Docker and AWS commands, because only the launcher may call Docker. Three commands, run from the repository root:
 
     .venv/bin/python -m scripts.infrastructure.push_images check
     .venv/bin/python -m scripts.infrastructure.push_images plan --repository-urls urls.json --profile <PROFILE> --region <REGION> [--only NAME ...]

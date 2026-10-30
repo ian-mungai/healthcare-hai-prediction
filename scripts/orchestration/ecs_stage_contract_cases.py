@@ -387,7 +387,7 @@ def main() -> int:
         "class": 4,
         "purpose": "Synthetic schema, storage model and mutation check summary",
         "created": created,
-        "end_condition": "The lead no longer cites this candidate's preparation checks",
+        "end_condition": "The coordinating agent no longer cites this candidate's preparation checks",
     }
     destination.with_name("retention.json").write_text(json.dumps(retention, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(

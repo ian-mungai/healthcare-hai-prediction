@@ -99,9 +99,9 @@ repos:
         pass_filenames: false
         always_run: true
       - id: markdownlint
-        # Pinned markdownlint-cli2 from scripts/quality/install_markdownlint.py with the Conventional Docs baseline in
+        # Pinned markdownlint-cli2 from scripts/quality/install_markdownlint.py with the documentation baseline in
         # .markdownlint-cli2.jsonc; E2E records under data/ are skipped. Blocking from the start: the whole project was clean.
-        name: Markdown syntax follows the Conventional Docs baseline (markdownlint)
+        name: Markdown syntax follows the documentation baseline (markdownlint)
         entry: .tools/markdownlint-cli2/node_modules/.bin/markdownlint-cli2 --config .markdownlint-cli2.jsonc
         language: system
         types: [markdown]

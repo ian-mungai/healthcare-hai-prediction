@@ -213,7 +213,7 @@ that names individuals (the HCAI annual financial files and the CMS contacts
 table) is kept until its redacted copy is accepted into bronze, then for a
 90-day grace period, then deleted. Its SHA-256, source URL and download date
 are kept, because the sources are public and can be downloaded again.
-Deletions run in batches the lead lists with exact paths, each approved by
+Deletions run in batches the coordinating agent lists with exact paths, each approved by
 the owner. The development Mac uses FileVault. That host check does not
 establish compliance on its own.
 

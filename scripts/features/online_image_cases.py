@@ -1,6 +1,6 @@
 """The image part of the online cases (E22 window half, E23 online against offline, D8 and D12): the real Feast over lane B's real Redis service.
 
-Run in the Feast image on the Redis service's network (the lead's heavy lane), with the job environment of that service::
+Run in the Feast image on the Redis service's network (the coordinating agent's heavy lane), with the job environment of that service::
 
     FEAST_REDIS_HOST=redis REDIS_PASSWORD=... python -B -m scripts.features.online_cases --part image
 

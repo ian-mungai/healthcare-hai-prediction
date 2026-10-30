@@ -140,7 +140,7 @@ This document lists every repository check that the pre-commit hooks and CI run,
   once a whole-repository run is clean. The hook and CI leave this kind in warning mode. `--warn` reports all findings without
   failing, including a kind selected with `--block`. The other writing kinds retain their existing scopes.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
-  outside `data/` against the Conventional Docs baseline in
+  outside `data/` against the documentation baseline in
   `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
   lists, a language on every code fence). It blocks: a whole-project run was
   clean when it was added.

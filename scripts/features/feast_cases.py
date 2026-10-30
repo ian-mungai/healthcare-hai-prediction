@@ -2,7 +2,7 @@
 ``publication_reads`` and ``feature_store.yaml``).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part local [--case E17_during ...]      # now: stub catalogs, no Feast, no PyIceberg, no Docker
-    python -B -m scripts.features.feast_cases --part image [--case E16 ...]                        # inside the Feast image (the lead runs it)
+    python -B -m scripts.features.feast_cases --part image [--case E16 ...]                        # inside the Feast image (the coordinating agent runs it)
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]               # the AWS profile against stand-ins (``feast_aws_cases``)
 
 ``--part local`` runs the logic that needs neither Feast nor PyIceberg: head verification and publication selection against a stub catalog, the schema
