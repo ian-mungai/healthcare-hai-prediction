@@ -1,6 +1,6 @@
 #!/bin/sh
 # Compile services/feature_store/requirements.in into the hash-pinned requirements.txt, inside the pinned base image on linux/arm64.
-# This script runs INSIDE the throwaway container (it starts no container and calls no Docker). The lead starts it from the repository root:
+# This script runs INSIDE the throwaway container (it starts no container and calls no Docker). The coordinating agent starts it from the repository root:
 #
 #   docker run --rm --platform linux/arm64 --memory 4g --user "$(id -u):$(id -g)" -e HOME=/tmp \
 #     --volume "$PWD":/work --workdir /work \

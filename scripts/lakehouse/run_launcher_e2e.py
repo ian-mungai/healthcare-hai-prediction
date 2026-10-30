@@ -42,7 +42,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from orchestration import code_digest, launcher, mlflow_service, online_store, pipeline_session, training_contract
@@ -211,6 +211,8 @@ class Env:
             "lakehouse_state": str(self.temp / "lakehouse"),
             "runs_root": str(self.temp / "runs"),
             "token_root": str(self.temp / "tokens"),
+            # No case may reach the real Docker Desktop: a case that needs these commands sets a stand-in.
+            **dict.fromkeys(("start_command", "quit_command", "restart_command"), [NO_DESKTOP_PROGRAM, "desktop", "unset"]),
             **settings,
         }
         self.write_settings()
@@ -2703,7 +2705,7 @@ def resumed_start_stopped(env: Env, elsewhere: Path, when: str) -> bool:
     dies; a launcher whose checkout differs then opens the registry. It must not resume the startup: it tears down what exists and stays down.
 
     A create paused before its effect is released before the second launcher starts, so its effect lands first. A dead launcher's request that
-    lands after the second launcher's teardown can leave one empty network, which no scan sees (issue WV3-010, amendment A88)."""
+    lands after the second launcher's teardown can leave one empty network, which no scan sees (amendment A88)."""
     env.settings.pop("catalog_checkout", None)
     env.write_settings()
     env.start()
@@ -2973,6 +2975,9 @@ def catalog_down_barrier(env: Env) -> dict[str, bool]:
     return results
 
 
+NO_DESKTOP_PROGRAM = "hai-e2e-no-docker-desktop"
+
+
 def restart_command(env: Env, delay: float, down: float) -> list[str]:
     """A restart command for the settings: after a delay it tells the fake daemon to restart."""
     code = (
@@ -3045,11 +3050,428 @@ def docker_restart_command_and_client(env: Env) -> dict[str, bool]:
         catalog.TEST_REGISTRY = saved_registry
     env.daemon.containers.pop(foreign)
     return {
-        "the default restart command starts the docker program with desktop restart": default_config.restart_command == ("docker", "desktop", "restart")
-        and launcher.Config.__dataclass_fields__["restart_command"].default == ("docker", "desktop", "restart"),
+        "the default restart command starts the docker program with desktop restart": launcher.Config.__dataclass_fields__["restart_command"].default
+        == ("docker", "desktop", "restart"),
+        "the case's registry never reaches the real Docker Desktop": default_config.restart_command[0] == NO_DESKTOP_PROGRAM,
         "a refused restart (a foreign container runs) is a nonzero exit of the client": code == 1,
-        "the failure text names the refusal and no success line is printed": "Docker not restarted" in stderr.getvalue(),
+        "the failure text names the refusal and no success line is printed": "Docker not quit" in stderr.getvalue(),
         "the restart did not run": not env.daemon.calls_matching("POST", "/restart"),
+    }
+
+
+@case("docker_restart_answer_deadline", timings={"restart_answer": 4})
+def docker_restart_answer_deadline(env: Env) -> dict[str, bool]:
+    """911 and R14: the restart command returns but the daemon stays down; the restart fails at its answer deadline and the launcher accepts requests again."""
+    env.settings["restart_command"] = restart_command(env, 0.5, 600.0)
+    env.write_settings()
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    began = time.monotonic()
+    failed = expect_error(lambda: client.call("docker_restart", {"owner": True}, owner, timeout=60))
+    seconds = time.monotonic() - began
+    status = client.call("status", {"what": "launcher"})
+    during = expect_error(lambda: client.call("allocate", {}))
+    env.daemon.down_until = 0.0
+    env.wait(lambda: env.ping().get("status") == "serving", 30, "serving once the daemon answers")
+    alloc_id = client.allocate(1)
+    client.release_allocation(alloc_id)
+    return {
+        "the restart failed as degraded and names the deadline": refused(failed, "degraded", "did not answer within 4 s after the restart"),
+        "it failed after the deadline and before the client gave up": 4 <= seconds < 30,
+        "the restart record is cleared": status["restart"] is None and env.state()["launcher"]["restart"] is None,
+        "a request is refused as degraded, no longer as a running restart": refused(during, "degraded") and "restart" not in str(during),
+        "allocate works again once the daemon answers": bool(alloc_id),
+    }
+
+
+def desktop_command(env: Env, name: str, endpoint: str, delay: float = 0.0) -> list[str]:
+    """A start, quit or restart command for the settings. It logs its process ID and mode, then does what the mode file says: ``act`` tells the fake daemon
+    (after a delay), ``noop`` returns, ``fail`` exits 3 and ``hang`` sleeps."""
+    mode_file, log = env.temp / f"{name}_mode", env.temp / f"{name}.log"
+    mode_file.write_text("act")
+    code = (
+        "import http.client, os, socket, sys, time\n"
+        f"mode = open({str(mode_file)!r}).read().strip()\n"
+        f"open({str(log)!r}, 'a').write(f'{{os.getpid()}} {{mode}}\\n')\n"
+        "class C(http.client.HTTPConnection):\n"
+        "    def connect(self):\n"
+        "        self.sock = socket.socket(socket.AF_UNIX)\n"
+        f"        self.sock.connect({str(env.temp / 'd.sock')!r})\n"
+        "if mode == 'hang':\n"
+        "    time.sleep(600)\n"
+        "elif mode == 'fail':\n"
+        "    sys.exit(3)\n"
+        "elif mode == 'act':\n"
+        f"    time.sleep({delay})\n"
+        f"    c = C('x'); c.request('POST', {endpoint!r}); c.getresponse().read()\n"
+    )
+    return [sys.executable, "-c", code]
+
+
+def set_mode(env: Env, name: str, mode: str) -> None:
+    """What the next run of a stand-in command does."""
+    (env.temp / f"{name}_mode").write_text(mode)
+
+
+def command_runs(env: Env, name: str) -> list[tuple[int, str]]:
+    """The (process ID, mode) of every run of a stand-in command so far."""
+    log = env.temp / f"{name}.log"
+    return [(int(pid), mode) for pid, mode in (line.split() for line in log.read_text().splitlines())] if log.exists() else []
+
+
+def wait_degraded(env: Env) -> None:
+    """Wait until the launcher has noticed that the daemon is gone."""
+    env.wait(lambda: env.ping().get("status") == "degraded", 20, "the launcher is degraded")
+
+
+@case("desktop_start", timings={"start_wait": 6})
+def desktop_start(env: Env) -> dict[str, bool]:
+    """R7, R8, R15 and R18: desktop_start leaves a running Docker alone, starts a stopped one, joins a start that runs, and fails at its one deadline
+    when the command hangs, fails or the daemon never answers; the next call works."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.write_settings()
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def start(**params: Any) -> Any:
+        return client.call("desktop_start", {"owner": True, **params}, owner, timeout=60)
+
+    already_up = start()
+    ran_when_up = command_runs(env, "start")
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    began = time.monotonic()
+    started = start()
+    start_seconds = time.monotonic() - began
+    serving = env.ping().get("status") == "serving"
+    ran_when_down = command_runs(env, "start")
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    set_mode(env, "start", "hang")
+    began = time.monotonic()
+    hung = expect_error(lambda: start(deadline=3))
+    hang_seconds = time.monotonic() - began
+    hung_pid = command_runs(env, "start")[-1][0]
+    set_mode(env, "start", "noop")
+    silent = expect_error(lambda: start(deadline=3))
+    silent_mode = command_runs(env, "start")[-1][1]
+    set_mode(env, "start", "act")
+    joined: list[Any] = []
+    threads = [threading.Thread(target=lambda: joined.append(env.client().call("desktop_start", {"owner": True}, owner, timeout=60))) for _ in range(2)]
+    runs_before = len(command_runs(env, "start"))
+    for thread in threads:
+        thread.start()
+        env.threads.append(thread)
+        time.sleep(0.1)
+    for thread in threads:
+        thread.join(timeout=30)
+    runs_joined = len(command_runs(env, "start")) - runs_before
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    set_mode(env, "start", "fail")
+    failed = expect_error(lambda: start())
+    set_mode(env, "start", "act")
+    recovered = start()
+    return {
+        "a running Docker is left alone: started is false and no command ran": already_up["started"] is False and ran_when_up == [],
+        "a stopped Docker is started: the command ran once and the launcher serves": started["started"] is True
+        and len(ran_when_down) == 1
+        and serving
+        and start_seconds < 6,
+        "a hanging command is killed at the deadline and the failure names the deadline and the dialog": refused(hung, "degraded", "did not answer within 3 s")
+        and "answer any dialog" in str(hung)
+        and not env.alive(hung_pid)
+        and 3 <= hang_seconds < 10,
+        "a command that returns while the daemon stays down fails at the same deadline": refused(silent, "degraded", "did not answer within 3 s")
+        and silent_mode == "noop",
+        "no start record is left after a failure": env.state()["launcher"]["desktop"] is None,
+        "two starts at once run one command and both succeed": runs_joined == 1 and len(joined) == 2 and all(item["started"] for item in joined),
+        "a failing command is reported as a command error": refused(failed, "command_failed", "docker start failed"),
+        "the next call works": recovered["started"] is True and env.ping().get("status") == "serving",
+    }
+
+
+@case("docker_release_skips_and_refusals")
+def docker_release_skips_and_refusals(env: Env) -> dict[str, bool]:
+    """R1, R2, R9, R23 and R28: docker_release skips with no container since the start time or with Docker down, and is refused (every foreign container
+    named, the registry blocker first) while foreign containers run or an allocation is held; neither the quit nor the restart command runs."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.settings["restart_command"] = desktop_command(env, "restart", "/_test/restart?down=1")
+    env.write_settings()
+    catalog_script(env)
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def release(**params: Any) -> Any:
+        return client.call("docker_release", {"owner": True, **params}, owner, timeout=60)
+
+    before = time.time()
+    no_container = release(since=before)
+    catalog_up(env)
+    client.call("catalog_down")
+    env.wait(lambda: catalog_phase(env) == "down", 30, "the catalog is down")
+    nothing_since = release(since=time.time() + 5)
+    labels = {"com.docker.compose.project": "other"}
+    first, second = env.daemon.create_rogue("rogue-one", labels, running=True), env.daemon.create_rogue("rogue-two", labels, running=True)
+    two_foreign = expect_error(lambda: release(since=before))
+    alloc_id = client.allocate(1)
+    allocation_and_foreign = expect_error(lambda: release(since=before))
+    env.daemon.containers.pop(first)
+    env.daemon.containers.pop(second)
+    allocation_only = expect_error(lambda: release(since=before))
+    client.release_allocation(alloc_id)
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    docker_down = release(since=before)
+    env.daemon.start_desktop()
+    env.wait(lambda: env.ping().get("status") == "serving", 30, "serving again")
+    return {
+        "no container since the start time: skipped, naming the time": no_container["outcome"] == "skipped"
+        and "no container ran since" in no_container["reason"],
+        "a container created earlier than the start time: skipped": nothing_since["outcome"] == "skipped"
+        and "no container ran since" in nothing_since["reason"],
+        "two foreign containers: refused, both named": refused(two_foreign, "refused", "rogue-one, rogue-two")
+        or refused(two_foreign, "refused", "rogue-two, rogue-one"),
+        "the refusal text names the kind of container": refused(two_foreign, "refused", "running containers not created by this launcher"),
+        "a held allocation is the first blocker and the foreign containers are still named": refused(
+            allocation_and_foreign, "refused", f"allocation {alloc_id} is held"
+        )
+        and "rogue-one" in str(allocation_and_foreign)
+        and "rogue-two" in str(allocation_and_foreign),
+        "a held allocation alone refuses": refused(allocation_only, "refused", f"allocation {alloc_id} is held")
+        and "not created by this launcher" not in str(allocation_only),
+        "Docker not running: skipped": docker_down == {"outcome": "skipped", "reason": "Docker Desktop is not running"},
+        "nothing quit or restarted Docker": command_runs(env, "quit") == [] and command_runs(env, "restart") == [] and not env.daemon.is_down(),
+    }
+
+
+@case("docker_release_quit", timings={"quit_wait": 8})
+def docker_release_quit(env: Env) -> dict[str, bool]:
+    """Answer 3, R26 and R30: after a create since the start time, docker_release stops the idle catalog, runs the quit command, waits until the daemon stops
+    answering and shuts the launcher down; it never restarts Docker."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop", delay=0.3)
+    env.settings["restart_command"] = desktop_command(env, "restart", "/_test/restart?down=1")
+    env.write_settings()
+    catalog_script(env)
+    pid = env.start()
+    owner = {"kind": "any", "owner": True}
+    before = int(time.time())
+    catalog_phase_after_up = catalog_up(env)
+    outcome: list[Any] = []
+    began = time.monotonic()
+    thread = threading.Thread(target=lambda: outcome.append(env.client().call("docker_release", {"owner": True, "since": before}, owner, timeout=90)))
+    thread.start()
+    env.threads.append(thread)
+    thread.join(timeout=60)
+    seconds = time.monotonic() - began
+    env.wait(lambda: not env.alive(pid), 20, "the launcher ends after the quit")
+    state = env.state()
+    return {
+        "the catalog was up before the release": catalog_phase_after_up == "up",
+        "the release ended as a quit with the catalog down": bool(outcome) and outcome[0].get("outcome") == "quit" and outcome[0].get("catalog") == "down",
+        "the quit command ran once and the daemon stopped": [mode for _, mode in command_runs(env, "quit")] == ["act"] and env.daemon.is_down(),
+        "Docker was not restarted": command_runs(env, "restart") == [],
+        "the launcher shut down": not env.alive(pid),
+        "the registry is idle: catalog down, no restart or release record": state["launcher"]["restart"] is None
+        and state["launcher"].get("release") is None
+        and (state["launcher"].get("catalog") or {}).get("phase") == "down",
+        "the create time was recorded": float(state["launcher"].get("last_container_at", 0)) >= before,
+        "the release returned well within the client's wait": seconds < 30,
+    }
+
+
+@case("docker_release_quit_deadlines", timings={"quit_wait": 8})
+def docker_release_quit_deadlines(env: Env) -> dict[str, bool]:
+    """R3, R16 and R18: a quit command that hangs, a daemon that keeps answering and a failing command each end the release visibly and leave Docker running;
+    a second release during the hang is refused; the next release works."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    pid = env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def release(**params: Any) -> Any:
+        return client.call("docker_release", {"owner": True, **params}, owner, timeout=60)
+
+    set_mode(env, "quit", "hang")
+    hung: list[Any] = []
+    thread = threading.Thread(
+        target=lambda: hung.append(expect_error(lambda: env.client().call("docker_release", {"owner": True, "deadline": 4}, owner, timeout=60)))
+    )
+    began = time.monotonic()
+    thread.start()
+    env.threads.append(thread)
+    env.wait(lambda: (env.state()["launcher"].get("restart") or {}).get("kind") == "quit", 10, "the quit is recorded")
+    second = expect_error(lambda: release())
+    thread.join(timeout=30)
+    hang_seconds = time.monotonic() - began
+    hung_pid = command_runs(env, "quit")[-1][0]
+    serving_after_hang = env.ping().get("status") == "serving" and env.state()["launcher"]["restart"] is None and not env.daemon.is_down()
+    set_mode(env, "quit", "noop")
+    answering = expect_error(lambda: release(deadline=3))
+    set_mode(env, "quit", "fail")
+    failed = expect_error(lambda: release())
+    set_mode(env, "quit", "act")
+    recovered = release()
+    env.wait(lambda: not env.alive(pid), 20, "the launcher ends after the quit")
+    return {
+        "a hanging quit command is killed and the release fails at the deadline": bool(hung)
+        and refused(hung[0], "degraded", "quit command did not end within 4 s")
+        and not env.alive(hung_pid)
+        and 4 <= hang_seconds < 15,
+        "a second release during the hang is refused": refused(second, "refused", "a Docker restart is running"),
+        "Docker and the launcher are as before after the hang": serving_after_hang,
+        "a daemon that keeps answering fails the release at the deadline": refused(answering, "degraded", "still answers 3 s after the quit command"),
+        "a failing quit command is a command error": refused(failed, "command_failed", "docker quit failed"),
+        "the next release quits": recovered.get("outcome") == "quit" and env.daemon.is_down(),
+    }
+
+
+def launcher_cli(*arguments: str) -> tuple[int, str, str]:
+    """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
+    saved = sys.argv
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        sys.argv = ["launcher", *arguments]
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = launcher.main()
+    finally:
+        sys.argv = saved
+    return code, out.getvalue(), err.getvalue()
+
+
+@case("docker_desktop_defaults")
+def docker_desktop_defaults(env: Env) -> dict[str, bool]:
+    """R10 and R12: the default commands are pinned (nothing runs); a program that is not found refuses with the PATH in the message; the CLI skips a
+    release when no launcher runs and exits 3 with every foreign container named when one is refused."""
+    default_config = env.config
+    fields = launcher.Config.__dataclass_fields__
+    env.settings["start_command"] = ["hai-no-such-docker-program", "desktop", "start"]
+    env.settings["quit_command"] = ["hai-no-such-docker-program", "desktop", "stop"]
+    env.write_settings()
+
+    def cli(*arguments: str) -> tuple[int, str, str]:
+        return launcher_cli("--test-registry", str(env.registry), *arguments)
+
+    no_launcher = cli("docker-release", "--owner")
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    release_missing = expect_error(lambda: client.call("docker_release", {"owner": True}, owner))
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    start_missing = expect_error(lambda: client.call("desktop_start", {"owner": True}, owner))
+    env.daemon.start_desktop()
+    env.wait(lambda: env.ping().get("status") == "serving", 30, "serving again")
+    env.stop_launcher()
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    env.start()
+    already_up = cli("docker-start", "--owner")
+    labels = {"com.docker.compose.project": "other"}
+    rogues = [env.daemon.create_rogue("rogue-one", labels, running=True), env.daemon.create_rogue("rogue-two", labels, running=True)]
+    refused_cli = cli("docker-release", "--owner")
+    for rogue in rogues:
+        env.daemon.containers.pop(rogue)
+    future = cli("docker-release", "--owner", "--since", str(time.time() + 3600))
+    return {
+        "the default start command is docker desktop start": fields["start_command"].default == ("docker", "desktop", "start"),
+        "the default quit command is docker desktop stop": fields["quit_command"].default == ("docker", "desktop", "stop"),
+        "the case's registry never reaches the real Docker Desktop": default_config.start_command[0] == default_config.quit_command[0] == NO_DESKTOP_PROGRAM,
+        "the default restart command is docker desktop restart": fields["restart_command"].default == ("docker", "desktop", "restart"),
+        "the program is also searched in the Docker Desktop folders": launcher.DOCKER_PROGRAM_FOLDERS
+        == ("/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin"),
+        "a release with a missing program is refused with the PATH": refused(release_missing, "refused", "docker CLI not found on PATH (")
+        and str(env.work / "bin") in str(release_missing),
+        "a start with a missing program is refused with the PATH": refused(start_missing, "refused", "docker CLI not found on PATH ("),
+        "no launcher runs: the CLI skips and exits 0": no_launcher[0] == 0 and "no launcher runs" in no_launcher[1],
+        "docker-start with Docker running prints started false and exits 0": already_up[0] == 0 and '"started": false' in already_up[1],
+        "a refused release exits 3 and names every foreign container": refused_cli[0] == 3 and "rogue-one" in refused_cli[2] and "rogue-two" in refused_cli[2],
+        "a release with no container since the start time exits 0": future[0] == 0 and "no container ran since" in future[1],
+    }
+
+
+@case("docker_release_deadline_covers_the_catalog_stop", timings={"quit_wait": 8, "restart_wait": 20})
+def docker_release_deadline_covers_the_catalog_stop(env: Env) -> dict[str, bool]:
+    """A deadline the caller gives covers the whole release: a catalog that will not stop ends the release at that deadline and the quit never runs later."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    catalog_script(env)
+    env.start()
+    catalog_up(env)
+    env.daemon.fail_remove = 10**6
+    began = time.monotonic()
+    failure = expect_error(lambda: env.client().call("docker_release", {"owner": True, "deadline": 2}, {"kind": "any", "owner": True}, timeout=40))
+    seconds = time.monotonic() - began
+    time.sleep(1.5)
+    env.daemon.fail_remove = 0
+    return {
+        "the release fails naming its deadline": refused(failure, "degraded", "within its deadline of 2 s"),
+        "it ends at the deadline, not at the restart wait": seconds < 10,
+        "the quit command never ran": command_runs(env, "quit") == [],
+        "no release record is left": env.state()["launcher"].get("release") is None,
+    }
+
+
+@case("docker_release_client_deadline", timings={"quit_wait": 8})
+def docker_release_client_deadline(env: Env) -> dict[str, bool]:
+    """F1: a quit command that returns while the daemon keeps answering, with `--deadline 1`, ends the CLI as degraded (exit 5) naming the deadline, not as a
+    registry error (exit 4); a `docker-start` or `docker-release` request with no reply by its deadline gets the same translation."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    env.start()
+    set_mode(env, "quit", "noop")
+    code, _, error = launcher_cli("--test-registry", str(env.registry), "docker-release", "--owner", "--deadline", "1")
+
+    class Silent:
+        """A client whose request gets no reply."""
+
+        def call(self, *_: Any, **__: Any) -> Any:
+            raise TimeoutError("no complete reply")
+
+    expired = expect_error(lambda: launcher.call_by_deadline(cast(Any, Silent()), "docker-start", "desktop_start", {"owner": True}, 7, 37))
+    return {
+        "the CLI exits 5, the degraded exit": code == launcher.DEGRADED_EXIT,
+        "the message names the deadline of 1 s": "1 s" in error and "deadline" in error,
+        "it is no registry error": "registry error" not in error,
+        "a request without a reply is a degraded error naming its deadline": refused(expired, "degraded", "docker-start") and "deadline of 7 s" in str(expired),
+    }
+
+
+@case("docker_context_program_lookup")
+def docker_context_program_lookup(env: Env) -> dict[str, bool]:
+    """F2: the real configuration branch (a scratch Git checkout, no `DOCKER_HOST`) finds `docker` for the Docker context the way `desktop_program` does: on
+    the PATH, then in the Docker Desktop folders. With none of them holding it, the CLI refuses with exit 3 and names the PATH. No real `docker` runs."""
+    checkout = env.work / "checkout"
+    run_command("git", ["init", "-q", str(checkout)], timeout=30, check=True)
+    path_folder, fallback = env.work / "empty_path", env.work / "fallback_bin"
+    path_folder.mkdir()
+    fallback.mkdir()
+    (path_folder / "git").symlink_to(str(shutil.which("git")))
+    executable(fallback / "docker", response("unix://" + str(env.work / "context.sock")))
+    saved = (Path.cwd(), os.environ.get("DOCKER_HOST"), os.environ["PATH"], launcher.DOCKER_PROGRAM_FOLDERS)
+    try:
+        os.chdir(checkout)
+        os.environ.pop("DOCKER_HOST", None)
+        os.environ["PATH"] = str(path_folder)
+        launcher.DOCKER_PROGRAM_FOLDERS = ()
+        missing = launcher_cli("docker-release", "--owner")
+        launcher.DOCKER_PROGRAM_FOLDERS = (str(fallback),)
+        config = launcher.resolve_config(None, checkout)
+    finally:
+        os.chdir(saved[0])
+        if saved[1] is not None:
+            os.environ["DOCKER_HOST"] = saved[1]
+        os.environ["PATH"] = saved[2]
+        launcher.DOCKER_PROGRAM_FOLDERS = saved[3]
+    return {
+        "a missing docker CLI refuses with exit 3": missing[0] == launcher.REFUSED_EXIT,
+        "the refusal names the PATH": f"docker CLI not found on PATH ({path_folder})" in missing[2],
+        "it is no registry error": "registry error" not in missing[2],
+        "a docker in a Docker Desktop folder is found for the context": config.docker_socket == str(env.work / "context.sock"),
     }
 
 
@@ -6613,9 +7035,9 @@ def growth_reserve(env: Env) -> dict[str, bool]:
     del after
     alloc = env.allocate()
     held = env.state()["allocations"][alloc]["environment"]["JOB_MEMORY_LIMIT"]
-    expected = 32 * GIB - used - 8 * GIB - reserve
+    expected = (32 * GIB - used - 8 * GIB - reserve) * 75 // 100
     return {
-        "the plan before the catalog is Docker's free memory": int(before["environment"]["JOB_MEMORY_LIMIT"]) == 24 * GIB,
+        "the plan before the catalog is the capped share of Docker's free memory": int(before["environment"]["JOB_MEMORY_LIMIT"]) == 18 * GIB,
         "both services registered a limit": set(services) == {"polaris-db", "polaris"},
         "an allocation holds back the services' unused limits": int(held) == expected,
         "the reserve is not zero": reserve > 0,
@@ -6636,7 +7058,7 @@ def run_allocation_growth_reserve(env: Env) -> dict[str, bool]:
     attempt_id = env.submit(run, "fixture_dbt", "g1", params=env.fixture_params("g1"))["attempt_id"]
     env.wait_phase(attempt_id, ("started",), 30)
     allocation = env.state()["allocations"][env.attempt(attempt_id)["attempt_alloc"]]
-    expected = 32 * GIB - used - 8 * GIB - reserve
+    expected = (32 * GIB - used - 8 * GIB - reserve) * 75 // 100
     return {
         "the reserve is not zero": reserve > 0,
         "the run's attempt allocation holds back the services' unused limits": int(allocation["environment"]["JOB_MEMORY_LIMIT"]) == expected,
@@ -6657,7 +7079,7 @@ def pooled_launch_capacity(env: Env) -> dict[str, bool]:
     env.client().call("cancel", {"attempt_id": first}, principal)
     env.wait_ended(first)
     rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
-    env.daemon.usage["external-heavy"] = 20 * GIB
+    env.daemon.usage["external-heavy"] = 16 * GIB
     second = env.submit(principal, launch="p2", params=env.fixture_params("p2"))["attempt_id"]
     time.sleep(3.0)
     waited = env.phase(second) == "queued" and not creates(env, "-p2-")
@@ -6673,6 +7095,35 @@ def pooled_launch_capacity(env: Env) -> dict[str, bool]:
     }
 
 
+@case("queued_memory_deadline", stub_host=True, timings={"memory_wait": 3.0})
+def queued_memory_deadline(env: Env) -> dict[str, bool]:
+    """A pooled launch that waits on memory used elsewhere ends with a named cause once the memory wait deadline passes."""
+    hold_forever(env)
+    env.start()
+    alloc = env.allocate(workers=1)
+    principal = env.alloc_principal(alloc)
+    first = env.submit(principal, launch="m1", params=env.fixture_params("m1"), timeout_seconds=600)["attempt_id"]
+    env.wait_phase(first, ("started",))
+    env.client().call("cancel", {"attempt_id": first}, principal)
+    env.wait_ended(first)
+    rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
+    env.daemon.usage["external-heavy"] = 16 * GIB
+    try:
+        queued = env.submit(principal, launch="m2", params=env.fixture_params("m2"), timeout_seconds=600)["attempt_id"]
+        time.sleep(1.0)
+        waited = env.phase(queued) == "queued" and "memory" in str(env.attempt(queued).get("waiting_on", ""))
+        ended = env.wait_ended(queued, 20)
+    finally:
+        env.daemon.containers.pop(rogue, None)
+        env.daemon.usage.pop("external-heavy", None)
+    return {
+        "the attempt first waited on memory": waited,
+        "it ended as a failed create, not a timeout": ended["reason"] == "create_failed",
+        "the cause names memory and the deadline": "memory did not return within 3 s" in ended["detail"],
+        "no container was created for it": not creates(env, "-m2-"),
+    }
+
+
 @case("queued_cutoff_timeout", stub_host=True)
 def queued_cutoff_timeout(env: Env) -> dict[str, bool]:
     """912 (N1): a queued finite attempt that waits on memory past its start cutoff ends with a timeout and never creates a container."""
@@ -6681,7 +7132,7 @@ def queued_cutoff_timeout(env: Env) -> dict[str, bool]:
     alloc = env.allocate(workers=1)
     principal = env.alloc_principal(alloc)
     rogue = env.daemon.create_rogue("external-heavy", {}, running=True)
-    env.daemon.usage["external-heavy"] = 20 * GIB
+    env.daemon.usage["external-heavy"] = 16 * GIB
     try:
         queued = env.submit(principal, launch="q1", params=env.fixture_params("q1"), timeout_seconds=6)["attempt_id"]
         time.sleep(1.0)
@@ -7126,6 +7577,8 @@ def catalog_client(env: Env) -> dict[str, bool]:
     )
     catalog_script(env, others_run_forever=False)
     env.settings["restart_command"] = restart_command(env, 0.2, 0.5)
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=0.2")
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
     env.write_settings()
     outputs: dict[str, str] = {}
     fixture_writer: list[str | None] = []
@@ -7232,7 +7685,8 @@ def catalog_client(env: Env) -> dict[str, bool]:
         ),
         "the Spark heap line is printed": "Spark heap " in outputs["job_e2e"],
         "down stopped the catalog": "Catalog services stopped" in outputs["down"] and catalog_phase(env) == "down",
-        "release restarted Docker": released.startswith("Docker restarted"),
+        "release quit Docker Desktop through the stand-in quit command": released.startswith("Docker Desktop quit")
+        and bool((env.temp / "quit.log").read_text().strip()),
         "an unknown job is refused": refused_job is not None and "unknown job" in refused_job,
         "no credentials file or compose file exists": not (state / "secrets").exists() and not (env.temp / "compose.env").exists(),
     }
@@ -9693,8 +10147,18 @@ ALL_CASES = (
     staging_pool_interrupt,
     pooled_launch_capacity,
     queued_cutoff_timeout,
+    queued_memory_deadline,
     run_allocation_growth_reserve,
     docker_restart_command_and_client,
+    docker_restart_answer_deadline,
+    desktop_start,
+    docker_release_skips_and_refusals,
+    docker_release_quit,
+    docker_release_quit_deadlines,
+    docker_desktop_defaults,
+    docker_release_deadline_covers_the_catalog_stop,
+    docker_release_client_deadline,
+    docker_context_program_lookup,
     effective_spec_mutations,
     mount_fence_other_checkouts,
     template_owner_predicates,

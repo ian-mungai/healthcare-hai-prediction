@@ -1,16 +1,18 @@
 ---
-title: Architecture Rendering
+title: Architecture rendering
 description: How the architecture diagram is validated with Archify and rendered to PNG with headless Chrome.
-last_updated: 2026-10-13
+last_updated: 2026-10-29
 ---
 
-# Architecture Rendering
+# Architecture rendering
+
+This document explains how to validate and render the architecture diagram. It is for developers who change the diagram.
 
 The diagram source is `docs/architecture/architecture.json`, drawn with
 [Archify](https://github.com/tt-a1i/archify) v3.0.1. Each component cites the
 lines of code or configuration it was checked against. Its `finalize` command validates the JSON, writes
-`docs/architecture/architecture.html` and checks it in Chrome; the PNG is
-rendered from the HTML with headless Chrome. Planned components are listed in
+`docs/architecture/architecture.html` and checks it in Chrome. Headless Chrome renders the PNG
+from the HTML. Planned components are listed in
 the "Planned (not built)" card. With Archify unpacked at `<archify>`:
 
 ```sh
@@ -21,4 +23,4 @@ ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architec
   --screenshot=docs/architecture/architecture.png "file://$PWD/docs/architecture/architecture.html"
 ```
 
-`finalize` also writes receipt files beside the HTML; keep them out of Git.
+`finalize` also writes receipt files beside the HTML. Keep them out of Git.

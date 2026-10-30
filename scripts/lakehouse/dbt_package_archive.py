@@ -224,7 +224,7 @@ def write_immutable(root: Path, relative: Path, data: bytes) -> None:
     Every folder from / down opens relative to its parent with O_NOFOLLOW. The bytes go to an exclusive staging file in the
     same folder, which a hard link publishes: a link never replaces an existing file, and an interrupted write leaves no
     archive. The published file must be the staged inode, or the call refuses and deletes nothing. A folder that another
-    process moves after it was opened, or an entry it changes during the fetch, is outside this check (issue register WV3-011).
+    process moves after it was opened, or an entry it changes during the fetch, is outside this check.
     """
     if relative.is_absolute() or ".." in relative.parts or not relative.is_relative_to(ARCHIVES):
         raise ArchiveError("archive path must be in the ignored package archive folder")

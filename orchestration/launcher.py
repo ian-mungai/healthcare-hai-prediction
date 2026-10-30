@@ -78,7 +78,7 @@ from orchestration import (
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
-from scripts.process import run_command
+from scripts.process import TimeoutExpired, run_command
 
 PROTOCOL = 1
 REFUSED_EXIT, ERROR_EXIT, DEGRADED_EXIT = 3, 4, 5
@@ -136,6 +136,11 @@ DEADLINE_RELAY_VARIABLE = "HAI_DEADLINE_RELAY_B"
 LAUNCH_NONCE_VARIABLE = "HAI_LAUNCH_NONCE"
 LAUNCH_NONCE = os.environ.get(LAUNCH_NONCE_VARIABLE, "")
 DOCKER_RESTART_COMMAND = ("docker", "desktop", "restart")
+DOCKER_START_COMMAND = ("docker", "desktop", "start")
+DOCKER_QUIT_COMMAND = ("docker", "desktop", "stop")
+# Folders searched after the PATH for the docker program: a Git hook often runs with a short PATH.
+DOCKER_PROGRAM_FOLDERS: tuple[str, ...] = ("/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin")
+DEADLINE_LIMIT = 3600.0
 # D1 section 5 item 1: the admitted host-to-VM skew, the start margin, the TERM-to-KILL grace and the headroom after it.
 SKEW_SECONDS = 2
 START_MARGIN_SECONDS = 1
@@ -211,6 +216,13 @@ class Timings:
     docker_call_timeout: float = 120.0
     health_wait: float = 180.0
     restart_wait: float = 300.0
+    # After the restart command returns, how long the daemon may stay unreachable before the restart fails and its record is cleared.
+    restart_answer: float = 240.0
+    # One deadline for the start command and for the daemon to answer after it; one for the quit command and for the daemon to stop answering.
+    start_wait: float = 240.0
+    quit_wait: float = 120.0
+    # How long a queued launch waits for memory that another process holds before it fails with a named cause.
+    memory_wait: float = memory_budget.MEMORY_WAIT_DEADLINE
     # After a pool's cancellations persist, how long its workers keep polling an unreachable launcher before failing visibly.
     cancel_settle: float = 75.0
     # How long a client keeps retrying a submit or status exchange that times out (a launcher busy on a loaded machine) before failing.
@@ -237,6 +249,8 @@ class Config:
     timings: Timings = Timings()
     images: Mapping[str, str] = field(default_factory=dict)
     restart_command: tuple[str, ...] = DOCKER_RESTART_COMMAND
+    start_command: tuple[str, ...] = DOCKER_START_COMMAND
+    quit_command: tuple[str, ...] = DOCKER_QUIT_COMMAND
     secrets_endpoint: str | None = None
     secret_fetch_seconds: float = secret_store.FETCH_DEADLINE_SECONDS
     sts_endpoint: str | None = None
@@ -327,12 +341,21 @@ def account_home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
+def docker_program(name: str) -> str:
+    """The full path of a Docker program: the PATH first, then the folders Docker Desktop installs into (failure mode R10)."""
+    path = os.environ.get("PATH", "")
+    found = shutil.which(name, path=os.pathsep.join([path, *DOCKER_PROGRAM_FOLDERS]))
+    if found is None:
+        raise LauncherError(f"docker CLI not found on PATH ({path})", "refused")
+    return found
+
+
 def docker_socket_path() -> str:
     """The Docker Engine socket: ``DOCKER_HOST`` as the Docker command does, else the current context's endpoint."""
     host = os.environ.get("DOCKER_HOST", "")
     if host.startswith("unix://"):
         return host.removeprefix("unix://")
-    result = run_command("docker", ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], timeout=30)
+    result = run_command(docker_program("docker"), ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], timeout=30)
     endpoint = result.stdout.strip()
     if result.returncode or not endpoint.startswith("unix://"):
         raise Degraded(f"cannot read the Docker socket from the Docker context: {result.stderr.strip()[-200:] or endpoint}")
@@ -3288,6 +3311,8 @@ METHODS: dict[str, MethodSpec] = {
     "orchestration_down": MethodSpec(("any",)),
     "pull": MethodSpec(("any",)),
     "docker_restart": MethodSpec(("any",), owner_flag=True),
+    "docker_release": MethodSpec(("any",), owner_flag=True),
+    "desktop_start": MethodSpec(("any",), owner_flag=True),
     "shutdown": MethodSpec(("any",), owner_flag=True),
     "catalog_authority": MethodSpec(("any",), owner_flag=True),
 }
@@ -3428,6 +3453,7 @@ class Launcher:
         self.stream_acked = False
         self.probe: dict[str, Any] | None = None
         self.next_retry = 0.0
+        self.desktop_poked = 0.0
         self.backoff = self.timings.backoff_start
         self.inflight: set[str] = set()
         self.inventory: dict[str, dict[str, Any]] = {}
@@ -3515,6 +3541,11 @@ class Launcher:
             "restartcheck": self.on_restartcheck,
             "restartcmd": self.on_restartcmd,
             "restartping": self.on_restartping,
+            "releasecheck": self.on_releasecheck,
+            "quitcmd": self.on_quitcmd,
+            "quitping": self.on_quitping,
+            "desktopping": self.on_desktopping,
+            "desktopcmd": self.on_desktopcmd,
             "copy": self.on_copy,
             "rmcopy": self.on_rmcopy,
             "seal": self.on_seal,
@@ -3577,6 +3608,8 @@ class Launcher:
             "orchestration_down": self.m_orchestration_down,
             "pull": self.m_pull,
             "docker_restart": self.m_docker_restart,
+            "docker_release": self.m_docker_release,
+            "desktop_start": self.m_desktop_start,
             "shutdown": self.m_shutdown,
             "catalog_authority": self.m_catalog_authority,
         }
@@ -3989,15 +4022,16 @@ class Launcher:
         cloud_request = self.cloud_request(method, params)
         if self.restart_running() and method not in ("ping", "status") and not cloud_request:
             raise LauncherError("a Docker restart is running", "refused")
-        if self.status == "starting" and method not in ("ping", "status") and not cloud_request:
+        if self.status == "starting" and method not in ("ping", "status", "desktop_start") and not cloud_request:
             raise Degraded("the launcher is starting")
-        if self.status == "degraded" and method not in ("ping", "status", "shutdown", "cancel", "logs", "release_allocation", "recover") and not cloud_request:
+        degraded_methods = ("ping", "status", "shutdown", "cancel", "logs", "release_allocation", "recover", "docker_release", "desktop_start")
+        if self.status == "degraded" and method not in degraded_methods and not cloud_request:
             raise Degraded(f"degraded: {self.degraded_reason}")
         if principal.get("kind") not in spec.kinds:
             raise LauncherError(f"{method} is not callable by principal {principal.get('kind')!r}", "principal")
         if (
             spec.owner_flag
-            and method in ("docker_restart", "shutdown", "recover", "catalog_authority", "mlflow_down")
+            and method in ("docker_restart", "docker_release", "desktop_start", "shutdown", "recover", "catalog_authority", "mlflow_down")
             and not principal.get("owner")
             and not params.get("owner")
         ):
@@ -4825,6 +4859,7 @@ class Launcher:
             },
         }
         attempt.update({"phase": "creating", "container_name": rendered.name, "spec_digest": sha256_text(canonical(spec)), "current_op": op_id})
+        state["launcher"]["last_container_at"] = time.time()
         if rendered.joins:
             attempt["joins"] = {network: list(aliases) for network, aliases in rendered.joins.items()}
         body, name = rendered.body, rendered.name
@@ -4914,6 +4949,7 @@ class Launcher:
 
     def advance_all(self) -> None:
         """One pass over every open attempt and every owner: the state machine of D1 sections 4 to 6."""
+        self.advance_desktop()
         if self.status == "starting" and not self.docker_ok:
             self.expire_lineage_startup()
             self.expire_mlflow_startup()
@@ -4985,6 +5021,8 @@ class Launcher:
             # Past the host start cutoff a queued finite attempt can never start: it ends now instead of waiting on memory or preparation.
             a["timeout_intent"] = {"reason": "start_after_deadline", "at": utc_now()}
             self.finish_attempt(state, a, self.intent_reason(a), "the start cutoff passed while queued")
+            return
+        if self.memory_wait_expired(state, a):
             return
         owner = a["owner"]
         if not self.admissible(state, a) and owner != DIAGNOSTIC_OWNER:
@@ -5186,6 +5224,23 @@ class Launcher:
         ok = free + own - running * share >= share or (running == 0 and free >= share)
         return {"ok": ok, "error": None, "free": free, "own": own, "running": running, "share": share}
 
+    def memory_wait_expired(self, state: dict[str, Any], a: dict[str, Any]) -> bool:
+        """End a queued attempt whose stored memory wait has lasted the deadline, from the figures of its last short reading; True when it ended.
+
+        Every queued tick and every reading calls this before anything else can clear or skip the clock, so a pending reading, a worker error, a
+        degraded launcher or a late good reading cannot extend the wait past ``Timings.memory_wait``.
+        """
+        since = a.get("memory_wait_since")
+        if since is None or a["phase"] != "queued":
+            return False
+        failure = memory_budget.wait_failure(
+            float(since), time.time(), self.timings.memory_wait, int(a.get("memory_wait_free", 0)), int(a.get("memory_wait_need", 0))
+        )
+        if failure is None:
+            return False
+        self.finish_attempt(state, a, "create_failed", failure)
+        return True
+
     def on_capacity(self, key: str, outcome: str, value: Any) -> None:
         """A capacity reading: the launch may go on, waits for the next reading, or (no worker runs and nothing could be read) fails."""
         attempt_id = key.split(":", 1)[1]
@@ -5194,15 +5249,24 @@ class Launcher:
             if a is None:
                 return
             a["capacity_pending"] = False
+            now = time.time()
+            if outcome == "ok" and not value["ok"] and not (value["error"] and not value["running"]):
+                a.setdefault("memory_wait_since", now)
+                a["memory_wait_free"] = int(value["free"])
+                a["memory_wait_need"] = int(value.get("share", 0))
+            if self.memory_wait_expired(state, a):
+                self.dirty.add(attempt_id)
+                return
             if outcome != "ok":
-                a["capacity_retry_at"] = time.time() + self.CAPACITY_RETRY
+                a["capacity_retry_at"] = now + self.CAPACITY_RETRY
                 return
             if value["ok"]:
-                a["capacity_at"] = time.time()
+                a["capacity_at"] = now
+                a.pop("memory_wait_since", None)
             elif value["error"] and not value["running"]:
                 self.finish_attempt(state, a, "create_failed", f"capacity: {value['error']}")
             else:
-                a["capacity_retry_at"] = time.time() + self.CAPACITY_RETRY
+                a["capacity_retry_at"] = now + self.CAPACITY_RETRY
                 a["waiting_on"] = f"memory (free {value['free']}, share {value.get('share', 0)})"
         self.dirty.add(attempt_id)
 
@@ -6104,6 +6168,8 @@ class Launcher:
                 "orchestration": state["launcher"].get("orchestration"),
                 "barrier": state["launcher"].get("barrier"),
                 "restart": state["launcher"].get("restart"),
+                "release": state["launcher"].get("release"),
+                "desktop": state["launcher"].get("desktop"),
                 "catalog_authority": state["launcher"].get("catalog_authority"),
                 "open_attempts": sum(1 for a in state["attempts"].values() if is_open(a)),
                 "open_templates": sorted({a["template"] for a in state["attempts"].values() if is_open(a)}),
@@ -6474,6 +6540,7 @@ class Launcher:
         self.advance_online_store(state, actions)
         self.advance_mlflow(state, actions)
         self.advance_restart(state, actions)
+        self.advance_release(state, actions)
         self.advance_copies(state, actions)
         self.advance_seals(state, actions)
 
@@ -7911,22 +7978,26 @@ class Launcher:
 
     def m_catalog_down(self, ctx: Ctx) -> dict[str, Any]:
         """Record a teardown barrier before any side effect (D1 section 8 item 3)."""
-        catalog = self.catalog_record(ctx.state)
-        if any("catalog_user" in run.get("registrations", []) for run in ctx.state["runs"].values()):
+        return self.begin_catalog_down(ctx.state)
+
+    def begin_catalog_down(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The teardown request of ``catalog_down``, also used by ``docker_release`` for the idle catalog."""
+        catalog = self.catalog_record(state)
+        if any("catalog_user" in run.get("registrations", []) for run in state["runs"].values()):
             raise LauncherError("catalog users remain registered", "refused")
         if catalog["phase"] == "down":
             return {"phase": "down"}
-        if ctx.state["launcher"].get("barrier"):
+        if state["launcher"].get("barrier"):
             return {"phase": "tearing_down"}
-        readers = [r for r in ctx.state["registrations"].values() if r["kind"] == "reader"]
+        readers = [r for r in state["registrations"].values() if r["kind"] == "reader"]
         if readers:
             raise LauncherError(f"catalog_down is refused: reader registration {readers[0]['id']} exists", "refused")
-        users = [a for a in ctx.state["attempts"].values() if is_open(a) and TEMPLATES[a["template"]].needs_catalog]
+        users = [a for a in state["attempts"].values() if is_open(a) and TEMPLATES[a["template"]].needs_catalog]
         if users:
             raise LauncherError(f"catalog_down is refused: attempt {users[0]['id']} ({users[0]['template']}) needs the catalog", "refused")
         if catalog["phase"] == "starting":
             raise LauncherError("catalog_down is refused: a catalog startup is open", "refused")
-        ctx.state["launcher"]["barrier"] = {"phase": "stopping", "at": utc_now()}
+        state["launcher"]["barrier"] = {"phase": "stopping", "at": utc_now()}
         catalog.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
 
@@ -9018,8 +9089,8 @@ class Launcher:
 
     def m_docker_restart(self, ctx: Ctx) -> Any:
         """Restart Docker Desktop to free the VM's memory, only when nothing of this registry and nothing foreign runs (D1 section 8 item 4)."""
-        if ctx.state["launcher"].get("restart"):
-            raise LauncherError("a Docker restart is already running", "refused")
+        if ctx.state["launcher"].get("restart") or ctx.state["launcher"].get("release"):
+            raise LauncherError("a Docker restart or release is already running", "refused")
         caller = str(ctx.params.get("alloc_id") or "")
         problems = self.restart_problems(ctx.state, caller)
         if problems:
@@ -9033,11 +9104,21 @@ class Launcher:
         """Every reason a restart is refused, from the registry alone."""
         problems = [f"attempt {a['id']} is open" for a in state["attempts"].values() if is_open(a)]
         problems += [f"operation {o['op_id']} is open" for o in state["operations"].values() if o["state"] == "open"]
-        problems += [
+        return problems + self.holding_problems(state, caller)
+
+    @staticmethod
+    def holding_problems(state: Mapping[str, Any], caller: str) -> list[str]:
+        """The allocations and registrations of other callers, which the idle catalog's own attempts and operations never hold."""
+        problems = [
             f"allocation {k} is {v['state']}" for k, v in state["allocations"].items() if v["state"] in ("planning", "held", "releasing") and k != caller
         ]
-        problems += [f"registration {k} exists" for k in state["registrations"]]
-        return problems
+        return problems + [f"registration {k} exists" for k in state["registrations"]]
+
+    @staticmethod
+    def foreign_running(state: Mapping[str, Any], listing: Sequence[Mapping[str, Any]]) -> list[str]:
+        """The names of every running container the launcher has no create record for (failure mode R1)."""
+        known = {cid for cid, entry in state["containers"].items() if not cid.startswith("network:") and entry.get("name")}
+        return [str(c["Names"][0]).lstrip("/") for c in listing if c["Id"] not in known]
 
     def on_restartcheck(self, key: str, outcome: str, value: Any) -> None:
         """The running-container listing arrived: a container the launcher did not create refuses the restart."""
@@ -9049,10 +9130,9 @@ class Launcher:
             return
         with self.tx() as state:
             problems = self.restart_problems(state, caller)
-            known = {cid for cid, entry in state["containers"].items() if not cid.startswith("network:") and entry.get("name")}
-            foreign = [str(c["Names"][0]).lstrip("/") for c in value if c["Id"] not in known]
+            foreign = self.foreign_running(state, value)
             if foreign:
-                problems.append(f"a running container was not created by this launcher ({foreign[0]})")
+                problems.append(f"a running container was not created by this launcher ({', '.join(foreign)})")
             if problems:
                 self.complete_request(request_key, {}, LauncherError(f"docker_restart is refused: {problems[0]}", "refused"))
                 return
@@ -9063,24 +9143,33 @@ class Launcher:
         restart = state["launcher"].get("restart")
         if not restart:
             return
-        if restart["phase"] == "restart":
+        if restart.get("kind") == "quit":
+            self.advance_quit(state, restart, actions)
+        elif restart["phase"] == "restart":
             if "restart:cmd" not in self.inflight:
                 actions.append(lambda: self.spawn("restart:cmd", "restartcmd", self.run_restart_command))
-        elif (
-            restart["phase"] == "wait"
-            and self.status == "serving"
-            and self.docker_ok
-            and "restart:ping" not in self.inflight
-            and time.time() - restart.get("started", time.time()) > 1
-        ):
-            actions.append(lambda: self.spawn("restart:ping", "restartping", self.docker.ping))
+        elif restart["phase"] == "wait":
+            waited = time.time() - restart.get("started", time.time())
+            if waited > self.timings.restart_answer:
+                state["launcher"]["restart"] = None
+                message = f"Docker did not answer within {self.timings.restart_answer:g} s after the restart"
+                actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
+            elif self.status == "serving" and self.docker_ok and "restart:ping" not in self.inflight and waited > 1:
+                actions.append(lambda: self.spawn("restart:ping", "restartping", self.docker.ping))
 
     def run_restart_command(self) -> int:
         """Worker: the restart command of the Docker application."""
-        program, *arguments = self.cfg.restart_command
-        result = run_command(program, arguments, timeout=self.timings.restart_wait)
+        return self.run_desktop_command(self.cfg.restart_command, self.timings.restart_wait)
+
+    def desktop_program(self, command: Sequence[str]) -> str:
+        """The full path of a Docker Desktop command's program (``docker_program``)."""
+        return docker_program(command[0])
+
+    def run_desktop_command(self, command: Sequence[str], seconds: float) -> int:
+        """Worker: one command of the Docker application; it is stopped after ``seconds``."""
+        result = run_command(self.desktop_program(command), list(command[1:]), timeout=seconds)
         if result.returncode:
-            raise LauncherError(f"{' '.join(self.cfg.restart_command)} failed with exit code {result.returncode}")
+            raise LauncherError(f"{' '.join(command)} failed with exit code {result.returncode}")
         return 0
 
     def on_restartcmd(self, key: str, outcome: str, value: Any) -> None:
@@ -9110,6 +9199,268 @@ class Launcher:
             request_key = restart["request"]
             state["launcher"]["restart"] = None
         self.complete_request(request_key, {"phase": "done", "catalog": "down"})
+
+    # -- Docker Desktop: the start before a heavy run and the release (a quit) after it ----------------------------
+
+    @staticmethod
+    def seconds_param(params: Mapping[str, Any], name: str, default: float) -> float:
+        """A positive number of seconds a caller may set, at most ``DEADLINE_LIMIT``."""
+        value = params.get(name)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= DEADLINE_LIMIT:
+            raise LauncherError(f"{name} must be a number of seconds above 0 and at most {DEADLINE_LIMIT:g}", "args")
+        return float(value)
+
+    def finish_requests(self, keys: Sequence[str], result: dict[str, Any], error: LauncherError | None = None) -> None:
+        """Answer every request that waited for one Docker Desktop operation."""
+        for key in keys:
+            self.complete_request(key, result, error)
+
+    def m_desktop_start(self, ctx: Ctx) -> Any:
+        """Start Docker Desktop when the daemon does not answer and wait until the launcher serves, within one deadline (failure modes R7, R8, R15)."""
+        deadline = self.seconds_param(ctx.params, "deadline", self.timings.start_wait)
+        if self.status == "serving" and self.docker_ok:
+            return {"started": False, "seconds": 0.0}
+        self.desktop_program(self.cfg.start_command)
+        record = ctx.state["launcher"].get("desktop")
+        if record:
+            record["requests"].append(ctx.key)
+        else:
+            ctx.state["launcher"]["desktop"] = {
+                "phase": "probe",
+                "requests": [ctx.key],
+                "at": utc_now(),
+                "began": time.time(),
+                "deadline": deadline,
+                "ran": False,
+            }
+        return PENDING
+
+    def advance_desktop(self) -> None:
+        """The recorded start: ask whether the daemon answers, run the command if not, then wait for serving; the deadline covers all of it."""
+        with self.tx(write=False) as state:
+            if not state["launcher"].get("desktop"):
+                return
+        actions: list[Callable[[], None]] = []
+        with self.tx() as state:
+            record = state["launcher"]["desktop"]
+            requests = list(record["requests"])
+            left = record["began"] + record["deadline"] - time.time()
+            if left <= 0:
+                state["launcher"]["desktop"] = None
+                message = f"Docker Desktop did not answer within {record['deadline']:g} s; open Docker Desktop, answer any dialog, then run the command again"
+                actions.append(lambda: self.finish_requests(requests, {}, Degraded(message)))
+            elif record["phase"] == "probe":
+                if "desktop:ping" not in self.inflight:
+                    actions.append(lambda: self.spawn("desktop:ping", "desktopping", self.docker.ping))
+            elif record["phase"] == "command":
+                if "desktop:cmd" not in self.inflight:
+                    actions.append(lambda: self.spawn("desktop:cmd", "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
+            elif self.status == "serving" and self.docker_ok:
+                state["launcher"]["desktop"] = None
+                result = {"started": bool(record["ran"]), "seconds": round(time.time() - record["began"], 1)}
+                actions.append(lambda: self.finish_requests(requests, result))
+            elif self.status == "degraded" and time.monotonic() - self.desktop_poked >= 1.0:
+                self.reconnect_now()
+        for action in actions:
+            action()
+
+    def reconnect_now(self) -> None:
+        """Try the Docker connection at the next pass instead of after the backoff."""
+        self.desktop_poked = time.monotonic()
+        self.backoff = self.timings.backoff_start
+        self.next_retry = 0.0
+
+    def on_desktopping(self, key: str, outcome: str, value: Any) -> None:
+        """The daemon answered the start's first ping or did not: only a silent daemon gets the start command."""
+        with self.tx() as state:
+            record = state["launcher"].get("desktop")
+            if not record or record["phase"] != "probe":
+                return
+            record["phase"] = "wait" if outcome == "ok" and value else "command"
+        if outcome == "ok" and value:
+            self.reconnect_now()
+
+    def on_desktopcmd(self, key: str, outcome: str, value: Any) -> None:
+        """The start command ended: wait for the daemon, or fail the waiting requests."""
+        requests: list[str] = []
+        error: LauncherError | None = None
+        with self.tx() as state:
+            record = state["launcher"].get("desktop")
+            if not record or record["phase"] != "command":
+                return
+            if outcome == "ok":
+                record.update({"phase": "wait", "ran": True})
+            else:
+                requests = list(record["requests"])
+                state["launcher"]["desktop"] = None
+                if isinstance(value, TimeoutExpired):
+                    error = Degraded(
+                        f"Docker Desktop did not answer within {record['deadline']:g} s; open Docker Desktop, answer any dialog, then run the command again"
+                    )
+                else:
+                    error = LauncherError(f"docker start failed: {failure_text(value)}", "command_failed")
+        if error is not None:
+            self.finish_requests(requests, {}, error)
+        else:
+            self.reconnect_now()
+
+    def m_docker_release(self, ctx: Ctx) -> Any:
+        """After a heavy run, quit Docker Desktop to free the VM's memory, only when nothing of this registry and nothing foreign runs (answer 3)."""
+        deadline = self.seconds_param(ctx.params, "deadline", self.timings.quit_wait)
+        since = ctx.params.get("since")
+        if since is not None and (isinstance(since, bool) or not isinstance(since, (int, float)) or since < 0):
+            raise LauncherError("since must be a Unix time in seconds", "args")
+        if not (self.status == "serving" and self.docker_ok):
+            return {"outcome": "skipped", "reason": "Docker Desktop is not running"}
+        created = ctx.state["launcher"].get("last_container_at")
+        if since is not None and (created is None or float(created) < since):
+            return {"outcome": "skipped", "reason": f"no container ran since {datetime.fromtimestamp(since, UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}"}
+        if ctx.state["launcher"].get("release"):
+            raise LauncherError("a Docker release is already running", "refused")
+        self.desktop_program(self.cfg.quit_command)
+        explicit = ctx.params.get("deadline") is not None
+        ctx.state["launcher"]["release"] = {
+            "phase": "check",
+            "request": ctx.key,
+            "at": utc_now(),
+            "began": time.time(),
+            "deadline": deadline,
+            "explicit": explicit,
+        }
+        return PENDING
+
+    def release_refusal(self, problems: Sequence[str], foreign: Sequence[str]) -> str:
+        """The refusal text: the first registry blocker, how many more there are, and every foreign running container."""
+        names = f"running containers not created by this launcher: {', '.join(foreign)}"
+        if not problems:
+            return f"docker_release is refused: {names}"
+        more = f" (+{len(problems) - 1} more)" if len(problems) > 1 else ""
+        return f"docker_release is refused: {problems[0]}{more}" + (f"; {names}" if foreign else "")
+
+    def advance_release(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """The release before the quit: list the running containers, stop the idle catalog, list again, then hand over to the quit."""
+        release = state["launcher"].get("release")
+        if not release:
+            return
+        request = release["request"]
+        error: LauncherError | None = None
+        result: dict[str, Any] = {}
+        if not (self.status == "serving" and self.docker_ok):
+            result = {"outcome": "skipped", "reason": "Docker Desktop is not running"}
+        elif release.get("explicit") and time.time() - release["began"] > release["deadline"]:
+            # A deadline the caller gave covers the whole release: the caller stops waiting then, so the quit must not start after it.
+            error = Degraded(f"docker_release did not reach the quit within its deadline of {release['deadline']:g} s")
+        elif time.time() - release["began"] > self.timings.restart_wait:
+            error = LauncherError(f"docker_release failed: the catalog did not stop within {self.timings.restart_wait:g} s", "command_failed")
+        elif release["phase"] == "catalog":
+            if self.catalog_record(state)["phase"] == "down" and not state["launcher"].get("barrier"):
+                release["phase"] = "recheck"
+            return
+        else:
+            if "release:list" not in self.inflight:
+                actions.append(lambda: self.spawn("release:list", "releasecheck", lambda: self.docker.containers(all_states=False)))
+            return
+        state["launcher"]["release"] = None
+        actions.append(lambda: self.complete_request(request, result, error))
+
+    def on_releasecheck(self, key: str, outcome: str, value: Any) -> None:
+        """A listing of the running containers arrived: refuse, stop the idle catalog (first listing only) or start the quit (every check passed)."""
+        request = ""
+        error: LauncherError | None = None
+        with self.tx() as state:
+            release = state["launcher"].get("release")
+            if not release or release["phase"] not in ("check", "recheck"):
+                return
+            request = release["request"]
+            if outcome != "ok":
+                error = Degraded(f"docker_release is refused: the running containers cannot be listed ({failure_text(value)})")
+            else:
+                foreign = self.foreign_running(state, value)
+                catalog_down = self.catalog_record(state)["phase"] == "down" and not state["launcher"].get("barrier")
+                full = release["phase"] == "recheck" or catalog_down
+                problems = self.restart_problems(state, "") if full else self.holding_problems(state, "")
+                if problems or foreign:
+                    error = LauncherError(self.release_refusal(problems, foreign), "refused")
+                elif full:
+                    state["launcher"]["restart"] = {
+                        "phase": "restart",
+                        "kind": "quit",
+                        "request": request,
+                        "at": utc_now(),
+                        "began": release["began"] if release.get("explicit") else time.time(),
+                        "deadline": release["deadline"],
+                    }
+                    state["launcher"]["release"] = None
+                    return
+                else:
+                    try:
+                        self.begin_catalog_down(state)
+                    except LauncherError as refusal:
+                        error = LauncherError(f"docker_release is refused: the idle catalog cannot be stopped ({refusal})", "refused")
+                    else:
+                        release["phase"] = "catalog"
+                        return
+            state["launcher"]["release"] = None
+        self.complete_request(request, {}, error)
+
+    def advance_quit(self, state: dict[str, Any], restart: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Run the quit command, then wait until the daemon stops answering; one deadline covers both and an expired one leaves Docker as it is."""
+        left = restart["began"] + restart["deadline"] - time.time()
+        if left <= 0:
+            state["launcher"]["restart"] = None
+            message = (
+                f"Docker Desktop still answers {restart['deadline']:g} s after the quit command"
+                if restart["phase"] == "wait"
+                else f"the quit command did not end within {restart['deadline']:g} s"
+            )
+            actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
+        elif restart["phase"] == "restart":
+            if "quit:cmd" not in self.inflight:
+                actions.append(lambda: self.spawn("quit:cmd", "quitcmd", self.run_desktop_command, self.cfg.quit_command, left))
+        elif "quit:ping" not in self.inflight and time.time() - restart.get("pinged", 0.0) >= 1.0:
+            restart["pinged"] = time.time()
+            actions.append(lambda: self.spawn("quit:ping", "quitping", self.daemon_silent))
+
+    def daemon_silent(self) -> bool:
+        """Worker: True when the daemon no longer answers."""
+        try:
+            return not self.docker.ping()
+        except DockerError:
+            return True
+
+    def on_quitcmd(self, key: str, outcome: str, value: Any) -> None:
+        """The quit command ended: wait for the daemon to stop answering, or fail the release."""
+        request = ""
+        error: LauncherError | None = None
+        with self.tx() as state:
+            restart = state["launcher"].get("restart")
+            if not restart or restart.get("kind") != "quit" or restart["phase"] != "restart":
+                return
+            request = restart["request"]
+            if outcome == "ok":
+                restart["phase"] = "wait"
+                return
+            state["launcher"]["restart"] = None
+            if isinstance(value, TimeoutExpired):
+                error = Degraded(f"the quit command did not end within {restart['deadline']:g} s")
+            else:
+                error = LauncherError(f"docker quit failed: {failure_text(value)}", "command_failed")
+        self.complete_request(request, {}, error)
+
+    def on_quitping(self, key: str, outcome: str, value: Any) -> None:
+        """The daemon stopped answering: the release is done. The launcher has nothing left to supervise, so it stops (failure mode R30)."""
+        if outcome != "ok" or not value:
+            return
+        with self.tx() as state:
+            restart = state["launcher"].get("restart")
+            if not restart or restart.get("kind") != "quit" or restart["phase"] != "wait":
+                return
+            request, began = restart["request"], restart["began"]
+            state["launcher"]["restart"] = None
+        self.complete_request(request, {"outcome": "quit", "catalog": "down", "seconds": round(time.time() - began, 1)})
+        self.running = False
 
     # -- snapshot copies (D1 section 10 item 1) ---------------------------------------------------------------------
 
@@ -9148,7 +9499,7 @@ class Launcher:
         return {"prepared": True}
 
     def m_training_fixture_publication(self, ctx: Ctx) -> dict[str, Any]:
-        """Bind the lead runner's synthetic publication and applied registry inside a test run."""
+        """Bind the coordinating agent's runner's synthetic publication and applied registry inside a test run."""
         self.pipeline_params(ctx, ("local_catalog", "registry"))
         run = self.run_entry(ctx)
         folder = self.cfg.runs_root / run["run_id"]
@@ -9853,7 +10204,7 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             raise LauncherError(f"history_retain ({timings.history_retain} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
         if timings.compact_floor <= timings.poll_patience:
             raise LauncherError(f"compact_floor ({timings.compact_floor} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
-        for name in ("compact_threshold", "stuck_after", "gone_after", "slow_exchange", "cleanup_budget"):
+        for name in ("compact_threshold", "stuck_after", "gone_after", "slow_exchange", "cleanup_budget", "memory_wait"):
             if getattr(timings, name) <= 0:
                 raise LauncherError(f"{name} ({getattr(timings, name)}) must be positive", "config")
         folder = registry.path / "test_state"
@@ -9866,6 +10217,8 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             timings=timings,
             images=dict(settings.get("images", {})),
             restart_command=tuple(settings.get("restart_command", DOCKER_RESTART_COMMAND)),
+            start_command=tuple(settings.get("start_command", DOCKER_START_COMMAND)),
+            quit_command=tuple(settings.get("quit_command", DOCKER_QUIT_COMMAND)),
             secrets_endpoint=str(settings["secrets_endpoint"]) if settings.get("secrets_endpoint") else None,
             secret_fetch_seconds=float(settings.get("secret_fetch_seconds", secret_store.FETCH_DEADLINE_SECONDS)),
             sts_endpoint=str(settings["sts_endpoint"]) if settings.get("sts_endpoint") else None,
@@ -10682,6 +11035,15 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("catalog-down", help="stop the catalog services and wait")
     restart = commands.add_parser("docker-restart", help="restart Docker Desktop when nothing of this registry runs")
     restart.add_argument("--owner", action="store_true", required=True)
+    release = commands.add_parser(
+        "docker-release", help="quit Docker Desktop after a heavy run when nothing of this registry and no foreign container runs (never restarts it)"
+    )
+    release.add_argument("--owner", action="store_true", required=True)
+    release.add_argument("--since", type=float, help="skip unless a container was created since this Unix time")
+    release.add_argument("--deadline", type=float, help="seconds the whole release may take (the client gives up then)")
+    start = commands.add_parser("docker-start", help="start Docker Desktop when it does not answer and wait until the launcher serves")
+    start.add_argument("--owner", action="store_true", required=True)
+    start.add_argument("--deadline", type=float, help="seconds the start command and the wait for the daemon may take")
     commands.add_parser("shutdown", help="stop the launcher").add_argument("--owner", action="store_true", required=True)
     commands.add_parser(
         "dbt", help="dbt: `deps` runs the dbt_deps template; any other command needs a real run with recorded pins and a complete snapshot"
@@ -10733,7 +11095,7 @@ def main() -> int:
     try:
         if args.command == "serve":
             return Launcher(resolve_config(args.test_registry)).serve()
-        client = load_client(args.test_registry)
+        client = load_client(args.test_registry, start=args.command != "docker-release")
         if args.command == "status":
             result: Any = client.call("status", {"what": args.what})
         elif args.command == "plan":
@@ -10746,6 +11108,12 @@ def main() -> int:
             result = client.wait_for("catalog", "", "phase", ("down",), {"kind": "any"}, 600)
         elif args.command == "docker-restart":
             result = client.call("docker_restart", {"owner": True}, {"kind": "any", "owner": True}, timeout=900)
+        elif args.command == "docker-release":
+            result = release_command(client, args)
+        elif args.command == "docker-start":
+            deadline = args.deadline if args.deadline is not None else client.config.timings.start_wait
+            params = {"owner": True} if args.deadline is None else {"owner": True, "deadline": args.deadline}
+            result = call_by_deadline(client, "docker-start", "desktop_start", params, deadline, deadline + 30)
         elif args.command == "shutdown":
             result = client.call("shutdown", {"owner": True}, {"kind": "any", "owner": True})
         elif args.command == "dbt":
@@ -10756,6 +11124,8 @@ def main() -> int:
             return run_command_line(client, args)
     except ClientError as error:
         sys.stderr.write(f"launcher: {error} [{error.code}]\n")
+        if error.code == "command_failed":
+            return ERROR_EXIT
         return DEGRADED_EXIT if error.transport or error.code == "degraded" else REFUSED_EXIT
     except (run_lock.Refused, LauncherError) as error:
         sys.stderr.write(f"refused: {error}\n")
@@ -10966,6 +11336,29 @@ def session_input_line(data: bytes, tty: bool) -> bytes:
     """One line of the session protocol for a chunk of input; outside a terminal a lone Ctrl-C is the interrupt signal."""
     message = {"signal": "INT"} if data == b"\x03" and not tty else {"in": base64.b64encode(data).decode()}
     return json.dumps(message).encode() + b"\n"
+
+
+def call_by_deadline(client: LauncherClient, command: str, method: str, params: dict[str, Any], deadline: float, wait: float) -> Any:
+    """An owner request that waits ``wait`` seconds for its reply; none by then is a degraded error naming the deadline, not a registry error."""
+    try:
+        return client.call(method, params, {"kind": "any", "owner": True}, timeout=wait)
+    except TimeoutError as error:
+        raise ClientError(f"{command} had no reply within its deadline of {deadline:g} s", "degraded") from error
+
+
+def release_command(client: LauncherClient, args: argparse.Namespace) -> dict[str, Any]:
+    """``docker-release``: the launcher's answer, or ``skipped`` when no launcher runs (the client never starts one for a release)."""
+    try:
+        client.open_socket(5).close()
+    except OSError:
+        return {"outcome": "skipped", "reason": "no launcher runs"}
+    params: dict[str, Any] = {"owner": True}
+    if args.since is not None:
+        params["since"] = args.since
+    if args.deadline is not None:
+        params["deadline"] = args.deadline
+    deadline = args.deadline if args.deadline is not None else 900
+    return dict(call_by_deadline(client, "docker-release", "docker_release", params, deadline, deadline))
 
 
 def run_command_line(client: LauncherClient, args: argparse.Namespace) -> int:

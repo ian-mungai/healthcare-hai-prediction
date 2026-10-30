@@ -1,7 +1,7 @@
 ---
 title: AWS control plane
 description: Control-plane services on the AWS container host, with inputs, secrets, images and the Mac launcher changes.
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 audience: [developer]
 ---
 
@@ -35,7 +35,7 @@ Services that bind every interface by default and how each is held to loopback (
 | Listener | Default | Setting |
 | --- | --- | --- |
 | Scheduler health server (8974) | every interface (`[scheduler] scheduler_health_check_server_host`) | `AIRFLOW__SCHEDULER__SCHEDULER_HEALTH_CHECK_SERVER_HOST=127.0.0.1` |
-| Scheduler and triggerer log servers (8793, 8794) | every interface, no host option (`serve_logs` passes `host=""` to uvicorn) | `--skip-serve-logs`; task logs are read from the shared `<data>/airflow/logs` volume |
+| Scheduler and triggerer log servers (8793, 8794) | every interface, no host option (`serve_logs` passes `host=""` to uvicorn) | `--skip-serve-logs`. Task logs come from the shared `<data>/airflow/logs` volume |
 | Polaris management interface (8182) | Quarkus management default | `QUARKUS_MANAGEMENT_HOST=127.0.0.1` |
 | Marquez API and admin connectors (5000, 5001) | every interface (Dropwizard) | `bindHost: 127.0.0.1` in the generated configuration |
 | Marquez web (3000) | every interface (`app.listen(port)`) | the arm64 build edits the listen call to use `WEB_HOST` (default 127.0.0.1) |
@@ -51,7 +51,7 @@ Services that bind every interface by default and how each is held to loopback (
 | `control_plane_task_role_arn` | No data permission. Used by the other services |
 | `log_group_names` | Map with `postgres`, `redis`, `polaris`, `airflow`, `marquez` (groups may repeat) |
 | `ecr_repository_urls` | Map with `postgres`, `redis`, `polaris`, `polaris_admin` and `airflow`, plus `marquez` and `marquez_web` when Marquez is on |
-| `project_tag` | The foundation `project_tag` output: the project name, the same `Project` tag value as the data bucket. Every task definition and service carries it; the budget counts the tagged costs of the services the AWS-first design adds |
+| `project_tag` | The foundation `project_tag` output: the project name, the same `Project` tag value as the data bucket. Every task definition and service carries it. The budget counts the tagged costs of the services the AWS-first design adds |
 | `data_mount_path` | Absolute mount path of the data volume on the host |
 | `image_digests` | Written by `scripts/infrastructure/push_images.py record` |
 
@@ -90,10 +90,10 @@ A plan test (`infra/services/tests/flow`) reads every command line of a containe
 How each secret reaches its program without a command line or a file:
 
 - **Airflow database URL.** Airflow's `_CMD` option runs `bash -c 'printf %s "...$AIRFLOW_DB_PASSWORD..."'`. The shell expands the variable inside the `printf` builtin, so no argument holds the password.
-- **Database role passwords.** The `postgres_databases` container feeds `psql` a here-document on standard input. `\getenv` ([PostgreSQL 17 psql](https://www.postgresql.org/docs/17/app-psql.html)) copies each password from the environment into a psql variable. `:'name'` quotes it into `ALTER ROLE`. The script first sets `log_statement = 'none'`, `log_min_error_statement = 'panic'` and `log_min_duration_statement = -1` for the session and sets `VERBOSITY terse`, so neither the statement log nor an error report repeats the statement. Checked on a local PostgreSQL 14 server: with `log_statement = 'ddl'` the unprotected script logged `ALTER ROLE airflow PASSWORD '...'`; the protected script logged nothing, also for a failing statement. `\getenv` itself is not in version 14; it is documented for 17. Residual: while the statement runs, a superuser can see it in `pg_stat_activity`.
+- **Database role passwords.** The `postgres_databases` container feeds `psql` a here-document on standard input. `\getenv` ([PostgreSQL 17 psql](https://www.postgresql.org/docs/17/app-psql.html)) copies each password from the environment into a psql variable. `:'name'` quotes it into `ALTER ROLE`. The script first sets `log_statement = 'none'`, `log_min_error_statement = 'panic'` and `log_min_duration_statement = -1` for the session and sets `VERBOSITY terse`, so neither the statement log nor an error report repeats the statement. A check on a local PostgreSQL 14 server with `log_statement = 'ddl'` showed that the unprotected script logged `ALTER ROLE airflow PASSWORD '...'` and the protected script logged nothing, also for a failing statement. `\getenv` itself is not in version 14. The documentation lists it for version 17. Residual: while the statement runs, a superuser can see it in `pg_stat_activity`.
 - **Redis.** `redis-server -` reads its configuration from standard input. The script builds the lines with the `printf` builtin inside a bash process substitution (`< <(...)`, a pipe) and quotes the password for the configuration parser. Checked with a local Redis 8.10 and a password that holds a quote, a backslash and a space: `CONFIG GET requirepass` returned it, standard input was a pipe, no process argument held it and no file under the working folder held it. The `requirepass` command form was rejected: a started server accepts connections without a password until the command runs.
 - **Polaris bootstrap.** `polaris-admin-tool bootstrap` takes `--credential realm,id,secret` (a command argument) or `--credentials-file` ([admin tool](https://polaris.apache.org/releases/1.8.0/admin-tool/)). The task passes `--credentials-file /dev/stdin` and writes the JSON credential through the `printf` builtin to a pipe. The file option opens `uri.toURL().openStream()` ([RootCredentialsSet](https://github.com/apache/polaris/blob/apache-polaris-1.8.0/polaris-core/src/main/java/org/apache/polaris/core/persistence/bootstrap/RootCredentialsSet.java)), which reads a pipe once. Not run: it needs the image. Verify at the first run that the task finishes with exit 0.
-- **Airflow sign-in.** The Simple auth manager reads passwords only from a JSON file (`SimpleAuthManager.get_passwords()` opens `simple_auth_manager_passwords_file`; the login service calls that static method, so a subclass cannot replace it; [auth manager guide](https://airflow.apache.org/docs/apache-airflow/3.3.2/core-concepts/auth-manager/simple/index.html), [source](https://github.com/apache/airflow/blob/3.3.2/airflow-core/src/airflow/api_fastapi/auth/managers/simple/services/login.py)). It has no in-memory option, so the stack sets `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=true`. This is the accepted access control: the API server listens on 127.0.0.1 only. The only way in is a Session Manager port-forwarding session, which IAM authenticates. The Airflow administrator password (`/healthcare_hai_prediction/airflow_admin`) is not injected. The alternative that keeps a password is the FAB auth manager (the provider is in the image constraints): it stores a password hash in the metadata database, but its first-user step needs a verified in-memory path and a running host, so it is not chosen here.
+- **Airflow sign-in.** The Simple auth manager reads passwords only from a JSON file. `SimpleAuthManager.get_passwords()` opens `simple_auth_manager_passwords_file`. The login service calls that static method, so a subclass cannot replace it (see the [auth manager guide](https://airflow.apache.org/docs/apache-airflow/3.3.2/core-concepts/auth-manager/simple/index.html) and the [source](https://github.com/apache/airflow/blob/3.3.2/airflow-core/src/airflow/api_fastapi/auth/managers/simple/services/login.py)). It has no in-memory option, so the stack sets `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=true`. This is the accepted access control: the API server listens on 127.0.0.1 only. The only way in is a Session Manager port-forwarding session, which IAM authenticates. The Airflow administrator password (`/healthcare_hai_prediction/airflow_admin`) is not injected. The alternative that keeps a password is the FAB auth manager (the provider is in the image constraints): it stores a password hash in the metadata database, but its first-user step needs a verified in-memory path and a running host, so it is not chosen here.
 
 ## AWS catalog setup
 
@@ -127,18 +127,18 @@ The stand-in E2E is `.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup
 
 | Need | Who | Why |
 | --- | --- | --- |
-| `ssm:GetParameters` for the execution role on the eight parameter ARNs in the secrets table (`output.parameter_arns_used`) and no other action: no `kms:Decrypt` (the AWS managed key `aws/ssm` needs none; a customer managed key would), no Secrets Manager action | Foundation IAM | The task definitions inject the parameters; [task execution role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html#task-execution-secrets) |
-| Parameters `/healthcare_hai_prediction/redis_password` and `/healthcare_hai_prediction/polaris_root_secret` | Secret store (the project profile, through `secret_store.MANAGED`) | Both are new; a task that injects a missing parameter does not start |
+| `ssm:GetParameters` for the execution role on the eight parameter ARNs in the secrets table (`output.parameter_arns_used`) and no other action. It grants no `kms:Decrypt` (the AWS managed key `aws/ssm` needs none, but a customer managed key would) and no Secrets Manager action | Foundation IAM | The task definitions inject the parameters. See [task execution role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html#task-execution-secrets) |
+| Parameters `/healthcare_hai_prediction/redis_password` and `/healthcare_hai_prediction/polaris_root_secret` | Secret store (the project profile, through `secret_store.MANAGED`) | Both are new. A task that injects a missing parameter does not start |
 | Host security group closed to the internet, with 8181 and 6379 open only to the job security group | Foundation network | These are the only non-loopback listeners |
 | `ecs:RegisterTaskDefinition`, `ecs:CreateService`, `ecs:UpdateService`, `ecs:DescribeServices`, `ecs:TagResource` and `iam:PassRole` on the three roles | Foundation IAM | The apply creates the task definitions and services |
-| Host firewall rule that blocks the instance metadata service for every non-root user | Foundation host | Keeps the containers away from the host role's credentials; see "Users" |
+| Host firewall rule that blocks the instance metadata service for every non-root user | Foundation host | Keeps the containers away from the host role's credentials (see "Users") |
 | `kernel.core_pattern` set to a plain file path that does not start with a pipe character (for example a root-only directory), with `fs.suid_dumpable=0` | Foundation host | Every container sets hard and soft `core` ulimits of 0, but Linux ignores that limit when the pattern pipes the dump to a program. A native or JVM crash must not write injected credentials from memory to a file |
 | ECS agent with host-network task roles enabled (`ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST`, believed to default to true, not verified) | Foundation host | Task roles must work under host networking |
 | Repositories `polaris_admin` (and `marquez`, `marquez_web` when Marquez is on) | Foundation registry | They already exist in the foundation's list |
 
 ## Images
 
-All images must be `linux/arm64`. `scripts/infrastructure/push_images.py` prints the commands (it starts no program, because only the launcher may call Docker). The lead runs them and records the digests.
+All images must be `linux/arm64`. `scripts/infrastructure/push_images.py` prints the commands (it starts no program, because only the launcher may call Docker). The coordinating agent runs them and records the digests.
 
 | Image | Source | arm64 status |
 | --- | --- | --- |
@@ -151,7 +151,7 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 ## Order of the first start
 
-1. The owner applies the foundation. The lead runs the printed `push_images plan` commands and records the digests.
+1. The owner applies the foundation. The coordinating agent runs the printed `push_images plan` commands and records the digests.
 2. Place a checkout of the repository at `dag_code_path` (default `<data>/repo`). Airflow mounts the DAGs, the broker client and the lineage configuration from it read-only.
 3. Turn the host on before the first services apply:
 
@@ -159,7 +159,7 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
    .venv/bin/python -m scripts.infrastructure.host_session start
    ```
 
-   The entry point reads the cluster, host group, capacity provider, service names and task families from the platform and services Terraform outputs, so it runs only once the services stack exists. For the very first registration check before that stack exists, use the CLI fallback below. It sets the desired capacity to 1 and waits up to 10 minutes for one `ACTIVE`, agent-connected container instance whose `capacityProviderName` (from `describe-container-instances`) is the host capacity provider. An instance can be `ACTIVE` before ECS lists it in the provider. RunTask on the provider then fails with `The specified capacity provider ... contains no container instances` (seen on Oct 29 2026). If the membership is missing at the deadline, the failure says the instance is registered but not in the capacity provider. Then it runs step 5 and the service restarts. Any failure, interruption or SIGTERM stops the host and verifies it, unless you pass `--keep-on` to keep the host on for diagnosis. While that stop runs, a further Ctrl-C, SIGTERM or SIGHUP is held and reported ("stopping the host, please wait"), so it cannot cut the stop short. Every wait and every AWS call within it ends at the wait's deadline. Failure messages show a provider reason only as a fixed category. `host_session status` shows the host and service counts without changing anything. `host_session stop` sets the desired capacity to 0 and waits up to 15 minutes for the instance to terminate.
+   The entry point reads the cluster, host group, capacity provider, service names and task families from the platform and services Terraform outputs, so it runs only once the services stack exists. To check the first registration before that stack exists, use the CLI fallback below. `host_session start` sets the desired capacity to 1 and waits up to 10 minutes for one `ACTIVE`, agent-connected container instance whose `capacityProviderName` (from `describe-container-instances`) is the host capacity provider. An instance can be `ACTIVE` before ECS lists it in the provider. RunTask on the provider then fails with `The specified capacity provider ... contains no container instances` (seen on Oct 29 2026). If the membership is missing at the deadline, the failure says the instance is registered but not in the capacity provider. `host_session start` then runs step 5 and the service restarts. Any failure, interruption or SIGTERM stops the host and verifies it, unless you pass `--keep-on` to keep the host on for diagnosis. While that stop runs, a further Ctrl-C, SIGTERM or SIGHUP is held and reported ("stopping the host, please wait"), so it cannot cut the stop short. Every wait and every AWS call within it ends at the wait's deadline. Failure messages show a provider reason only as a fixed category. `host_session status` shows the host and service counts without changing anything. `host_session stop` sets the desired capacity to 0 and waits up to 15 minutes for the instance to terminate.
 
    CLI fallback, with the project profile and the foundation's host group name:
 
@@ -193,7 +193,7 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
    Before apply, the wrapper verifies the project identity and refuses a saved plan whose project inputs, foundation
    outputs, image digests or other variables differ from the current sources or committed defaults.
-5. `host_session start` runs this step and the restarts below. It launches `host_prepare` with the tagged RunTask (it first checks for a running task of the same family and never starts a second one; a launch whose reply is lost is retried with the same client token, so ECS returns the same task) and requires exit code 0. Then it forces a new deployment of every project service at once, postgres first, without waiting for the scheduler's backoff. It waits, with a deadline, until each service shows one `COMPLETED` deployment, its running count and no pending task. A `FAILED` rollout stops the wait at once. The manual steps follow as the fallback.
+5. `host_session start` runs this step and the restarts below. It launches `host_prepare` with the tagged RunTask and requires exit code 0. It first checks for a running task of the same family and never starts a second one. A launch whose reply is lost is retried with the same client token, so ECS returns the same task. Then it forces a new deployment of every project service at once, postgres first, without waiting for the scheduler's backoff. It waits, with a deadline, until each service shows one `COMPLETED` deployment, its running count and no pending task. A `FAILED` rollout stops the wait at once. The manual steps follow as the fallback.
 
    Run `host_prepare` with the explicit Project tag shown under "Launching a one-shot task". Require an empty `failures` list from RunTask. Save its task ARN, wait for it to stop and inspect its exit status:
 
@@ -218,11 +218,11 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
    Run `.venv/bin/python -m scripts.infrastructure.host_session bootstrap` once. It requires the postgres and polaris services to be stable, runs `polaris_bootstrap` with the same tagged launch and exit-code check and refuses a second run (marker `data/host_session/polaris_bootstrap.launched`) unless you pass `--again`. Once it begins, a failure stops the host as `start` does, unless you pass `--keep-on`. The manual form:
 
-   Run `polaris_bootstrap` once after Postgres is ready: its service passes the stable waiter above with a `COMPLETED` deployment and one running task. Use the same tagged launch, `tasks-stopped` waiter and exit-code checks. It is not restarted on failure: a second run reports that the realm exists. Then create the catalog and principals (see the next section).
+   Run `polaris_bootstrap` once after Postgres is ready. Its service must pass the stable waiter above with a `COMPLETED` deployment and one running task. Use the same tagged launch, `tasks-stopped` waiter and exit-code checks. Nothing restarts it on failure. A second run reports that the realm exists. Then create the catalog and principals (see the next section).
 
 ## How the workflows run on the host
 
-The silver, gold and maintenance DAGs only call the job broker over HTTP (`orchestration/client.py`). Nothing in the DAGs changes. The scheduler needs `/opt/hai/broker/client.json` and `broker_token`. On the host a broker service writes the endpoint and the token comes from a new Parameter Store secret. That service and the job path are package P7b. This package assumes:
+The silver, gold and maintenance DAGs only call the job broker over HTTP (`orchestration/client.py`). Nothing in the DAGs changes. The scheduler needs `/opt/hai/broker/client.json` and `broker_token`. On the host a broker service writes the endpoint and the token comes from a new Parameter Store secret. A later package adds that service and the job path. That package assumes:
 
 - The broker keeps its HTTP interface and its ledger. It replaces the launcher with an ECS target: one `RunTask` per launcher template (`pipeline_spark`, `pipeline_publish`, `fixture_dbt`, `quality_*`, `pipeline_export`), idempotent through a start token derived from the submission ID.
 - Status, cancel and logs come from `DescribeTasks`, `StopTask` and CloudWatch Logs. Light steps run on the host capacity provider. Heavy steps run on Fargate Spot with on-demand fallback.
@@ -256,16 +256,35 @@ aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <cluste
   --query '{taskArn:tasks[0].taskArn,failures:failures}'
 ```
 
-Save the task ARN for the waiter and continue only with an empty `failures` list. The explicit tag and the propagated task definition tag use the same `Project` key. If RunTask rejects the request for a repeated tag key, run it again without `--propagate-tags`: the explicit tag still satisfies IAM and still tags the task.
+Save the task ARN for the waiter and continue only with an empty `failures` list. The explicit tag and the propagated task definition tag use the same `Project` key. If RunTask rejects the request for a repeated tag key, run it again without `--propagate-tags`. The explicit tag still satisfies IAM and still tags the task.
+
+## Stopping job tasks before the host stops
+
+`host_session stop` ends only the host group. Fargate job tasks keep running and cost money, so run the task cleanup first and stop the host after it:
+
+```sh
+.venv/bin/python -m scripts.infrastructure.aws_tasks list \
+  && .venv/bin/python -m scripts.infrastructure.aws_tasks stop \
+  && .venv/bin/python -m scripts.infrastructure.host_session stop
+```
+
+The commands are joined with `&&`: when the cleanup exits 1 (a writer refused, a task left running), the host stop does not run.
+
+- `list` shows the job tasks that are not `STOPPED` and changes nothing. It follows the `ListTasks` pages to the end for both desired statuses, `RUNNING` and `STOPPED`, because a task that was told to stop but still runs only shows under `STOPPED`.
+- `stop` sends `StopTask` for each such job task (again on a retry) and waits up to 90 seconds until ECS describes each as `STOPPED`. The 120-second deadline starts when the command starts, before the setup lookups (profile, region and Terraform outputs), so the setup and the task calls share it. Each task call gets only the time that remains. Each Terraform lookup gets only the time that remains (at most its own 120-second limit). No lookup starts when no time remains (a configuration error, exit 2). When the lookups end in time but used all of it, no task call is sent and the command exits 1. The whole command ends within the 120 seconds. The command exits 1 for a task that is still running or that ECS no longer describes. It names that task by family and ID suffix. A second run finds nothing to stop and exits 0.
+- Only tasks of the families `<PROJECT_NAME>_<ENVIRONMENT>_job_*` are touched. The family comes from the task definition, not from the group, because the caller of `RunTask` chooses the group. A task is never stopped, even with a confirmation, when its group family and task definition family differ or when `DescribeTasks` returns no definition for it. It is listed with "group and task definition differ" and named in the failure. The exit code is 1. Service tasks (Postgres, Polaris, Airflow), the one-shot host tasks and tasks of other projects are skipped.
+- A task whose `StopTask` call failed is described again with the others. One that ECS now shows as `STOPPED` is confirmed; any other fails the command.
+- A writer task (family `..._job_write_*`) may hold an open writer intent. The tool cannot read the launcher's journal. `stop` does not stop it unless the owner names its ID suffix: `aws_tasks stop --confirm-writer-stop <suffix>` (repeatable; the suffix is the 8 characters `list` shows). The other tasks are still stopped, the refused writers are listed and the exit code is 1, so a running writer blocks the host stop. Every suffix after `--confirm-writer-stop` is checked against the listed writers before the command returns, also when no job task is running: a suffix that matches no running writer is reported ("matches no running writer") and the exit code is 1. A rerun after the writer stopped therefore fails while it repeats the flag; drop the flag. The `StopTask` reason records the owner's confirmation. The writer's layer stays in recovery hold until `complete` runs from the terminal observation.
+- Output shows the family and the last 8 characters of the task ID only, never an ARN, an account ID or a provider reason. The project user's policy already allows `ListTasks`, `DescribeTasks` and `StopTask` on the project cluster.
 
 ## Teardown
 
-`terraform destroy` of `infra/services/` removes the services. The task definition revisions stay registered (`skip_destroy`, because the project user may not deregister them) and stay active until they are deregistered separately. The data volume, its snapshots, the secrets (parameters) and the ECR images belong to the foundation and stay until the foundation's own teardown names them. Stop the services before a destroy if the Postgres data must be consistent: scale each service to zero first.
+If the Postgres data must be consistent, stop the services before a destroy by scaling each service to zero. `terraform destroy` of `infra/services/` removes the services. The task definition revisions stay registered (`skip_destroy`, because the project user may not deregister them) and stay active until someone deregisters them separately. The data volume, its snapshots, the secrets (parameters) and the ECR images belong to the foundation and stay until the foundation's own teardown names them.
 
 ## Open choices
 
 - **How the DAG code reaches the host** (decided): a checkout of the merged `main` commit at `dag_code_path`, mounted read-only, like the local Compose files. Baking the code into the Airflow image by digest is not needed now.
-- **Run-folder storage for jobs** (P7b, decided): S3 staging under the lakehouse prefix; no EFS.
+- **Run-folder storage for jobs** (decided for the later broker and job-path package): S3 staging under the lakehouse prefix, with no EFS.
 - **Airflow sign-in.** All-admins on a loopback-only API server (this package) or the FAB auth manager with a password hash in the database. See the secrets section.
-- **Option names that need a running host.** `simple_auth_manager_all_admins`, `scheduler_health_check_server_host` and `--skip-serve-logs` (on the scheduler and triggerer) come from the 3.3.2 sources and documentation. Verify them at the first deploy with `ss -ltn` on the host: only 6379 and 8181 may show a non-loopback address.
+- **Option names that need a running host.** `simple_auth_manager_all_admins`, `scheduler_health_check_server_host` and `--skip-serve-logs` (on the scheduler and triggerer) come from the 3.3.2 sources and documentation. Verify them at the first deploy with `ss -ltn` on the host. Only 6379 and 8181 may show a non-loopback address.
 - **Host networking and the instance metadata service** (decided): host networking stays, because ECS port mappings have no host address field and bridge networking could not keep a published port on 127.0.0.1. The foundation blocks the metadata service for non-root users with a host firewall rule. Every long-running container runs as a non-root user (see "Users").

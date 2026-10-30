@@ -76,7 +76,15 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     archives.mkdir()
     selected_platform = f"{platform.system().lower()}_{'amd64' if platform.machine() in {'x86_64', 'AMD64'} else platform.machine()}"
     tools: dict[str, Any] = {}
-    for name, kind in [("duckdb", "zip"), ("gitleaks", "tar.gz"), ("tflint", "zip"), ("trivy", "tar.gz")]:
+    for name, kind in [
+        ("duckdb", "zip"),
+        ("gitleaks", "tar.gz"),
+        ("tflint", "zip"),
+        ("trivy", "tar.gz"),
+        ("osv-scanner", "tar.gz"),
+        ("zizmor", "tar.gz"),
+        ("typos", "zip"),
+    ]:
         path = archives / f"{name}.{kind}"
         content = b"synthetic executable fixture; never executed\n"
         if kind == "zip":
@@ -113,6 +121,9 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
         str(archives),
     ]
     cases.append({"name": "install_from_verified_offline_archives", **run(command, ROOT)})
+    for name in ("osv-scanner", "zizmor", "typos"):
+        check((destination / "bin" / name).is_file(), f"Hosted linter {name} was not installed")
+        check(json.loads((destination / "receipts" / f"{name}.json").read_text())["version"] == "1.2.3", f"Hosted linter {name} receipt differs")
     before = {str(p.relative_to(destination)): (digest(p), p.stat().st_mtime_ns) for p in destination.rglob("*") if p.is_file()}
     cases.append({"name": "replay_install", **run(command, ROOT)})
     after = {str(p.relative_to(destination)): (digest(p), p.stat().st_mtime_ns) for p in destination.rglob("*") if p.is_file()}

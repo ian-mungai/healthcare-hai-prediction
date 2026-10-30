@@ -35,7 +35,16 @@ NO_INSTANCES = (
 SERVICE_START_SECONDS = 45
 LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 123456789012"
 CLIENT_TOKEN_LIMIT = 64
-FLAGS = {"--force-new-deployment", "--enable-ecs-managed-tags", "--no-honor-cooldown"}
+STOP_TASK_SECONDS = 15
+FLAGS = {"--force-new-deployment", "--enable-ecs-managed-tags", "--no-honor-cooldown", "--no-paginate"}
+
+
+class StandInError(Exception):
+    """A handler refuses the call the way the AWS CLI does: exit code 254 and an ``An error occurred (<code>)`` line."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 def parse(argv: list[str]) -> dict[str, list[str]]:
@@ -64,6 +73,13 @@ class StandInHost:
     ``lose_run_task_reply[:<n>]`` (the next n run-task calls start their task but time out before the reply; one when n is absent),
     ``stale_list_tasks`` (list-tasks never shows a task), ``slow_calls:<n>`` (every describe and list call takes n virtual seconds and
     times out when its limit is shorter) and ``leaky_reasons`` (every provider reason holds an ARN, an instance ID and an account ID).
+    ``page_size:<n>`` makes list-tasks answer n ARNs and a ``nextToken`` per page when the call has ``--no-paginate`` (without it the CLI joins the
+    pages), ``repeat_token`` makes every page answer the same ``nextToken``, ``ghost_task`` makes list-tasks name one task that describe-tasks reports
+    ``MISSING``, ``vanish_after_stop`` makes a stopped task unknown to describe-tasks, ``never_stop_task`` makes stop-task accept the call but leave the
+    task running, ``stop_task_error`` makes stop-task fail without effect, ``stop_task_lost_reply`` makes stop-task take effect and then fail and
+    ``no_definition`` makes describe-tasks omit ``taskDefinitionArn``. List-tasks answers the tasks whose ``desiredStatus`` is the ``--desired-status``
+    value (RUNNING when absent), and a stopped task has desired status STOPPED. ``add_task`` adds a running task of any family and group, so a case
+    can hold job tasks, service tasks and writer tasks together.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
@@ -94,6 +110,25 @@ class StandInHost:
         }
         self.throttled = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("throttle:")), 0)
         self.provider_delay = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("late_provider:")), 0)
+        self.page_size = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("page_size:")), 0)
+        self.handlers[("ecs", "stop-task")] = self.ecs_stop_task
+        self.added = 0
+
+    def add_task(self, family: str, group: str | None = None) -> str:
+        """Add a running task of ``family`` (group ``family:<family>`` unless given) that runs until it is stopped; the answer is its ARN."""
+        self.added += 1
+        arn = f"{ACCOUNT_MARK}task/{CLUSTER}/{'ab' * 12}c0de{self.added:04x}"
+        self.tasks[arn] = {
+            "key": family,
+            "family": family,
+            "group": group or f"family:{family}",
+            "status": "RUNNING",
+            "desired": "RUNNING",
+            "stops_at": 10**9,
+            "exit": 0,
+            "options": {},
+        }
+        return arn
 
     def advance(self, seconds: float) -> None:
         """Move virtual time forward and settle what completes."""
@@ -102,7 +137,7 @@ class StandInHost:
             self.instance_up_at, self.terminate_at = None, None
         for task in self.tasks.values():
             if task["status"] != "STOPPED" and self.now >= task["stops_at"]:
-                task["status"] = "STOPPED"
+                task["status"], task["desired"] = "STOPPED", "STOPPED"
                 if task["key"] == "host_prepare" and task["exit"] == 0:
                     self.prepared = True
         for name, service in self.services.items():
@@ -151,7 +186,10 @@ class StandInHost:
         handler = self.handlers.get((service, operation))
         if handler is None:
             return CompletedProcess(argv, 252, "", "unknown command")
-        answer = json.dumps(handler(options))
+        try:
+            answer = json.dumps(handler(options))
+        except StandInError as error:
+            return CompletedProcess(argv, 254, "", f"\nAn error occurred ({error.code}) when calling the {operation} operation\n")
         if operation == "run-task" and self.lost_replies > 0:
             self.lost_replies -= 1
             raise TimeoutExpired(argv, limit or 0)
@@ -190,10 +228,42 @@ class StandInHost:
         return {"containerInstances": [instance]}
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        family = options["--family"][0]
+        family = options.get("--family", [None])[0]
         if "stale_list_tasks" in self.faults:
             return {"taskArns": []}
-        return {"taskArns": [arn for arn, task in self.tasks.items() if task["family"] == family and task["status"] != "STOPPED"]}
+        desired = options.get("--desired-status", ["RUNNING"])[0]
+        arns = [
+            arn
+            for arn, task in self.tasks.items()
+            if (family is None or task["family"] == family)
+            and task.get("desired", "RUNNING") == desired
+            and (desired == "STOPPED" or task["status"] != "STOPPED")
+        ]
+        if "ghost_task" in self.faults:
+            arns = [*arns, f"{ACCOUNT_MARK}task/{CLUSTER}/ghost"]
+        if not self.page_size or "--no-paginate" not in options:
+            return {"taskArns": arns}
+        start = int(options.get("--next-token", ["0"])[0])
+        page: dict[str, Any] = {"taskArns": arns[start : start + self.page_size]}
+        if start + self.page_size < len(arns):
+            page["nextToken"] = str(start if "repeat_token" in self.faults else start + self.page_size)
+        return page
+
+    def ecs_stop_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        if "stop_task_error" in self.faults:
+            raise StandInError("InvalidParameterException")
+        task = self.tasks.get(options["--task"][0])
+        if task is None or options.get("--cluster") != [CLUSTER]:
+            raise StandInError("InvalidParameterException")
+        task["desired"], task["stop_reason"] = "STOPPED", options.get("--reason", [""])[0]
+        if "vanish_after_stop" in self.faults:
+            del self.tasks[options["--task"][0]]
+            return {"task": {"desiredStatus": "STOPPED"}}
+        if "never_stop_task" not in self.faults:
+            task["stops_at"] = min(task["stops_at"], self.now + STOP_TASK_SECONDS)
+        if "stop_task_lost_reply" in self.faults:
+            raise StandInError("ServerException")
+        return {"task": {"taskArn": options["--task"][0], "desiredStatus": "STOPPED"}}
 
     def ecs_run_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
         family = options["--task-definition"][0]
@@ -218,10 +288,28 @@ class StandInHost:
         return {"tasks": [{"taskArn": arn}], "failures": []}
 
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        task = self.tasks[options["--tasks"][0]]
-        container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
+        found: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
         reason = "Essential container in task exited" + (f" {LEAK}" if "leaky_reasons" in self.faults else "")
-        return {"tasks": [{"lastStatus": task["status"], "stoppedReason": reason, "containers": [container]}], "failures": []}
+        for arn in options["--tasks"]:
+            task = self.tasks.get(arn)
+            if task is None:
+                failures.append({"arn": arn, "reason": "MISSING"})
+                continue
+            container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
+            definition = {} if "no_definition" in self.faults else {"taskDefinitionArn": f"{ACCOUNT_MARK}task-definition/{task['family']}:7"}
+            found.append(
+                {
+                    "taskArn": arn,
+                    **definition,
+                    "group": task.get("group", f"family:{task['family']}"),
+                    "lastStatus": task["status"],
+                    "desiredStatus": task.get("desired", "RUNNING"),
+                    "stoppedReason": reason,
+                    "containers": [container],
+                }
+            )
+        return {"tasks": found, "failures": failures}
 
     def ecs_update_service(self, options: dict[str, list[str]]) -> dict[str, Any]:
         service = self.services[options["--service"][0]]

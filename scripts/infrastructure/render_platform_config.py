@@ -15,6 +15,7 @@ from scripts.infrastructure.render_project_config import REPO_ROOT, Configuratio
 from scripts.process import TimeoutExpired, run_command
 
 PLATFORM_DIRECTORY = REPO_ROOT / "infra" / "platform"
+TERRAFORM_SECONDS = 120
 PLATFORM_KEYS = ("aws_profile", "aws_region", "environment", "expected_account_id", "project_name")
 SERVICES_PLATFORM_KEYS = (
     "project_tag",
@@ -34,16 +35,23 @@ def platform_values(storage: dict[str, str]) -> dict[str, str]:
     return {key: storage[key] for key in PLATFORM_KEYS}
 
 
-def terraform_document(directory: Path, arguments: list[str], storage: dict[str, str], failure: str) -> dict[str, Any]:
-    """Read Terraform JSON with the project profile and report failures without printing subprocess output."""
+def terraform_document(directory: Path, arguments: list[str], storage: dict[str, str], failure: str, timeout: float = TERRAFORM_SECONDS) -> dict[str, Any]:
+    """Read Terraform JSON with the project profile and report failures without printing subprocess output.
+
+    ``timeout`` is the seconds the lookup may take, at most the 120-second limit. A caller under a command deadline passes the time that remains; when none
+    remains, no process starts.
+    """
+    if timeout <= 0:
+        raise ConfigurationError(f"{failure} The command deadline passed before Terraform started.")
+    timeout = min(timeout, TERRAFORM_SECONDS)
     environment = os.environ.copy()
     for name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
         environment.pop(name, None)
     environment.update(AWS_PROFILE=storage["aws_profile"], AWS_REGION=storage["aws_region"], AWS_DEFAULT_REGION=storage["aws_region"])
     try:
-        result = run_command("terraform", [f"-chdir={directory}", *arguments], env=environment, timeout=120)
+        result = run_command("terraform", [f"-chdir={directory}", *arguments], env=environment, timeout=timeout)
     except TimeoutExpired:
-        raise ConfigurationError(f"{failure} Terraform exceeded 120 seconds.") from None
+        raise ConfigurationError(f"{failure} Terraform exceeded {timeout:g} seconds.") from None
     except OSError:
         raise ConfigurationError(failure) from None
     if result.returncode:

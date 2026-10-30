@@ -1614,7 +1614,7 @@ def main() -> int:
                 "class": 4,
                 "purpose": "Verified staging runtime evidence",
                 "created": record["created_utc"],
-                "end_condition": "The lead no longer cites this increment",
+                "end_condition": "The coordinating agent no longer cites this increment",
             },
             indent=2,
         )

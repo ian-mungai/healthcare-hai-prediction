@@ -125,6 +125,51 @@ AI_CREDIT = re.compile(r"^\s*(?:co-authored-by|co-developed-by|assisted-by|gener
 AI_GENERATED = re.compile(r"^\s*(?:[🤖✨]\s*)?(?:generated (?:with|by)|written by)\b(.*)$", re.IGNORECASE)
 AI_SESSION = re.compile(rf"^\s*(?:{'|'.join(AI_AGENTS)})-session\s*:", re.IGNORECASE)
 
+# Internal plan references: they point at plan and review records that live outside the repository. A finding names the
+# form and never echoes the matched text, so the check log holds no message text. Codes need a keyword or brackets, so a
+# bare "B1" (hex fragment, CSS class) passes and "S3" is never a code (the storage service). The registry's public source
+# families S13 to S16 are not codes either; a bracketed list counts when any of its codes is not public. Hash and snapshot forms
+# need their provenance words on the same line, so a downloaded file's hash and a data snapshot ID pass.
+PLAN_CODE = r"(?!S3\b)[A-Z]\d{1,2}"
+PUBLIC_CODE = r"S(?:3|13|14|15|16)\b"
+BRACKET_LIST = rf"[(\[](?=[^)\]]*\b(?!{PUBLIC_CODE})[A-Z]\d{{1,2}}\b)[A-Z]\d{{1,2}}(?:(?:, | to | and )[A-Z]\d{{1,2}})*[)\]]"
+ISSUE_ID = r"(?!SHA|MD|RC)[A-Z]{1,4}\d+-\d+"
+NUMBER_WORD = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
+REVIEW_LINE = r"(?=.*\b(?:re-?check|review(?:s|ed|er|ers|ing)?)\b)"
+PATCH_HASH = r"(?:hash|sha-?256|checksum)\W+[0-9a-f]{12,64}\b"
+PLAN_REFERENCES = (
+    (
+        "unit or lane code",
+        re.compile(rf"\b(?:[Ll]ane [A-Z]\b|(?i:units?|lanes?|failure modes?|tasks?|slices?|steps?) {PLAN_CODE}\b)"),
+    ),
+    ("bracketed unit code", re.compile(BRACKET_LIST)),
+    ("issue ID", re.compile(rf"\b(?i:refs?|issues?|tickets?|closes|fixes|resolves)\b[ :]+{ISSUE_ID}\b|[(\[]{ISSUE_ID}[)\]]")),
+    (
+        "review-round name",
+        re.compile(
+            r"\b(?:re-?check\s+#?\d+|fix\s+round\s+#?\d+|review\s+(?:round\s+\d+|#\d+)|round\s+\d+\s+of\s+(?:the|its|their)\s+review)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "review-round name",
+        re.compile(
+            rf"^{REVIEW_LINE}.*\b(?:{NUMBER_WORD}\s+(?:review\s+|fix\s+)?rounds?\b(?!\s+(?:trips?|robin|numbers?|values?|figures?|digits?|decimals?|places?))"
+            rf"|rounds?\s+{NUMBER_WORD}\b(?!\s+(?:decimals?|digits?|places?|numbers?|values?)))",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "accepted-patch hash",
+        re.compile(rf"^(?=.*\b(?:patch|diff)\b)(?=.*\b(?:accepted|reviewed|staged)\b)(?=.*\b{PATCH_HASH}).*$", re.IGNORECASE),
+    ),
+    (
+        "worktree snapshot ID",
+        re.compile(r"^(?=.*\bworktrees?\b).*\bsnapshot\s+(?:id\s+)?[0-9a-f]{7,40}\b", re.IGNORECASE),
+    ),
+    ("review status note", re.compile(r"\bnot\s+independently\s+reviewed\b", re.IGNORECASE)),
+)
+
 PRIVACY_RULE = f"{POLICY}: privacy scan"
 PRIVACY_FIX = (
     "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid) or read it from configuration;"
@@ -826,10 +871,29 @@ def attribution_findings(location: str, message: str) -> list[Finding]:
     return findings
 
 
+def plan_reference_findings(location: str, message: str, *, comments: bool = False) -> list[Finding]:
+    """Check each message line for internal plan references; Git's comment lines are not part of the message."""
+    findings = []
+    for number, line in enumerate(message.splitlines(), 1):
+        if comments and line.startswith("#"):
+            continue
+        for form, pattern in PLAN_REFERENCES:
+            if pattern.search(line):
+                findings.append(
+                    Finding(
+                        f"{location}:{number}",
+                        f"internal plan reference in commit message: {form}",
+                        f"{POLICY}: commit messages",
+                        "say what changed in plain words; keep unit and lane codes, review rounds, patch hashes and snapshot IDs in the plan records",
+                    )
+                )
+    return findings
+
+
 def message_findings(location: str, message: str, *, comments: bool = False) -> list[Finding]:
-    """Apply the subject and attribution policies without printing message bodies into check logs."""
+    """Apply the subject, attribution and plan-reference policies without printing message bodies into check logs."""
     subject = next((line for line in message.splitlines() if not (comments and line.startswith("#"))), "")
-    return commit_subjects([(location, subject)]) + attribution_findings(location, message)
+    return commit_subjects([(location, subject)]) + attribution_findings(location, message) + plan_reference_findings(location, message, comments=comments)
 
 
 def commit_message(path: str) -> list[Finding]:

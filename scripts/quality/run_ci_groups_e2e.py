@@ -17,6 +17,9 @@ the caller's index, staged diff and working files survive. The report goes to
 data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
 the run fails when a file under test changes while it runs.
 
+The reuse, shard and gate stage cases are the check group reuse_gate_checks (hosted job CI Reuse and Gate E2E): ``--reuse-only`` and ``--gate-stage-only``
+run them, ``--selection-only`` (Local CI Core) leaves them out and a run without a mode runs all.
+
 Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim check)
 and ``acquisition-checks``, every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is
 in a hosted partition that the pre-push plan runs. Pre-push cases build small repositories with stand-ins for the commands: the plan selects the range with
@@ -28,15 +31,14 @@ once), a ref that pre-commit does not dispatch for, several refs, deletions, a t
 changed shim; an inherited ``SKIP`` and the other pre-commit selection variables never reach the gate or a step. Planted defects (a heavy hook back in the
 commit stage, a dropped privacy hook, a missing install type, an edited manual entry, a hook in no partition, an escalation gap) are caught by named cases.
 
-``--speed-only`` runs only the cases of the timing, units and gates part as an iteration run and not commit evidence.
-``--selection-only`` runs the selector and acquisition-hook selection cases as an iteration run and not commit evidence.
-It skips every case that runs scripts/run_ci.sh or this runner. Acquisition selection uses a scratch replacement of the
-heavy gate body and the real hook configuration.
+The Docker release cases run the gate against a stand-in launcher (``orchestration/launcher.py`` in the scratch repository). A failing step, a raising step
+runner and a passing gate each release once with ``--since`` the start of the run. A refused, failed, unreadable or too slow release never changes the exit
+code and is recorded as ``docker_release`` in ``report.json``. ``scripts/run_ci.sh`` skips its own release under the gate, on hosted CI, off macOS, in a
+list-only run and in the gates part (``release_docker`` runs on its own with a stand-in interpreter).
 """
 
 from __future__ import annotations
 
-import ast
 import copy
 import hashlib
 import importlib
@@ -51,12 +53,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from scripts.process import clear_git_environment, find_program, run_command
 from scripts.quality import ci_groups
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
+from scripts.quality.source_reads import source_inputs
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv" / "bin" / "python"
@@ -72,6 +76,7 @@ COPIED = (
     ".yamllint",
     "README.md",
     "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
     "config/quality/feature_cases.json",
     "scripts/lakehouse/feature_shards.py",
     "scripts/lakehouse/run_feature_sources_e2e.py",
@@ -98,6 +103,9 @@ COPIED = (
     "orchestration/network_policy.py",
     "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/ci_main_passes.py",
+    "scripts/quality/launcher_inputs.py",
+    "scripts/quality/source_reads.py",
     "scripts/quality/lint_sources.py",
     "scripts/quality/documentation_review.py",
     "scripts/quality/repo_checks.py",
@@ -159,6 +167,7 @@ WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
     "core": CORE,
     "launcher": ["launcher"],
+    "reuse_gate": ["reuse_gate_checks"],
     "bronze": LAYERS[:1],
     "silver": LAYERS[1:2],
     "gold": LAYERS[2:3],
@@ -167,7 +176,7 @@ PART_GROUPS = {
     "feature_columns": LAYERS[3:],
     "feature_store": LAYERS[3:],
     "core+layers": WITH_LAYERS,
-    "all": [*WITH_LAYERS, "launcher", "acquisition", "repository_hooks"],
+    "all": [*WITH_LAYERS, "launcher", "reuse_gate_checks", "acquisition", "repository_hooks"],
 }
 PASS_LINES = {part: "All local CI checks passed" for part in PART_GROUPS} | {"launcher": "The launcher part passed."}
 LAKEHOUSE_SCRIPT = ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"]
@@ -293,6 +302,9 @@ def run_entry(work: Path, out: Path, label: str, extra: dict[str, str]) -> tuple
 def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     name = "docs_only_runs_gates" if part == "core" else f"docs_only_runs_gates_{part}_part"
     stage_readme(work)
+    # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
+    launcher_part = "launcher" in PART_GROUPS[part]
+    marker = (install_launcher_group_stub(work) if "repository_code_checks" in PART_GROUPS[part] else install_launcher_stub(work)) if launcher_part else None
     try:
         code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part})
     finally:
@@ -300,7 +312,10 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "conditional_groups_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part] if group != "repository_code_checks"),
+        "conditional_groups_skipped_with_reason": all(
+            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "launcher"}
+        ),
+        "launcher_selected_and_started": (marker is not None and "run launcher" in log and marker.exists()) if launcher_part else "run launcher" not in log,
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
         # sql_style is selected by path in the staged scope (always_except_commits), so a README-only change skips it with a reason.
@@ -413,6 +428,18 @@ def install_launcher_stub(work: Path) -> Path:
         'marker.parent.mkdir(exist_ok=True)\nmarker.write_text(" ".join(sys.argv[1:]))\n',
         encoding="utf-8",
     )
+    marker = work / "data" / "launcher_stub.marker"
+    marker.unlink(missing_ok=True)
+    return marker
+
+
+def install_launcher_group_stub(work: Path) -> Path:
+    """A launcher stub for a part that also runs repository_code_checks: it replaces the group body, because the process start guard there rejects an edited
+    run_launcher_e2e.py, whose hash its reviewed entries record."""
+    # The stub still names the module, because the launcher input check compares the body with its entry points.
+    run = ": -m scripts.lakehouse.run_launcher_e2e >data/launcher_stub.marker"
+    body = f"#!/usr/bin/env bash\n# shellcheck disable=SC2154,SC2329\nlauncher_e2e() {{\n  mkdir -p data\n  {run}\n}}\n"
+    (work / GROUP_FILES / "launcher.sh").write_text(body, encoding="utf-8")
     marker = work / "data" / "launcher_stub.marker"
     marker.unlink(missing_ok=True)
     return marker
@@ -786,107 +813,293 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
     ]
-    return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
+    return [*cases, *reader_coverage_cases(work), *entry_point_cases(), *launcher_selection_cases(work), *launcher_always_cases(work)]
+
+
+LAUNCHER_IMPORTED = (
+    "scripts/lakehouse/silver.py",
+    "orchestration/network_policy.py",
+    "scripts/quality/docker_calls.py",
+    "scripts/acquisition/new_probe.py",
+    "dbt/models/gold/new_probe.sql",
+    "scripts/quality/lint_sources.py",
+    "scripts/quality/ci_hooks.py",
+    "dags/gold_transform_dag.py",
+    "tests/orchestration/fixtures/combined_dag.py",
+    "scripts/quality/future_probe.py",
+)
+# Paths no import or read of the suite reaches. Followed modules that list files carry an ``inventory_reads`` entry with the pattern ``.``, so the group is
+# selected by every path (owner decision 1): the cases expect it until a module's entry is narrowed by a reviewed change, one module at a time.
+LAUNCHER_ALWAYS_SELECTED = (
+    "infra/main.tf",
+    "config/quality/mypy_runtimes.json",
+    "docs/data_collection.md",
+    ".github/pull_request_template.md",
+)
+# The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
+LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
+# The recheck's reproductions: inventories whose root the round 1 scan did not read (a wrapped root, a keyword argument, a listing program by path).
+LAUNCHER_INVENTORY_READS = {
+    "wrapped_rglob": '    for path in Path(ROOT).rglob("*.json"):\n        if path.is_file():\n            json.loads(path.read_text())\n',
+    "walk_keyword": "    for _folder, _names, files in os.walk(top=ROOT):\n        json.dumps(files)\n",
+    "find_by_path": '    run_command("/usr/bin/find", [str(ROOT), "-name", "*.json"], timeout=60, check=True)\n',
+}
+SAMPLE_REPOSITORY = {
+    "entry.py": (
+        "from pathlib import Path\nfrom pkg import used\n\nROOT = Path(__file__).resolve().parent\n\n\ndef run():\n    import late\n"
+        '    data = (ROOT / "config/a.json").read_text()\n    compose = (ROOT / "compose.yaml").read_text()\n'
+        '    files = sorted((ROOT / "folder").glob("*"))\n    return used, late, data, compose, files\n'
+    ),
+    "pkg/__init__.py": "",
+    "pkg/used.py": "VALUE = 1\n",
+    "late.py": "VALUE = 2\n",
+    "config/a.json": "{}\n",
+    "compose.yaml": "services:\n  worker:\n    entrypoint: [python, -m, svc.worker]\n",
+    "svc/worker.py": "VALUE = 3\n",
+    "folder/x.txt": "x\n",
+    "folder/y.txt": "y\n",
+    "unrelated.py": "VALUE = 4\n",
+    "other/z.py": "VALUE = 5\n",
+    "scripts/ci/groups/launcher.sh": 'launcher_e2e() {\n  "$python_bin" -m entry\n}\n',
+}
+SAMPLE_ENTRY = {"entry_points": ["entry.py"], "extra_inputs": []}
+FOLDER_LINE = 'files = sorted((ROOT / "folder").glob("*"))'
+
+
+def sample_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The tool on a small repository: the computed list has the imports, reads, module names in text files and whole-folder reads, and a planted defect
+    against the committed list is named by ``problems``."""
+    try:
+        from scripts.quality import launcher_inputs
+    except ImportError as error:
+        return [{"case": "launcher_inputs_tool_exists", "passed": False, "error": str(error)}]
+    root = scratch / "launcher_sample"
+    for name, text in SAMPLE_REPOSITORY.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text, encoding="utf-8")
+    tracked = set(SAMPLE_REPOSITORY)
+    computed = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], SAMPLE_ENTRY["extra_inputs"])
+    committed = {
+        **SAMPLE_ENTRY,
+        "files": computed["files"],
+        "dynamic_sites": computed["dynamic_sites"],
+        "folders": computed["folders"],
+        "inventory_sites": computed["inventory_sites"],
+        "inventory_reads": [{"module": "entry.py", "pattern": ".", "why": "sample: the glob of the folder it reads whole is not reviewed"}],
+    }
+    wanted = {"entry.py", "pkg/__init__.py", "pkg/used.py", "late.py", "config/a.json", "compose.yaml", "svc/worker.py", "folder/x.txt", "folder/y.txt"}
+    cases = [
+        {
+            "case": "launcher_inputs_sample_closure",
+            "passed": set(computed["files"]) == wanted,
+            "missing": sorted(wanted - set(computed["files"])),
+            "extra": sorted(set(computed["files"]) - wanted),
+        },
+        {"case": "launcher_inputs_sample_matches_itself", "passed": launcher_inputs.problems(root, tracked, committed) == []},
+        {"case": "launcher_inputs_sample_folder_read_whole", "passed": computed["folders"] == ["folder"], "folders": computed["folders"]},
+    ]
+
+    def planted(name: str, change: Callable[[dict[str, Any]], dict[str, Any]], named: str, files: dict[str, str] | None = None) -> dict[str, Any]:
+        changed_tracked = tracked | set(files or {})
+        for path, text in (files or {}).items():
+            (root / path).write_text(text, encoding="utf-8")
+        try:
+            found = launcher_inputs.problems(root, changed_tracked, change(copy.deepcopy(committed)))
+        finally:
+            for path in files or {}:
+                (root / path).write_text(SAMPLE_REPOSITORY.get(path, ""), encoding="utf-8")
+        return {"case": name, "passed": any(named in line for line in found), "named": named, "problems": found[:4]}
+
+    def drop(path: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        return lambda listing: {**listing, "files": [item for item in listing["files"] if item != path]}
+
+    def add(path: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        return lambda listing: {**listing, "files": sorted([*listing["files"], path])}
+
+    cases += [
+        planted("launcher_list_missing_imported_module_is_named", drop("late.py"), "late.py"),
+        planted("launcher_list_missing_package_init_is_named", drop("pkg/__init__.py"), "pkg/__init__.py"),
+        planted("launcher_list_missing_read_file_is_named", drop("config/a.json"), "config/a.json"),
+        planted("launcher_list_missing_module_named_in_text_is_named", drop("svc/worker.py"), "svc/worker.py"),
+        planted("launcher_list_missing_file_of_a_folder_read_is_named", drop("folder/y.txt"), "folder/y.txt"),
+        planted("launcher_list_missing_folder_is_named", lambda listing: {**listing, "folders": []}, "folder/"),
+        planted("launcher_list_stale_entry_is_named", add("unrelated.py"), "unrelated.py"),
+        planted("launcher_list_deleted_entry_is_named", add("gone.py"), "gone.py"),
+        planted(
+            "launcher_new_import_is_named_until_regenerated",
+            lambda listing: listing,
+            "other/z.py",
+            {"late.py": "import other.z\nVALUE = 2\n"},
+        ),
+        planted(
+            "launcher_new_dynamic_import_is_named",
+            lambda listing: listing,
+            "late.py",
+            {"late.py": "import importlib\n\n\ndef load(name):\n    return importlib.import_module(name)\n"},
+        ),
+        planted(
+            "launcher_stale_ignored_read_is_named",
+            lambda listing: {**listing, "ignored_reads": [{"module": "entry.py", "text": "nothing/here", "why": "planted"}]},
+            "nothing/here",
+        ),
+        planted("launcher_entry_point_must_match_the_group_body", lambda listing: {**listing, "entry_points": ["unrelated.py"]}, "launcher.sh"),
+        planted(
+            "launcher_undeclared_inventory_read_is_named",
+            lambda listing: listing,
+            "late.py: lists files by inventory",
+            {"late.py": 'LISTING = ["git", "ls-files", "--", "*.py"]\n'},
+        ),
+        planted(
+            "launcher_undeclared_bare_listdir_is_named",
+            lambda listing: listing,
+            "late.py: lists files by inventory",
+            {"late.py": 'from os import listdir\n\nNAMES = listdir(".")\n'},
+        ),
+        planted(
+            "launcher_stale_inventory_read_is_named",
+            lambda listing: {**listing, "inventory_reads": [{"module": "late.py", "pattern": "\\.py$", "why": "planted"}]},
+            "late.py: inventory_reads",
+        ),
+        planted(
+            "launcher_new_occurrence_of_an_ignored_text_is_named",
+            lambda listing: {**listing, "ignored_reads": [{"module": "entry.py", "text": "folder", "why": "planted", "lines": [FOLDER_LINE]}]},
+            "entry.py: ignored read 'folder'",
+            {"entry.py": SAMPLE_REPOSITORY["entry.py"] + 'COPY = ROOT / "folder"\n'},
+        ),
+    ]
+    ignoring = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    (root / "entry.py").write_text(SAMPLE_REPOSITORY["entry.py"] + 'EXACT = (ROOT / "folder/x.txt").read_text()\n', encoding="utf-8")
+    try:
+        exact = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    finally:
+        (root / "entry.py").write_text(SAMPLE_REPOSITORY["entry.py"], encoding="utf-8")
+    cases += [
+        {
+            "case": "launcher_trace_names_a_file_the_list_misses",
+            "passed": launcher_inputs.trace_gaps(["other/z.py", "entry.py", "/outside/x"], tracked, computed["files"]) == ["other/z.py"],
+        },
+        {
+            "case": "launcher_ignored_read_drops_its_folder",
+            "passed": "folder/x.txt" not in ignoring["files"] and ignoring["folders"] == [] and ("entry.py", "folder") in ignoring["ignored"],
+        },
+        {
+            "case": "launcher_ignored_read_keeps_an_exact_read_of_its_folder",
+            "passed": "folder/x.txt" in exact["files"] and "folder/y.txt" not in exact["files"] and exact["folders"] == [],
+            "files": [path for path in exact["files"] if path.startswith("folder/")],
+            "folders": exact["folders"],
+        },
+    ]
+    return cases
+
+
+def overlay_problems(tracked: set[str], committed: dict[str, Any], line: str) -> list[str]:
+    """The list check on the suite with ``line`` added after the anchor of LAUNCHER_EXACT_READ (in docker_calls_check): the source is changed only for this
+    process's reads, never on disk."""
+    from scripts.quality import launcher_inputs
+
+    target = ROOT / LAUNCHER_E2E
+    original = target.read_text(encoding="utf-8")
+    anchor = LAUNCHER_EXACT_READ[0]
+    if anchor not in original:
+        return []
+    changed = original.replace(anchor, anchor + line, 1)
+    read_text = Path.read_text
+
+    def overlay(path: Path, *args: Any, **kwargs: Any) -> str:
+        return changed if path == target else read_text(path, *args, **kwargs)
+
+    with mock.patch.object(Path, "read_text", overlay):
+        return launcher_inputs.problems(ROOT, tracked, committed)
+
+
+def launcher_always_cases(work: Path) -> list[dict[str, Any]]:
+    """The always-select pattern (``.``) selects the launcher for every changed path and takes no part in classifying paths: it is not in a group list, so a
+    path no list names still selects every group (LS27), an empty change list selects no launcher (LS28) and the configuration note states the
+    exception (LS30)."""
+    config = ci_groups.load()
+    listed = [pattern for patterns in config["groups"].values() for pattern in patterns] + config["passive"]
+    always = config.get("launcher_always", [])
+    code, plan, error = select(work, "--scope", "paths", "--part", "all")
+    note = json.loads((ROOT / ci_groups.CONFIG).read_text(encoding="utf-8"))["note"]
+    stale = ("no longer selects it", "never another group")
+    return [
+        {
+            "case": "launcher_always_pattern_is_not_a_classifier",
+            "passed": bool(always) and not any(re.search(pattern, "newtop/tool.bin") for pattern in listed),
+            "launcher_always": always,
+            "matching": [pattern for pattern in listed if re.search(pattern, "newtop/tool.bin")][:4],
+        },
+        {
+            "case": "empty_change_list_selects_no_launcher",
+            "passed": code == 0 and plan is not None and "launcher" not in plan["run"],
+            "run": plan["run"] if plan else None,
+            "error": error[-400:],
+        },
+        {
+            "case": "ci_groups_note_states_the_launcher_exception",
+            "passed": "launcher_always" in note and "inventory_reads" in note and not any(phrase in note for phrase in stale),
+            "stale_phrases": [phrase for phrase in stale if phrase in note],
+        },
+    ]
+
+
+def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
+    """The launcher group is selected by what its suite imports or reads, and by every path while a followed module that lists files carries the ``.`` pattern
+    of its ``inventory_reads`` entry (owner decision 1: every such module always selects the suite until a reviewed entry narrows it). A change to a module
+    the suite imports selects it, so does a path the suite never reaches, the committed list equals the computed one, and every computed file is selected by
+    the group's patterns."""
+    cases: list[dict[str, Any]] = [
+        selection_case(work, f"launcher_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_IMPORTED
+    ]
+    cases += [
+        selection_case(work, f"launcher_always_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_ALWAYS_SELECTED
+    ]
+    try:
+        from scripts.quality import launcher_inputs
+    except ImportError as error:
+        return [*cases, {"case": "launcher_inputs_tool_exists", "passed": False, "error": str(error)}]
+    tracked = set(git(ROOT, "ls-files").splitlines())
+    committed = json.loads((ROOT / launcher_inputs.LIST).read_text(encoding="utf-8"))
+    config = ci_groups.load()
+    gaps = launcher_inputs.selection_gaps(config, committed["files"], tracked)
+    exact = overlay_problems(tracked, committed, LAUNCHER_EXACT_READ[1])
+    inventories = {name: overlay_problems(tracked, committed, line) for name, line in LAUNCHER_INVENTORY_READS.items()}
+    with tempfile.TemporaryDirectory(prefix="launcher_sample.") as folder:
+        sample = sample_cases(Path(folder))
+    return [
+        *cases,
+        {
+            "case": "launcher_list_equals_computed",
+            "passed": launcher_inputs.problems(ROOT, tracked, committed) == [],
+            "problems": launcher_inputs.problems(ROOT, tracked, committed)[:6],
+        },
+        {
+            "case": "launcher_list_names_an_exact_read_beside_an_ignored_folder",
+            "passed": any(line.startswith("config/quality/mypy_runtimes.json: the launcher suite needs it") for line in exact),
+            "problems": exact[:4],
+        },
+        *(
+            {
+                "case": f"launcher_list_names_an_inventory_by_{name}",
+                "passed": any(line.startswith(f"{LAUNCHER_E2E}: ") and "inventory sites" in line for line in found),
+                "problems": found[:4],
+            }
+            for name, found in inventories.items()
+        ),
+        {
+            "case": "launcher_list_is_selected_by_the_group",
+            "passed": not gaps and len(committed["files"]) > 0,
+            "not_selected": gaps[:6],
+            "files": len(committed["files"]),
+        },
+        *sample,
+    ]
 
 
 def module_source(module: str) -> str:
     return (ROOT / f"{module.replace('.', '/')}.py").read_text(encoding="utf-8")
-
-
-def fills_template(template: list[str | None], path: str, names: set[str]) -> bool:
-    """True when ``path`` is the f-string ``template`` (constant parts, ``None`` per placeholder) with each placeholder replaced by a string of ``names``."""
-
-    def from_part(index: int, position: int) -> bool:
-        if index == len(template):
-            return position == len(path)
-        part = template[index]
-        if part is not None:
-            return path.startswith(part, position) and from_part(index + 1, position + len(part))
-        return any(path[position:end] in names and from_part(index + 1, end) for end in range(position + 1, len(path) + 1))
-
-    return from_part(0, 0)
-
-
-def source_inputs(source: str, tracked: set[str]) -> dict[str, str]:
-    """Every tracked file that a string anywhere in ``source`` names, in module-level constants and inside functions alike, with the text that names it.
-    A string constant, or a ``/`` join of strings (``Path(..)``, names assigned a join anywhere in the module), names a file or the files in a folder when it
-    holds a slash; a join that is only created (the receiver of ``mkdir``, ``write_text``, ``write_bytes``, ``touch`` or ``unlink``) is not read. An f-string
-    names every tracked file it matches when each placeholder is replaced by a string constant of the module (``f"dbt/models/{folder}/{name}.sql"``).
-    Docstrings and one-component names are not read as paths. The source is read, not imported."""
-    tree = ast.parse(source)
-    in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
-    docstrings = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
-    strings = {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in in_fstring and id(node) not in docstrings
-    }
-    created = {
-        id(node.func.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"mkdir", "write_text", "write_bytes", "touch", "unlink"}
-    }
-    known = {"ROOT": "", "REPO_ROOT": ""}
-
-    def operand(node: ast.expr) -> str | None:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.Name):
-            return known.get(node.id)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Path" and len(node.args) == 1:
-            return operand(node.args[0])
-        return None
-
-    def joined(top: ast.BinOp) -> list[str]:
-        parts: list[str | None] = []
-        node: ast.expr = top
-        while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            parts.append(operand(node.right))
-            node = node.left
-        parts.append(operand(node))
-        runs: list[str] = []
-        run: list[str] = []
-        for part in [*reversed(parts), None]:
-            if part is None:
-                if len(run) > 1:
-                    runs.append("/".join(piece.strip("/") for piece in run if piece.strip("/")))
-                run = []
-            else:
-                run.append(part)
-        return runs
-
-    assigned = [
-        (node.targets[0].id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id not in known
-    ]
-    for _ in range(3):
-        for name, value in assigned:
-            if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Div):
-                if len(runs := joined(value)) == 1:
-                    known[name] = runs[0]
-            elif (text := operand(value)) is not None:
-                known[name] = text
-    inner = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
-    names = set(strings)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner and id(node) not in created:
-            names.update(joined(node))
-    templates: list[list[str | None]] = [
-        [part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else None for part in node.values]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.JoinedStr)
-    ]
-    found: dict[str, str] = {}
-    for path in sorted(tracked):
-        for text in sorted(names):
-            base = text.strip("/")
-            if "/" in base and (path == base or path.startswith(f"{base}/")):
-                found.setdefault(path, text)
-        for template in templates:
-            if None in template and any(template) and fills_template(template, path, strings):
-                found.setdefault(path, 'f"' + "{}".join(part or "" for part in template) + '"')
-    return found
 
 
 def reader_inputs(modules: tuple[str, ...], tracked: set[str]) -> dict[str, str]:
@@ -963,6 +1176,8 @@ HOSTED_ENTRY_POINTS = {
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
         ("scripts.infrastructure.run_host_session_e2e", ("scripts/infrastructure/run_host_session_e2e.py", "scripts/infrastructure/host_session.py")),
         ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
+        ("scripts.infrastructure.run_aws_tasks_e2e", ("scripts/infrastructure/run_aws_tasks_e2e.py", "scripts/infrastructure/aws_tasks.py")),
+        ("scripts.infrastructure.aws_tasks_plants", ("scripts/infrastructure/aws_tasks_plants.py", "scripts/infrastructure/aws_tasks.py")),
     ),
     "lakehouse_gold_writer_setup": (
         (
@@ -1078,6 +1293,13 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         ),
         selection_case(
             work,
+            "unclassified_path_runs_all_in_part_all",
+            ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "all"],
+            [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
+            "unclassified",
+        ),
+        selection_case(
+            work,
             "launcher_path",
             ["--scope", "paths", "--path", "orchestration/launcher.py", "--part", "all"],
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "launcher"],
@@ -1100,7 +1322,6 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             ["--scope", "paths", "--path", "config/quality/mypy_runtimes.json", "--part", "core+layers"],
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks", "configuration_checks"],
         ),
-        selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], PART_GROUPS["all"], "full scope"),
         selection_case(
             work,
@@ -2117,7 +2338,16 @@ def hook_partition_cases(scratch: Path) -> list[dict[str, Any]]:
 def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
     """Dry-run the real dispatcher using print-only commands in a minimal tree, without checking out data or running gates."""
     base = scratch / "parallel_plan_base"
-    names = ["scripts/run_ci.sh", "scripts/process.py", "scripts/quality/ci_groups.py", "config/quality/ci_groups.json", *BODY_FILES]
+    names = [
+        "scripts/run_ci.sh",
+        "scripts/process.py",
+        "scripts/quality/ci_groups.py",
+        "config/quality/ci_groups.json",
+        "config/quality/launcher_inputs.json",
+        "config/lakehouse/bronze_tables.json",
+        "config/lakehouse/aws_bronze_grants.json",
+        *BODY_FILES,
+    ]
     names += [path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/infrastructure").glob("*.sh")]
     for name in names:
         target = base / name
@@ -2471,6 +2701,7 @@ BODY_SELECTION = {
     "sql_style": ["repository_code_checks", "sql_style"],
     "terraform_checks": ["repository_code_checks", "terraform_checks"],
     "launcher": ["repository_code_checks", "launcher"],
+    "reuse_gate_checks": ["repository_code_checks", "launcher", "reuse_gate_checks"],
 }
 
 
@@ -2487,7 +2718,8 @@ def staged_edit_case(work: Path, name: str, path: str, want_run: list[str], part
 
 def body_file_cases(work: Path) -> list[dict[str, Any]]:
     """An edit to a body file selects its own group (and the layers downstream of a lakehouse layer) and the repository group, which runs the guard, and no
-    other group. The pull request template is a document; the dispatcher, the workflow and the setup action select every group."""
+    other group in the core and layer parts (the launcher part selects every path, see ``launcher_selection_cases``). The dispatcher, the workflow and the
+    setup action select every group."""
     cases = [
         {
             "case": "every_body_file_has_an_expected_selection",
@@ -2496,13 +2728,20 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         }
     ]
     for group, wanted in BODY_SELECTION.items():
-        part = "all" if group == "launcher" else "core+layers"
+        part = "all" if group in {"launcher", "reuse_gate_checks"} else "core+layers"
         cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
-    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group_in_part_all", ".github/pull_request_template.md", [], "all"))
+    cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
     cases.append(
-        staged_edit_case(work, "dispatcher_edit_selects_every_group_in_part_all", "scripts/run_ci.sh", [*WITH_LAYERS, "launcher"], "all", "selects every group")
+        staged_edit_case(
+            work,
+            "dispatcher_edit_selects_every_group_in_part_all",
+            "scripts/run_ci.sh",
+            [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
+            "all",
+            "selects every group",
+        )
     )
     cases.append(
         selection_case(
@@ -2523,11 +2762,6 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         )
         for path in (".github/workflows/ci.yml", ".github/actions/setup/action.yml")
     ]
-    cases.append(
-        selection_case(
-            work, "pull_request_template_path_selects_no_group", ["--scope", "paths", "--path", ".github/pull_request_template.md", "--part", "all"], []
-        )
-    )
     return cases
 
 
@@ -2648,7 +2882,7 @@ def guard_cases() -> list[dict[str, Any]]:
         config["global"].append("^scripts/ci/")
 
     def broad_launcher(config: dict[str, Any]) -> None:
-        config["groups"]["launcher"] = ["^scripts/" if pattern.startswith("^scripts/(?!") else pattern for pattern in config["groups"]["launcher"]]
+        config["groups"]["launcher"].append("^scripts/")
 
     def remove_sql_file(tree: Path) -> None:
         (tree / sql).unlink()
@@ -2753,11 +2987,18 @@ printf 'ACQ part=%s shard=%s count=%s dir=%s\\n' "${ACQUISITION_PART:-}" "$shard
 
 
 def dry_run(
-    work: Path, out: Path, name: str, env: dict[str, str], fail_shard: str = "", skip_shard: str = "", prepare: Callable[[Path], None] | None = None
+    work: Path,
+    out: Path,
+    name: str,
+    env: dict[str, str],
+    fail_shard: str = "",
+    skip_shard: str = "",
+    prepare: Callable[[Path], None] | None = None,
+    timing: str = "",
 ) -> tuple[int, str]:
     """Run the dispatcher with a ``timed`` that only prints the command and a stand-in acquisition entry: the order, grouping and arguments of a full run
     without running any check. ``fail_shard`` makes that shard fail and ``skip_shard`` makes it leave no folder."""
-    (work / TIMING).write_text(DRY_TIMING, encoding="utf-8")
+    (work / TIMING).write_text(timing or DRY_TIMING, encoding="utf-8")
     (work / "scripts/acquisition/run_checks.sh").write_text(DRY_ACQUISITION.replace("@FAIL@", fail_shard).replace("@SKIP@", skip_shard), encoding="utf-8")
     try:
         if prepare:
@@ -2799,6 +3040,7 @@ def local_plan_of(log: str) -> dict[str, Any]:
             f"{suite}:{count}" for suite, count in re.findall(r"^TIMED lakehouse_features: combine (sources|columns)/(\d+) ", log, re.MULTILINE)
         ),
         "hook_groups": set(re.findall(r"^TIMED repository hooks: (\w+) ", log, re.MULTILINE)),
+        "launcher_shards": set(re.findall(r"^TIMED launcher E2E shard (\d+/\d+) ", log, re.MULTILINE)),
         "groups": groups,
         "units": units,
         "shards": set(shards),
@@ -2819,6 +3061,7 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
     feature_shards: set[str] = set()
     feature_combines: set[str] = set()
     hook_groups: set[str] = set()
+    launcher_shards: set[str] = set()
     for definition in workflow["jobs"].values():
         for entry in matrix_entries(definition):
             for step in definition.get("steps", []):
@@ -2827,6 +3070,8 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
                 if command == "bash scripts/run_ci.sh" and env.get("CI_PART") not in {None, "gates"}:
                     part = env["CI_PART"]
                     groups |= set(ci_groups.groups_of(part, config)) - {"acquisition"}
+                    if env.get("LAUNCHER_SHARD"):
+                        launcher_shards.add(env["LAUNCHER_SHARD"])
                     if part == "gold":
                         units |= set((env.get("CI_UNITS") or " ".join(GOLD_UNITS)).split())
                     if part in {"feature_sources", "feature_columns"}:
@@ -2852,6 +3097,7 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
         "feature_shards": feature_shards,
         "feature_combines": feature_combines,
         "hook_groups": hook_groups,
+        "launcher_shards": launcher_shards,
     }
 
 
@@ -2859,7 +3105,7 @@ def mirror_differences(github: dict[str, Any], local: dict[str, Any]) -> dict[st
     """What differs between the GitHub jobs and the full local run; empty when the local run mirrors GitHub."""
     differences = {
         name: {"github": sorted(github[name]), "local": sorted(local[name])}
-        for name in ("groups", "units", "shards", "combine_counts", "feature_shards", "feature_combines", "hook_groups")
+        for name in ("groups", "units", "shards", "combine_counts", "feature_shards", "feature_combines", "hook_groups", "launcher_shards")
         if github[name] != local[name]
     }
     if local["shard_runs"] != len(local["shards"]) or local["combine_runs"] != 1:
@@ -2888,6 +3134,9 @@ def planted_workflows() -> dict[str, dict[str, Any]]:
     hooks = copy.deepcopy(workflow_document())
     hooks["jobs"]["hooks"]["strategy"]["matrix"]["include"].pop()
     drifts["hook_group"] = hooks
+    launcher = copy.deepcopy(workflow_document())
+    launcher["jobs"]["launcher"]["strategy"]["matrix"]["shard"].pop()
+    drifts["launcher_shard"] = launcher
     return drifts
 
 
@@ -2897,11 +3146,13 @@ def mirror_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     github = github_plan_of(workflow_document())
     differences = mirror_differences(github, local)
     items = local["items"]
+    first_item = re.search(r"^== \w+ ==$", log, re.MULTILINE)
     shard_items = [item for item in items if item.startswith("acquisition_shard_")]
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "same_groups_units_shards_and_combine_as_the_github_jobs": not differences,
-        "launcher_ran_before_every_item": "TIMED launcher E2E" in log and log.index("TIMED launcher E2E") < log.index("\n== "),
+        # The sharded launcher block prints under "== launcher shard K/N ==" headers, which are not group items: compare with the first "== item ==" header.
+        "launcher_ran_before_every_item": 0 <= log.find("TIMED launcher E2E") < (first_item.start() if first_item else -1),
         "writer_set_up_ran_alone_first": items[:1] == ["lakehouse_gold_writer_setup"],
         "shards_ran_with_the_groups": len(shard_items) == 4 and all(item in items[1:-1] for item in shard_items),
         "combine_ran_last_after_every_shard": items[-1:] == ["acquisition_combine"] and local["combine_counts"] == {"4"},
@@ -2958,6 +3209,8 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["repository_code_checks", "sql_style"],
+        # Every path selects the launcher while a followed module carries the inventory_reads pattern ".", so the dry run starts it too.
+        "launcher_selected_by_every_path": "TIMED launcher E2E" in log and local["groups"] == {"launcher", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }
     cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
@@ -3047,7 +3300,7 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
             "bash",
             ["scripts/run_ci.sh"],
             cwd=work,
-            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), **extra},
+            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), "HAI_CI_REUSE": "off", **extra},
             timeout=600,
         )
     finally:
@@ -3069,7 +3322,9 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
 def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     everything = [entry for group in BODY_SELECTION for entry in STAND_IN_ENTRIES.get(group, [group])]
     core = [
-        entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
+        entry
+        for entry in everything
+        if entry not in {"launcher_e2e", "reuse_gate_checks", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
     ]
     layers = {
         "bronze": ["lakehouse_bronze"],
@@ -3124,12 +3379,18 @@ FAST_COMMIT_HOOKS = frozenset(
         "subprocess-imports",
         "docker-calls",
         "container-mounts",
+        "check-jsonschema",
+        "import-linter",
+        "tflint",
+        "trivy-config",
+        "typos",
+        "zizmor",
     }
 )
 PUSH_HOOKS = frozenset({"local_ci_pushed", "acquisition-checks"})
 INSTALL_TYPES = ("pre-commit", "commit-msg", "pre-push")
 FINGERPRINT_KEYS = ("entry", "language", "files", "exclude", "types", "types_or", "always_run", "pass_filenames", "verbose", "args")
-# What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced.
+# What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced, and the seven linters of lint_tools.
 MANUAL_FINGERPRINTS = {
     "gitleaks-outgoing": "f1c92f2c178a",
     "credential-files": "9d1f2d4ee86b",
@@ -3161,6 +3422,13 @@ MANUAL_FINGERPRINTS = {
     "suppressions": "eda6794008b9",
     "subprocess-imports": "7bae5ddf818b",
     "docker-calls": "2f3e46d94779",
+    "tflint": "1cea729b9600",
+    "trivy-config": "7303359ce5bc",
+    "zizmor": "a7d8a0e15bb0",
+    "import-linter": "5409790957ac",
+    "check-jsonschema": "3b0e5a36602c",
+    "typos": "61801f4f88b0",
+    "osv-scanner": "a3e0e7a4f358",
     "test-checks": "0328ad4bb1bd",
     "test-documentation-review": "db426284e54a",
 }
@@ -3290,7 +3558,10 @@ ORDINARY_PATHS = (
     "scripts/acquisition/s3_store.py",
     "scripts/acquisition/run_checks.sh",
 )
-INHERITED_PATTERN = "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
+INHERITED_PATTERN = (
+    "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|HAI_DOCKER_RELEASE$|HAI_CI_REUSE$|"
+    "GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
+)
 NOT_CONTROLS = frozenset(
     {
         "BASH",
@@ -3352,11 +3623,34 @@ if [[ -n "${STUB_WAIT_FOR_LOCK:-}" ]]; then
     sleep 0.1
   done
 fi
-printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s"}, "seen": "%s", "overlap": "%s"}\\n' \\
-  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "$seen" "$overlap" >>"$STUB_LOG"
+printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s", ' \\
+  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}" >>"$STUB_LOG"
+printf '"HAI_CI_REUSE": "%s"}, "seen": "%s", "overlap": "%s"}\\n' "${HAI_CI_REUSE-unset}" "$seen" "$overlap" >>"$STUB_LOG"
 if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
 exit "${STUB_EXIT_RUN_CI:-0}"
 """.replace("@PATTERN@", INHERITED_PATTERN)
+# The stand-in launcher of the release: it logs its arguments and answers as STUB_RELEASE says (quit, skipped, refused, error, garbage or sleep).
+STUB_LAUNCHER = (
+    "import json, os, re, sys, time\n"
+    "seen = ','.join(sorted(name for name in os.environ if re.match(%r, name)))\n"
+    "with open(os.environ['STUB_LOG'], 'a') as log:\n"
+    "    log.write(json.dumps({'stub': 'launcher', 'argv': sys.argv[1:], 'seen': seen}) + '\\n')\n"
+    "mode = os.environ.get('STUB_RELEASE', 'quit')\n"
+    "if mode == 'quit':\n"
+    "    print(json.dumps({'outcome': 'quit', 'catalog': 'down', 'seconds': 1.5}))\n"
+    "elif mode == 'skipped':\n"
+    "    print(json.dumps({'outcome': 'skipped', 'reason': 'no container ran since T'}))\n"
+    "elif mode == 'refused':\n"
+    "    sys.stderr.write('launcher: refused: docker_release is refused: running containers not created by this launcher: other_db, other_cache\\n')\n"
+    "    sys.exit(3)\n"
+    "elif mode == 'error':\n"
+    "    sys.stderr.write('launcher: docker quit failed: boom [command_failed]\\n')\n"
+    "    sys.exit(4)\n"
+    "elif mode == 'garbage':\n"
+    "    print('not json')\n"
+    "elif mode == 'sleep':\n"
+    "    time.sleep(60)\n"
+)
 STUB_ACQUISITION = """#!/usr/bin/env bash
 collided=false
 if [[ -n "${STUB_INDEX_LOCK:-}" ]]; then
@@ -3393,28 +3687,34 @@ def pre_push_repo(
     timeout: int | None = None,
     mutate: Callable[[str], str] | None = None,
     config_edit: Callable[[str], str] | None = None,
+    small: dict[str, Any] | None = None,
 ) -> Path:
     """A small repository with the real selector configuration, a copy of the pre-push run and stand-ins for the commands a push runs.
 
     One topic commit per path in ``changed`` follows the base commit; ``mutate`` rewrites the copy of ``scripts/quality/pre_push.py`` to plant a defect.
+    No range is a small change unless ``small`` overrides the thresholds of ``pre_push.small_change``.
     """
     root = scratch / name
     suffix = 1
     while root.exists():
         suffix += 1
         root = scratch / f"{name}_{suffix}"
-    for folder in ("config/quality", "scripts/quality", "scripts/acquisition", ".github/workflows"):
+    for folder in ("config/quality", "scripts/quality", "scripts/acquisition", ".github/workflows", "orchestration"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / ".venv").symlink_to(ROOT / ".venv")
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     if timeout is not None:
         config["pre_push"]["timeout_seconds"] = {"range": timeout, "full": timeout}
+    config["pre_push"]["small_change"] = {**config["pre_push"]["small_change"], **({"max_files": 0} if small is None else small)}
     (root / "config/quality/ci_groups.json").write_text(json.dumps(config))
     (root / "scripts/run_ci.sh").write_text(STUB_RUN_CI)
+    (root / "scripts/quality/ci_changed_files.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "changed_files", "CHANGED_FILES"))
     (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
-    for package in ("scripts", "scripts/quality"):
+    (root / "scripts/quality/lint_tools.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "osv_scanner", "OSV_SCANNER"))
+    for package in ("scripts", "scripts/quality", "orchestration"):
         (root / package / "__init__.py").write_text("")
+    (root / "orchestration/launcher.py").write_text(STUB_LAUNCHER % INHERITED_PATTERN)
     shutil.copy2(ROOT / "scripts/process.py", root / "scripts/process.py")
     source = (ROOT / "scripts/quality/pre_push.py").read_text()
     (root / "scripts/quality/pre_push.py").write_text(mutate(source) if mutate else source)
@@ -3477,7 +3777,7 @@ def hook_partition_case(scratch: Path, mutate: Callable[[str], str] | None = Non
     """
     root = pre_push_repo(scratch, "pre_push_hook_partitions", ("scripts/acquisition/example.py", "README.md"), mutate=mutate)
     lock = root / "index.lock"
-    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "1.5", "STUB_WAIT_FOR_LOCK": str(lock)}, timeout=300)
+    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "5", "STUB_WAIT_FOR_LOCK": str(lock)}, timeout=300)
     calls = pre_push_calls(root)
     hooks = [call for call in calls if call["stub"] == "ci_hooks"]
     acquisition = [call for call in calls if call["stub"] == "acquisition"]
@@ -3531,7 +3831,259 @@ def hook_deadline_case(scratch: Path) -> dict[str, Any]:
     }
 
 
-def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
+def latest_report(root: Path) -> dict[str, Any]:
+    reports = sorted((root / "data/e2e/pre_push").glob("*/report.json"))
+    return json.loads(reports[-1].read_text()) if reports else {}
+
+
+def gate_release_case(
+    scratch: Path,
+    case: str,
+    mode: str,
+    want_exit: int,
+    want_outcome: str,
+    want_text: str,
+    step_exit: str = "0",
+    mutate: Callable[[str], str] | None = None,
+    seconds_limit: float = 60.0,
+) -> dict[str, Any]:
+    """The gate asks a stand-in launcher (it answers as ``mode`` says) to quit Docker after its steps; the gate's exit stays the steps' result."""
+    root = pre_push_repo(scratch, case, "README.md", mutate=mutate)
+    before = time.time()
+    began = time.monotonic()
+    code, out, error = pre_push(root, "run", extra={"STUB_RELEASE": mode, "STUB_EXIT_RUN_CI": step_exit}, timeout=180)
+    seconds = time.monotonic() - began
+    after = time.time()
+    calls = pre_push_calls(root)
+    launcher_calls = [call for call in calls if call["stub"] == "launcher"]
+    ci_calls = [call for call in calls if call["stub"] == "run_ci"]
+    argv = launcher_calls[0]["argv"] if launcher_calls else []
+    since = float(argv[argv.index("--since") + 1]) if "--since" in argv else -1.0
+    released = latest_report(root).get("docker_release") or {}
+    checks = {
+        "exit": code == want_exit,
+        "launcher_called_once": len(launcher_calls) == 1,
+        "release_arguments": argv[:3] == ["docker-release", "--owner", "--since"],
+        "since_is_the_run_start": before - 1 <= since <= after,
+        "release_environment_clean": launcher_calls[0]["seen"] == "" if launcher_calls else False,
+        "run_ci_defers_to_the_gate": bool(ci_calls) and all(call["env"]["HAI_DOCKER_RELEASE"] == "outer" for call in ci_calls),
+        "run_ci_never_reuses_under_the_gate": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "off" for call in ci_calls),
+        "line_printed": f"pre-push: Docker release: {want_text}" in out,
+        "report_entry": released.get("outcome") == want_outcome,
+        "within_limit": seconds < seconds_limit,
+    }
+    return {"case": case, "passed": all(checks.values()), "checks": checks, "exit": code, "output": (out + error)[-500:]}
+
+
+def failing_step_release_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return gate_release_case(scratch, "pre_push_failing_step_still_releases", "quit", 1, "quit", "Docker Desktop quit in", step_exit="3", mutate=mutate)
+
+
+def refused_release_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return gate_release_case(
+        scratch, "pre_push_refused_release_keeps_the_exit_zero", "refused", 0, "refused", "refused (launcher: refused: docker_release is refused", mutate=mutate
+    )
+
+
+def exception_release_case(scratch: Path) -> dict[str, Any]:
+    """A step runner that raises (the Ctrl-C path) still releases, and the error reaches the caller."""
+    raising = source_edit('    serial = [step for step in steps if step["kind"] in SERIAL_KINDS]', '    raise RuntimeError("planted step failure")')
+    root = pre_push_repo(scratch, "pre_push_exception_still_releases", "README.md", mutate=raising)
+    code, out, error = pre_push(root, "run", extra={"STUB_RELEASE": "quit"}, timeout=120)
+    launcher_calls = [call for call in pre_push_calls(root) if call["stub"] == "launcher"]
+    checks = {
+        "error_reaches_the_caller": code != 0 and "planted step failure" in error,
+        "launcher_called_once": len(launcher_calls) == 1,
+        "line_printed": "pre-push: Docker release: Docker Desktop quit in" in out,
+    }
+    return {
+        "case": "pre_push_exception_in_the_steps_still_releases",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "exit": code,
+        "output": (out + error)[-400:],
+    }
+
+
+def direct_release_cases(scratch: Path) -> list[dict[str, Any]]:
+    """``pre_push.release`` on its own: a program that cannot start and a launcher that never answers are reported, never raised."""
+    missing = pre_push_module.release(scratch / "no_such_root", time.time())
+    root = pre_push_repo(scratch, "pre_push_release_direct", "README.md")
+    os.environ["STUB_LOG"] = str(root / "stub.log")
+    try:
+        registry = pre_push_module.release(root, time.time(), str(scratch / "registry"))
+    finally:
+        del os.environ["STUB_LOG"]
+    registry_argv: list[str] = next((call["argv"] for call in pre_push_calls(root) if call["stub"] == "launcher"), [])
+    return [
+        {
+            "case": "pre_push_release_reports_a_program_that_cannot_start",
+            "passed": missing["outcome"] == "failed" and "could not start" in missing["detail"],
+            "result": missing,
+        },
+        {
+            "case": "pre_push_release_passes_the_test_registry_before_the_command",
+            "passed": registry["outcome"] == "quit"
+            and registry_argv[:2] == ["--test-registry", str(scratch / "registry")]
+            and registry_argv[2] == "docker-release",
+            "argv": registry_argv,
+        },
+    ]
+
+
+def gate_release_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Gate cases 6 to 8 of the Docker release design, and the cases for every other answer of the launcher."""
+    deadline = source_edit("RELEASE_SECONDS = 600", "RELEASE_SECONDS = 2")
+    results = [
+        failing_step_release_case(scratch),
+        refused_release_case(scratch),
+        gate_release_case(
+            scratch,
+            "pre_push_release_deadline_is_killed_and_reported",
+            "sleep",
+            0,
+            "failed",
+            "failed (exceeded 2 s and was stopped)",
+            mutate=deadline,
+            seconds_limit=45,
+        ),
+        gate_release_case(scratch, "pre_push_passing_gate_quits_docker", "quit", 0, "quit", "Docker Desktop quit in"),
+        gate_release_case(scratch, "pre_push_skipped_release_is_reported", "skipped", 0, "skipped", "skipped (no container ran since T)"),
+        gate_release_case(
+            scratch,
+            "pre_push_failed_release_keeps_the_exit_zero",
+            "error",
+            0,
+            "failed",
+            "failed (exit 4: launcher: docker quit failed: boom [command_failed]); the gate result stands",
+        ),
+        gate_release_case(scratch, "pre_push_unreadable_release_answer_keeps_the_exit_zero", "garbage", 0, "failed", "failed (unreadable answer: not json)"),
+        exception_release_case(scratch),
+        *direct_release_cases(scratch),
+    ]
+    dropped = source_edit(
+        "        released = release(root, started, release_registry)", '        released = {"outcome": "skipped", "detail": "planted", "seconds": 0.0}'
+    )
+    blocking = source_edit(
+        '    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\\n")\n    return 0',
+        '    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\\n")\n    return 0 if released["outcome"] != "refused" else 1',
+    )
+    results += [
+        planted_case("dropped_release", failing_step_release_case, scratch, mutate=dropped),
+        planted_case("refused_release_blocks_the_push", refused_release_case, scratch, mutate=blocking),
+    ]
+    return results
+
+
+def release_docker_run(
+    scratch: Path,
+    name: str,
+    extra: dict[str, str],
+    system: str = "Darwin",
+    part: str = "all",
+    launcher_exit: str = "0",
+    transform: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Run the ``release_docker`` function of ``scripts/run_ci.sh`` alone, with a stand-in interpreter that logs its arguments and a ``uname`` shim."""
+    body = function_text((ROOT / "scripts/run_ci.sh").read_text(), "release_docker")
+    if body is None:
+        return {"code": -1, "calls": [], "output": "release_docker is not defined in scripts/run_ci.sh"}
+    text = f"release_docker() {{\n{body}}}\n"
+    folder = scratch / name
+    (folder / "bin").mkdir(parents=True)
+    log = folder / "calls.log"
+    (folder / "bin/uname").write_text(f"#!/bin/sh\necho {system}\n")
+    (folder / "bin/uname").chmod(0o755)
+    (folder / "python_bin").write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_LOG"\nexit "${STUB_EXIT:-0}"\n')
+    (folder / "python_bin").chmod(0o755)
+    (folder / "release_function.sh").write_text(transform(text) if transform else text)
+    environment = {key: value for key, value in os.environ.items() if key not in ("HAI_DOCKER_RELEASE", "GITHUB_ACTIONS", "CI_LIST_ONLY")}
+    result = run_command(
+        "/bin/bash",
+        [
+            "-c",
+            'set -euo pipefail; source "$RELEASE_FUNCTION"; python_bin="$RELEASE_PYTHON"; part="$RELEASE_PART"; '
+            'ci_started=1700000000; release_docker; echo "status=$?"',
+        ],
+        env={
+            **environment,
+            "PATH": f"{folder / 'bin'}:{environment['PATH']}",
+            "RELEASE_FUNCTION": str(folder / "release_function.sh"),
+            "RELEASE_PYTHON": str(folder / "python_bin"),
+            "RELEASE_PART": part,
+            "STUB_LOG": str(log),
+            "STUB_EXIT": launcher_exit,
+            **extra,
+        },
+        timeout=60,
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    return {"code": result.returncode, "calls": calls, "output": result.stdout + result.stderr}
+
+
+def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Gate case 9: ``run_ci.sh`` releases Docker once after a run on macOS, never changes its exit status, and skips under the gate, on hosted CI, off macOS,
+    in a list-only run and in the gates part."""
+    ci = (ROOT / "scripts/run_ci.sh").read_text()
+    finish = function_text(ci, "finish") or ""
+    wanted = "-m orchestration.launcher docker-release --owner --since 1700000000 --deadline 600"
+    results: list[dict[str, Any]] = []
+    run = release_docker_run(scratch, "release_runs", {})
+    results.append(
+        {
+            "case": "run_ci_releases_docker_after_a_run_on_macos",
+            "passed": run["code"] == 0 and run["calls"] == [wanted] and "status=0" in run["output"],
+            "run": run,
+        }
+    )
+    skipped: dict[str, tuple[dict[str, str], dict[str, Any], str]] = {
+        "outer": ({"HAI_DOCKER_RELEASE": "outer"}, {}, "the pre-push gate releases Docker"),
+        "github": ({"GITHUB_ACTIONS": "true"}, {}, "hosted CI has no Docker Desktop"),
+        "linux": ({}, {"system": "Linux"}, "this is not macOS"),
+        "list_only": ({"CI_LIST_ONLY": "1"}, {}, "no group ran Docker"),
+        "gates": ({}, {"part": "gates"}, "no group ran Docker"),
+    }
+    for label, (extra, options, reason) in skipped.items():
+        run = release_docker_run(scratch, f"release_skipped_{label}", extra, **options)
+        results.append(
+            {
+                "case": f"run_ci_skips_its_docker_release_{label}",
+                "passed": run["code"] == 0 and run["calls"] == [] and f"Docker release skipped: {reason}" in run["output"] and "status=0" in run["output"],
+                "run": run,
+            }
+        )
+    run = release_docker_run(scratch, "release_refused", {}, launcher_exit="3")
+    results.append(
+        {
+            "case": "run_ci_docker_release_failure_keeps_the_exit_status",
+            "passed": run["code"] == 0
+            and run["calls"] == [wanted]
+            and "status=0" in run["output"]
+            and "Docker release did not quit Docker (exit 3)" in run["output"],
+            "run": run,
+        }
+    )
+    results.append(
+        {
+            "case": "run_ci_finish_releases_after_the_scratch_folder_and_the_trap_keeps_its_rule",
+            "passed": "release_docker" in finish
+            and ci.index("ci_started=") < ci.index("trap 'finish;")
+            and "trap 'finish; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
+        }
+    )
+    planted = release_docker_run(
+        scratch,
+        "release_planted",
+        {"HAI_DOCKER_RELEASE": "outer"},
+        transform=lambda text: text.replace('"${HAI_DOCKER_RELEASE:-}" == "outer"', '"${HAI_DOCKER_RELEASE:-}" == "never"'),
+    )
+    results.append(
+        {"case": "planted_release_under_the_gate_caught_by_run_ci_skips_its_docker_release_outer", "passed": planted["calls"] == [wanted], "run": planted}
+    )
+    return results
+
+
+def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
     """The pre-push run selects the groups of the pushed range as hosted CI does, escalates to the full scope for selector and CI script changes, and
     every step has a deadline that fails visibly."""
     results = [escalation_case(scratch, f"pre_push_escalates_{index}", path, "full") for index, path in enumerate(ESCALATING_PATHS)]
@@ -3569,7 +4121,9 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
     hooks = [steps.get(f"hooks_{group}", {}).get("argv", []) for group in config["hook_groups"]]
     matches = {
         "scope": plan["scope"] == "range" and plan["start"] == base and plan["end"] == head,
-        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END"},
+        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
+        "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
+        "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
         "env_values": local.get("env", {}).get("CI_SCOPE") == hosted_env["CI_SCOPE"]
         and local.get("env", {}).get("RANGE_START") == base
         and local.get("env", {}).get("RANGE_END") == head,
@@ -3590,7 +4144,7 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
             "case": "pre_push_full_plan_runs_the_full_scope_once",
             "passed": bool(full)
             and full["scope"] == "full"
-            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full"}
+            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "off"}
             and not any(name.startswith("hooks_") or name == "acquisition" for name in full_steps),
             "steps": list(full_steps),
         }
@@ -3634,6 +4188,7 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
         }
     )
     results += [hook_partition_case(scratch), hook_failure_case(scratch), hook_deadline_case(scratch)]
+    results += gate_release_cases(scratch) + run_ci_release_cases(scratch)
     serial_jobs = 'jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])'
     serial_kinds = 'SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})'
     results += [
@@ -3641,6 +4196,8 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
         planted_case("acquisition_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_kinds, 'SERIAL_KINDS = frozenset({"ci_hooks"})')),
         planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [steps]")),
     ]
+    if gate_stage:
+        results += gate_stage_cases(scratch)
     return (
         results + hook_and_tree_cases(scratch) + acquisition_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + entry_cases() + docs_cases()
     )
@@ -3662,6 +4219,542 @@ def planted_case(label: str, case: Callable[..., dict[str, Any]], scratch: Path,
     except ValueError as error:
         return {"case": f"planted_{label}_caught_by_{case.__name__}", "passed": False, "error": str(error)}
     return {"case": f"planted_{label}_caught_by_{result['case']}", "passed": not result["passed"], "caught": not result["passed"]}
+
+
+def first_stub(calls: list[dict[str, Any]]) -> str:
+    return calls[0]["stub"] if calls else ""
+
+
+def changed_files_first_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """The changed-file checks run first, over the pushed range, and the long steps start after they passed."""
+    root = pre_push_repo(scratch, "gate_changed_files_first", "README.md", mutate=mutate)
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = pre_push_calls(root)
+    base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
+    argv = calls[0].get("argv", []) if calls else []
+    order = [call["stub"] for call in calls]
+    return {
+        "case": "pre_push_changed_file_checks_run_first_over_the_range",
+        "passed": code == 0
+        and first_stub(calls) == "changed_files"
+        and order.count("changed_files") == 1
+        and argv[argv.index("--from") + 1 : argv.index("--from") + 2] == [base]
+        and argv[argv.index("--to") + 1 : argv.index("--to") + 2] == [head]
+        and "run_ci" in order,
+        "exit": code,
+        "order": order,
+        "output": (out + error)[-300:],
+    }
+
+
+def changed_files_failure_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """A failed changed-file check stops the gate before the long groups, the hook partitions and the acquisition hook, and names itself."""
+    root = pre_push_repo(scratch, "gate_changed_files_failure", ("README.md",), mutate=mutate)
+    code, out, error = pre_push(root, "run", extra={"STUB_EXIT_CHANGED_FILES": "1"}, timeout=300)
+    order = [call["stub"] for call in pre_push_calls(root)]
+    return {
+        "case": "pre_push_changed_file_failure_stops_before_the_long_groups",
+        "passed": code != 0 and order == ["changed_files"] and "changed_file_checks" in out + error,
+        "exit": code,
+        "order": order,
+        "output": (out + error)[-300:],
+    }
+
+
+def changed_files_without_a_range_case(scratch: Path) -> dict[str, Any]:
+    """With no merge base there is no range to read, so the checks are left out and the full scope runs."""
+    root = pre_push_repo(scratch, "gate_changed_files_no_range", "README.md", remote=False)
+    code, out, error = pre_push(root, "run", timeout=300)
+    order = [call["stub"] for call in pre_push_calls(root)]
+    return {"case": "pre_push_changed_file_checks_need_a_range", "passed": code == 0 and "changed_files" not in order and "run_ci" in order, "order": order}
+
+
+def unreadable_status_case(scratch: Path) -> dict[str, Any]:
+    """A tree whose state Git cannot read is refused: the checks could not describe the pushed commit."""
+    root = pre_push_repo(scratch, "gate_unreadable_status")
+    (root / ".git/index").write_bytes(b"not an index")
+    code, out, error = pre_push(root, "run", timeout=120)
+    return {
+        "case": "pre_push_refuses_a_tree_whose_state_cannot_be_read",
+        "passed": code != 0 and not [call for call in pre_push_calls(root) if call["stub"] == "run_ci"] and "no check ran" in out and "cannot be read" in out,
+        "exit": code,
+        "output": (out + error)[-300:],
+    }
+
+
+def small_case(
+    scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_small: bool, mutate: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """A small change runs the commit checks and the affected groups; the hosted partitions and the acquisition hook stay with hosted CI."""
+    root = pre_push_repo(scratch, f"gate_small_{name}", changed, small=small, mutate=mutate)
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = pre_push_calls(root)
+    stubs = [call["stub"] for call in calls]
+    hosted = "ci_hooks" in stubs or "acquisition" in stubs
+    ran_ci = [call["env"]["CI_SCOPE"] for call in calls if call["stub"] == "run_ci"]
+    passed = (
+        code == 0
+        and ran_ci == ["range"]
+        and "changed_files" in stubs
+        and (not hosted if want_small else "ci_hooks" in stubs)
+        and (("small change" in out) == want_small)
+    )
+    return {"case": f"pre_push_small_change_{name}", "passed": passed, "exit": code, "calls": stubs, "output": (out + error)[-300:]}
+
+
+SMALL = {"max_files": 6, "max_changed_lines": 250}
+
+
+def changed_file_check_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The changed-file checks choose their steps from the changed paths and fail with the file named."""
+    changed_files = importlib.import_module("scripts.quality.ci_changed_files")
+
+    def names(files: list[str]) -> list[str]:
+        return [step["name"] for step in changed_files.steps(ROOT, files, lambda listed: listed)]
+
+    results = [
+        {
+            "case": "changed_file_checks_pick_steps_from_the_changed_paths",
+            "passed": names(["a.py", "dbt/models/gold/x.sql", "README.md"])
+            == ["ruff_format", "ruff_check", "mypy", "sqlfluff", "docker_calls", "ci_group_files"]
+            and names(["README.md"]) == ["docker_calls", "ci_group_files"]
+            and names(["scripts/x.py"]) == ["ruff_format", "ruff_check", "mypy", "docker_calls", "ci_group_files"]
+            and names(["scripts/x.sql"]) == ["docker_calls", "ci_group_files"],
+        }
+    ]
+    root = scratch / "changed_file_ruff"
+    (root / "config/quality").mkdir(parents=True)
+    (root / "config/quality/ci_groups.json").write_text(json.dumps({"pre_push": {"changed_file_seconds": 120}}))
+    (root / "good.py").write_text("print(1)\n")
+    (root / "bad.py").write_text("import os\nprint( 1 )\n")
+    outcomes = {}
+    for name, only in (("good", "ruff_check"), ("bad", "ruff_check"), ("bad_format", "ruff_format")):
+        file = "good.py" if name == "good" else "bad.py"
+        result = run_command(
+            str(PYTHON), ["-m", "scripts.quality.ci_changed_files", "--root", str(root), "--file", file, "--only", only], cwd=ROOT, timeout=120
+        )
+        outcomes[name] = (result.returncode, result.stdout)
+    results.append(
+        {
+            "case": "changed_file_checks_fail_with_the_file_named",
+            "passed": outcomes["good"][0] == 0
+            and outcomes["bad"][0] == 1
+            and "bad.py" in outcomes["bad"][1]
+            and "FAIL ruff_check" in outcomes["bad"][1]
+            and outcomes["bad_format"][0] == 1
+            and "FAIL ruff_format" in outcomes["bad_format"][1],
+            "outcomes": {key: value[0] for key, value in outcomes.items()},
+        }
+    )
+    return results
+
+
+def osv_scanner_case(
+    scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_run: bool, mutate: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """The OSV-Scanner hook runs over the pushed range in its own step, also for a small change, and skips a range without a requirements file."""
+    root = pre_push_repo(scratch, f"gate_osv_{name}", changed, small=small, mutate=mutate)
+    plan = pre_push_plan(root)
+    step: dict[str, Any] = next((item for item in plan["steps"] if item["name"] == "osv_scanner"), {})
+    base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = [call for call in pre_push_calls(root) if call["stub"] == "osv_scanner"]
+    passed = (
+        code == 0
+        and step.get("argv", [])[-6:] == ["--hook-stage", "pre-push", "--from-ref", base, "--to-ref", head]
+        and len(calls) == (1 if want_run else 0)
+        and (not want_run or calls[0]["argv"] == ["osv-scanner"])
+    )
+    return {
+        "case": f"pre_push_osv_scanner_{name}",
+        "passed": passed,
+        "exit": code,
+        "calls": len(calls),
+        "step": step.get("argv", []),
+        "output": (out + error)[-300:],
+    }
+
+
+def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The changed-file checks, the OSV-Scanner step and the small-change rule of the pre-push run."""
+    results = [changed_files_first_case(scratch), changed_files_failure_case(scratch), changed_files_without_a_range_case(scratch)]
+    results.append(unreadable_status_case(scratch))
+    results += changed_file_check_cases(scratch)
+    results += [
+        osv_scanner_case(scratch, "runs_for_a_requirements_change", ("requirements.txt",), None, True),
+        osv_scanner_case(scratch, "runs_for_a_small_change", ("requirements.txt",), SMALL, True),
+        osv_scanner_case(scratch, "skips_a_range_without_requirements", ("README.md",), None, False),
+    ]
+    results += [
+        small_case(scratch, "runs_only_checks_and_groups", ("features/example.py", "README.md"), SMALL, True),
+        small_case(scratch, "too_many_files_runs_everything", tuple(f"features/example_{index}.py" for index in range(7)), SMALL, False),
+        small_case(scratch, "too_many_lines_runs_everything", ("features/example.py",), {**SMALL, "max_changed_lines": 1}, False),
+        small_case(scratch, "infrastructure_runs_everything", ("infra/example.tf",), SMALL, False),
+        small_case(scratch, "shell_script_runs_everything", ("scripts/lakehouse/example.sh",), SMALL, False),
+        small_case(scratch, "disabled_by_the_threshold", ("features/example.py",), None, False),
+    ]
+    results += [
+        planted_case("changed_file_checks_last", changed_files_first_case, scratch, mutate=source_edit('    first = chosen["first"]\n', "    first = None\n")),
+        planted_case(
+            "osv_scanner_step_left_out",
+            osv_scanner_case,
+            scratch,
+            name="runs_for_a_requirements_change",
+            changed=("requirements.txt",),
+            small=None,
+            want_run=True,
+            mutate=source_edit('steps.append({"name": "osv_scanner"', '[].append({"name": "osv_scanner"'),
+        ),
+        planted_case("changed_file_failure_ignored", changed_files_failure_case, scratch, mutate=source_edit('if first_result["exit"] != 0:', "if False:")),
+        planted_case(
+            "every_change_small",
+            small_case,
+            scratch,
+            name="infrastructure_runs_everything",
+            changed=("infra/example.tf",),
+            small=SMALL,
+            want_small=False,
+            mutate=source_edit('if matching([*small["not_paths"], *config["pre_push"]["full_paths"]], paths):', "if False:"),
+        ),
+    ]
+    return results
+
+
+MAIN_PASSES = "scripts.quality.ci_main_passes"
+PASS_FILES = (
+    "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
+    "scripts/process.py",
+    "scripts/quality/ci_groups.py",
+    "scripts/quality/ci_main_passes.py",
+)
+
+
+def passes(root: Path, folder: Path, command: str, groups: list[str], main_ref: str = "HEAD", extra: tuple[str, ...] = ()) -> tuple[str, dict[str, str]]:
+    """Run the pass-record module in ``root`` and return its output and the group lines of ``filter`` (reuse or run)."""
+    environment = {**os.environ, "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": main_ref, "PYTHONDONTWRITEBYTECODE": "1"}
+    result = run_command(str(PYTHON), ["-B", "-m", MAIN_PASSES, command, "--groups", *groups, *extra], cwd=root, env=environment, timeout=300)
+    lines = [line.split() for line in result.stdout.splitlines()]
+    return result.stdout, {line[1]: line[0] for line in lines if line and line[0] in {"reuse", "run"}}
+
+
+def passes_repo(scratch: Path, name: str) -> Path:
+    root = scratch / name
+    for path in PASS_FILES:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / path, root / path)
+    for package in ("scripts", "scripts/quality"):
+        (root / package / "__init__.py").write_text("")
+    for path in ("README.md", "features/example.py", "dbt/models/silver/example.sql", "scripts/lakehouse/example.py"):
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text("base\n")
+    probe_git(root, "init", "--quiet", "--initial-branch", "main")
+    probe_git(root, "add", "--all")
+    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "base")
+    return root
+
+
+def affected(path: str) -> set[str]:
+    return set(ci_groups.plan("paths", "all", paths=[path])["run"])
+
+
+def reuse_hit(path: str) -> set[str]:
+    """The groups whose main-reuse input hash a change to ``path`` moves: those it selects, and each full-only group, whose input is every file."""
+    return affected(path) | set(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["full_only"])
+
+
+def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
+    """A group's pass is recorded only on a clean commit of main and reused only for identical inputs."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
+    groups = [*config["groups"], *config["full_only"]]
+    recordable = [group for group in groups if group not in config["reuse"]["never"]]
+    root = passes_repo(scratch, "passes_clean")
+    folder = scratch / "passes_clean_records"
+    written, _ = passes(root, folder, "record", groups)
+    _, clean = passes(root, folder, "filter", groups)
+    results = [
+        {
+            "case": "pass_records_are_written_on_a_clean_commit_of_main_and_reused",
+            "passed": "recorded" in written
+            and sorted(path.stem for path in folder.glob("*.json")) == sorted(recordable)
+            and all(clean[group] == "reuse" for group in recordable)
+            and clean["repository_hooks"] == "run",
+            "written": written.strip()[:200],
+            "filter": clean,
+        }
+    ]
+    probe = "dbt/models/silver/example.sql"
+    (root / probe).write_text("changed\n")
+    _, changed = passes(root, folder, "filter", groups)
+    hit = reuse_hit(probe)
+    results.append(
+        {
+            "case": "pass_reuse_stops_for_the_groups_a_changed_file_selects",
+            "passed": all(changed[group] == ("run" if group in hit else "reuse") for group in recordable) and hit and hit != set(recordable),
+            "run": sorted(group for group in groups if changed[group] == "run"),
+            "selected_by_the_file": sorted(hit),
+        }
+    )
+    written_dirty, _ = passes(root, scratch / "passes_dirty_records", "record", groups)
+    results.append(
+        {
+            "case": "pass_record_refused_for_a_changed_tree",
+            "passed": "not recorded" in written_dirty and "changes" in written_dirty and not (scratch / "passes_dirty_records").exists(),
+            "output": written_dirty.strip()[:200],
+        }
+    )
+    (root / probe).write_text("base\n")
+    (root / "features/new_file.py").write_text("new\n")
+    _, untracked = passes(root, folder, "filter", groups)
+    results.append(
+        {
+            "case": "pass_reuse_stops_for_a_new_untracked_file",
+            "passed": all(untracked[group] == ("run" if group in reuse_hit("features/new_file.py") else "reuse") for group in recordable)
+            and bool(reuse_hit("features/new_file.py")),
+            "run": sorted(group for group in groups if untracked[group] == "run"),
+        }
+    )
+    (root / "features/new_file.py").unlink()
+    (root / "README.md").write_text("docs change\n")
+    _, documentation = passes(root, folder, "filter", groups)
+    expected = reuse_hit("README.md")
+    results.append(
+        {
+            "case": "pass_reuse_follows_the_selector_for_a_documentation_change",
+            "passed": all(documentation[group] == ("run" if group in expected else "reuse") for group in recordable) and expected != set(recordable),
+            "run": sorted(group for group in groups if documentation[group] == "run"),
+            "selected_by_the_file": sorted(expected),
+        }
+    )
+    (root / "README.md").write_text("base\n")
+    unrelated = probe_git(root, "commit-tree", "HEAD^{tree}", "-m", "unrelated")
+    probe_git(root, "branch", "elsewhere", unrelated)
+    written_topic, _ = passes(root, scratch / "passes_topic_records", "record", groups, main_ref="elsewhere")
+    _, away = passes(root, folder, "filter", groups, main_ref="elsewhere")
+    results.append(
+        {
+            "case": "pass_record_and_reuse_need_the_commit_to_be_in_main",
+            "passed": "not recorded" in written_topic and "not in" in written_topic and all(away[group] == "run" for group in groups),
+            "output": written_topic.strip()[:200],
+            "filter": away,
+        }
+    )
+    return results
+
+
+LAUNCHER_STUB_TIMING = """#!/usr/bin/env bash
+timed() {
+  local label="$1"
+  shift
+  if [[ "$label" == "launcher E2E shard "* ]]; then printf 'TIMED %s %s\\n' "$label" "$*"; "$@"; else printf 'TIMED %s %s\\n' "$label" "$*"; fi
+}
+timing_table() { :; }
+timing_entry() { :; }
+"""
+LAUNCHER_STUB_BODY = """#!/usr/bin/env bash
+launcher_e2e() {
+  printf 'stub launcher shard %s\\n' "${LAUNCHER_SHARD:-all}"
+  if [[ "${LAUNCHER_SHARD:-}" == "${STUB_LAUNCHER_FAIL:-none}" ]]; then return 1; fi
+  sleep "${STUB_LAUNCHER_SLEEP:-1}"
+}
+"""
+LAUNCHER_SLEEP = "40.7"
+
+
+def launcher_shard_run(work: Path, out: Path, label: str, env: dict[str, str]) -> tuple[int, str, float]:
+    def stub_body(tree: Path) -> None:
+        (tree / GROUP_FILES / "launcher.sh").write_text(LAUNCHER_STUB_BODY, encoding="utf-8")
+
+    started = time.monotonic()
+    code, log = dry_run(
+        work, out, label, {"CI_SCOPE": "full", "CI_PART": "launcher", "HAI_CI_REUSE": "off", **env}, prepare=stub_body, timing=LAUNCHER_STUB_TIMING
+    )
+    return code, log, time.monotonic() - started
+
+
+def leftover_sleepers() -> list[str]:
+    result = run_command("pgrep", ["-f", f"sleep {LAUNCHER_SLEEP}"], timeout=30)
+    return result.stdout.split()
+
+
+def launcher_shard_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    """The full local run splits the launcher E2E like the hosted matrix, runs the shards at once, bounds them and stops what they left."""
+    shards = json.loads((ROOT / "config/quality/ci_groups.json").read_text())["launcher_shards"]
+    results = []
+    code, log, seconds = launcher_shard_run(work, out, "launcher_shards_parallel", {"STUB_LAUNCHER_SLEEP": "6"})
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["launcher"] in log,
+        "every_shard_ran": all(f"stub launcher shard {index}/{shards}" in log for index in range(1, shards + 1)),
+        "shards_ran_at_once": seconds < 6 * shards + 4,
+        "logs_print_in_shard_order": log.index(f"launcher shard 1/{shards} ==") < log.index(f"launcher shard {shards}/{shards} =="),
+    }
+    results.append({"case": "local_launcher_runs_its_shards_at_once", "passed": all(checks.values()), "checks": checks, "seconds": round(seconds, 1)})
+    code, log, seconds = launcher_shard_run(work, out, "launcher_shard_fails", {"STUB_LAUNCHER_FAIL": f"{shards}/{shards}", "STUB_LAUNCHER_SLEEP": "1"})
+    checks = {
+        "exit_nonzero": code != 0,
+        "names_the_shard": f"Local CI failed in: launcher E2E shard {shards}/{shards}" in log,
+        "other_shards_ran_and_print": "stub launcher shard 1/" in log,
+        "no_pass_line": PASS_LINES["launcher"] not in log,
+    }
+    results.append({"case": "local_launcher_shard_failure_fails_the_run_and_names_the_shard", "passed": all(checks.values()), "checks": checks, "exit": code})
+    code, log, seconds = launcher_shard_run(work, out, "launcher_shard_deadline", {"STUB_LAUNCHER_SLEEP": LAUNCHER_SLEEP, "CI_LAUNCHER_LIMIT_SECONDS": "2"})
+    left = leftover_sleepers()
+    checks = {
+        "exit_nonzero": code != 0,
+        "names_the_deadline": "ran past its deadline of 2 s: stopping it" in log and "(deadline 2 s)" in log,
+        "ended_long_before_the_stub_would_have": seconds < 35,
+        "stopped_every_process": not left,
+    }
+    for pid in left:
+        run_command("kill", ["-KILL", pid], timeout=30)
+    results.append(
+        {"case": "local_launcher_shards_are_bounded_and_stopped", "passed": all(checks.values()), "checks": checks, "seconds": round(seconds, 1), "left": left}
+    )
+    code, log, seconds = launcher_shard_run(work, out, "launcher_one_shard", {"LAUNCHER_SHARD": f"2/{shards}", "STUB_LAUNCHER_SLEEP": "1"})
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["launcher"] in log,
+        "only_the_given_shard": f"stub launcher shard 2/{shards}" in log and "stub launcher shard 1/" not in log and "launcher shard 1/" not in log,
+    }
+    results.append({"case": "local_launcher_run_with_a_given_shard_runs_only_it", "passed": all(checks.values()), "checks": checks, "exit": code})
+    return results
+
+
+def reuse_dry_run(
+    work: Path, out: Path, label: str, env: dict[str, str], folder: Path, record: bool = True, edit: Callable[[Path], None] | None = None
+) -> tuple[int, str]:
+    """A dry run of the dispatcher after a record of every group made inside the run's own state (the stand-ins change the inputs)."""
+
+    def prepare(tree: Path) -> None:
+        if record:
+            passes(tree, folder, "record", GROUP_NAMES, extra=("--test-any-state",))
+        if edit:
+            edit(tree)
+
+    return dry_run(
+        work,
+        out,
+        label,
+        # The case's own gate marker counts, not the one of a gate that runs this suite.
+        {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": "HEAD", "HAI_DOCKER_RELEASE": "", **env},
+        prepare=prepare,
+    )
+
+
+GROUP_NAMES = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["groups"]) + list(
+    json.loads((ROOT / "config/quality/ci_groups.json").read_text())["full_only"]
+)
+
+
+def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
+    """The dispatcher skips the groups whose pass was recorded on main, only in a full local run, and never under the gate."""
+    results = pass_record_cases(scratch)
+    results += launcher_shard_cases(work, out)
+    results.append(
+        planted_case(
+            "gate_without_the_reuse_switch",
+            failing_step_release_case,
+            scratch,
+            mutate=source_edit("**OUTER_RELEASE, **NO_REUSE}", "**OUTER_RELEASE}"),
+        )
+    )
+    recordable = [group for group in GROUP_NAMES if group != "repository_hooks"]
+    code, log = reuse_dry_run(work, out, "reuse_on", {"HAI_CI_REUSE": "main"}, scratch / "reuse_on_records")
+    items = local_plan_of(log)["items"]
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "every_recorded_group_is_reused": all(f"reused {group}:" in log for group in recordable),
+        "no_reused_group_ran": "TIMED launcher E2E" not in log and not any(item in items for item in ("python_lint", "lakehouse_bronze", "sql_style")),
+        "the_hook_partitions_still_ran": any(item.startswith("hook_") for item in items),
+        "no_acquisition_shard_ran": not any(item.startswith("acquisition_") for item in items),
+        "nothing_recorded_from_a_changed_tree": "not recorded" in log,
+    }
+    results.append({"case": "local_run_reuses_the_groups_recorded_on_main", "passed": all(checks.values()), "checks": checks, "items": items})
+    probe = "dbt/models/silver/example_probe.sql"
+
+    def add_probe(tree: Path) -> None:
+        (tree / probe).parent.mkdir(parents=True, exist_ok=True)
+        (tree / probe).write_text("select 1\n")
+
+    code, log = reuse_dry_run(work, out, "reuse_changed_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_changed_records", edit=add_probe)
+    hit = reuse_hit(probe)
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "selected_groups_ran": all(f"reused {group}:" not in log for group in hit),
+        "other_groups_reused": all(f"reused {group}:" in log for group in recordable if group not in hit),
+    }
+    results.append(
+        {"case": "local_run_reuse_stops_for_a_changed_input", "passed": all(checks.values()) and bool(hit), "checks": checks, "selected": sorted(hit)}
+    )
+    acquisition_probe = "scripts/acquisition/example_probe.py"
+
+    def add_acquisition_probe(tree: Path) -> None:
+        (tree / acquisition_probe).write_text("EXAMPLE = 1\n")
+
+    code, log = reuse_dry_run(
+        work, out, "reuse_changed_full_only_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_full_only_records", edit=add_acquisition_probe
+    )
+    results.append({"case": "local_run_reuse_stops_for_a_changed_full_only_input", "passed": code == 0 and "reused acquisition:" not in log, "exit": code})
+
+    def break_the_lookup(tree: Path) -> None:
+        (tree / "scripts/quality/ci_main_passes.py").write_text("raise SystemExit(7)\n")
+
+    code, log = reuse_dry_run(work, out, "reuse_lookup_fails", {"HAI_CI_REUSE": "main"}, scratch / "reuse_lookup_records", edit=break_the_lookup)
+    items = local_plan_of(log)["items"]
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "nothing_reused": "reused " not in log,
+        "the_groups_still_ran": all(item in items for item in ("python_lint", "lakehouse_bronze", "sql_style")),
+    }
+    results.append({"case": "local_run_runs_every_group_when_the_reuse_lookup_fails", "passed": all(checks.values()), "checks": checks, "items": items})
+    for label, env, why in (
+        ("off", {"HAI_CI_REUSE": "off"}, "off by request"),
+        ("under_the_gate", {"HAI_CI_REUSE": "main", "HAI_DOCKER_RELEASE": "outer"}, "the gate marker"),
+        ("hosted_default", {}, "hosted default"),
+        ("part_core", {"HAI_CI_REUSE": "main", "CI_PART": "core"}, "a partial run"),
+        ("unit_subset", {"HAI_CI_REUSE": "main", "CI_UNITS": "checks"}, "a unit subset"),
+    ):
+        code, log = reuse_dry_run(work, out, f"reuse_{label}", env, scratch / f"reuse_{label}_records")
+        results.append({"case": f"local_run_does_not_reuse_{label}", "passed": "reused " not in log and code == 0, "why": why, "exit": code})
+    code, log = reuse_dry_run(work, out, "reuse_bad_value", {"HAI_CI_REUSE": "sometimes"}, scratch / "reuse_bad_records", record=False)
+    results.append(
+        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main or off" in log and "TIMED" not in log}
+    )
+    return results
+
+
+REUSE_GATE_CASES = ("--reuse-only", "--gate-stage-only")
+
+
+def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
+    """The reuse, shard and gate stage cases are the check group reuse_gate_checks: their own part and hosted job, not a command of the Core part."""
+    path = "scripts/quality/ci_reuse.py"
+    results = [
+        selection_case(
+            work, "reuse_gate_part_selects_only_the_reuse_gate_group", ["--scope", "paths", "--path", path, "--part", "reuse_gate"], ["reuse_gate_checks"]
+        ),
+        selection_case(
+            work,
+            "core_part_leaves_the_reuse_gate_group_out",
+            ["--scope", "paths", "--path", path, "--part", "core"],
+            ["python_lint", "repository_code_checks", "configuration_checks"],
+        ),
+    ]
+    body = (ROOT / GROUP_FILES / "reuse_gate_checks.sh").read_text(encoding="utf-8")
+    core = (ROOT / GROUP_FILES / "repository_code_checks.sh").read_text(encoding="utf-8")
+    jobs = workflow_document()["jobs"]
+    steps = [step.get("env", {}) for step in jobs["reuse_gate"]["steps"] if step.get("env", {}).get("CI_PART") == "reuse_gate"]
+    required = json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8"))["required_pull_request_jobs"]
+    results.append(
+        {
+            "case": "reuse_and_gate_stage_cases_run_in_their_own_group_and_hosted_job",
+            "passed": all(f"run_ci_groups_e2e {flag}" in body and f"run_ci_groups_e2e {flag}" not in core for flag in REUSE_GATE_CASES)
+            and "run_ci_groups_e2e --selection-only" in core
+            and len(steps) == 1
+            and jobs["reuse_gate"]["name"] == "CI Reuse and Gate E2E"
+            and "CI Reuse and Gate E2E" in required,
+        }
+    )
+    return results
 
 
 def head_of(root: Path) -> str:
@@ -4093,6 +5186,8 @@ EXPECTED_CONTROLS = (
     "ACQUISITION_EXPECT",
     "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
+    "HAI_DOCKER_RELEASE",
+    "HAI_CI_REUSE",
     "PRE_COMMIT_FROM_REF",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
@@ -4105,7 +5200,10 @@ EXPECTED_CONTROLS = (
     "PRE_COMMIT_RUNNING_LEGACY",
     "_PRE_COMMIT_SKIP_POST_CHECKOUT",
 )
-STEP_SETS = {"run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END"}, "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"}}
+STEP_SETS = {
+    "run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
+    "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"},
+}
 
 
 def inherited_controls_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
@@ -4445,6 +5543,14 @@ def runner_stage_cases(scratch: Path) -> list[dict[str, Any]]:
 
 def main() -> int:
     clear_git_environment()
+    if "--gate-stage-only" in sys.argv[1:]:
+        with tempfile.TemporaryDirectory(prefix="ci_gate_stage_e2e.") as folder:
+            gate_results = gate_stage_cases(Path(folder))
+        gate_failed = [row["case"] for row in gate_results if not row["passed"]]
+        for row in gate_results:
+            sys.stdout.write(("PASS " if row["passed"] else "FAIL ") + row["case"] + "\n")
+        sys.stdout.write(f"{len(gate_results) - len(gate_failed)}/{len(gate_results)} passed (iteration mode, not commit evidence)\n")
+        return int(bool(gate_failed))
     if "--sharding-only" in sys.argv[1:]:
         with tempfile.TemporaryDirectory(prefix="ci_sharding_e2e.") as folder:
             shard_results = parallel_ci_cases(Path(folder)) + parallel_plan_cases(Path(folder))
@@ -4462,6 +5568,7 @@ def main() -> int:
         return int(bool(shard_report["failed"]))
     selection_only = "--selection-only" in sys.argv[1:]
     speed_only = "--speed-only" in sys.argv[1:]
+    reuse_only = "--reuse-only" in sys.argv[1:]
     out = ROOT / "data" / "e2e" / "ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     out.mkdir(parents=True)
     scratch = Path(tempfile.mkdtemp(prefix="ci_groups_e2e."))
@@ -4476,11 +5583,16 @@ def main() -> int:
         identity = code_identity(work)
         if speed_only:
             results += speed_static_cases(scratch) + speed_real_cases(work, out)
+        elif reuse_only:
+            results += reuse_cases(work, out, scratch)
         else:
             results.append(scratch_cleanup_interrupt_case(scratch))
             results += selection_cases(work)
             results += fast_hook_cases(scratch)
-            results += pre_push_cases(work, scratch)
+            results += pre_push_cases(work, scratch, gate_stage=not selection_only)
+            results += reuse_group_cases(work)
+            if not selection_only:
+                results += reuse_cases(work, out, scratch)
             results += runner_stage_cases(scratch)
             results += speed_static_cases(scratch)
             if not selection_only:
@@ -4520,8 +5632,10 @@ def main() -> int:
         "body_file_unreadable_*",
         "staged_body_edit_runs_only_its_group_items",
         "real_run_*",
+        "reuse_*",
+        "gate_stage_*",
     ]
-    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only else {"mode": "full"}
+    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only or reuse_only else {"mode": "full"}
     report = {"started": out.name, **mode, "code": identity, "cases": results, "passed": len(results) - len(failed), "total": len(results), "failed": failed}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"Bash used by the group-file guard cases: {identity.get('tools', {}).get('bash (the group-file guard)', 'unknown')}\n")

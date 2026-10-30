@@ -153,7 +153,11 @@
         ],
         "format": "skops",
         "trusted_types": [
-          "scripts.training.preprocessing.FoldMissingnessSelector",
+          "scripts.training.models.common.Feature",
+          "scripts.training.models.elastic.ElasticRegressor",
+          "scripts.training.models.linear.OLSRegressor",
+          "scripts.training.models.preprocessing.FoldPreprocessor",
+          "scripts.training.models.trees.TreeRegressor",
           "xgboost.core.Booster",
           "xgboost.sklearn.XGBRegressor"
         ],

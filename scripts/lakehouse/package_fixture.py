@@ -14,7 +14,7 @@ at a time across worktrees (a caller's ``HAI_ALLOCATION`` is reused). Every fixt
 baseline fingerprints every relation of a build file opened read-only: row count, ordered columns with types and an
 order-independent content hash (the sum of each row's lower 64 MD5 bits and the XOR of each row's full MD5, as text in
 the pinned DuckDB). ``check`` builds a package's patched project, selects its frozen required tests with their ancestors
-(cautious indirect selection), records the effective selection once or verifies it against the lead's approved copy, then
+(cautious indirect selection), records the effective selection once or verifies it against the coordinating agent's approved copy, then
 compares the package's models with the beab859 baseline and runs its expected-failure mutations. Failure modes 737, 888
 and 889 are in plans/wave0_20261010/failure_modes.md.
 """
@@ -417,7 +417,7 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
         problems = [f"required test missing: {test}" for test in missing]
         if not record:
             if approved is None:
-                raise FixtureError("a check without --record needs --approved <effective_selection.json the lead approved>")
+                raise FixtureError("a check without --record needs --approved <effective_selection.json the coordinating agent approved>")
             accepted = json.loads(approved.read_text())
             problems += [
                 f"{key} differs from the approved selection" for key in ("selector_sha256", "manifest_sha256", "nodes") if accepted[key] != effective[key]
@@ -491,7 +491,7 @@ def main() -> int:
     command.add_argument("--selector", type=Path, required=True, help="the frozen selector contract")
     command.add_argument("--patch", type=Path, action="append", default=[], help="a patch against dbt/ (paths a/dbt/...), applied in order")
     command.add_argument("--record", action="store_true", help="record the effective selection once")
-    command.add_argument("--approved", type=Path, help="the effective selection the lead approved")
+    command.add_argument("--approved", type=Path, help="the effective selection the coordinating agent approved")
     command.add_argument("--expected-failure", action="append", default=[], metavar="NAME:PATCH:TEST", help="a mutation that must fail exactly TEST")
     args = parser.parse_args()
     TEST_REGISTRY = args.test_registry

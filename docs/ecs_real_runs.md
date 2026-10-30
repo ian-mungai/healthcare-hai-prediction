@@ -1,7 +1,7 @@
 ---
 title: Real AWS read verification
 description: Bounded procedures and evidence requirements for cloud identity, admission and actual gold spill runs.
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 audience: [developer, operator]
 status: Proposed
 ---
@@ -18,7 +18,7 @@ Prepare each approved cloud run with the [procedure data](../config/orchestratio
 4. Record current regional price evidence and the approved run's cost ceiling, code hash and absolute UTC window.
 5. Render and check the [target](ecs_target_contract.md). Keep catalog-dependent Mac preparation disabled except the bronze cutover's route, which runs only after a passing Mac-side route check of the bound host and its network acceptance check.
 
-The early one-task identity check must pass before grant delivery relies on task-session naming. The two-task identity check below remains required. A failed premise stops the run. Return it to the lead without broadening grant access.
+The early one-task identity check must pass before grant delivery relies on task-session naming. The two-task identity check below remains required. A failed premise stops the run. Return it to the coordinating agent without broadening grant access.
 
 No dataset bytes move from the Mac to AWS. These runs use existing S3 lakehouse objects and registered snapshots. Only the verified code archive, job descriptor and per-try grants are uploaded. Source rows stay in the approved task workspace or run prefix. Controller records contain permitted counts, identities, digests and measurements only.
 
@@ -54,7 +54,7 @@ The outer limit is two hours. Begin with two tasks and their separate grants. Ke
 
 Lakehouse tasks must reach their approved catalog and S3. Offline tasks must not reach the catalog. Both classes must fail to reach Redis, unrelated hosts and the internet. The native Mac-container route remains a separate required observation. Mark it blocked when acceptance is absent. Keep catalog-dependent Mac preparation disabled.
 
-The one attended bronze cutover uses Mac-side route acceptance instead (owner decision, Oct 28 2026, described in [lakehouse usage](lakehouse_usage.md#bronze-cutover-to-the-aws-catalog)). Its `route-check` records that the tunnel and relay reach only the catalog port of the bound host, that the host's security groups admit inbound traffic only from project security groups (same account and VPC, with the project tag) and that no Mac Docker network reaches the tunnel or relay. That record does not replace this class-network matrix. The matrix stays required before any ECS job uses the catalog.
+The one attended bronze cutover uses Mac-side route acceptance instead (approved by the owner and described in [lakehouse usage](lakehouse_usage.md#bronze-cutover-to-the-aws-catalog)). Its `route-check` records that the tunnel and relay reach only the catalog port of the bound host, that the host's security groups admit inbound traffic only from project security groups (same account and VPC, with the project tag) and that no Mac Docker network reaches the tunnel or relay. That record does not replace this class-network matrix. The matrix stays required before any ECS job uses the catalog.
 
 The cap includes pending, running, stopping and unknown tasks. An unconfirmed stop keeps its reservation. The budget alert is a warning to the owner. Lifecycle expiration remains a configuration assertion. A delete marker does not prove old versions disappeared.
 
@@ -80,7 +80,7 @@ The outer limit is four hours. Use the existing published silver snapshots, the 
 4. Check staging at most 25 percent of the step, each chain at most 30 minutes and spill at most half the remaining storage. Preserve the 5 GiB disk margin and record all units.
 5. Verify the approved portable input path and release the run. Supply the inventory and measurements for the independent workload audit.
 
-Count compressed and unpacked images, copied inputs, declared outputs, scratch and buffers. Report missing spill as unproven. A failed threshold holds acceptance. Return a bounded sizing or chain-task proposal to the lead. Preserve the fixed deadline and actual workload.
+Count compressed and unpacked images, copied inputs, declared outputs, scratch and buffers. Report missing spill as unproven. A failed threshold holds acceptance. Return a bounded sizing or chain-task proposal to the coordinating agent. Preserve the fixed deadline and actual workload.
 
 ## Artifact and cleanup
 

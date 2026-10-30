@@ -6011,7 +6011,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # and the fills, each with its source. Reviewed row by row.
     # SCD2 history from source dates only.
     # Padded owner IDs; base owners are unchanged. The one-release bridge belongs to the SCD2 history,
-    # saved in features/ for the Feast phase.
+    # saved in features/ for the feature phase.
     code, statuses = built(results, "owner_bridge")
     bridged = model_outputs("owner_bridge")
     checks["owner_ids_padded"] = code == 0 and bridged.get("owner_padded") == [("0042633786", "2022-11-30")]

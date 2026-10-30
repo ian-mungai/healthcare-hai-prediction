@@ -22,7 +22,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_ARCHIVE = 64 * 1024 * 1024
-MAX_BINARY = 192 * 1024 * 1024  # trivy 0.74.0 is about 161 MB.
+MAX_BINARY = 192 * 1024 * 1024  # trivy is about 160 MB.
 LOGGER = logging.getLogger(__name__)
 
 
@@ -120,9 +120,10 @@ def publish(path: Path, content: bytes, mode: int) -> None:
 def install(manifest: Path, destination: Path, archives: Path | None, tools: list[str] | None = None) -> None:
     """Validate every asset before publishing binaries and deterministic receipts."""
     config = json.loads(manifest.read_text(encoding="utf-8"))
-    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb"}
+    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb", "osv-scanner", "zizmor", "typos"}
     names = set(config["tools"])
-    if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - {"yamllint"}:
+    other_installers = {name for name, tool in config["tools"].items() if "installer" in tool}
+    if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - other_installers:
         raise ValueError("Unsupported tool manifest")
     selected_tools = names & native if tools is None else set(tools)
     if not selected_tools or not selected_tools <= names & native:

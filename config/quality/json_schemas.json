@@ -1,0 +1,104 @@
+{
+  "note": "Which files check-jsonschema validates (scripts/quality/lint_tools.py check-jsonschema, docs/quality_checks.md). Every tracked *.schema.json is also checked against its metaschema. Each pair names a schema and the tracked files that must satisfy it; a pattern that matches no tracked file is an error. Not mapped: the ecs_job and ecs_outputs examples (their schemas $ref a sibling schema by an .invalid web address that check-jsonschema cannot map to a file), the remote_run and sdk_worker examples (case matrices that hold deliberately invalid samples), config/aws/iam_preparation.json (not an instance of jobs_preparation.schema.json) and the schemas of runtime records, which have no single committed instance file.",
+  "schema_version": 1,
+  "builtin": [
+    {
+      "schema": "vendor.github-workflows",
+      "files": [
+        ".github/workflows/*.yml"
+      ]
+    },
+    {
+      "schema": "vendor.github-actions",
+      "files": [
+        ".github/actions/*/action.yml"
+      ]
+    }
+  ],
+  "pairs": [
+    {
+      "schema": "config/orchestration/broker_templates.schema.json",
+      "files": [
+        "config/orchestration/broker_templates.json"
+      ]
+    },
+    {
+      "schema": "config/orchestration/ecs_jobs.schema.json",
+      "files": [
+        "config/orchestration/ecs_jobs.json"
+      ]
+    },
+    {
+      "schema": "config/acquisition/projection_policies.schema.json",
+      "files": [
+        "config/acquisition/projection_policies.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/census_regions.schema.json",
+      "files": [
+        "config/training/census_regions.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/excluded_controls.schema.json",
+      "files": [
+        "config/training/excluded_controls.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/models.schema.json",
+      "files": [
+        "config/training/models.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/promotion.schema.json",
+      "files": [
+        "config/training/promotion.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/targets.schema.json",
+      "files": [
+        "config/training/targets.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/feature_list.schema.json",
+      "files": [
+        "config/training/feature_lists/*.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/bundle.schema.json",
+      "files": [
+        "data_contracts/training/bundle.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/training/model_contract.schema.json",
+      "files": [
+        "data_contracts/training/model_contract.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/orchestration/ecs_input_map.schema.json",
+      "files": [
+        "data_contracts/orchestration/examples/ecs_input_map.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/orchestration/ecs_real_run_request.schema.json",
+      "files": [
+        "data_contracts/orchestration/examples/ecs_real_run_request.json"
+      ]
+    },
+    {
+      "schema": "data_contracts/orchestration/ecs_target.schema.json",
+      "files": [
+        "data_contracts/orchestration/examples/ecs_target.json"
+      ]
+    }
+  ]
+}

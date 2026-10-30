@@ -41,7 +41,7 @@ def _source_inventory(case: str, request: dict[str, Any], target: dict[str, Any]
 def prepare_run(case: str, target: dict[str, Any], target_sha256: str, request: dict[str, Any]) -> dict[str, Any]:
     """Bind an actual-data run checklist to its target, retained registration inventory and approved time window.
 
-    This validates preparation records. The shared runner must execute and collect every observation before the lead audits cloud acceptance.
+    This validates preparation records. The shared runner must execute and collect every observation before the coordinating agent audits cloud acceptance.
     """
     validate_target(target)
     if target["enabled"] is not True:
@@ -93,7 +93,7 @@ def prepare_run(case: str, target: dict[str, Any], target_sha256: str, request: 
 
 
 def main() -> int:
-    """Write a private preparation card while leaving cloud execution and approval with the lead."""
+    """Write a private preparation card while leaving cloud execution and approval with the coordinating agent."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=("R1", "R2", "R3"), required=True)
     parser.add_argument("--target", type=Path, default=ROOT / "data/orchestration/ecs_target.json")

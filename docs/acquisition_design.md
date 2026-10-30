@@ -1,64 +1,64 @@
 ---
-title: Acquisition Design
+title: Acquisition design
 description: What each collector and shared acquisition mechanism checks and which failure each check prevents.
-last_updated: 2026-10-20
+last_updated: 2026-10-29
 ---
 
-# Acquisition Design
+# Acquisition design
 
-This note explains why the collection code in `scripts/acquisition/` checks what it checks. It has one section per shared mechanism and one per collector: what the code collects or does, then each check with the failure it prevents. The runbook, [Data Collection](data_collection.md), gives the commands. Where this note and the code differ, the code is the reference.
+The collection code in `scripts/acquisition/` checks each item before it stores the item. This document gives the reason for each check. It has one section per shared mechanism and one per collector: what the code collects or does, then each check with the failure it prevents. The collection guide, [Data collection](data_collection.md), gives the commands. Where this document and the code differ, the code is the reference.
 
-Checks fail closed: a failed check stops the item with a fixed reason and no completion record is written. That is not the same as having no side effects. Storage uploads and verifies objects one at a time, so a check that fails partway can leave earlier verified objects in the bucket without a completion record; a rerun finds them by key and verifies them instead of writing again. Batch runs also store failed or partial downloads on purpose as audit evidence, never as data.
+Checks fail closed: a failed check stops the item with a fixed reason and no completion record is written. That is not the same as having no side effects. Storage uploads and verifies objects one at a time, so a check that fails partway can leave earlier verified objects in the bucket without a completion record. A rerun finds them by key and verifies them instead of writing again. Batch runs also store failed or partial downloads on purpose as audit evidence, never as data.
 
 Collection checks prove integrity and provenance only. A successful capture stays `acquired_unvalidated` with verification `pending`. A failed capture is `evidence_only_partial` with verification `evidence_only` when part of the response arrived, otherwise `rejected` with verification `rejected`. Storage manifests carry `model_eligible: false`, as do the lineage and completion records of the plan-based collectors. Definitions, geography, coverage and model eligibility are reviewed later.
 
 ## Contents
 
-- [Shared Mechanisms](#shared-mechanisms)
-  - [Download Transport](#download-transport)
-  - [Capture Receipts](#capture-receipts)
-  - [Storage in the Project Bucket](#storage-in-the-project-bucket)
-  - [Locked Plans, Completion Records and Reruns](#locked-plans-completion-records-and-reruns)
-  - [Source Registry, Terms and Access Releases](#source-registry-terms-and-access-releases)
-  - [Reviewed Code Versions and Earlier Plan Versions](#reviewed-code-versions-and-earlier-plan-versions)
-  - [API Keys](#api-keys)
-  - [Browser Download Origins](#browser-download-origins)
-  - [Personal Data in Publisher Files](#personal-data-in-publisher-files)
-- [API Collectors](#api-collectors)
+- [Shared mechanisms](#shared-mechanisms)
+  - [Download transport](#download-transport)
+  - [Capture receipts](#capture-receipts)
+  - [Storage in the project bucket](#storage-in-the-project-bucket)
+  - [Locked plans, completion records and reruns](#locked-plans-completion-records-and-reruns)
+  - [Source registry, terms and access releases](#source-registry-terms-and-access-releases)
+  - [Reviewed code versions and earlier plan versions](#reviewed-code-versions-and-earlier-plan-versions)
+  - [API keys](#api-keys)
+  - [Browser download origins](#browser-download-origins)
+  - [Personal data in publisher files](#personal-data-in-publisher-files)
+- [API collectors](#api-collectors)
   - [BLS API](#bls-api)
-  - [Census ACS Profiles API](#census-acs-profiles-api)
-  - [Census ACS Detailed Tables and Derived History](#census-acs-detailed-tables-and-derived-history)
-  - [HUD Crosswalk API](#hud-crosswalk-api)
+  - [Census ACS profiles API](#census-acs-profiles-api)
+  - [Census ACS detailed tables and derived history](#census-acs-detailed-tables-and-derived-history)
+  - [HUD crosswalk API](#hud-crosswalk-api)
   - [CMS Mapping Medicare Disparities](#cms-mapping-medicare-disparities)
-  - [BLS API Fallback](#bls-api-fallback)
-  - [Illinois Hospital Directory API](#illinois-hospital-directory-api)
-- [Scripted File Downloads](#scripted-file-downloads)
-  - [Download Batches](#download-batches)
-  - [History Routes](#history-routes)
-  - [Reference Document Fetch](#reference-document-fetch)
-  - [Census County-Change Pages](#census-county-change-pages)
-    - [County-Change Page Grammar](#county-change-page-grammar)
-    - [County-Change Seed](#county-change-seed)
-  - [ZIP Archives](#zip-archives)
-- [Browser Downloads](#browser-downloads)
-  - [Census Table Exports](#census-table-exports)
-  - [HUD Crosswalk Workbooks](#hud-crosswalk-workbooks)
-  - [CDC WONDER Exports](#cdc-wonder-exports)
-  - [Reference Downloads](#reference-downloads)
-- [Sources With Personal Data](#sources-with-personal-data)
-  - [CMS Hospital Ownership](#cms-hospital-ownership)
-  - [HCAI Utilization](#hcai-utilization)
-  - [ONC Meaningful Use](#onc-meaningful-use)
-  - [Public-Business CSV Abstraction](#public-business-csv-abstraction)
-- [Checks After Storage](#checks-after-storage)
-  - [Storage Records Check](#storage-records-check)
-  - [Manifest Corrections](#manifest-corrections)
-  - [Redownload Checks](#redownload-checks)
-  - [Single-Copy Starting Index](#single-copy-starting-index)
+  - [BLS API fallback](#bls-api-fallback)
+  - [Illinois hospital directory API](#illinois-hospital-directory-api)
+- [Scripted file downloads](#scripted-file-downloads)
+  - [Download batches](#download-batches)
+  - [History routes](#history-routes)
+  - [Reference document fetch](#reference-document-fetch)
+  - [Census county-change pages](#census-county-change-pages)
+    - [County-change page grammar](#county-change-page-grammar)
+    - [County-change seed](#county-change-seed)
+  - [ZIP archives](#zip-archives)
+- [Browser downloads](#browser-downloads)
+  - [Census table exports](#census-table-exports)
+  - [HUD crosswalk workbooks](#hud-crosswalk-workbooks)
+  - [CDC WONDER exports](#cdc-wonder-exports)
+  - [Reference downloads](#reference-downloads)
+- [Sources with personal data](#sources-with-personal-data)
+  - [CMS hospital ownership](#cms-hospital-ownership)
+  - [HCAI utilization](#hcai-utilization)
+  - [ONC meaningful use](#onc-meaningful-use)
+  - [Public-business CSV abstraction](#public-business-csv-abstraction)
+- [Checks after storage](#checks-after-storage)
+  - [Storage records check](#storage-records-check)
+  - [Manifest corrections](#manifest-corrections)
+  - [Redownload checks](#redownload-checks)
+  - [Single-copy starting index](#single-copy-starting-index)
 
-## Shared Mechanisms
+## Shared mechanisms
 
-### Download Transport
+### Download transport
 
 `transport.py` downloads every scripted file. Each attempt gets its own folder and `transport.json` record, written once.
 
@@ -70,12 +70,12 @@ Collection checks prove integrity and provenance only. A successful capture stay
 | After a signed redirect no further redirect is allowed and the request carries no publisher headers or cookies. The signature query is removed from every record. | Publisher headers reach another host. A signed address leaks through a record. |
 | The request asks for unencoded bytes. Encoded, partial (`206` or `Content-Range`), short, oversized or incomplete responses are failures, never complete files. | A compressed or truncated file is stored as complete. |
 | An empty body or HTML in place of data is refused. | An error or login page is stored as data. |
-| Each payload gets a light format check. ZIP, XLSX and DOCX must open with a non-empty member directory; XLSX and DOCX also need their required package entries. PDF needs its header and an end marker in the last 4 KiB. JSON up to 32 MiB must parse without duplicate keys or non-finite numbers. XLS and gzip need their file signatures. The first 8 KiB of CSV or text must not look like JSON, XML or binary. | A wrong file type is stored under the expected name. |
+| Each payload gets a light format check. ZIP, XLSX and DOCX must open with a non-empty member directory. XLSX and DOCX also need their required package entries. PDF needs its header and an end marker in the last 4 KiB. JSON up to 32 MiB must parse without duplicate keys or non-finite numbers. XLS and gzip need their file signatures. The first 8 KiB of CSV or text must not look like JSON, XML or binary. | A wrong file type is stored under the expected name. |
 | Member CRCs and workbook contents are not checked here. The archive parser or collector that reads them does that. | The transport check is mistaken for full validation. |
 | Only timeouts, `408`, `429`, server errors and network failures are retried, with growing waits, a `Retry-After` cap and validated size and time limits. | A run hangs, retries without end or sends too many requests. |
 | Failures are recorded as fixed codes from a table. The body of a failed signed request is not kept. | Provider error text or echoed credentials enter evidence. |
 
-### Capture Receipts
+### Capture receipts
 
 `capture.py` turns a plan into a local snapshot whose `receipt.json` follows `config/acquisition/snapshot_contract.schema.json`.
 
@@ -84,11 +84,11 @@ Collection checks prove integrity and provenance only. A successful capture stay
 | A plan may hold only known fields and must state its scope. Its route must be exactly one registry file route that is not a discovery index or a recorded failed route. | A plan with unchecked options runs or a route never meant to deliver data is used. |
 | Governance must say the data is public, needs no credentials and holds no protected health or personal data. A held source is refused, except a reference document with a release binding. Reference-only sources never supply data. | A sensitive or held source enters the general downloader. |
 | The receipt is schema-validated before and after the download. Artifact paths must stay inside the snapshot and every hash and size must match the file on disk. | A receipt describes missing, altered or misplaced files. |
-| A capture can never mark itself validated. A successful capture stays `acquired_unvalidated` with verification `pending`; a failed one is `evidence_only_partial` (`evidence_only`) or `rejected` (`rejected`). The status pair must match. | Collection is mistaken for approval of the data. |
+| A capture can never mark itself validated. A successful capture stays `acquired_unvalidated` with verification `pending`. A failed one is `evidence_only_partial` (`evidence_only`) or `rejected` (`rejected`). The status pair must match. | Collection is mistaken for approval of the data. |
 | A plan may pin the expected SHA-256. A different download is recorded as incomplete. | A changed publisher file replaces the planned one unnoticed. |
 | The lineage records the registry and schema hashes. The snapshot folder name holds a UTC time and a random part and is created exclusively. | A capture cannot be traced to its rules or two captures collide. |
 
-### Storage in the Project Bucket
+### Storage in the project bucket
 
 `s3_store.py` stores verified captures in the project's private, versioned bucket. `storage_controls.py` sends each receipt to the check of the collector that wrote it.
 
@@ -106,9 +106,9 @@ Collection checks prove integrity and provenance only. A successful capture stay
 | ZIP containers are never uploaded, only their verified members. Objects are capped at 512 MiB. | Unreviewed archive contents reach the bucket. |
 | Manifests and the reconciliation file are written once. Local evidence is published atomically and an existing file with different bytes stops the run. | Storage evidence is lost, half-written or edited later. |
 
-### Locked Plans, Completion Records and Reruns
+### Locked plans, completion records and reruns
 
-These rules hold for the BLS, Census profile, Census detailed, HUD API, HUD workbook, WONDER, CMS ownership, HCAI, ONC and reference-download collectors. MMD and the browser-export scripts for MMD and Census differ; their sections say how.
+These rules hold for the BLS, Census profile, Census detailed, HUD API, HUD workbook, WONDER, CMS ownership, HCAI, ONC and reference-download collectors. MMD and the browser-export scripts for MMD and Census differ. Their sections say how.
 
 | Check | Failure it prevents |
 | --- | --- |
@@ -119,10 +119,10 @@ These rules hold for the BLS, Census profile, Census detailed, HUD API, HUD work
 | `--validate-receipt` works without network access. For a collector that writes a derived CSV, it rebuilds the CSV from the original bytes and compares every hash. For reference downloads, which store only the original document and its download proof, it checks the document, the proof and the plan binding. | A derived file no longer follows from its original. |
 | Collectors of many separate files check and store each item on its own. A failing item is held with a fixed reason and the run exits non-zero naming it. | One bad file blocks the rest or is skipped silently. |
 
-### Source Registry, Terms and Access Releases
+### Source registry, terms and access releases
 
 `source_registry.py` checks `config/acquisition/source_registry.json` against its lock. `registry_additions.py` handles added
-measure controls and each source's publisher and bronze `dataset_id` values; `source_metadata.py` derives those placements
+measure controls and each source's publisher and bronze `dataset_id` values. `source_metadata.py` derives those placements
 from tracked configuration. With `--bronze-lineage <file>` both require every bronze dataset ID to be placed or listed as
 unplaced, even when the optional additions files are absent. They check every placement against the bronze `_source_id`
 of its dataset: it must equal the placing source or a reviewed acquisition route (`acquired_via`, only `main-hai-pdc`, the
@@ -138,18 +138,18 @@ bulk PDC download). `s3_store.py` checks releases of held sources.
 | A held source is stored only when its receipt binds, by SHA-256, the terms-acceptance record or an access-release record naming that source as released. Records are never edited: an extension is a separate record. A receipt is checked against the record it binds and later receipts bind the most recent one. | A held source is stored without its release. Editing a record breaks the receipts bound to it. |
 | Receipts of held sources carry the terms record's restrictions and attribution. | Downstream use loses the publisher's conditions. |
 
-### Reviewed Code Versions and Earlier Plan Versions
+### Reviewed code versions and earlier plan versions
 
 `code_versions.py`, `legacy_versions.py` and `data_paths.py` keep stored captures verifiable as code and configuration change.
 
 | Check | Failure it prevents |
 | --- | --- |
-| Each plan-based collector (BLS, Census profile and detailed, HUD API, WONDER, CMS ownership, HCAI, ONC and reference downloads) fingerprints the top-level Python modules in `scripts/acquisition/` (file names containing `e2e` excluded) and the configuration loader. The MMD API collector fingerprints its own fixed module list. General captures (file downloads and the BLS and Illinois API fallbacks), the HUD workbook collector and the Census and MMD browser-export scripts have no fingerprint gate; their checks are in their own sections. | A change to shared code goes unnoticed. |
+| Each plan-based collector (BLS, Census profile and detailed, HUD API, WONDER, CMS ownership, HCAI, ONC and reference downloads) fingerprints the top-level Python modules in `scripts/acquisition/` (file names containing `e2e` excluded) and the configuration loader. The MMD API collector fingerprints its own fixed module list. General captures (file downloads and the BLS and Illinois API fallbacks), the HUD workbook collector and the Census and MMD browser-export scripts have no fingerprint gate. Their checks are in their own sections. | A change to shared code goes unnoticed. |
 | A plan-based collector creates captures only when its exact fingerprint set appears in its `config/acquisition/*_code_versions.json` list. The list reader accepts only repository-relative `scripts/` paths with 64-character hashes. A stored capture verifies only while the fingerprint it recorded is still listed, so earlier versions stay listed. | Unlisted code produces evidence. A code change breaks older captures. |
 | Tracked plans and records state the current rule. A capture that recorded an earlier version verifies only if `config/acquisition/legacy_versions.json` (with its lock) lists it and the archived bytes still match. A supplementary plan names its parent's hash. | Older captures stop verifying, an altered predecessor is accepted or plan versions mix. |
-| Records keep the paths they were written with; code maps them through `config/data_paths.json`. | Moving the dataset folders breaks rechecks. |
+| Records keep the paths they were written with. Code maps them through `config/data_paths.json`. | Moving the dataset folders breaks rechecks. |
 
-### API Keys
+### API keys
 
 The BLS, Census and HUD collectors read keys from AWS Secrets Manager.
 
@@ -159,9 +159,9 @@ The BLS, Census and HUD collectors read keys from AWS Secrets Manager.
 | The key never appears in plans, receipts, logs, caches or the bucket. BLS sends it in the request body, Census as an unrecorded query parameter and HUD in the `Authorization` header. | A key leaks through a saved URL or record. |
 | A response containing the key is refused before anything is written. Only HTTP 200 JSON within a size cap is accepted, redirects are not followed and errors withhold response details. | A publisher echo or error page writes the key or bad data into evidence. |
 
-### Browser Download Origins
+### Browser download origins
 
-Some files can only be saved by a person in a browser. On macOS, Safari and Chrome record the download address on each saved file (`com.apple.metadata:kMDItemWhereFroms`) and the file system records its creation time. The rules below apply to the HUD workbook, WONDER and reference-download collectors. MMD and Census browser exports have their own origin checks, described in their sections.
+A person must save some files in a browser. On macOS, Safari and Chrome record the download address on each saved file (`com.apple.metadata:kMDItemWhereFroms`) and the file system records its creation time. The rules below apply to the HUD workbook, WONDER and reference-download collectors. MMD and Census browser exports have their own origin checks, described in their sections.
 
 | Check | Failure it prevents |
 | --- | --- |
@@ -171,18 +171,18 @@ Some files can only be saved by a person in a browser. On macOS, Safari and Chro
 
 Off macOS, the end-to-end suites read these two values from a synthetic record, so origin parsing and checks still run.
 
-### Personal Data in Publisher Files
+### Personal data in publisher files
 
 Three sources publish names or contact details next to the organizational data the project needs. Their collectors share these rules.
 
 | Check | Failure it prevents |
 | --- | --- |
 | The original is downloaded only into a `private_original/` folder (files `0600`, folders `0700`) outside every snapshot. | An original that names people is uploaded or shared. |
-| A snapshot may hold only derived files, a download proof and a scope file; `raw/` or `audit/` folders are refused. | The original reaches the bucket through the standard layout. |
+| A snapshot may hold only derived files, a download proof and a scope file. `raw/` or `audit/` folders are refused. | The original reaches the bucket through the standard layout. |
 | Names found in the original stay in memory, used only to find copies in other cells. Only counts are written. | Personal details are recorded while removing them. |
-| Derived files are rebuilt from the local original on every recheck and must match byte for byte. A verified original is reused; a failed download stays private and the item is held. | Derived files drift, downloads repeat or a bad file is stored. |
+| Derived files are rebuilt from the local original on every recheck and must match byte for byte. A verified original is reused. A failed download stays private and the item is held. | Derived files drift, downloads repeat or a bad file is stored. |
 
-## API Collectors
+## API collectors
 
 ### BLS API
 
@@ -196,7 +196,7 @@ Three sources publish names or contact details next to the organizational data t
 | An empty series or a missing year is accepted only with BLS's exact "does not exist" or "No Data Available" message and recorded as an availability hold. A partly missing year stops the batch. Every message must be recognized. | Gaps are hidden, filled in or explained by an unknown warning. |
 | The raw JSON is stored unchanged. The CSV keeps published tokens and footnotes. | The derived file alters source values. |
 
-### Census ACS Profiles API
+### Census ACS profiles API
 
 `collect_census_acs_api.py` collects the ACS 5-year data profiles DP02 to DP05 for the 2005 to 2009 period, with DP02PR for Puerto Rico in a supplementary plan, for every county and municipio.
 
@@ -207,7 +207,7 @@ Three sources publish names or contact details next to the organizational data t
 | Rows must have the header width with string or null cells. State and county codes must match `GEO_ID`, no county may repeat and the county set must equal the pinned list. | Missing, duplicate or mismatched geographies. |
 | The CSV writes nulls as `\N` and refuses a cell that already holds it. | Nulls and published text become indistinguishable. |
 
-### Census ACS Detailed Tables and Derived History
+### Census ACS detailed tables and derived history
 
 `collect_census_acs_detailed.py` collects tables B17001, B16001 and B16004 through the Census API, then derives poverty percentages and limited-English totals for years with no published county table.
 
@@ -215,12 +215,12 @@ Three sources publish names or contact details next to the organizational data t
 | --- | --- |
 | Each batch is bound to its year's endpoint and table and the header to that year's pinned dictionary. Counties must be unique five-digit codes matching `GEO_ID`, at least 3,100 of them. | Another table, year or geography is stored. |
 | The "speak English less than very well" lines are chosen by label from each year's own dictionary and pinned in the plan. The loader re-derives them and stops on any difference. | The wrong lines are summed when labels or positions change. |
-| Each compared pair (B17001 against the stored S1701 export; B16001 against B16004 in the same year) must cover exactly the same county set. The compared files are pinned by hash. | Comparisons pass on different or changed inputs. |
-| Within that set, counties with a non-numeric value on either side are counted as skipped. Every other county is compared: B17001's population and below-poverty counts must equal S1701's and the percentage must match to one decimal place; the B16001 total and universe must equal B16004's. A check passes only with zero mismatches and at least one compared county. Otherwise nothing derived is stored. | A derivation that does not reproduce the published tables is stored. A check passes with nothing compared. |
+| Each compared pair (B17001 against the stored S1701 export and B16001 against B16004 in the same year) must cover exactly the same county set. The compared files are pinned by hash. | Comparisons pass on different or changed inputs. |
+| Within that set, counties with a non-numeric value on either side are counted as skipped. Every other county is compared: B17001's population and below-poverty counts must equal S1701's and the percentage must match to one decimal place. The B16001 total and universe must equal B16004's. A check passes only with zero mismatches and at least one compared county. Otherwise nothing derived is stored. | A derivation that does not reproduce the published tables is stored. A check passes with nothing compared. |
 | A county gets no derived value when any estimate is a negative sentinel, null or text. It also gets none when the denominator is zero. A missing or non-numeric margin keeps the estimate and leaves its approximate margin blank. | Special values are treated as numbers. A valid estimate is dropped for a missing margin. |
 | The derived snapshot is built only when every input capture and check passed. Derived CSVs carry numerator, denominator, percentage, the approximate margin of error and source lines. Receipts call the values derived and attach the check report. | A failed input is used. Derived values pass as published ones. |
 
-### HUD Crosswalk API
+### HUD crosswalk API
 
 `collect_hud_api.py` collects the USPS ZIP-to-county crosswalk, nationwide, one request per quarter.
 
@@ -229,7 +229,7 @@ Three sources publish names or contact details next to the organizational data t
 | The plans pin endpoint, crosswalk type, `query=All`, quarters and the terms record by hash. The quarter plan names the first plan's hash. Requests are at least two seconds apart. | Another type, quarter or query runs or HUD's rate limit is exceeded. |
 | The raw response is cached before the envelope checks. | A schema change forces repeated requests to examine it. |
 | Envelope fields must equal the pinned set (no pagination marker) and echo the requested year, quarter, input and type. | A truncated, paginated or mismatched response is stored. |
-| Result fields must equal the pinned set or that set without both `city` and `state`, the same in every row. Omitted fields are never filled in; the receipt names them. | A field change slips through or values are invented. |
+| Result fields must equal the pinned set or that set without both `city` and `state`, the same in every row. Omitted fields are never filled in. The receipt names them. | A field change slips through or values are invented. |
 | ZIP and county codes stay five-digit text. Two-digit codes are accepted only for the Pacific territories 60, 64, 68 and 70, kept as published and not counted as counties. | Leading zeros are lost or an unknown code passes. |
 | Ratios are decimals from 0 to 1 inclusive, kept as published. No ZIP-county pair may repeat and every state and DC must appear. | Invalid weights pass, rows collapse or states are missing. |
 | ZIPs whose ratio sums miss 1 by more than 0.01 or equal 0 are counted in the statistics. They are neither rejected nor renormalized. | Business-only ZIPs and small sum gaps are hidden. Valid quarters are refused. |
@@ -237,22 +237,22 @@ Three sources publish names or contact details next to the organizational data t
 
 ### CMS Mapping Medicare Disparities
 
-`collect_mmd_api.py` collects condition-years from the CMS MMD API; `run_mmd_api_collection.py` works through its queue one item at a time. `store_mmd_export.py` stores the earlier browser exports.
+`collect_mmd_api.py` collects condition-years from the CMS MMD API. `run_mmd_api_collection.py` works through its queue one item at a time. `store_mmd_export.py` stores the earlier browser exports.
 
 MMD differs from the [shared plan rules](#locked-plans-completion-records-and-reruns). Its plans are pinned by fixed SHA-256 values in `mmd_api_contract.py`, not by lock files. The collector takes no OS lock. A finished year is reused through its `capture_ready.json` after the receipt and contract checks pass again. A `completed.json` is accepted when it names that same receipt.
 
 | Check | Failure it prevents |
 | --- | --- |
 | Only the MMD endpoint on `data.cms.gov` is requested. The collection plans, their registry hash, references and the API-to-browser comparison report are pinned by hash. Each condition must be in exactly one plan, with the year offered and its review hold in place. | Unplanned endpoints, conditions or years are collected. |
-| Rows must have exactly the expected fields and echo every selection. FIPS codes must have the expected width (CMS drops some state codes' leading zero; kept as published), be unique and in range. Denominator codes must be known and rates plain non-negative decimals in range. | Unexpected fields, subgroups, geographies or rate tokens. |
+| Rows must have exactly the expected fields and echo every selection. FIPS codes must have the expected width (CMS drops the leading zero of some state codes, which the collector keeps as published), be unique and in range. Denominator codes must be known and rates plain non-negative decimals in range. | Unexpected fields, subgroups, geographies or rate tokens. |
 | Three probe requests at the start, at an offset and past the end must return the matching rows and an empty end. An empty, tiny or page-size-limited response is refused. | A truncated or reordered response is taken as complete. |
-| The derived CSV follows CMS's export format and its selections; an unknown geography stops the item. A saved response without its metadata record stops the run. | The CSV invents names or unrecorded bytes become evidence. |
+| The derived CSV follows CMS's export format and its selections. An unknown geography stops the item. A saved response without its metadata record stops the run. | The CSV invents names or unrecorded bytes become evidence. |
 | Browser exports: every recorded origin must be HTTPS on `data.cms.gov` and all of them are kept in the lineage. The file must be a regular file of at most 16 MiB with the reviewed header, all 13 selections in every row and unique, non-blank FIPS codes. | An export from another site or with mixed selections is stored. |
 | No locked plan pins a browser export's hash. The observed hash is recorded and the stored copy must keep it. The retrieval time is the file's modification time, stated as such. | Bytes change during capture. The export claims a transport time it lacks. |
 
-### BLS API Fallback
+### BLS API fallback
 
-The general capture path (`capture.py` with `api_fallbacks.py`, run through [Download Batches](#download-batches)) has a separate `bls_api` mode for version 1 of the BLS API. It is distinct from the version 2 collector above.
+The general capture path (`capture.py` with `api_fallbacks.py`, run through [Download batches](#download-batches)) has a separate `bls_api` mode for version 1 of the BLS API. It is distinct from the version 2 collector above.
 
 | Check | Failure it prevents |
 | --- | --- |
@@ -262,7 +262,7 @@ The general capture path (`capture.py` with `api_fallbacks.py`, run through [Dow
 | Each batch run reserves its attempts against a local ledger of at most 25 requests in any rolling 24 hours. | The unregistered daily quota is exceeded. |
 | Storage rebuilds the allowed request from the plan and rechecks that the stored response covers it. | A receipt whose request drifted is stored. |
 
-### Illinois Hospital Directory API
+### Illinois hospital directory API
 
 The general capture path also has an `il_directory` mode for the Illinois hospital report card directory, fetched as numbered pages of 100.
 
@@ -274,34 +274,34 @@ The general capture path also has an `il_directory` mode for the Illinois hospit
 | Each next-page link must be the same endpoint with the next page number. The last page must have no next link and the IDs seen must equal the total. Reaching the page limit first is a failure. | Pages are skipped or the capture ends before the directory does. |
 | Storage replays the page sequence from the stored pages. | A receipt with a broken page chain is stored. |
 
-## Scripted File Downloads
+## Scripted file downloads
 
-### Download Batches
+### Download batches
 
 `batch.py` runs bounded batches of file downloads built from the registry.
 
 | Check | Failure it prevents |
 | --- | --- |
 | A batch names the registry hash. Job IDs are unique and every plan passes the capture checks offline before any request. | A malformed or unchecked batch runs. |
-| Files over 512 MiB are refused. Each run has a job limit and a byte budget; a job that would exceed it stays pending. A state-root lock prevents parallel batches. | A run grows without bound, truncates a file or collides with another run. |
+| Files over 512 MiB are refused. Each run has a job limit and a byte budget. A job that would exceed it stays pending. A state-root lock prevents parallel batches. | A run grows without bound, truncates a file or collides with another run. |
 | A failed or partial capture is stored with the audit-only option as evidence (never as data) and gets no completion record. | Failure evidence is lost. A broken file is promoted. |
 | A completed job must match its job and layout hashes. A recovered capture must match the job's source, registry, request, scope, release, periods and expected hash. | A rerun uses a capture taken for another job. |
 | A capture of the same pinned file is reused only through an explicit, checksum-bound link. | A file is downloaded twice or reuse crosses scopes. |
 
-### History Routes
+### History routes
 
-Discovery scripts (`discover_history.py`, `discover_publisher_history.py`, `discover_acs_history.py`, `discover_acs_sequences.py` and `discover_california_exports.py`) find earlier releases; `history_routes.py` downloads them.
+Discovery scripts (`discover_history.py`, `discover_publisher_history.py`, `discover_acs_history.py`, `discover_acs_sequences.py` and `discover_california_exports.py`) find earlier releases. `history_routes.py` downloads them.
 
 | Check | Failure it prevents |
 | --- | --- |
 | Discovery saves each publisher index page and lists only links it contains, with the page's hash as evidence. | Guessed download links. |
-| Candidates are added to a validated copy of the registry; the locked registry is never edited. | Discovery changes the reviewed registry. |
+| Candidates are added to a validated copy of the registry. The locked registry is never edited. | Discovery changes the reviewed registry. |
 | Data from held, privacy-review or large-file-review sources is refused. A held source may supply a reference document only with a `terms` or `access_release` binding, which storage rechecks. | History downloads bypass a hold. |
 | Repeated URLs are planned once. Each job reserves twice its size limit against a run budget, with 512 MiB per file. | Duplicate downloads or an unbounded run. |
 | A redirect is followed only after `history_redirects.py` confirms it lands on the same resource and file name in the reviewed publisher bucket. | An unreviewed redirect is followed. |
 | Without `--execute` every job is validated offline. Each job has a write-once record and a `completed.json` once stored. | Dry runs have side effects. Work is repeated. |
 
-### Reference Document Fetch
+### Reference document fetch
 
 `one_off/reference_documents/fetch_support.py` downloads the files for `fetch_reference_pdfs.py` (reference PDFs named in a history-route candidates file) and `check_alaska_county_codes.py` (four county crosswalk files). Both reuse the [download transport](#download-transport) checks and add the ones below. Neither writes to S3 or bronze.
 
@@ -314,7 +314,7 @@ Discovery scripts (`discover_history.py`, `discover_publisher_history.py`, `disc
 | Each file downloads in its own process. The project's process launcher starts it and ends it 180 seconds after it started. The limit covers name lookup, connect, headers, body and retry pauses. The command installs no signal handler or timer. A file stopped by it is rejected as `capture_deadline_exceeded`: its receipt entry has no size or SHA-256, its folder keeps the attempts that finished (the running attempt keeps its partial file and has no `transport.json`) and gets `deadline.json` naming the URL and the seconds. Nothing partial is accepted. A download process that fails another way, for example on a refused URL, stops the command with exit 2. | A response that sends a few bytes at a time or a name lookup that never returns keeps a command running as long as the publisher or resolver keeps it waiting. |
 | The county-code check reads the named columns of each file and fails when a column or archive member is missing. It writes its report once and a rerun must reproduce it byte for byte. | A changed layout is read as a different column. |
 
-### Census County-Change Pages
+### Census county-change pages
 
 `scripts/acquisition/one_off/county_changes/county_changes.py` fetches the Census county-change pages for 1970, 1980, 1990 and 2000 into a local folder. The `history_routes.py` mechanism stores the pages as reference documents of the registered `ADJ` source. The transport refuses HTML as a data role. The page contract (`page_problem`, `parse_page` and everything they run) is `scripts/acquisition/county_change_pages.py`, a top-level acquisition module, so the collector code fingerprints cover it. It is the only reader of the pages. The part of a page that holds the changes is its section (the decade heading and the change list). The repository commits the four sections in `config/acquisition/census_county_changes`. `scripts/lakehouse/county_change_seed.py` turns the committed sections into the reviewed dbt seed `dbt/seeds/census_county_change_events.csv`, which silver reads. The warehouse never parses a page.
 
@@ -328,12 +328,12 @@ Discovery scripts (`discover_history.py`, `discover_publisher_history.py`, `disc
 | The successors of a retirement are the codes named after the last "to create" or in the whole detail with its own code excluded. | A donor county is recorded as a successor. |
 | The seed check verifies each committed section against its pin, regenerates the events from the four sections and requires the seed to equal them byte for byte. It also compares the regenerated events and the seed with a reviewed golden file: the count per page and event plus every retirement row. It requires the four pages, one change-list hash per page equal to its pin, contiguous event numbers and well-formed rows. A page, a section, the seed or the golden file is read once, so a replacement between two reads cannot change the events that were checked. | A page, a rule or a reviewed value drifts without a visible difference. A hand edit of the seed, of the golden file or of both reaches silver. |
 
-#### County-Change Page Grammar
+#### County-change page grammar
 
-The grammar is closed: a page that uses anything it does not list is refused by `page_problem` (reason `decade_heading_or_layout_differs`) and is never stored or turned into seed rows. Only the section is read; the rest of the page (head, navigation, scripts, comments, footer) is ignored whatever it holds. A committed section is read by the same rules: it starts with the decade heading and holds the change list after it.
+The grammar is closed: a page that uses anything it does not list is refused by `page_problem` (reason `decade_heading_or_layout_differs`) and is never stored or turned into seed rows. Only the section is read. The rest of the page (head, navigation, scripts, comments, footer) is ignored whatever it holds. A committed section is read by the same rules: it starts with the decade heading and holds the change list after it.
 
 1. **Text and lines.** The page is UTF-8. A line ends at LF, CRLF or CR and reads as LF. White space is space, tab, CR and LF only.
-2. **Location.** The decade heading element occurs exactly once in the page text and names the decade of the page (`1970` for the 1970 page). Its form is `<h3 style="V" class="V">Changes to Counties or County Equivalent Entities: DDDDs</h3>`, where each attribute is optional and `style` comes before `class`. The section is the heading and the text after it up to the first `</section>` (that exact spelling), which must exist; the change list is the text after the heading. A committed section holds the heading and the change list without the closing tag.
+2. **Location.** The decade heading element occurs exactly once in the page text and names the decade of the page (`1970` for the 1970 page). Its form is `<h3 style="V" class="V">Changes to Counties or County Equivalent Entities: DDDDs</h3>`, where each attribute is optional and `style` comes before `class`. The section is the heading and the text after it up to the first `</section>` (that exact spelling), which must exist. The change list is the text after the heading. A committed section holds the heading and the change list without the closing tag.
 3. **Tags.** Inside the change list only the tags below occur, spelled exactly as shown. A tag name ends at the first character that is not a letter or digit, so `<br-note>` is not `br`. `V` is zero or more characters other than `"`, `<`, `>`, `&` and the control characters U+0000 to U+001F and U+007F, in double quotes.
 
    | Tag | Where | Attributes |
@@ -342,10 +342,10 @@ The grammar is closed: a page that uses anything it does not list is refused by 
    | `<section>` | between sections | optional `style="V"` |
    | `<p>`, `</p>` | between sections | optional `class="V"` then optional `style="V"` |
    | `<h4>`, `</h4>` | one per section heading | none |
-   | `<b>`, `</b>` or `<strong>`, `</strong>` | at most one pair inside `<h4>`, around the whole heading text; a heading without the pair is read the same | none |
+   | `<b>`, `</b>` or `<strong>`, `</strong>` | at most one pair inside `<h4>`, around the whole heading text. A heading without the pair is read the same | none |
    | `<ul>`, `</ul>` | right after `</h4>` | none |
    | `<li>`, `</li>` | inside `<ul>`, not nested | none |
-   | `<br />` | inside `<li>` (it reads as a space) | none; this spelling only |
+   | `<br />` | inside `<li>` (it reads as a space) | none (this spelling only) |
 
    Any other `<...>`, an upper-case tag, a self-closing form other than `<br />`, a space inside a tag, an attribute elsewhere, another attribute name, order or quote style, a comment, a declaration, a processing instruction, a script or a style is refused. So is any `<` or `>` in text or in an attribute value.
 4. **Structure.** The change list is a sequence of sections between frame tags (`div`, `section`, `p` and their closing tags): `<h4>` heading `</h4>`, then `<ul>`, any number of `<li>` items and `</ul>`. The reader skips a frame tag wherever it stands between sections and does not match opening tags with closing tags, so an unclosed or stray frame tag changes nothing. White space may separate any two tags. Several items may share a line. Text outside a heading or an item must be white space only. A list without a heading, an item outside a list, nesting and an unclosed heading, bold wrapper, list or item are refused.
@@ -353,36 +353,36 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 6. **Entities.** Only `&amp;`, `&quot;`, `&apos;`, `&#39;` and `&nbsp;`, with the semicolon, in this case. Any other `&` (a missing semicolon, another name, another number, another case, a bare `&`) is refused. After decoding, text may not contain `&` followed by a letter or `#` (`&amp;nbsp;` is refused).
 7. **Item and heading text.** The text between the tags with entities decoded, each `<br />` as a space, runs of white space collapsed to one space and the ends trimmed. The change-list digest that the candidates pin is the SHA-256 of the headings and item texts so read.
 8. **Sections.** The heading text, lower-cased, starts with one of: `new counties or county equivalent entities` (created), `deleted counties or county equivalent entities` or `deleted county equivalent entities` (deleted), `name and/or code changes or corrections` (renamed or corrected), `substantial county or county equivalent` (boundary change), `changes to county equivalent entities in alaska` (Alaska summary list). Any other heading is refused.
-9. **Items.** The entity is the text before the first `(SS-CCC)` code (two digits, a hyphen, three digits; the state code must be in the state table), trimmed and without trailing commas. An empty entity is refused. So is a trailing state name that differs from the state code. The detail is the text after the first colon or semicolon that follows the code. In the name and code section the detail starts with `Renamed as`, `Renamed from` or `Name corrected`, else the page is refused. A retirement (a deleted entity or one renamed to another code) takes its successors from the codes after the last ` to create ` or from the whole detail, its own code excluded, in text order. A retirement with a detail and no successor is refused. So is a retirement with two dates.
+9. **Items.** The entity is the text before the first `(SS-CCC)` code (two digits, a hyphen and three digits, with a state code that is in the state table), trimmed and without trailing commas. An empty entity is refused. So is a trailing state name that differs from the state code. The detail is the text after the first colon or semicolon that follows the code. In the name and code section the detail starts with `Renamed as`, `Renamed from` or `Name corrected`, else the page is refused. A retirement (a deleted entity or one renamed to another code) takes its successors from the codes after the last ` to create ` or from the whole detail, its own code excluded, in text order. A retirement with a detail and no successor is refused. So is a retirement with two dates.
 10. **Dates.** A date is a month name with a capital letter, one or two digits, a comma, a space and a year from 1000 to 2999 (`July 1, 1994`), delimited by a word boundary on both sides (`PreJuly 1, 1994` and `July 1, 19945` hold no date). An impossible date is refused. The dates of an item are its distinct dates.
 11. **Alaska lists.** The summary item starts with `The county equivalent entities in Alaska changed from Census Divisions in 1970`. The created item starts with `New entities created in Alaska are:`, holds that one colon only and no digit outside the `(SS-CCC)` codes and becomes one created event per `Name (SS-CCC)`. Any other item of that section is refused.
 12. **Page.** At least one event other than the summary and no repeated event (same page, code, event and text).
 
-#### County-Change Seed
+#### County-change seed
 
 `scripts/lakehouse/county_change_seed.py` builds `dbt/seeds/census_county_change_events.csv` from the four committed sections in `config/acquisition/census_county_changes` (`county-changes.<year>.section.html`): one row per event with the page, the event's number on the page, the page's change-list hash and the fields silver needs (state, county code, county name, event, the single effective date or none, successors and the item text). Each section must give the change-list digest pinned in the candidates file before any event is read, so changing a section, the seed or the golden file needs a reviewed pin to change as well. The sections are public Census page text (heading and change list only) and are the only input of `--check`, `--write` and `--print-golden`.
 
 - `--check` runs in the lakehouse group of `scripts/run_ci.sh` and needs no pages: pins, regeneration byte for byte, the golden file and the row shapes.
 - `--write` writes nothing when a section fails the page check or its pin or when the events differ from the golden file.
-- `--extract --pages <folder>` is the only mode that reads fetched pages. It checks all four against the page check and their pins and only then writes the four sections; a second run writes the same bytes.
+- `--extract --pages <folder>` is the only mode that reads fetched pages. It checks all four against the page check and their pins and only then writes the four sections. A second run writes the same bytes.
 
 `scripts/lakehouse/run_county_change_seed_e2e.py` is the repeatable E2E: damaged copies of the committed seed and sections, synthetic pages, read races and (with `--pages`) the four real pages, each case naming its intended cause. Silver reads the seed in `int_county_retirements` and the Alaska label test.
 
-### ZIP Archives
+### ZIP archives
 
 `archive_review.py`, `mapped_archives.py`, `continue_history.py` and `plan_archive_members.py` open ZIP downloads. Storage expands an archive in one of two ways.
 
 | Check | Failure it prevents |
 | --- | --- |
 | Before expansion the archive must match its captured hash. Member count and expanded size are bounded. Absolute or parent paths, backslashes, duplicates, symbolic links and encrypted members are refused. Written lengths must match the ZIP directory and an extracted member is never overwritten with different bytes. | Path traversal, archive bombs, corrupt members, a swapped archive or changed evidence. |
-| Default expansion (no map) opens one level only. A PDF or Word member is stored as a reference, as is a member whose name suggests a dictionary, codebook, layout, readme, method, footnote or manifest; every other member is data. macOS packaging files stay inside the original. A nested ZIP stops storage. | A nested archive is uploaded as table data. |
+| Default expansion (no map) opens one level only. A PDF or Word member is stored as a reference, as is a member whose name suggests a dictionary, codebook, layout, readme, method, footnote or manifest. Every other member is data. macOS packaging files stay inside the original. A nested ZIP stops storage. | A nested archive is uploaded as table data. |
 | Explicit archive references name the parent artifact, member, stored name, role and format. Roles are limited to dictionary, methodology, layout and manifest and each member is at most 20 MiB. | A document is stored under the wrong role or an oversized member is pulled out. |
 | Mapped expansion uses an explicit map that names every leaf once, nested archives included to a bounded depth, with its hash, length and role. | Members are dropped, doubled or given the wrong role. |
-| In both cases the container stays local; only members are stored. | Unreviewed content reaches the bucket. |
+| In both cases the container stays local. Only members are stored. | Unreviewed content reaches the bucket. |
 
-## Browser Downloads
+## Browser downloads
 
-### Census Table Exports
+### Census table exports
 
 `store_census_export.py` stores ACS table exports from data.census.gov. It does not follow the shared offline-by-default rule: every run reads the Terraform outputs and contacts AWS and a run without a stored capture requests the export address.
 
@@ -395,7 +395,7 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | Each data file starts with `GEO_ID` and `NAME`. Rows have the header width and unique county IDs. There are more than 3,000 counties. | A partial or non-county export is stored. |
 | When a completion record exists, the script rechecks the reconciliation, manifest and mapped members and reads every stored version back live. | A completed export is accepted although its stored objects changed. |
 
-### HUD Crosswalk Workbooks
+### HUD crosswalk workbooks
 
 `store_hud_xlsx.py` stores the ZIP-to-county workbooks for quarters the API does not serve nationwide. The [browser origin checks](#browser-download-origins) apply.
 
@@ -410,7 +410,7 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | One quarter has exact repeated rows. A separate locked record, bound to the plan hash and that quarter's download hash, allows dropping exactly the recorded count of rows identical in all six values, from the CSV only. A pair repeated with different values still stops the quarter and every other quarter still refuses repeats. | Repeats are dropped elsewhere, conflicts are collapsed or the exception drifts. |
 | Each quarter records its county geography: 2000 Census counties through 2011 Q4 and 2010 Census counties from 2012 Q1. The CSV matches the API layout and receipts bind the HUD terms record. | Boundary eras mix or the two HUD routes diverge. |
 
-### CDC WONDER Exports
+### CDC WONDER exports
 
 `store_wonder_export.py` stores county mortality exports saved from WONDER's Underlying Cause of Death forms. WONDER's API serves national data only. The [browser origin checks](#browser-download-origins) apply.
 
@@ -423,7 +423,7 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | Values are numbers or a flag allowed for that column (`Suppressed`, `Unreliable`, `Not Available` or `Missing`), kept as published. A death count from 1 to 9 stops the export. | Flags are lost or recalculated. An export breaks WONDER's suppression terms. |
 | The export is stored unchanged with its notes and a county-year CSV beside it. Receipts carry WONDER's data-use restrictions. | The query record is lost or small counts are published downstream. |
 
-### Reference Downloads
+### Reference downloads
 
 `store_reference_download.py` stores data dictionaries and methodology documents that publishers serve only to browsers. The [browser origin checks](#browser-download-origins) apply.
 
@@ -432,47 +432,47 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | A request list names each file's source, role (dictionary, methodology or layout), title, publisher, exact origin address and space-free file name. | A file is stored as data or for an unnamed source. |
 | `--build-plan` checks that each file's recorded origin includes the planned address, then writes the plan with hashes and sizes and its lock. Storage rechecks origin, hash, size and plan. | A file from elsewhere enters the plan or a file changes after planning. |
 | A held source needs a release binding and other sources must not carry one. | A held source's document is stored without its release. |
-| Each file has its own completion record (with no row count) and is stored once; a failing file is held while the others continue. | Files are stored twice. One file blocks the rest. |
+| Each file has its own completion record (with no row count) and is stored once. A failing file is held while the others continue. | Files are stored twice. One file blocks the rest. |
 
-## Sources With Personal Data
+## Sources with personal data
 
-### CMS Hospital Ownership
+### CMS hospital ownership
 
 `store_cms_owners.py` collects the monthly CMS Hospital All Owners releases and stores organization rows only. The [personal data rules](#personal-data-in-publisher-files) apply.
 
 | Check | Failure it prevents |
 | --- | --- |
 | Each release is bound to its registry route, period and layout. Exactly two published headers are accepted, each pinned to its releases. | A changed file or layout goes unnoticed. |
-| Only type `O` (organization) rows are kept; a type other than `I` or `O` stops the release, as does a kept row with a personal name or title. Name, title, street address, city and ZIP columns are dropped. | An individual's row or address reaches the bucket. |
+| Only type `O` (organization) rows are kept. A type other than `I` or `O` stops the release, as does a kept row with a personal name or title. Name, title, street address, city and ZIP columns are dropped. | An individual's row or address reaches the bucket. |
 | Every kept organization row must have a non-blank enrollment ID and the release must keep at least one organization row. | Rows that cannot link to a hospital are stored. An empty result passes. |
 | An organization or doing-business-as name that contains the whole name (two or more words) of an individual listed in the same release is replaced with `[REDACTED]`. | An individual is named through a company name. |
-| Private-equity and REIT flags exist only in the later layout and are never added to earlier releases; values must be `Y`, `N` or blank. Kept cells are written as published, with no trimming or zero-filling. | Flags are invented or values change during filtering. |
-| UTF-8 is tried first, then Windows-1252; the encoding is recorded. Rows read must equal rows dropped plus rows kept. | Names are garbled or rows are lost silently. |
+| Private-equity and REIT flags exist only in the later layout and are never added to earlier releases. Values must be `Y`, `N` or blank. Kept cells are written as published, with no trimming or zero-filling. | Flags are invented or values change during filtering. |
+| UTF-8 is tried first, then Windows-1252. The encoding is recorded. Rows read must equal rows dropped plus rows kept. | Names are garbled or rows are lost silently. |
 
-### HCAI Utilization
+### HCAI utilization
 
-`store_hcai_util.py` collects California hospital annual utilization workbooks and stores one abstracted CSV per sheet. HCAI is on access hold; storage accepts it only with the access-release record. The [personal data rules](#personal-data-in-publisher-files) apply.
+`store_hcai_util.py` collects California hospital annual utilization workbooks and stores one abstracted CSV per sheet. HCAI is on access hold. Storage accepts it only with the access-release record. The [personal data rules](#personal-data-in-publisher-files) apply.
 
 | Check | Failure it prevents |
 | --- | --- |
 | Each year is bound to its address, reviewed signed-redirect target, hash, size, sheet names and data header. | A revised or different file is used. |
-| The package is read with bounded sizes, CRC checks and an event parser that refuses XML declarations. Formulas and unknown cell types stop the year. Cells beyond the header must be empty in the header row and in every hospital data row; only the four publisher label rows may extend beyond it. | A crafted workbook is parsed unsafely or formulas become values. |
+| The package is read with bounded sizes, CRC checks and an event parser that refuses XML declarations. Formulas and unknown cell types stop the year. Cells beyond the header must be empty in the header row and in every hospital data row. Only the four publisher label rows may extend beyond it. | A crafted workbook is parsed unsafely or formulas become values. |
 | Every column whose name looks personal (NAME, PHONE, FAX, MAIL, ADDR, PREP, CONTACT, TITLE or SIGN) must be on the redaction list or the reviewed not-personal list. | An unreviewed personal column slips through. |
 | Facility street address and phone, administrator and preparer names and the parent company's business address are redacted. Rows whose licensee is an individual investor also lose the parent name, city and ZIP code. | A person is named directly or as an individual investor. |
 | Any other cell containing a collected name (two or more words), an email address or a phone number is redacted and counted. The four label rows are not read as names. | Names or contact details typed into other fields survive. |
 | The data sheet needs at least 400 hospitals. Values stay as stored. The preliminary year is labeled and fails its binding if HCAI replaces the file. | A truncated workbook is stored or preliminary data passes as final. |
 
-### ONC Meaningful Use
+### ONC meaningful use
 
 `store_onc_mu.py` collects the Medicare meaningful-use attestation file and stores hospital rows only. The [personal data rules](#personal-data-in-publisher-files) apply.
 
 | Check | Failure it prevents |
 | --- | --- |
 | The plan binds the download's address, hash and size and raises the size and time limits for this one large file, which is read as a stream. The header must be exact and rows the same width. | A different file is used, memory runs out or the layout changes. |
-| Provider types must be `Hospital` or `EP`; only hospital rows are kept and each must have an empty `Specialty` and a CCN. `Specialty` is dropped. | Clinician rows or columns reach the bucket. |
+| Provider types must be `Hospital` or `EP`. Only hospital rows are kept and each must have an empty `Specialty` and a CCN. `Specialty` is dropped. | Clinician rows or columns reach the bucket. |
 | Rows read must equal rows dropped plus rows kept and every full program year must have hospital rows. Receipts keep this series separate from the Promoting Interoperability file. | Rows are lost or the two ONC series are joined. |
 
-### Public-Business CSV Abstraction
+### Public-business CSV abstraction
 
 `abstract_public_business_csv.py` writes a privacy-filtered local copy of a publisher CSV under a policy file. It uploads nothing. The policy's retention value (`abstracted_only` or `raw_private_and_abstracted`) records what later storage may keep.
 
@@ -483,13 +483,13 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | Every non-blank cell in a redact field is replaced with `[REDACTED]`. | A listed personal field survives. |
 | The values from redact fields (except placeholders such as `n/a`) are collected in memory and normalized for case, width and spacing. They are searched as whole words in the scrub fields and matches are replaced. Each collected value is at most 4,096 characters and at most 100,000 values are held. | Names or contact details copied into text fields survive. A crafted file exhausts memory. |
 | The manifest marks free-text privacy review as still pending. | The abstraction is mistaken for a full privacy review of free text. |
-| Output is staged and published only when complete; a conflicting existing output stops the run. | A partial or conflicting copy is used. |
+| Output is staged and published only when complete. A conflicting existing output stops the run. | A partial or conflicting copy is used. |
 
-## Checks After Storage
+## Checks after storage
 
-### Storage Records Check
+### Storage records check
 
-`verify_storage_records.py` compares every object version in the project bucket with the local storage records, read-only. It compares sizes; content is verified at upload by the version readback.
+`verify_storage_records.py` compares every object version in the project bucket with the local storage records, read-only. It compares sizes. Content is verified at upload by the version readback.
 
 | Check | Failure it prevents |
 | --- | --- |
@@ -498,22 +498,22 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | Each recorded version must be live with its size unless a retirement record lists it. | Missing or wrong-size objects go unnoticed. |
 | Every retirement entry must have status `deleted_verified` or `already_absent` and retirement records must agree on sizes. Retired versions must be absent, with no delete marker either. Replacements must be live with their size. | A deletion that was never verified counts as retired. A retired version is still present. |
 | A version known only from a saved S3 inventory must still be present, as a live object version or as a delete marker, unless it is retired. A retired version must be neither. | Objects listed in an inventory disappear unnoticed. |
-| Live versions no record or inventory names are unrecorded. Versions under the top-level `lakehouse/` folder are Iceberg table files, counted apart; upload records naming such keys are still checked. | Untracked objects go unnoticed or table files are reported as gaps. |
-| The `e2e`, `conformance` and `schema_review` folders are skipped only at the top of the evidence root and reported with reasons and counts; deeper folders with those names are still read. Folders named `private_original`, `storage_checks` and `redacted_copies` are skipped at any depth. A single-copy index (a JSON object with a schema version, a generation and a checksum map) is skipped by its format wherever it is stored and counted as `single_copy_index_files_skipped`. | Synthetic files block the check, private originals are read, a built single-copy index is read as an upload record or the exclusion hides evidence. |
+| Live versions no record or inventory names are unrecorded. Versions under the top-level `lakehouse/` folder are Iceberg table files, counted apart. Upload records naming such keys are still checked. | Untracked objects go unnoticed or table files are reported as gaps. |
+| The `e2e`, `conformance` and `schema_review` folders are skipped only at the top of the evidence root and reported with reasons and counts. Deeper folders with those names are still read. Folders named `private_original`, `storage_checks` and `redacted_copies` are skipped at any depth. A single-copy index (a JSON object with a schema version, a generation and a checksum map) is skipped by its format wherever it is stored and counted as `single_copy_index_files_skipped`. | Synthetic files block the check, private originals are read, a built single-copy index is read as an upload record or the exclusion hides evidence. |
 | JSON over 50 MB or unparseable stops the check unless it has a recorded disposition. | Bad evidence is skipped silently. |
 
-### Manifest Corrections
+### Manifest corrections
 
 `correct_manifest_roles.py` writes corrected storage manifests when an object was stored under the wrong role.
 
 | Check | Failure it prevents |
 | --- | --- |
 | A committed specification (`config/acquisition/manifest_corrections.json`) names each manifest by key, version and SHA-256 and each change by object, version, old role and target role. The stored manifest must match. | The wrong manifest is corrected. |
-| Only the named `role` fields change; `supersedes` and `correction` are added and every other field is kept. | A correction changes more than the role. |
+| Only the named `role` fields change. `supersedes` and `correction` are added and every other field is kept. | A correction changes more than the role. |
 | The corrected manifest is a separate object keyed by its own hash, with no time in its bytes, so a rerun verifies instead of writing. The original stays. | The capture record is lost or reruns write duplicates. |
-| A dry run is the default. Writing needs `--store` with the specification's SHA-256; each write is read back and recorded locally for the storage check. | Unreviewed, unverified or unrecorded writes. |
+| A dry run is the default. Writing needs `--store` with the specification's SHA-256. Each write is read back and recorded locally for the storage check. | Unreviewed, unverified or unrecorded writes. |
 
-### Redownload Checks
+### Redownload checks
 
 `redownload.py` and `redownload_controls.py` download every queued source again into a separate folder and compare the result with the stored capture. They never write to the bucket and never replace a stored capture.
 
@@ -522,14 +522,14 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | Check | Failure it prevents |
 | --- | --- |
 | The queue must match its lock and every queued receipt must be unchanged. | The run compares against edited receipts. |
-| A controls snapshot binds the hashes of every acquisition module, the process and configuration modules, `requirements.txt`, every `config/acquisition/*.json` (code-version lists included), the path map `config/data_paths.json` (as `path_map_sha256`), the queue inputs, job files, the local settings file (hash only), the source scope, state root and limits. A passing independent review must bind the snapshot's hash; any change invalidates it. | Unreviewed code, plans or settings run. |
+| A controls snapshot binds the hashes of every acquisition module, the process and configuration modules, `requirements.txt`, every `config/acquisition/*.json` (code-version lists included), the path map `config/data_paths.json` (as `path_map_sha256`), the queue inputs, job files, the local settings file (hash only), the source scope, state root and limits. A passing independent review must bind the snapshot's hash. Any change invalidates it. | Unreviewed code, plans or settings run. |
 | The path map is checked against its reviewed hash again before each collector or plan dispatch and each receipt read. A change during the run stops it with "Path map changed" before any request. | A moved data folder redirects the run after review. |
-| The state root must be inside the redownload folder, outside every stored collection and free of symbolic links. Its `run.json` binds one queue and one controls snapshot; another root invalidates the review. | The run writes into stored evidence or resets budgets by switching folders. |
+| The state root must be inside the redownload folder, outside every stored collection and free of symbolic links. Its `run.json` binds one queue and one controls snapshot. Another root invalidates the review. | The run writes into stored evidence or resets budgets by switching folders. |
 | The first unit per source, route and mode is a pilot. Non-pilot units run only after every pilot in the selected reviewed scope has an exact match or a recorded review, so one pending pilot holds non-pilot work for all sources in that scope. | One systematic problem repeats across many units. |
 | A non-pilot unit also needs its own pilot matched or reviewed. Any outcome other than an exact match stops that source until a resume names the reviewed outcomes. | A source keeps running after a mismatch. |
-| Attempts (at most two per address) and bytes received or persisted are reserved durably against a 128 GiB cap; interrupted reservations stay charged and free disk is checked. BLS requests share one rolling 450 limit across stored and fresh ledgers. HTTP `429` pauses the source with its `Retry-After` delay. AWS calls are limited to identity and key reads. | Restarts reset budgets, the disk fills, quotas are exceeded or the bucket changes. |
+| Attempts (at most two per address) and bytes received or persisted are reserved durably against a 128 GiB cap. Interrupted reservations stay charged and free disk is checked. BLS requests share one rolling 450 limit across stored and fresh ledgers. HTTP `429` pauses the source with its `Retry-After` delay. AWS calls are limited to identity and key reads. | Restarts reset budgets, the disk fills, quotas are exceeded or the bucket changes. |
 
-**Units.** File units use the shared transport. Paged API units are fetched page by page and compared by hash. Collector units run the collector's capture path into the fresh folder with storage off, then compare data artifacts by role and name. Manual units are read from a separate downloads folder. A WONDER export with the planned bytes runs the full collector; any other runs the collector's origin and export checks and is compared with the stored export by bytes. MMD browser exports that moved to the API match through an explicit file-name map. Fresh originals with personal data stay private and are listed with hashes for deletion. Failures keep only fixed categories and reviewed code locations.
+**Units.** File units use the shared transport. Paged API units are fetched page by page and compared by hash. Collector units run the collector's capture path into the fresh folder with storage off, then compare data artifacts by role and name. Manual units are read from a separate downloads folder. A WONDER export with the planned bytes runs the full collector. Any other runs the collector's origin and export checks and is compared with the stored export by bytes. MMD browser exports that moved to the API match through an explicit file-name map. Fresh originals with personal data stay private and are listed with hashes for deletion. Failures keep only fixed categories and reviewed code locations.
 
 **Content comparison.** When fresh bytes differ from the stored file, `compare_files` decides whether the content still matches. Two kinds of difference can match. A recognized archive may differ in packaging (entry timestamps, compression or order) when every member's name and content and every comment match. Inside a member or file, the only difference that can match is an Office build time. Any other difference needs review. The steps run in this order:
 
@@ -540,12 +540,12 @@ The grammar is closed: a page that uses anything it does not list is refused by 
 | Case | How it compares |
 | --- | --- |
 | An archive: the stored file name ends in `.zip`, `.xlsx` or `.docx` and both files begin with a ZIP local-file header (the fresh download's own name is not checked) | Entry by entry, by name and SHA-256, directories included, within safe bounds. A differing member is compared by the rules below using its path. The archive comment and every entry comment compare by bytes. |
-| An Office member at exactly `docProps/core.xml` (up to 1 MiB) | Compared as raw text. A safe parse (defusedxml) only confirms that the root has exactly one `dcterms:created` and one `dcterms:modified` child holding a real UTC time in the form `YYYY-MM-DDThh:mm:ssZ` and carrying exactly one attribute, `xsi:type="dcterms:W3CDTF"`. The root must be the Office `coreProperties` element. The `cp`, `dcterms` and `xsi` prefixes must all be declared. Every declaration of them at any depth must bind its Office namespace. Each element's exact text must occur once in the file; only those two timestamps are masked (`document_build_time`). Comments, processing instructions, namespace declarations, attributes and whitespace still count. If any condition fails or the member starts with a UTF-8 byte-order mark, the member compares by bytes. |
+| An Office member at exactly `docProps/core.xml` (up to 1 MiB) | Compared as raw text. A safe parse (defusedxml) only confirms that the root has exactly one `dcterms:created` and one `dcterms:modified` child holding a real UTC time in the form `YYYY-MM-DDThh:mm:ssZ` and carrying exactly one attribute, `xsi:type="dcterms:W3CDTF"`. The root must be the Office `coreProperties` element. The `cp`, `dcterms` and `xsi` prefixes must all be declared. Every declaration of them at any depth must bind its Office namespace. Each element's exact text must occur once in the file. Only those two timestamps are masked (`document_build_time`). Comments, processing instructions, namespace declarations, attributes and whitespace still count. If any condition fails or the member starts with a UTF-8 byte-order mark, the member compares by bytes. |
 | Every other file, Census table notes, WONDER exports and saved web pages included | By bytes. A new access or query date in Census notes or a WONDER export is `changed_needs_review`. |
 
-Masking applies only to strict UTF-8 text. Any other difference is `changed_needs_review`. File, manual and collector comparisons record `excluded_parts`; the report counts matches by excluded part and treats outcomes without that field (paged API units, transport failures and blocked collector runs) as having no exclusions.
+Masking applies only to strict UTF-8 text. Any other difference is `changed_needs_review`. File, manual and collector comparisons record `excluded_parts`. The report counts matches by excluded part and treats outcomes without that field (paged API units, transport failures and blocked collector runs) as having no exclusions.
 
-A manual file counts only when it was created after the run started and one of its recorded origins is the unit's exact address: scheme, host, port, path and query must match after removing only the fragment and a `;jsessionid=` segment. An absent port means the scheme default; an explicit port compares as written. A matching file wins. Otherwise the first changed file from that address is kept and flagged `changed_needs_review`. Files from other addresses, even on the same host, are ignored.
+A manual file counts only when it was created after the run started and one of its recorded origins is the unit's exact address: scheme, host, port, path and query must match after removing only the fragment and a `;jsessionid=` segment. An absent port means the scheme default. An explicit port compares as written. A matching file wins. Otherwise the first changed file from that address is kept and flagged `changed_needs_review`. Files from other addresses, even on the same host, are ignored.
 
 | Comparison rule | Failure it prevents |
 | --- | --- |
@@ -557,7 +557,7 @@ A manual file counts only when it was created after the run started and one of i
 | Comparison results name the parts they left out. | Exclusions are applied silently. |
 | Manual files must come from the unit's exact address. | A file from a neighboring address is attributed to the unit. |
 
-### Single-Copy Starting Index
+### Single-copy starting index
 
 `single_copy_index.py` builds the immutable index that single-copy storage reads at start (`load_policy` in `single_copy.py`). It names objects that are already in the bucket, so switching the setting on copies nothing. The command lists every object version of the bucket with read-only `ListObjectVersions` requests under the project profile and writes one new local file. It writes nothing to S3. The listing is the true list of stored files. Each payload key holds its SHA-256. The listing gives the exact version, the size and the storage time (`LastModified`). The local download records are only a cross-check. The offline suite `run_single_copy_index_e2e.py` runs the real command against a stand-in for the listing and generated records, breaks one thing at a time and requires the refusal to cite that cause alone.
 

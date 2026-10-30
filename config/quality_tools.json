@@ -17,31 +17,40 @@
       }
     },
     "tflint": {
-      "version": "0.64.0",
+      "version": "0.65.0",
+      "checksum_source": "https://github.com/terraform-linters/tflint/releases/tag/v0.65.0",
+      "plugins": {
+        "aws": {
+          "version": "0.50.0",
+          "source": "github.com/terraform-linters/tflint-ruleset-aws",
+          "install": "tflint --init, run by hand once; the hook refuses to run without the plugin"
+        }
+      },
       "releases": {
         "darwin_arm64": {
-          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_darwin_arm64.zip",
-          "sha256": "2496e9cb3d24992d553b45e7c87a0fdc9449ca975233876247a9bfeda857e6c0",
+          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.65.0/tflint_darwin_arm64.zip",
+          "sha256": "5a71c63481ba56760864298011fdb7317a9ae80a0bbaeceefa35883c7f62ac71",
           "format": "zip"
         },
         "linux_amd64": {
-          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_linux_amd64.zip",
-          "sha256": "cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537",
+          "url": "https://github.com/terraform-linters/tflint/releases/download/v0.65.0/tflint_linux_amd64.zip",
+          "sha256": "d4c545ed2e29d6338604b586f34f544f380f70f243aa72f7b484713835eaec61",
           "format": "zip"
         }
       }
     },
     "trivy": {
-      "version": "0.74.0",
+      "version": "0.76.1",
+      "checksum_source": "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_checksums.txt",
       "releases": {
         "darwin_arm64": {
-          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-ARM64.tar.gz",
-          "sha256": "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11",
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_macOS-ARM64.tar.gz",
+          "sha256": "11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5",
           "format": "tar.gz"
         },
         "linux_amd64": {
-          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
-          "sha256": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz",
+          "sha256": "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0",
           "format": "tar.gz"
         }
       }
@@ -131,6 +140,77 @@
           "max_archive_bytes": 21294383
         }
       }
+    },
+    "osv-scanner": {
+      "version": "2.7.0",
+      "installer": "homebrew",
+      "formula": "osv-scanner",
+      "executable": "/opt/homebrew/bin/osv-scanner",
+      "checksum_source": "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_SHA256SUMS",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_darwin_arm64",
+          "sha256": "d4926ef8da134332543be276dff157e4c170f99ad91fc48e89448a8816bdf70b",
+          "format": "binary"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64",
+          "sha256": "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b",
+          "format": "binary"
+        }
+      }
+    },
+    "zizmor": {
+      "version": "1.31.1",
+      "installer": "homebrew",
+      "formula": "zizmor",
+      "executable": "/opt/homebrew/bin/zizmor",
+      "checksum_source": "https://github.com/zizmorcore/zizmor/releases/tag/v1.31.1",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-aarch64-apple-darwin.tar.gz",
+          "sha256": "ad5aa633cd56215b11e6c51d51f90c7e6b22904a75047d1215abbd422f61d698",
+          "format": "tar.gz"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99",
+          "format": "tar.gz"
+        }
+      }
+    },
+    "import-linter": {
+      "version": "2.15",
+      "installer": "scripts/quality/install_lint_tools.py",
+      "requirements": "scripts/quality/lint_requirements/import_linter.txt",
+      "executable": ".tools/import-linter/bin/lint-imports"
+    },
+    "typos": {
+      "version": "1.51.1",
+      "installer": "homebrew",
+      "formula": "typos-cli",
+      "executable": "/opt/homebrew/bin/typos",
+      "checksum_source": "https://github.com/crate-ci/typos/releases/tag/v1.51.1",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/crate-ci/typos/releases/download/v1.51.1/typos-v1.51.1-aarch64-apple-darwin.tar.gz",
+          "sha256": "316d50a32c3726a80ab39c6d12141b70080498973c5e8a9b068b12cde78b10c1",
+          "format": "tar.gz",
+          "member": "./typos"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/crate-ci/typos/releases/download/v1.51.1/typos-v1.51.1-x86_64-unknown-linux-musl.tar.gz",
+          "sha256": "93c301fd4120ff076e2cc2a6d6a61cab4a4bdb81899287c0938b452e56d1f454",
+          "format": "tar.gz",
+          "member": "./typos"
+        }
+      }
+    },
+    "check-jsonschema": {
+      "version": "0.39.0",
+      "installer": "scripts/quality/install_lint_tools.py",
+      "requirements": "scripts/quality/lint_requirements/check_jsonschema.txt",
+      "executable": ".tools/check-jsonschema/bin/check-jsonschema"
     }
   }
 }

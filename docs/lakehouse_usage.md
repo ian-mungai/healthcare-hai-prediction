@@ -1,15 +1,17 @@
 ---
 title: Lakehouse usage
-description: Commands and checks for the launcher, bronze and its AWS cutover, staging, silver, gold, features, run lock, fixtures.
+description: Commands for the launcher, bronze and its AWS cutover, staging, silver, gold, features, the run lock and fixtures.
 last_updated: 2026-10-29
 ---
 
 # Lakehouse usage
 
+This document gives the commands and checks for the launcher, bronze and its AWS cutover, staging, gold, silver, the run lock and the fixtures. It is for the owner and for developers who run the lakehouse.
+
 ## Main commands
 
 Every container starts through the launcher (`orchestration/launcher.py`), the only process allowed to call Docker. A real
-dbt build runs only with its provenance recorded; a complete successful build is sealed into a read-only copy that the
+dbt build runs only with its provenance recorded. A complete successful build is sealed into a read-only copy that the
 gold, quality and query readers check before they read it. The main lakehouse commands:
 
 ```sh
@@ -31,7 +33,7 @@ One deadline covers the whole command: every request and every sleep stops at it
 not ended (exit 1). A gold run names the committed silver run it reads with `--silver-snapshot-run` (default `latest`). It reads
 the session's Airflow token secret from Secrets Manager into memory and prints one line: the run ID, the end state, the seconds
 and the task states. It exits 0 for a successful run. An error names the workflow, the run ID and the HTTP status or the cause,
-never a response body. The native check is the `trigger_command` case of `scripts.orchestration.run_transform_e2e`; its offline
+never a response body. The native check is the `trigger_command` case of `scripts.orchestration.run_transform_e2e`. Its offline
 refusal and deadline checks run with `--trigger-check`.
 
 ## Secrets
@@ -40,7 +42,7 @@ No secret is saved in a file on the host. The catalog database password, the roo
 ID and secret live in AWS Systems Manager Parameter Store as SecureString parameters under `/healthcare_hai_prediction/` (the names are in `docs/install_details.md`). The
 catalog commands and the writer principal setup generate or store them there, the launcher reads them into memory when it
 creates a container and sets them in that container's environment. The workflow supervisor stores its session secrets
-the same way. Reading or storing a secret needs the IAM grant of the project profile; a missing grant fails and names the secret.
+the same way. Reading or storing a secret needs the IAM grant of the project profile. A missing grant fails and names the secret.
 
 The launcher fetches the secrets of a container in a worker, never on its main loop. One deadline of 30 s covers the client setup,
 every read and every retry (5 s to connect, 10 s per read, 2 requests in all). A fetch that does not finish fails the attempt and
@@ -57,7 +59,7 @@ resets the principal and stores a new pair, one run at a time.
 
 ## Writer principals
 
-Each publish layer writes the catalog as its own principal. Run each set-up once with the catalog up, before that layer's first real
+Each publish layer writes the catalog as its own principal. Run each setup once with the catalog up, before that layer's first real
 publish. `--dry-run` prints the requests and sends none. A rerun changes nothing and keeps the stored credentials.
 
 ```sh
@@ -65,15 +67,15 @@ publish. `--dry-run` prints the requests and sends none. A rerun changes nothing
 .venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to AWS Parameter Store
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup --dry-run   # plan of the silver_writer principal (silver and silver_e2e)
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup             # create it; credentials go to AWS Parameter Store
-.venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both set-ups against a stand-in Polaris; no Docker
+.venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both setups against a stand-in Polaris; no Docker
 .venv/bin/python -m scripts.features.features_writer_setup --dry-run  # plan of the features_writer principal (features and features_e2e)
 ```
 
 A writer may create, read and write the tables of its own two namespaces and read the catalog's properties. It cannot touch the other
-layer's namespaces or bronze, manage the catalog, create or drop a namespace or drop a table. The root credentials make the set-up
+layer's namespaces or bronze, manage the catalog, create or drop a namespace or drop a table. The root credentials make the setup
 requests only. Each writer's client ID and secret are stored in AWS Parameter Store (see Secrets) and never printed. A job receives them
 only from the launcher (`POLARIS_GOLD_WRITER_CLIENT_ID` and `_SECRET`, `POLARIS_SILVER_WRITER_CLIENT_ID` and `_SECRET`). The shared
-requests and the Secrets Manager steps are in `scripts/lakehouse/polaris_writer.py`. The features writer follows the silver pattern: `--dry-run` works. A real set-up refuses
+requests and the Secrets Manager steps are in `scripts/lakehouse/polaris_writer.py`. The features writer follows the silver pattern: `--dry-run` works. A real setup refuses
 until the managed secrets for its client ID and secret exist (`POLARIS_FEATURES_WRITER_CLIENT_ID` and `_SECRET`).
 
 ## Pipeline AWS access
@@ -104,7 +106,7 @@ with an AWS class can start.
 
 ## Launcher
 
-`orchestration/launcher.py` is the only process that starts containers; the Docker-call check
+`orchestration/launcher.py` is the only process that starts containers. The Docker-call check
 (`.venv/bin/python -m scripts.quality.docker_calls`) fails on a Docker call anywhere else, except the reviewed sites in
 `config/quality/docker_calls_reviewed.json`. It starts on demand, holds the registry lock for its whole life and serves
 its clients over a local socket. Every job is an attempt of a fixed template (`dbt_deps`, `real_dbt`, `fixture_dbt`,
@@ -117,7 +119,7 @@ records into the append-only archive `history/<UTC date>.jsonl` beside `registry
 released or failed allocations with their settled operations and container records, done requests and reservation
 events. A transaction then no longer rewrites the whole history. A record leaves the registry only after its archive
 line is complete on disk: the launcher writes every byte, syncs the file and its folders, reads the lines back and cuts an
-incomplete last line left by a crash. A failed append keeps the records in the registry and the next pass tries again; a
+incomplete last line left by a crash. A failed append keeps the records in the registry and the next pass tries again. A
 crash can repeat a line but never lose one. An allocation that an attempt in the registry, a registration, a reader or a
 reservation still names stays. A test registry's retention must exceed the client's retry patience, so a retried request
 always finds its first result.
@@ -139,11 +141,11 @@ a registry error before any orphan stop or removal. The disposal worker also ins
 its `hai.registry_id` label to match before stopping or removing it. A replacement that lands while a tick runs is read on the next tick. So is one that
 restores earlier content after the cache took a later state. A file that is not valid JSON is refused with a registry
 error and its signature is not stored, so the next tick reads it again. The read and the hash cost about 0.4 ms for a 1 MB
-file and 3 ms for an 8 MB file (one machine, warm cache). The time-based work (create deadlines, orphan retries and the
+file and 3 ms for an 8 MB file (one measurement on one machine with a warm cache, with no saved artifact). The time-based work (create deadlines, orphan retries and the
 periodic pass) runs on every tick with no parse. The state machine pass (every `tick`,
 0.2 s) and the session timers still read the registry on each tick.
 
-A client that waits for the launcher (`run_attempt`) tells a gone launcher from a slow one and from a stuck one:
+A client that waits for the launcher (`run_attempt`) distinguishes a launcher that is gone, a launcher that is slow and a launcher that is stuck:
 
 - **Gone:** the socket is missing or refuses connections for `gone_after` (1 s). The client fails at once with code
   `unavailable` and the message "the launcher is not running".
@@ -191,7 +193,7 @@ launcher did not answer, with the code, instead of that it refused. A caller tha
 silver runner's cleanup summary holds `allocation_release` (the outcome) beside `allocation_released` (true only for
 `released`). A retained or unresolved release makes its `ok` false.
 
-`scripts/lakehouse/query.sh -c "select 1" -csv` runs one query and needs no terminal; every word after `query` goes to
+`scripts/lakehouse/query.sh -c "select 1" -csv` runs one query and needs no terminal. Every word after `query` goes to
 DuckDB unchanged. `query --help` prints the supported arguments (`-c SQL` and the output flags) and exits 0 without
 starting the catalog or taking an allocation. A file or pipe on standard input is sent in chunks of 16 KiB while the
 shell's output is printed, so a large file neither fills memory nor stops the output. `.venv/bin/python -m
@@ -214,8 +216,31 @@ rules with a fake Docker and a test registry.
 .venv/bin/python -m orchestration.launcher status                # the launcher; --what registry, catalog or protected_sets
 .venv/bin/python -m orchestration.launcher plan                  # the memory plan the launcher computes now
 .venv/bin/python -m orchestration.launcher shutdown --owner      # stop the launcher
+.venv/bin/python -m orchestration.launcher docker-start --owner [--deadline S]                 # start Docker Desktop if it does not answer; wait until the launcher serves
+.venv/bin/python -m orchestration.launcher docker-release --owner [--since EPOCH] [--deadline S]   # quit Docker Desktop after a heavy run when nothing runs
 .venv/bin/python -m scripts.lakehouse.run_launcher_e2e           # launcher scenarios with a fake Docker; report: data/e2e/launcher/
 ```
+
+`docker-start` and `docker-release` run `docker desktop start` and `docker desktop stop` (found on the `PATH`, then in `/usr/local/bin` and
+`/Applications/Docker.app/Contents/Resources/bin`; check both subcommands with `docker desktop --help` before the first real use). `docker-start`
+prints `{"started": false}` when Docker already answers; otherwise it runs the start command and waits until the launcher serves, within one
+deadline (default 240 s; exit 5 names the deadline and the macOS dialog to answer). `docker-release` never restarts Docker. It prints
+`{"outcome": "skipped", ...}` and exits 0 when no launcher runs, when Docker is not running or when (with `--since`) no container was created since that Unix time. It
+exits 3 and names every running container the launcher did not create (or the first registry blocker, such as a held allocation) and leaves Docker
+running. Otherwise it stops the idle catalog, quits Docker Desktop, waits until the daemon stops answering (120 s by default; exit 5 when it
+still answers, exit 4 when the command fails) and shuts the launcher down. `docker-restart --owner` stays for a manual restart.
+
+Accepted limit (waiting for the owner): a `docker-start` that joins a start already running keeps the first caller's deadline, not its own shorter
+`--deadline`. The joiner waits for the running start and receives its result, so a 1 s request can wait for a 240 s start and
+receives the first caller's error if that start fails.
+
+### Session end
+
+Before a session ends and in the break procedure, run `.venv/bin/python -m orchestration.launcher docker-release --owner`. Without `--since` it
+always acts: it stops this registry's idle catalog and quits Docker Desktop when no registry work is open and no container the launcher did not
+create runs. When it refuses (exit 3) it names each running container and the first registry blocker. Relay those names to the owner and leave Docker
+running. Another project's session that has no container yet is not detected, so the quit can interrupt it. A session that starts a heavy run later
+needs no manual start, because `scripts.lakehouse.catalog up` runs `docker-start` first.
 
 ## Bronze
 
@@ -259,13 +284,13 @@ Compare dictionaries give types only. Bronze does not load:
 
 - objects removed from S3, which the manifests still list (`config/lakehouse/retired_objects.json`, keys, versions and
   checksums only): the privacy deletion and 2,193 byte-identical duplicate versions, each with a kept
-  twin verified first;
-- other copies of a file already loaded, which `bronze.stored_copies` lists;
-- a Care Compare contacts file that names state staff;
+  twin verified first.
+- other copies of a file already loaded, which `bronze.stored_copies` lists.
+- a Care Compare contacts file that names state staff.
 - audit copies, receipts and Office package parts.
 
 Two HRSA detail files, stored under the dictionary role, have corrected manifests in S3 that give them the data role
-(`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`); the original
+(`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`). The original
 manifests stay unchanged. Open gaps are tracked in the local issue register.
 
 ## Bronze cutover to the AWS catalog
@@ -313,7 +338,7 @@ once, mode 0600, in the cutover folder. A second capture must give the same dige
 behind an owned loopback relay (`orchestration/catalog_transport.py`). The host is never typed by the owner: each step
 binds the one in-service instance of the approved host group named by the platform outputs.
 
-Route acceptance for this cutover is Mac-side (owner decision, Oct 28 2026, for this one attended cutover only, in
+The owner approved Mac-side route acceptance for this one attended cutover only (implemented in
 `scripts/lakehouse/cutover_route.py`). `route-check` makes three observations of the bound host and records them once,
 pass or fail, in `route_checks/<STAMP>.json` in the cutover folder: the cutover ID, the host, each result and the
 SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, with no address or credential):
@@ -368,10 +393,10 @@ principal, each registration run and each namespace scan. Both credentials are r
 from Parameter Store into memory only. `switch` names the receipt digest in its command reason. After the switch, no
 layer writes anywhere until AWS writers qualify. Mac reads are stale until the reader relay exists.
 
-`rollback` returns to `mac_writer` from `freezing` directly and from `source_fenced`, `refreshing` or `aws_writer` (P4)
+`rollback` returns to `mac_writer` from `freezing` directly and from `source_fenced`, `refreshing` or `aws_writer`
 through `source_verify`, which recaptures the Mac catalog and requires the frozen inventory digest. AWS registrations
 stay in place and are adopted as `unchanged` by a later retry. The launcher refuses a rollback once an AWS writer was
-admitted (P5).
+admitted.
 Repeating `rollback` after it restored `mac_writer` resends this cutover's stored final command and returns the stored
 record, with authority and epoch unchanged.
 
@@ -385,10 +410,10 @@ reads with the lakehouse reader role, not the ECS task role of a read job.
 The staging models and their checks are described in [staging_models.md](staging_models.md).
 
 The dbt packages
-(dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
+(dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`. dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
-only on request, on the in-memory `lint` target with no catalog; its findings are warnings:
+only on request, on the in-memory `lint` target with no catalog. Its findings are warnings:
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.run_staging_e2e              # fixtures; --real adds the real tables; report: data/e2e/staging/
@@ -413,7 +438,7 @@ Before it starts the catalog or a build, `run_staging_e2e` sends one ping to a r
 exchange: no retry, no warm-up and no launcher start, so it creates no attempt, allocation or run. It stops with exit
 code 2 when the ping takes more than 0.5 s, fails or has no answer within 5 s. The message gives the measured time and the
 size of `registry.json`, then names compaction as one fix to try (the launcher moves finished records older than 1 hour
-once the file passes 1 MB); it does not say the size caused the delay. A launcher that is not running is refused with its
+once the file passes 1 MB). It does not say the size caused the delay. A launcher that is not running is refused with its
 own message and the command that starts it. The check changes no state.
 
 **Gold checks.** `scripts/lakehouse/run_gold_e2e.py` builds silver and gold on the staging fixtures and, with `--real`, twice
@@ -421,8 +446,8 @@ from the real bronze tables, pinning the bronze snapshots around each build. It 
 surrogate keys and source dates from `data_contracts/lakehouse/gold_contract.json` and checks that each fact keeps its
 silver model's rows and values, that every key resolves to its dimension or the unknown member, that each dimension
 holds its unknown member once, that gold reads only its declared inputs and that two real builds give identical gold
-fingerprints. Every fact needs rows in the fixture stage; in the real stage every fact except the hold facts needs rows.
-A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. Every expression
+fingerprints. Every fact needs rows in the fixture stage. In the real stage every fact except the hold facts needs rows.
+A hold fact may be empty when nothing is held. At least one non-empty hold fact must keep its rows. Every expression
 finding on the compiled gold SQL (`scripts/lakehouse/gold_sql.py`) counts toward the verdict. An analysis that could not
 visit every relation a model reads fails the run. The check's own corpus E2E is
 `.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out <report.json>` (`--g4` runs only the six allowlist entries that
@@ -448,22 +473,22 @@ plan) over the silver suites in `data_contracts/great_expectations/suites/` and 
 `data_contracts/great_expectations/gold/` in one run. It opens the build file read-only and stops when an `analytics-dbt`
 container is running, when `int_silver_build_marker` is missing or when the marker's DuckDB version differs from the
 reader's. The silver suites are generated from `data_contracts/lakehouse/silver_columns.json` and the baselines
-(`scripts/lakehouse/run_silver_e2e.py --write-suites`; `--check-suites` in local CI fails when they drift):
+(`scripts/lakehouse/run_silver_e2e.py --write-suites` writes them. `--check-suites` in local CI fails when they drift). They check:
 
-- for every kept model, its column set and the type of each column; a row-count floor of one for every model except the
-  hold models (a real build may hold nothing for a source) and the marker, which needs exactly one row;
-- five-digit county codes and the self-link flag in the county adjacency edges;
-- a row-count band for each kept model that has a real count and no documented grain change.
+- for every kept model, its column set and the type of each column
+- a row-count floor of one for every model except the hold models (a real build may hold nothing for a source) and the marker, which needs exactly one row
+- five-digit county codes and the self-link flag in the county adjacency edges
+- a row-count band for each kept model that has a real count and no documented grain change
 
 A table the build lacks fails the expectations that name it. The 102 checks that read the spine, alignment, outcome and
-history tables are saved with the feature files in `features/great_expectations/` and do not run in silver validation; the
+history tables are saved with the feature files in `features/great_expectations/` and do not run in silver validation. The
 ownership-history assertion that every derived relationship comes from organization-owner rows stays there for the
 history build.
 
-Row-count bands come from `data_contracts/great_expectations/baselines.json`. The values under `proposed_values` only
-warn until the owner moves them to `values`; the older approved values belong to the saved checks. No expectation
-repeats a dbt test on the same column; the run fails if one does. Results keep counts only. Great Expectations keeps no
-open connection for DuckDB, so every metric came back empty. The validator registers DuckDB with it as a single-connection
+Row-count bands come from `data_contracts/great_expectations/baselines.json`. The values under `proposed_values` give
+warnings, not failures, until the owner moves them to `values`. The older approved values belong to the saved checks. No expectation
+repeats a dbt test on the same column. The run fails if one does. Results keep counts only. Great Expectations keeps no
+open connection for DuckDB, so every metric is empty without a registered dialect. The validator registers DuckDB with it as a single-connection
 dialect, only for the pinned version.
 
 ```sh
@@ -550,10 +575,10 @@ unproven.
 
 **Run lock and registry.** `scripts/lakehouse/run_lock.py` keeps one lock per domain (`acquisition`, `transform`,
 `training`, `serving`) for the whole machine, in `data/orchestration/registry/` of the main checkout. Every worktree
-finds it through Git's common directory; there is no environment override. `acquire` prints the run's token once and
-the registry keeps only its SHA-256; nested launchers join the run with `RUN_LOCK_TOKEN`. A run moves from `held` to
+finds it through Git's common directory. There is no environment override. `acquire` prints the run's token once and
+the registry keeps only its SHA-256. Nested launchers join the run with `RUN_LOCK_TOKEN`. A run moves from `held` to
 `finalizing` and `released`. A failed or stale run stays `failed_retained` until the owner releases it with its token
-after its labelled containers are stopped; nothing is released automatically. An acquisition run cannot write a
+after its labeled containers are stopped. Nothing is released automatically. An acquisition run cannot write a
 prefix a transform run pinned. Readers reserve a publish run, then register its snapshot set, so maintenance can keep
 it (`protected-sets`). Resource admission is the launcher's: a client takes an allocation, which admits one heavy launch at a time across
 worktrees. A child process that carries `HAI_ALLOCATION` reuses it (see [Launcher](#launcher)). Each registered
@@ -580,7 +605,7 @@ Single-copy acquisition is off by default. When enabled, publisher payloads in t
 categories use `bronze_objects/sha256/<sha256>`. Audit payloads and evidence-only captures use
 `bronze_evidence/sha256/<sha256>`. Each prefix has its own conditional create and checksum index, so identical publisher
 and audit bytes remain one physical object in each namespace. The immutable bootstrap format has separate `objects`
-and `evidence_objects` maps; a reference cannot cross between them. Category determines routing. An unknown category
+and `evidence_objects` maps. A reference cannot cross between them. Category determines routing. An unknown category
 fails closed. Manifests retain their collection paths, including evidence-only manifests under `audit`.
 Both content prefixes stay inactive until the owner applies the access rules and changes the setting (see
 [Switching on single-copy storage](#switching-on-single-copy-storage)).
@@ -592,12 +617,14 @@ starting index that names the objects already in the bucket. The setting stays `
 the working tree only.
 
 **Part 1: access rules.** The change is in `infra/iam/policies/healthcare_hai_prediction_s3_policy.json`. It adds four statements for
-`bronze_objects/sha256/` and `bronze_evidence/sha256/` in the project bucket. One reads current objects and exact
-versions (`s3:GetObject` and `s3:GetObjectVersion`). One creates objects (`s3:PutObject`) only when the request carries
-the `If-None-Match` header, so an existing key cannot be overwritten. It allows only a leaf of exactly 64 characters.
-Deletion, tagging and multipart actions are not granted. One denies writes, tagging and multipart actions in these two
-folders for every key shape that the older wildcard grants match, such as `bronze_objects/sha256/<hash>/references/x`.
-One denies `s3:PutObject` for every key under `sha256/` that holds a percent sign. IAM resource patterns have only `*`
+`bronze_objects/sha256/` and `bronze_evidence/sha256/` in the project bucket:
+
+- The first statement reads current objects and exact versions (`s3:GetObject` and `s3:GetObjectVersion`).
+- The second statement creates objects (`s3:PutObject`) only when the request carries the `If-None-Match` header, so an existing key cannot be overwritten. It allows only a leaf of exactly 64 characters. It grants no deletion, tagging or multipart action.
+- The third statement denies writes, tagging and multipart actions in these two folders for every key shape that the older wildcard grants match, such as `bronze_objects/sha256/<hash>/references/x`.
+- The fourth statement denies `s3:PutObject` for every key under `sha256/` that holds a percent sign.
+
+IAM resource patterns have only `*`
 and `?`, so the policy cannot limit the 64 characters to hexadecimal digits. The length-only pattern is the strongest
 form that IAM can express. The only writer is the store step, which computes the leaf as the SHA-256 of the file. The
 index loader refuses any other key. The policy evaluator cases (`scripts/infrastructure/policy_cases.py`, run by
@@ -605,7 +632,7 @@ index loader refuses any other key. The policy evaluator cases (`scripts/infrast
 condition or leaves an empty, short, long, percent or nested key writable.
 
 1. Read the change: `git diff main -- infra/iam`
-2. Plan with the administrator profile; the plan changes nothing:
+2. Plan with the administrator profile. The plan changes nothing:
    `.venv/bin/python -m infra.iam.scripts.manage_policies plan --admin-profile <ADMIN_PROFILE> --policy s3`
 3. Read the plan. When the policy set of the README (Install) is already applied, it must list only `UPDATE POLICY` for `healthcare_hai_prediction_s3_policy` and end with
    `Summary: 1 change(s), 0 unchanged.` Stop on any other line.
@@ -640,14 +667,14 @@ local file and nothing to S3.
    When identical bytes sit under more than one key, the index names the copy stored first and the report lists every
    other copy under `aliases`. Read that list before you switch the setting on.
 2. If the builder refuses, it writes nothing and lists each reason with a count and examples. The reasons and their
-   fixes are in [Single-Copy Starting Index](acquisition_design.md#single-copy-starting-index). Fix the cause and build
+   fixes are in [Single-copy starting index](acquisition_design.md#single-copy-starting-index). Fix the cause and build
    again into a new file name.
-3. Switch the setting on with the command the builder printed. It writes `config/acquisition/storage_policy.json` with
+3. The next command changes `config/acquisition/storage_policy.json`. Do not commit that file. The index is a local file, so a clone or a CI run cannot read it. Switch the setting on with the command the builder printed. It writes the file with
    the index path and its SHA-256.
 4. Check the policy loads:
    `.venv/bin/python -c "from scripts.acquisition.single_copy import load_policy; p = load_policy(); print(p['enabled'], len(p['objects']), len(p['evidence_objects']))"`
 
-Do not commit the changed policy file. The index is a local file, so a clone or a CI run cannot read it. To switch the
+To switch the
 setting off again, run `git checkout -- config/acquisition/storage_policy.json`.
 
 `stg_bronze__release_observations` covers the 70 analytical tables in the `copy_tables` family map, including aliases

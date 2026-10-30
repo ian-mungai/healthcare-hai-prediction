@@ -22,6 +22,8 @@ timed "acquisition: shell syntax" bash -n scripts/acquisition/run_checks.sh scri
 timed "acquisition: ruff" "$python_bin" -m ruff check --no-respect-gitignore scripts/acquisition tests/test_source_registry.py
 timed "acquisition: mypy" "$python_bin" -m scripts.quality.typecheck --runtime acquisition --check-untyped-defs --disallow-untyped-defs
 timed "acquisition: source registry" "$python_bin" -m scripts.acquisition.source_registry
+timed "acquisition: source verification log" "$python_bin" -m scripts.acquisition.source_verification_log --check
+timed "acquisition: receipt index" "$python_bin" -m scripts.acquisition.source_receipt_index --check
 timed "acquisition: shards E2E" "$python_bin" -m scripts.acquisition.run_shards_e2e
 timed "acquisition: pytest with coverage gate" "$python_bin" -m pytest scripts/acquisition/tests tests/test_source_registry.py --cov=scripts.acquisition \
   --cov-config=config/acquisition/coverage.ini --cov-report=term-missing --cov-fail-under=90 -q

@@ -1,0 +1,76 @@
+# typos for the lint_tools typos check (scripts/quality/lint_tools.py). Run `typos --config _typos.toml` from the repository root.
+# Machine-written data and the publishers' own spellings are excluded; the words below are accepted only in the files that need them
+# (a type glob matches a file name, so each name must stay unique among tracked files).
+[files]
+extend-exclude = [
+  "config/**",                                       # source inventories, plans and lists that keep the publishers' spellings and truncated names
+  "data_contracts/**",                               # saved suites and contracts that hold column names, hashes and sample values
+  "features/**/*.json",                              # saved suites and manifests of the same kind
+  "dbt/seeds/**",                                    # CSV seeds of codes, labels and publisher column headings
+  "docs/architecture/architecture.html",             # generated from docs/architecture/architecture.json
+  "services/orchestration/constraints-*.txt",        # pip constraints: package names such as vertica
+]
+
+[default.extend-words]
+# Domain terms, spelled as the sources and the project spell them.
+hsa = "hsa"                                          # hospital service area
+ehr = "ehr"                                          # electronic health record
+froms = "froms"                                      # the FROM clauses of a query
+unparseable = "unparseable"                          # a file that cannot be parsed
+
+[type.category_codes]
+# Race and category codes the publishers truncate (Wht, Othr), state code ND, and the PN measure suffix.
+extend-glob = [
+  "dim_measure.sql",
+  "pos_columns.sql",
+  "mup_columns.sql",
+  "assert_pos_county_fill.sql",
+  "int_pos_hospital_snapshots.sql",
+  "_facts_hospital__models.yml",
+  "run_staging_e2e.py",
+  "build_rev3.py",
+  "extract_cross_source_keys.py",
+]
+extend-words = { wht = "wht", othr = "othr", nd = "nd", pn = "pn" }
+
+[type.test_samples]
+# Samples that must stay as typed: a fake token, a Latin-1 byte string, a cut-off column name, a fake import and a document spelling.
+extend-glob = [
+  "run_checks_e2e.py",
+  "run_redownload_e2e.py",
+  "run_gold_publish_e2e.py",
+  "run_redaction_e2e.py",
+  "run_gold_sql_e2e.py",
+  "run_launcher_e2e.py",
+  "run_onc_mu_e2e.py",
+]
+extend-words = { nd = "nd", caf = "caf", syste = "syste", exis = "exis", ists = "ists", wher = "wher", spawnve = "spawnve", healthit = "healthit" }
+
+[type.pattern_stems]
+# Word stems and alternations that match the sources' own spellings in regular expressions and SQL.
+extend-glob = [
+  "repo_checks.py",
+  "ipps_file_labels.py",
+  "int_occmix_file_rows.sql",
+  "build_successor.py",
+]
+extend-words = { ane = "ane", propsed = "propsed", delet = "delet", ser = "ser" }
+
+[type.feature_columns]
+# Source column names the publishers truncate (bene_race_wht_cnt, bene_race_othr_cnt, benes_wth_ptaptb_cnt, ep_disabl) in the feature matrix models and the Feast definitions.
+extend-glob = [
+  "feature_matrix_hospital.sql",
+  "feature_matrix_county_measures.sql",
+  "feature_matrix_county_context.sql",
+  "_feature_matrix__models.yml",
+  "definitions.py",
+]
+extend-words = { wht = "wht", othr = "othr", wth = "wth", disabl = "disabl" }
+
+[type.server_method]
+# The method name `unstall` of the fake and real servers in the online store cases.
+extend-glob = [
+  "online_cases.py",
+  "feast_aws_cases.py",
+]
+extend-words = { unstall = "unstall" }

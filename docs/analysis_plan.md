@@ -6,7 +6,7 @@ last_updated: 2026-10-23
 
 # Analysis plan
 
-Every training run follows this plan. The plan changes during development, so each run records the plan's SHA-256 and the Git commit in MLflow. A result therefore always names the plan version it used.
+Every training run follows this plan. The plan changes during development, so each run records the plan's SHA-256 and the Git commit in MLflow. A result therefore always names the plan version of its run.
 
 ## Unit, populations and timing
 
@@ -30,7 +30,7 @@ Every training run follows this plan. The plan changes during development, so ea
 ## Missing values
 
 - A predictor that has no source period before the window stays missing. No value is filled with zero.
-- Each run logs the share of missing values per predictor. A predictor missing in more than 50% of the training rows is dropped before fitting. Other thresholds run only as labelled exploratory reruns.
+- Each run logs the share of missing values per predictor. A predictor missing in more than 50% of the training rows is dropped before fitting. Other thresholds run only as labeled exploratory reruns.
 - In the linear and likelihood models, a missing value takes the median of the predictor, computed inside each training fold. Each such predictor also gets a column that marks the missing rows. Every model then scores the same holdout rows.
 - Gradient boosting uses its own missing-value handling.
 

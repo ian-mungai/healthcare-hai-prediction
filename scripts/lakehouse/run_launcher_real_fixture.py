@@ -11,7 +11,7 @@ It never starts the catalog, reads bronze, uses AWS or a secret.
 This runner is a launcher client and nothing else: every container, network and removal is an operation of the launcher it starts, and what
 it observes of the daemon it reads from that launcher's status (its inventory by registry label). It writes only its throwaway test
 registry; it never reads or writes the main checkout's registry. The machine is shared with other jobs through the launcher's own
-allocation inside this test registry only: running it while another package's job holds the machine is the lead's call (the cross-registry
+allocation inside this test registry only: running it while another package's job holds the machine is the coordinating agent's call (the cross-registry
 admission of the former reservation no longer exists).
 """
 

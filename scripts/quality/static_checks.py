@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.process import TimeoutExpired, run_command
+from scripts.quality.lint_sources import native
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
@@ -105,10 +106,11 @@ def scan(directory: Path, output: Path) -> bool:
             )
             trivy_receipt = ROOT / ".tools/receipts/trivy.json"
             report["trivy_version"] = json.loads(trivy_receipt.read_text(encoding="utf-8"))["version"] if trivy_receipt.is_file() else None
+            trivy = native("trivy")
             commands = {
                 # Embedded checks only: no check-bundle download, version notice or telemetry, so results are reproducible offline.
                 "trivy": [
-                    str(ROOT / ".tools/bin/trivy"),
+                    trivy,
                     "config",
                     "--quiet",
                     "--skip-check-update",

@@ -23,6 +23,7 @@ jobs:
   plan:
     name: CI Plan
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 0.2 min.
     timeout-minutes: 5
     permissions:
       contents: read
@@ -63,6 +64,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse == 'true' }}
     runs-on: ubuntu-24.04
+    # Job wall time not measured: the job runs only when a passed result is reused.
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -106,20 +108,20 @@ jobs:
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     # Pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19 2026; move deliberately after a green test run on the new image.
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026), per matrix entry: beside each timeout below.
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - group: privacy
-            timeout: 12
+            timeout: 12  # max 2.5 min
           - group: documentation
-            timeout: 30
+            timeout: 30  # max 1.9 min
           - group: code
-            timeout: 40
-          # test-checks alone: about 10 minutes on a hosted runner (Oct 30 2026), 13 on a slow one.
+            timeout: 40  # max 22 min, about 24 estimated with the seven linters
           - group: samples
-            timeout: 20
+            timeout: 20  # max 13 min
     steps:
       - name: Record hook job start
         run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
@@ -135,6 +137,8 @@ jobs:
 
       - name: Set up the checks
         uses: ./.github/actions/setup
+        with:
+          lint-tools: ${{ matrix.group == 'code' }}
 
       - name: Check commit messages
         if: ${{ matrix.group == 'privacy' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000')) }}
@@ -172,6 +176,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 25.3 min, mean 24.9 min. The reuse, shard and gate stage cases of the CI groups E2E moved to the job
+    # CI Reuse and Gate E2E; this job runs only the selection cases of that E2E.
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -209,11 +215,40 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  reuse_gate:
+    name: CI Reuse and Gate E2E
+    needs: plan
+    if: ${{ needs.plan.outputs.reuse != 'true' }}
+    runs-on: ubuntu-24.04
+    # Estimate (no hosted run yet): the reuse, shard and gate stage cases of the CI groups E2E took 88 s and 10 s on the Mac (Oct 30 2026, load 8; about 3 minutes
+    # hosted), and the setup and the gates add about 4. They moved out of Local CI Core, which took 25.9 of its 30 minutes. Resize from the first complete hosted run.
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Set up the checks
+        uses: ./.github/actions/setup
+
+      - name: Run the CI groups reuse and gate stage E2Es
+        env:
+          CI_PART: reuse_gate
+          CI_SCOPE: range
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
+        run: bash scripts/run_ci.sh
+
   lakehouse:
     name: Lakehouse ${{ matrix.layer }} Checks
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026), per matrix entry: beside each timeout below.
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -221,16 +256,16 @@ jobs:
         include:
           - layer: Bronze
             part: bronze
-            timeout: 20
+            timeout: 20  # max 12.2 min
           - layer: Silver
             part: silver
-            timeout: 5
+            timeout: 5  # max 3.3 min
           # The gold layer's model metadata E2E, its longest command, runs in the gold_metadata job; writer_setup has timing assertions and runs
           # alone, before the other gold commands of this job.
           - layer: Gold
             part: gold
             units: checks writer_setup
-            timeout: 25
+            timeout: 25  # max 6.3 min
           - layer: Features
             part: feature_store
             timeout: 15
@@ -273,6 +308,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 22.7 min (shard 1), shards 16.6 to 22.7 min.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -314,6 +350,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 7.1 min (shard 1), shards 4.9 to 7.1 min.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -355,6 +392,7 @@ jobs:
     needs: [plan, feature_sources, feature_columns]
     if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 1.5 min.
     timeout-minutes: 10
     steps:
       - name: Require every feature shard job to have succeeded
@@ -420,6 +458,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 19.3 min, mean 15.1 min.
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -458,6 +497,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 12.5 min (shard 1), shard 2 max 10.5 min.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -504,6 +544,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Expected about 13 minutes with the setup (estimated from the 41 minutes of the unsharded run, whose tests take 39, over four shards). Resize
     # from a complete hosted run.
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 12.0 min (shard 1), shards 11.1 to 12.0 min.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -569,6 +610,7 @@ jobs:
     # Runs after a failed shard too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict.
     if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
+    # Measured job wall time on main (3 runs, Oct 28 2026): max 1.8 min.
     timeout-minutes: 10
     steps:
       - name: Require every shard job to have succeeded

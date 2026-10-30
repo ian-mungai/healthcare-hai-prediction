@@ -14,16 +14,26 @@ from pathlib import Path
 from types import FrameType, ModuleType
 from typing import Any
 
+from scripts.training.job_failure import EXIT_DEADLINE, EXIT_NOT_IMPLEMENTED, JobFailure
+from scripts.training.job_failure import EXIT_FAILED as EXIT_FAILED
+
 ROOT = Path(__file__).resolve().parents[2]
 ACTIONS = ("guard", "version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check", "promote", "smoke")
 MODULES: dict[str, tuple[str, ...]] = {
     "guard": ("scripts.training.guards", "scripts.training.targets", "scripts.training.step_records"),
-    "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records"),
-    "fit": ("scripts.training.models.suite",),
-    "mediation": ("scripts.training.mediation",),
-    "hac_validate": ("scripts.training.hac_validation",),
-    "log_run": (),
-    "promotion_check": (),
+    "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "fit": ("scripts.training.models.suite", "scripts.training.bundle", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "mediation": ("scripts.training.mediation", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "hac_validate": ("scripts.training.hac_validation", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "log_run": ("scripts.training.run_tracking", "scripts.training.dvc_baseline", "scripts.training.job_actions", "scripts.training.job_inputs"),
+    "promotion_check": (
+        "scripts.training.promotion_check",
+        "scripts.training.promotion",
+        "scripts.training.registry",
+        "scripts.training.run_tracking",
+        "scripts.training.job_actions",
+        "scripts.training.job_inputs",
+    ),
     "promote": (),
     "smoke": (),
 }
@@ -31,15 +41,6 @@ SNAPSHOT_PACKAGES = ("scripts", "orchestration", "feature_store")
 STATIC_SECONDS = {"guard": 300.0, "smoke": 120.0}
 REQUIRED = ("run", "mode", "run_dir", "parameters", "snapshot_record")
 OPTIONS = {name: "--" + name.replace("_", "-") for name in (*REQUIRED, "approval")}
-EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_DEADLINE = 1, 3, 4
-
-
-class JobFailure(Exception):
-    """A named, visible failure of one action."""
-
-    def __init__(self, name: str, detail: str, code: int = EXIT_FAILED) -> None:
-        super().__init__(detail)
-        self.name, self.detail, self.code = name, detail, code
 
 
 @dataclass(frozen=True)
@@ -124,15 +125,37 @@ def run_guard(context: Context) -> None:
 
 def action_modules() -> tuple[ModuleType, ...]:
     """Import every action module by a static statement, so the mount check and the image smoke see the same imports."""
+    import scripts.training.bundle as bundle
     import scripts.training.dvc_baseline as dvc_baseline
     import scripts.training.guards as guards
     import scripts.training.hac_validation as hac_validation
+    import scripts.training.job_actions as job_actions
+    import scripts.training.job_inputs as job_inputs
     import scripts.training.mediation as mediation
     import scripts.training.models.suite as suite
+    import scripts.training.promotion as promotion
+    import scripts.training.promotion_check as promotion_check
+    import scripts.training.registry as registry
+    import scripts.training.run_tracking as run_tracking
     import scripts.training.step_records as step_records
     import scripts.training.targets as targets
 
-    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation)
+    return (
+        guards,
+        targets,
+        step_records,
+        dvc_baseline,
+        suite,
+        mediation,
+        hac_validation,
+        job_actions,
+        job_inputs,
+        run_tracking,
+        bundle,
+        promotion,
+        promotion_check,
+        registry,
+    )
 
 
 def run_smoke(context: Context) -> None:
@@ -149,7 +172,58 @@ def run_smoke(context: Context) -> None:
     sys.stdout.write(json.dumps({"action": "smoke", "modules": names, "unimplemented": [name for name in ACTIONS if name not in HANDLERS]}) + "\n")
 
 
-HANDLERS: dict[str, Callable[[Context], None]] = {"guard": run_guard, "smoke": run_smoke}
+def run_fit(context: Context) -> None:
+    """Fit the six-model suite for every requested HAI type from the mounted extract."""
+    from scripts.training import job_actions
+
+    job_actions.run_fit(context, read_record(context))
+
+
+def run_mediation(context: Context) -> None:
+    """Estimate the PSI-90 and PSI-13 mediation for every requested HAI type."""
+    from scripts.training import job_actions
+
+    job_actions.run_mediation(context, read_record(context))
+
+
+def run_hac_validate(context: Context) -> None:
+    """Rank each fitted holdout against the HAC Reduction Program flags."""
+    from scripts.training import job_actions
+
+    job_actions.run_hac_validate(context, read_record(context))
+
+
+def run_version_extract(context: Context) -> None:
+    """Version each exported training matrix with DVC and record its metafile."""
+    from scripts.training import job_actions
+
+    job_actions.run_version_extract(context, read_record(context))
+
+
+def run_promotion_check(context: Context) -> None:
+    """Register each candidate, score it against the champion and record the verdict without changing production."""
+    from scripts.training import promotion_check
+
+    promotion_check.run(context, read_record(context))
+
+
+def run_log_run(context: Context) -> None:
+    """Log one MLflow run per requested HAI type from the mounted outputs of the earlier steps."""
+    from scripts.training import job_actions
+
+    job_actions.run_log_run(context, read_record(context))
+
+
+HANDLERS: dict[str, Callable[[Context], None]] = {
+    "guard": run_guard,
+    "version_extract": run_version_extract,
+    "fit": run_fit,
+    "mediation": run_mediation,
+    "hac_validate": run_hac_validate,
+    "log_run": run_log_run,
+    "promotion_check": run_promotion_check,
+    "smoke": run_smoke,
+}
 
 
 def budget(action: str) -> float:

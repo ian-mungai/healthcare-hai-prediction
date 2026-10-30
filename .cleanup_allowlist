@@ -41,3 +41,9 @@ dbt dbt/tests/features/* -- int_hai_outcome_values, int_occmix_measures and int_
 dbt docs/feature_phase_saved.md -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
 unused-code feature_store/definitions.py -- feast apply scans the module for Entity and FeatureView objects, so each view the generated file assigns to a module-level name is read by Feast, not imported
 unused-dependencies services/feature_store/requirements.in -- pyiceberg, duckdb, redis and hiredis are loaded through importlib or by Feast and redis-py themselves; the hash-pinned lock requirements.txt replaces this file as the runtime's requirements at lock review
+config .pre-commit-config.yaml -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
+config config/quality/ci_groups.json -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
+config docs/quality_checks.md -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
+config scripts/quality/lint_tools.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
+config scripts/quality/run_ci_groups_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
+config scripts/quality/run_lint_tools_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed

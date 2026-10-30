@@ -27,6 +27,7 @@ PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
 COPIED = [
     ".github/workflows/ci.yml",
     "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
     ".pre-commit-config.yaml",
     "pyproject.toml",
     ".env.example",
@@ -548,6 +549,98 @@ CASES = [
         True,
         message=f"fix: tidy\n# {CREDIT}: Claude <x@example.invalid>\n{SCISSORS}\n+{CREDIT}: Claude <x@example.invalid>\n",
     ),
+    Case(
+        "ordinary hex, CSS and commit hash text",
+        "commit-msg",
+        True,
+        message="fix(ui): keep the B1 class\n\nThe colour #B1B1B1 and byte 0xB1 stay. Fixed on 54551af and bd71c0d (B1 is a column).\n",
+    ),
+    Case(
+        "review words without a round number",
+        "commit-msg",
+        True,
+        message="fix(api): recheck the lane markers\n\nThe check reviewed the patch and the diff after round trips.\n",
+    ),
+    Case(
+        "decimal snapshot ID and long hash without patch",
+        "commit-msg",
+        True,
+        message="fix(lakehouse): read snapshot 6891234567890123456\n\nThe file SHA-256 7b1aeea20f2c01b0 matches.\n",
+    ),
+    Case("lane A in the subject", "commit-msg", False, message="feat(training): add lane A static part\n"),
+    Case("unit code after a keyword", "commit-msg", False, message="fix(api): handle retries\n\nUnit U4 covers the retry path.\n"),
+    Case("failure mode code", "commit-msg", False, message="fix(api): handle retries\n\nCovers failure mode T9.\n"),
+    Case("bracketed unit codes", "commit-msg", False, message="fix(api): handle retries\n\nThe pair is reset (P1, P3 to P5).\n"),
+    Case("recheck round", "commit-msg", False, message="fix(api): handle retries\n\nAccepted at Recheck 2 of the review.\n"),
+    Case("fix round", "commit-msg", False, message="fix(api): handle retries\n\nDone in fix round 2.\n"),
+    Case("review number", "commit-msg", False, message="fix(api): handle retries\n\nFound in review #3.\n"),
+    Case("accepted patch hash", "commit-msg", False, message="fix(api): handle retries\n\nFrom the accepted patch (SHA-256 399813a5f1ca75a0).\n"),
+    Case("staged diff hash", "commit-msg", False, message="fix(api): handle retries\n\nThe staged diff hash 7b1aeea20f2c01b0 was accepted.\n"),
+    Case("worktree snapshot ID", "commit-msg", False, message="fix(api): handle retries\n\nEqual to the worktree snapshot ffa86ab.\n"),
+    Case("not independently reviewed", "commit-msg", False, message="fix(api): handle retries\n\nNot  independently reviewed as its own change.\n"),
+    Case(
+        "capital letter codes without a keyword, S3 and issue-like names",
+        "commit-msg",
+        True,
+        message="fix(storage): keep the S3 upload\n\nThe bucket (S3) and step S3 stay. Refs CVE-2024-1234 and SHA3-256 are names; B1 is no code.\n",
+    ),
+    Case("registry source families in brackets", "commit-msg", True, message="fix(api): add the measures\n\nOne row per control (S13 to S16).\n"),
+    Case("a bracketed S code that is not a public family", "commit-msg", False, message="fix(api): add the measures\n\nThe pins follow the plan (S2).\n"),
+    Case("a public family beside a plan code in brackets", "commit-msg", False, message="fix(api): add the measures\n\nThe pins follow the plan (P7, S13).\n"),
+    Case("a mixed bracketed list with a plan code", "commit-msg", False, message="fix(api): add the measures\n\nThe pins follow the plan (P7, S2).\n"),
+    Case(
+        "round numbers in a review sentence",
+        "commit-msg",
+        True,
+        message="fix(api): keep the sums\n\nThe reviewer requested two round numbers and five round figures in the totals.\n",
+    ),
+    Case(
+        "rounding and round trips in a review sentence",
+        "commit-msg",
+        True,
+        message="fix(api): keep the sums\n\nThe reviewer asked to round two decimals and checked a round trip and a round robin.\n",
+    ),
+    Case(
+        "number of rounds outside review context", "commit-msg", True, message="test(api): repeat the load run\n\nThe run takes five rounds of ten requests.\n"
+    ),
+    Case(
+        "downloaded patch hash",
+        "commit-msg",
+        True,
+        message="fix(deps): apply the vendor fix\n\nThe downloaded patch SHA-256 399813a5f1ca75a0 matches the vendor page.\n",
+    ),
+    Case(
+        "snapshot ID of data",
+        "commit-msg",
+        True,
+        message="fix(lakehouse): read the table at the snapshot\n\nThe table snapshot ID a0b1c2d3 and snapshot 1234567 are table versions.\n",
+    ),
+    Case("unit code G4", "commit-msg", False, message="fix(api): handle retries\n\nCovers unit G4.\n"),
+    Case("task code A54", "commit-msg", False, message="fix(api): handle retries\n\nDone in task A54.\n"),
+    Case("lane codes D1 and L13", "commit-msg", False, message="fix(api): handle retries\n\nSee lanes D1 and L13.\n"),
+    Case("step code R14", "commit-msg", False, message="fix(api): handle retries\n\nAfter step R14 the queue drains.\n"),
+    Case("slice code K1", "commit-msg", False, message="fix(api): handle retries\n\nThe slice K1 retries once.\n"),
+    Case("failure mode code S2", "commit-msg", False, message="fix(api): handle retries\n\nCovers failure mode S2.\n"),
+    Case("bracketed code G4", "commit-msg", False, message="fix(api): handle retries\n\nThe pair is reset (G4).\n"),
+    Case(
+        "issue ID after Refs, ee93061",
+        "commit-msg",
+        False,
+        message="fix(quality): run the hook partitions one after the other (#42)\n\nThe partitions run in one worker.\n\nRefs ABC1-033\n",
+    ),
+    Case("bracketed issue ID", "commit-msg", False, message="fix(api): handle retries\n\nThe pair is reset (ABC1-033).\n"),
+    Case(
+        "review rounds in number words, 4c524c7",
+        "commit-msg",
+        False,
+        message="docs: add the acquisition design document\n\nIndependent review over five rounds; the last passed with one minor finding, fixed here.\n",
+    ),
+    Case("round two in a review", "commit-msg", False, message="fix(api): handle retries\n\nAccepted in round two of the review.\n"),
+    Case(
+        "accepted patch hash, any word order", "commit-msg", False, message="fix(api): handle retries\n\nThe SHA-256 399813a5f1ca75a0 of the accepted patch.\n"
+    ),
+    Case("worktree snapshot ID, letters only", "commit-msg", False, message="fix(api): handle retries\n\nEqual to the worktree snapshot abcdefa.\n"),
+    Case("worktree snapshot ID, digits only", "commit-msg", False, message="fix(api): handle retries\n\nEqual to the worktree snapshot ID 1234567.\n"),
     Case("agent credit trailer", "commit-msg", False, message=f"docs(readme): update setup\n\nBody.\n\n{CREDIT}: Claude Opus 5.5 <{VENDOR_ADDRESS}>\n"),
     Case("agent credit, lower case", "commit-msg", False, message=f"fix: tidy\n\n{CREDIT.lower()}:codex <codex@example.invalid>\n"),
     Case("vendor address only", "commit-msg", False, message=f"fix: tidy\n\n{CREDIT}: Assistant <{VENDOR_ADDRESS}>\n"),
@@ -675,7 +768,9 @@ def run_case(case: Case) -> tuple[bool, str]:
         output = result.stdout + result.stderr
         correct = passed == case.expect_pass and "Traceback (most recent call last)" not in output
         if not case.expect_pass and case.hook == "commit-msg":
-            correct = correct and any(marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message"))
+            correct = correct and any(
+                marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message", "internal plan reference in commit message:")
+            )
         if case.hook == "privacy-scan":
             added = len(ALLOWLIST_SOURCE.splitlines()) + 1
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
@@ -701,8 +796,16 @@ def run_range_case() -> tuple[bool, str]:
         git(repo, "commit", "--allow-empty", "-qm", f"fix: bad credit\n\n{SCISSORS}\n{CREDIT}: Claude <{VENDOR_ADDRESS}>")
         bad = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         invalid = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", "missing-ref", "HEAD"], cwd=repo)
+        git(repo, "reset", "-q", "--hard", "HEAD~1")
+        git(repo, "commit", "--allow-empty", "-qm", "fix: handle retries\n\nAccepted at recheck 2 of lane A.")
+        plan = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         ok = good.returncode == 0 and bad.returncode == 1 and "AI attribution in commit message" in bad.stderr and invalid.returncode != 0
-        return ok, f"clean range exit={good.returncode}; attributed range exit={bad.returncode}; missing revision exit={invalid.returncode}\n" + bad.stderr
+        ok = ok and plan.returncode == 1 and "internal plan reference in commit message: review-round name" in plan.stderr
+        return (
+            ok,
+            f"clean range exit={good.returncode}; attributed range exit={bad.returncode}; "
+            f"missing revision exit={invalid.returncode}; plan range exit={plan.returncode}\n" + bad.stderr + plan.stderr,
+        )
 
 
 def workflow_value(value: str, context: dict[str, str]) -> str:

@@ -15,7 +15,8 @@ the memory the Mac can give without swapping (vm_stat free, file-backed and purg
 Mac cap is skipped once the Docker VM already holds all of Docker's memory.
 Memory the VM already holds and no running container uses counts toward the Mac figure, less a VM base:
 a build that follows another can reuse it without the Mac swapping.
-The container gets that budget. DuckDB gets 80%, rounded down to whole gigabytes (GB). Spark gets whole gibibytes (g),
+The allocation takes ALLOCATION_SHARE_PERCENT of that budget, so a process that grows before the containers start still has room.
+The container gets the allocation. DuckDB gets 80%, rounded down to whole gigabytes (GB). Spark gets whole gibibytes (g),
 leaving its existing JVM overhead. The 4 GiB floor applies to the container, not the smaller engine budget.
 A budget below the floor, an unreadable Docker or an
 unknown size unit stops with the figures instead of falling back to a fixed value. Failure modes:
@@ -44,6 +45,12 @@ GIB = 1024**3
 HEADROOM = 8 * GIB
 # Room left for macOS when the Mac's own free memory caps the limit [493].
 MAC_HEADROOM = 2 * GIB
+# Each allocation takes this share of the free figure, so a process that grows before the containers start still has room. The 2 GiB Mac
+# headroom alone left no room for growth and the containers waited for memory.
+ALLOCATION_SHARE_PERCENT = 75
+# The longest a queued launch waits for memory that another process holds before it fails with a named cause. Ten minutes covers a
+# build or a browser that frees memory soon and is short enough that a stuck machine shows in the run.
+MEMORY_WAIT_DEADLINE = 600.0
 # The Docker VM's own resident memory with no container running: 1.9 GiB after a restart [543].
 VM_BASE = 2 * GIB
 # Container floor; the engine receives less because some allocations bypass its memory setting [466] [497] [527].
@@ -87,15 +94,19 @@ class Budget:
         return docker_free - self.growth_reserve
 
     @property
+    def allocation(self) -> int:
+        """Return the container memory of one allocation: ``ALLOCATION_SHARE_PERCENT`` of the free figure, in whole bytes."""
+        return self.free * ALLOCATION_SHARE_PERCENT // 100
+
+    @property
     def setting(self) -> str:
         """Reserve 20% inside the container for allocations outside DuckDB's buffer limit [527]."""
-        return f"{(self.free * 4 // 5) // 1000**3}GB"
+        return f"{(self.allocation * 4 // 5) // 1000**3}GB"
 
     @property
     def spark_setting(self) -> str:
-        """Return Spark's heap: the free memory less the JVM's overhead, in whole GiB (Spark's g unit), rounded down [487] [492]."""
-        heap = min(self.free / (1 + SPARK_OVERHEAD_FACTOR), self.free - SPARK_MIN_OVERHEAD)
-        return f"{int(heap // GIB)}g"
+        """Return Spark's heap: the allocation less the JVM's overhead, in whole GiB (Spark's g unit), rounded down [487] [492]."""
+        return spark_heap(self.allocation)
 
     def record(self) -> dict[str, int | str | None]:
         """Return the figures and the settings, for a report or the --explain output [463] [493]."""
@@ -107,6 +118,8 @@ class Budget:
             "mac_headroom": self.mac_headroom,
             "vm_reusable": self.vm_reusable,
             "growth_reserve": self.growth_reserve,
+            "allocation": self.allocation,
+            "allocation_share_percent": ALLOCATION_SHARE_PERCENT,
             "setting": self.setting,
             "spark_setting": self.spark_setting,
         }
@@ -122,7 +135,7 @@ class LaunchPlan:
     def environment(self) -> dict[str, str]:
         """Return the exact variables consumed by Compose and the job engines."""
         return {
-            "JOB_MEMORY_LIMIT": str(self.budget.free),
+            "JOB_MEMORY_LIMIT": str(self.budget.allocation),
             "DUCKDB_MEMORY_LIMIT": self.budget.setting,
             "SPARK_JOB_MEMORY": self.budget.spark_setting,
             "JOB_THREADS": str(self.threads),
@@ -160,8 +173,11 @@ def launch_plan(reader: DockerReader, growth: Mapping[str, int] | None = None) -
         use = reader.usage_by_name()
         reserve = sum(max(0, int(limit) - use.get(name, 0)) for name, limit in growth.items())
         budget = replace(budget, growth_reserve=reserve)
-        if budget.free < FLOOR:
-            raise BudgetError(f"only {budget.free / GIB:.1f} GiB free after a growth reserve of {reserve / GIB:.1f} GiB for {', '.join(sorted(growth))}")
+        if budget.allocation < FLOOR:
+            raise BudgetError(
+                f"only {budget.allocation / GIB:.1f} GiB to allocate ({budget.free / GIB:.1f} GiB free after a growth reserve of {reserve / GIB:.1f} GiB "
+                f"for {', '.join(sorted(growth))}, after the {ALLOCATION_SHARE_PERCENT}% allocation cap)"
+            )
     return LaunchPlan(budget, cores)
 
 
@@ -176,9 +192,9 @@ def pool_plan(plan: LaunchPlan, workers: int) -> dict[str, Any]:
     record = plan.record()
     if workers == 1:
         return {"environment": plan.environment(), "record": record}
-    share = plan.budget.free // workers
+    share = plan.budget.allocation // workers
     if share < FLOOR:
-        raise BudgetError(f"{workers} workers need {FLOOR / GIB:.0f} GiB each; the plan holds {plan.budget.free / GIB:.1f} GiB")
+        raise BudgetError(f"{workers} workers need {FLOOR / GIB:.0f} GiB each; the plan holds {plan.budget.allocation / GIB:.1f} GiB")
     environment = {
         "JOB_MEMORY_LIMIT": str(share),
         "DUCKDB_MEMORY_LIMIT": f"{(share * 4 // 5) // 1000**3}GB",
@@ -202,17 +218,28 @@ def compute(total: int, usages: list[int], mac_available: int | None = None, vm_
     used = sum(usages)
     reusable = max(0, vm_held - used - VM_BASE)
     budget = Budget(total=total, used_by_containers=used, headroom=HEADROOM, mac_available=mac_available, vm_reusable=reusable)
-    if budget.free < FLOOR:
+    if budget.allocation < FLOOR:
         mac = (
             "not capping"
             if mac_available is None
             else f"{mac_available / GIB:.1f} GiB plus {reusable / GIB:.1f} GiB reusable in the VM, less {MAC_HEADROOM / GIB:.0f} GiB headroom"
         )
         raise BudgetError(
-            f"only {budget.free / GIB:.1f} GiB free for DuckDB or Spark: Docker {total / GIB:.1f} GiB, "
-            f"containers {budget.used_by_containers / GIB:.1f} GiB, headroom {HEADROOM / GIB:.0f} GiB; Mac {mac}"
+            f"only {budget.free / GIB:.1f} GiB free for DuckDB or Spark, {budget.allocation / GIB:.1f} GiB after the "
+            f"{ALLOCATION_SHARE_PERCENT}% allocation cap: "
+            f"Docker {total / GIB:.1f} GiB, containers {budget.used_by_containers / GIB:.1f} GiB, headroom {HEADROOM / GIB:.0f} GiB; Mac {mac}"
         )
     return budget
+
+
+def wait_failure(since: float, now: float, deadline: float, free: int, need: int) -> str | None:
+    """Return the failure text when a launch has waited for memory since ``since`` for ``deadline`` seconds or more, else None.
+
+    A clock set back (``now`` before ``since``) never expires the wait.
+    """
+    if now < since or now - since < deadline:
+        return None
+    return f"memory did not return within {deadline:g} s: {free / GIB:.1f} GiB free, {need / GIB:.1f} GiB needed (another process holds the rest)"
 
 
 def service_limit(budget: Budget, share: float, minimum: int) -> int:

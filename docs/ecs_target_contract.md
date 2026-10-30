@@ -1,7 +1,7 @@
 ---
 title: ECS read target contract
 description: Proposed deployment captures, private target fields and jobs-wrapper interface for read tasks.
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 audience: [developer, operator]
 status: Proposed
 ---
@@ -34,7 +34,7 @@ Writer definitions use the digest-pinned Spark image and the same fixed bootstra
 
 `writer_parameter_names` maps each `write_<layer>_task` role key to a two-name list. The first name is `aws_polaris_<layer>_client_id`. The second is `aws_polaris_<layer>_client_secret`. Each name uses its reviewed Parameter Store path. The values never enter Terraform. Obtain the test pair from `job_writer_e2e_contract` and production pairs from `job_writer_layer_contract.parameter_names`. Consume role ARNs from `job_roles`.
 
-Each container injects only its own pair as `POLARIS_CLIENT_ID` and `POLARIS_CLIENT_SECRET`. The test definition binds `write_e2e_task` and the e2e pair. Reader definitions retain the reader pair. Role and parameter swaps between layers are refused.
+Each container injects only its own pair as `POLARIS_CLIENT_ID` and `POLARIS_CLIENT_SECRET`. The test definition binds `write_e2e_task` and the e2e pair. Reader definitions retain the reader pair. The renderer refuses role and parameter swaps between layers.
 
 The jobs export adds one `writer_dispatch_contracts` record for each selected writer. Each record fixes `job_class`, `task_role_key`, `parameter_names`, `capacity_providers`, `network` and `assign_public_ip`. The capacity list is exactly `["FARGATE"]`. The network is `lakehouse` and public IPs are `DISABLED`. The target renderer checks the complete contract against the actual container bindings before writing. The general `dispatch_contract` carries the exact selected `definition_classes`, `class_networks` and `class_capacity_providers` maps. The renderer validates them and retains both class placement maps in the target. The general `capacity_providers` list describes readers only.
 
@@ -60,7 +60,7 @@ Without a binding, `catalog` is null. The selector must refuse every lakehouse j
 
 `class_networks` maps offline and seal jobs to the exported offline group. It maps read jobs to the exported lakehouse group. A target with writer definitions also maps `lakehouse_write` to that group. The groups must differ. The endpoint subnet must belong to the platform output. Every application request disables public IPs. The definition checks require ARM64 Linux, Fargate compatibility, the fixed bootstrap, private scratch volumes, a non-root user, dropped capabilities and a 90-second stop timeout.
 
-The bronze cutover (`scripts/lakehouse/bronze_cutover.py`) enables the approved Session Manager route with an owned relay for its `register` and `verify` steps only. The host is the one in-service instance of the approved host group from the platform outputs. Both steps refuse to open the route without a passing route check of that host for the same cutover (`route-check`). For this one attended cutover the check is Mac-side (owner decision, Oct 28 2026): the tunnel and relay reach only the catalog port of the bound host, the host's security groups admit only project security groups (same account and VPC, with the project tag) and no Mac Docker network reaches the tunnel or relay. It does not observe the class-network matrix of the [real-run procedure](ecs_real_runs.md), which stays required before any ECS job uses the catalog. Its network acceptance check runs before the tunnel starts: the local tunnel and relay ports differ from the Mac Polaris port 8181. The host must be a running project instance. Every security group on the host or its interfaces admits inbound traffic only from project security groups (same account and VPC, with the project tag), never from an IP range or prefix list. Every other catalog-dependent Mac preparation remains disabled. No public catalog route is introduced.
+The bronze cutover (`scripts/lakehouse/bronze_cutover.py`) enables the approved Session Manager route with an owned relay for its `register` and `verify` steps only. The host is the one in-service instance of the approved host group from the platform outputs. Both steps refuse to open the route without a passing route check of that host for the same cutover (`route-check`). For this one attended cutover the owner approved a Mac-side check. The check requires three conditions. The tunnel and relay reach only the catalog port of the bound host. The host's security groups admit only project security groups (same account and VPC, with the project tag). No Mac Docker network reaches the tunnel or relay. The check does not observe the class-network matrix of the [real-run procedure](ecs_real_runs.md), which stays required before any ECS job uses the catalog. The network acceptance check runs before the tunnel starts and requires the local tunnel and relay ports to differ from the Mac Polaris port 8181. The host must be a running project instance. Every security group on the host or its interfaces admits inbound traffic only from project security groups (same account and VPC, with the project tag), never from an IP range or prefix list. Every other catalog-dependent Mac preparation remains disabled. No public catalog route is introduced.
 
 ## Private target writer
 

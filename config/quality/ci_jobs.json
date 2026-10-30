@@ -7,6 +7,7 @@
     "Repository Hooks (code)",
     "Repository Hooks (samples)",
     "Local CI Core",
+    "CI Reuse and Gate E2E",
     "Lakehouse Bronze Checks",
     "Lakehouse Silver Checks",
     "Lakehouse Gold Checks",

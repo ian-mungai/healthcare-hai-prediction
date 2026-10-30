@@ -2,7 +2,15 @@ name: Set up the checks
 description: Terraform, Python, Node.js, Go and the pinned project tools every CI check job needs.
 
 # pip accepts a package found in a restored environment or cache as already satisfied, and requirements.txt has no
-# hashes, so the Python environment is built fresh; only the hash-pinned SQLFluff requirements use the pip cache.
+# hashes, so the Python environment is built fresh; only the hash-pinned requirements of SQLFluff, import-linter and
+# check-jsonschema use the pip cache (pip checks every hash again on a cache hit). The native tools (gitleaks, TFLint, trivy,
+# OSV-Scanner, zizmor, typos and the rest) are downloaded from the pins of config/quality_tools.json on every run and checked
+# by SHA-256 before they are written to .tools/bin; nothing restored from a cache is trusted without that check.
+inputs:
+  lint-tools:
+    description: Also install the Python lint tools and the AWS ruleset of TFLint, which only the hook group that runs those linters needs.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -17,7 +25,10 @@ runs:
       with:
         python-version: "3.12"
         cache: pip
-        cache-dependency-path: scripts/quality/sqlfluff/requirements.txt
+        cache-dependency-path: |
+          scripts/quality/sqlfluff/requirements.txt
+          scripts/quality/lint_requirements/import_linter.txt
+          scripts/quality/lint_requirements/check_jsonschema.txt
 
     # markdownlint-cli2 needs Node.js 22 or later.
     - name: Setup Node.js
@@ -61,3 +72,14 @@ runs:
         fi
         mkdir -p "$HOME/.terraform.d/plugin-cache"
         echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+
+    - name: Install the lint tools
+      if: ${{ inputs.lint-tools == 'true' }}
+      shell: bash
+      env:
+        # Without a token, the GitHub API limit on a shared runner address stops the plugin download.
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        .venv/bin/python -m scripts.quality.install_lint_tools
+        # The AWS ruleset of the tflint hook: TFLint verifies the release checksums and signature of the plugin pinned in .tflint.hcl.
+        .tools/bin/tflint --init --config .tflint.hcl

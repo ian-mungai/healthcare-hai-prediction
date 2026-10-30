@@ -55,7 +55,7 @@ def main() -> int:
     parser.add_argument("--case", action="append", choices=("selector", "sizing", "contracts", "submission"))
     args = parser.parse_args()
     if args.proof not in ("S", "D"):
-        parser.error("this increment supplies S and in-process D only. T and A require the lead's integrated runtime and cloud inputs")
+        parser.error("this increment supplies S and in-process D only. T and A require the coordinating agent's integrated runtime and cloud inputs")
     selected = args.case or (["selector", "sizing", "contracts"] if args.proof == "S" else ["submission"])
     if (args.proof == "S" and "submission" in selected) or (args.proof == "D" and selected != ["submission"]):
         parser.error("the case selection does not match the requested proof level")

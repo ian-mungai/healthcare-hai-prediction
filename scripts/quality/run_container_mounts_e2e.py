@@ -526,8 +526,13 @@ def snapshot(deadline: float) -> dict[str, str]:
                 raise ValueError(f"{name}: source symlinks are not supported")
             files[name] = (ROOT / path).read_text(encoding="utf-8")
     files[".pre-commit-config.yaml"] = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    # The terraform_checks body copies these files into every stack it checks.
-    for name in ("config/quality/ci_groups.json", "config/lakehouse/bronze_tables.json", "config/lakehouse/aws_bronze_grants.json"):
+    # The CI group selector reads the launcher input list; the terraform_checks body copies the other files into every stack it checks.
+    for name in (
+        "config/quality/ci_groups.json",
+        "config/quality/launcher_inputs.json",
+        "config/lakehouse/bronze_tables.json",
+        "config/lakehouse/aws_bronze_grants.json",
+    ):
         files[name] = (ROOT / name).read_text(encoding="utf-8")
     files[".gitignore"] = ".venv/\n.cache/\n"
     return files
@@ -611,7 +616,7 @@ def ci_case(source: dict[str, str], workspace: Path, deadline: float, name: str 
             timeout=remaining(deadline, 15),
         )
         selected[path] = result.returncode == 0 and "repository_code_checks" in json.loads(result.stdout)["run"]
-    environment.update(CI_PART="core", CI_SCOPE="full", PYTHON_BIN=str(PYTHON))
+    environment.update(CI_PART="core", CI_SCOPE="full", PYTHON_BIN=str(PYTHON), HAI_DOCKER_RELEASE="outer")
     result = bounded("/bin/bash", ["scripts/run_ci.sh"], folder, environment, deadline)
     output = result.stdout + result.stderr
     commands = ("-m scripts.quality.container_mounts", "-m scripts.quality.run_container_mounts_e2e")

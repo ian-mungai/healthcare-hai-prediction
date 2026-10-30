@@ -30,9 +30,9 @@ Engine API classes (``DockerApi``, ``UnixConnection``, ``EventStream``) or of a 
 non-comment line that runs ``docker`` or ``docker-compose`` (directly, through ``exec``, ``env``, ``command``, ``sudo``, a path, a quoted
 ``bash -c`` string or a variable that holds the program) or runs ``eval`` is a finding.
 
-Process starts the check cannot prove and the lead has read are listed in ``REVIEWED``; each entry binds its whole file, the repository
+Process starts the check cannot prove and the coordinating agent has read are listed in ``REVIEWED``; each entry binds its whole file, the repository
 modules that file imports, its finding class and its exact number of findings. Three files are exempt, each for a stated reason
-(``EXEMPT``). Known limits (issue WV3-006): a ``PATH`` the repository changes, a program symlink the repository creates, a script the
+(``EXEMPT``). Known limits: a ``PATH`` the repository changes, a program symlink the repository creates, a script the
 repository writes at run time and then runs, and shell commands assembled from variables are not followed. The check covers the
 repository's own code, which is the trust boundary (D1 section 12). Failure mode 918 is in plans/wp/l1a_failure_modes.md.
 """
@@ -986,7 +986,7 @@ def dependencies(models: dict[str, FileModel], relative: str, root: Path) -> dic
 
 
 def site_entry(models: dict[str, FileModel], relative: str, root: Path, line: int, problem: str, occurrences: int, reason: str) -> dict[str, object]:
-    """A reviewed-site entry for the current source (used by the lead to write ``REVIEWED``)."""
+    """A reviewed-site entry for the current source (used by the coordinating agent to write ``REVIEWED``)."""
     code = (root / relative).read_text(errors="replace").splitlines()[line - 1].strip()
     return {
         "path": relative,

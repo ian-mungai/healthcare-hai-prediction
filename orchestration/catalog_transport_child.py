@@ -56,6 +56,7 @@ def _relay(target_port: int, listen_port: int, deadline: float) -> None:
         peers: dict[socket.socket, socket.socket] = {}
         buffers: dict[socket.socket, bytearray] = {}
         closing: set[socket.socket] = set()
+        shut: set[socket.socket] = set()
 
         def close_pair(peer: socket.socket) -> None:
             other = peers.pop(peer, None)
@@ -65,6 +66,7 @@ def _relay(target_port: int, listen_port: int, deadline: float) -> None:
                 peers.pop(entry, None)
                 buffers.pop(entry, None)
                 closing.discard(entry)
+                shut.discard(entry)
                 with contextlib.suppress(KeyError):
                     selector.unregister(entry)
                 entry.close()
@@ -112,7 +114,7 @@ def _relay(target_port: int, listen_port: int, deadline: float) -> None:
                         if mask & selectors.EVENT_READ:
                             chunk = peer.recv(65536)
                             if not chunk:
-                                closing.update((peer, other))
+                                closing.add(peer)
                             else:
                                 buffers[other].extend(chunk)
                         if mask & selectors.EVENT_WRITE and buffers[peer]:
@@ -123,7 +125,15 @@ def _relay(target_port: int, listen_port: int, deadline: float) -> None:
                     except OSError:
                         close_pair(peer)
                         continue
-                    if peer in closing and not buffers[peer] and not buffers[other]:
+                    try:
+                        for side in (peer, other):
+                            if peers[side] in closing and not buffers[side] and side not in shut:
+                                shut.add(side)
+                                side.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        close_pair(peer)
+                        continue
+                    if peer in closing and other in closing and not buffers[peer] and not buffers[other]:
                         close_pair(peer)
                     else:
                         refresh(peer)

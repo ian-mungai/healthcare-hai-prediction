@@ -107,15 +107,11 @@ def metafile_md5(metafile: Path) -> str:
     return str(found[0])
 
 
-def record(matrix_path: Path, run: Run, snapshots: Mapping[str, str], *, project: Path = ROOT, deadlines: Deadlines | None = None) -> str:
-    """Version the matrix with DVC, push it and record the metafile and its hash in the run; return the metafile hash."""
+def add_and_push(matrix_path: Path, *, project: Path = ROOT, deadlines: Deadlines | None = None) -> tuple[Path, Path]:
+    """Version the matrix with ``dvc add`` and push it; return its path inside the project and the path of its metafile."""
     limits = deadlines or Deadlines()
     if not matrix_path.is_file():
         raise BaselineError(f"the matrix file does not exist: {matrix_path}")
-    if not snapshots or not all(snapshots.values()):
-        raise BaselineError(
-            "record needs the Iceberg snapshot ID of every source feature table; a baseline without them does not say which data trained the model"
-        )
     try:
         relative = matrix_path.resolve().relative_to(project.resolve())
     except ValueError:
@@ -123,6 +119,27 @@ def record(matrix_path: Path, run: Run, snapshots: Mapping[str, str], *, project
     run_dvc(["add", str(relative)], project, limits.add)
     metafile = project / f"{relative}.dvc"
     run_dvc(["push", str(relative) + ".dvc"], project, limits.push)
+    return relative, metafile
+
+
+def record(matrix_path: Path, run: Run, snapshots: Mapping[str, str], *, project: Path = ROOT, deadlines: Deadlines | None = None) -> str:
+    """Version the matrix with DVC, push it and record the metafile and its hash in the run; return the metafile hash."""
+    if not matrix_path.is_file():
+        raise BaselineError(f"the matrix file does not exist: {matrix_path}")
+    if not snapshots or not all(snapshots.values()):
+        raise BaselineError(
+            "record needs the Iceberg snapshot ID of every source feature table; a baseline without them does not say which data trained the model"
+        )
+    relative, metafile = add_and_push(matrix_path, project=project, deadlines=deadlines)
+    return log_baseline(metafile, relative, run, snapshots)
+
+
+def log_baseline(metafile: Path, relative: Path, run: Run, snapshots: Mapping[str, str]) -> str:
+    """Log a recorded metafile as an artifact of the run and set the snapshot, path and hash tags; return the metafile hash.
+
+    The tags are set last, in the order a reader depends on: a run that carries the hash tag always carries the metafile. A repeat with the same inputs
+    logs the same artifact and sets the same tags.
+    """
     digest = file_digest(metafile, "sha256")
     run.store.log_artifact(run.run_id, str(metafile), ARTIFACT_FOLDER)
     for table, snapshot in sorted(snapshots.items()):

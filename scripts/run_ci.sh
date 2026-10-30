@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the
-# acquisition gate and the four lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the CI groups
+# reuse and gate stage cases, the acquisition gate and the four lakehouse layers), "reuse_gate" (those reuse and gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
 # if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), "feature_store" (the feature store's own light checks) or "gates" (the gates only).
 # FEATURE_SHARD=K/N selects one hosted feature shard. Without it the selected feature suites run all their shards and combine their evidence. GitHub CI runs
 # "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
@@ -12,6 +12,8 @@ set -euo pipefail
 # every group: the pre-push run escalates to it when the selector or the CI scripts change; run it on demand or when hosted CI is unavailable), "staged"
 # (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
+# HAI_CI_REUSE=main (the local default) skips a group whose input hash matches a pass recorded by a full run on a commit of origin/main; off runs every group. A passed full run on
+# a clean commit of origin/main records its groups (scripts/quality/ci_main_passes.py). The pre-push gate never reuses.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
@@ -28,8 +30,8 @@ source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
-  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
+  *) printf 'CI_PART must be all, core, launcher, reuse_gate, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"
@@ -50,11 +52,34 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 # to the job summary in a fixed order, also when a gate or a unit failed.
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
+# release_docker: after the run, ask the launcher to quit Docker Desktop. The launcher skips it unless a group created a container since ci_started and refuses
+# it while any other container or registry work runs. Nothing here changes the exit status of the run (failure mode R25). It is skipped under the pre-push gate
+# (HAI_DOCKER_RELEASE=outer, the gate releases once after all its steps), on hosted CI, off macOS, in a list-only run and in the gates part.
+ci_started="$(date +%s)"
+release_docker() {
+  local skip=""
+  if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then
+    skip="the pre-push gate releases Docker"
+  elif [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    skip="hosted CI has no Docker Desktop"
+  elif [[ "$(uname)" != "Darwin" ]]; then
+    skip="this is not macOS"
+  elif [[ "${CI_LIST_ONLY:-0}" == "1" || "$part" == "gates" ]]; then
+    skip="no group ran Docker"
+  fi
+  if [[ -n "$skip" ]]; then
+    printf 'Docker release skipped: %s\n' "$skip"
+    return 0
+  fi
+  "$python_bin" -m orchestration.launcher docker-release --owner --since "$ci_started" --deadline 600 || printf 'Docker release did not quit Docker (exit %s); the run result stands\n' "$?"
+  return 0
+}
 finish() {
   if [[ -s "$scratch/main.timing" ]]; then
     timing_table "${timing_files[@]}" >>"$summary"
   fi
   rm -rf "$scratch"
+  release_docker
 }
 # Only a run that sets ci_finished=1 exits 0: bash 3.2 (macOS /bin/bash) reports status 0 to this trap when an unbound
 # variable ends the script, so the trap fails every other exit itself.
@@ -77,6 +102,36 @@ done <<<"$plan"
 if [[ "${CI_LIST_ONLY:-0}" == "1" ]]; then
   ci_finished=1
   exit 0
+fi
+# Reuse of a group's pass from main (scripts/quality/ci_main_passes.py). HAI_CI_REUSE is "main" (the default for a local run) or "off" (the default on hosted CI). The pre-push
+# gate sets it to off, and HAI_DOCKER_RELEASE=outer (the gate's marker) forces it off here too: the gate never reuses a local pass. Only a full run of part all reuses and records
+# (no CI_UNITS, LAUNCHER_SHARD or FEATURE_SHARD). A group is reused only when a full run on a commit of origin/main recorded a pass with the same input hash.
+reuse_mode="${HAI_CI_REUSE:-}"
+if [[ -z "$reuse_mode" ]]; then
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then reuse_mode=off; else reuse_mode=main; fi
+fi
+case "$reuse_mode" in
+  main | off) ;;
+  *) printf 'HAI_CI_REUSE must be main or off, not %s\n' "$reuse_mode" >&2; exit 2 ;;
+esac
+if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then reuse_mode=off; fi
+full_run=0
+if [[ "$part" == "all" && -z "${CI_UNITS:-}" && -z "${LAUNCHER_SHARD:-}" && -z "${FEATURE_SHARD:-}" ]]; then full_run=1; fi
+if [[ "$reuse_mode" == "main" && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then
+  # Only a group the lookup names as reused leaves the run, so a lookup that fails or prints nothing runs every group.
+  reused=" "
+  while read -r kind group commit; do
+    if [[ "$kind" == reuse ]]; then
+      printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary"
+      reused+="$group "
+    fi
+  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
+  kept=()
+  for group in "${run_groups[@]}"; do
+    [[ "$reused" == *" $group "* ]] || kept+=("$group")
+  done
+  run_groups=(${kept[@]+"${kept[@]}"})
+  selected=" ${run_groups[*]:-} "
 fi
 is_selected() { [[ "$selected" == *" $1 "* ]]; }
 # require_group_file <group>: a missing or unreadable body file of a check group fails the run with its name.
@@ -148,11 +203,87 @@ fi
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 
+failed=()
+# descendants <pid>: the pids of all processes below <pid>, deepest first.
+descendants() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null || true); do
+    descendants "$child"
+    printf '%s\n' "$child"
+  done
+}
+# stop_tree <pid>: TERM <pid> and everything below it, KILL what is left after 5 s.
+stop_tree() {
+  local members
+  members="$(descendants "$1") $1"
+  # shellcheck disable=SC2086
+  kill -TERM $members 2>/dev/null || true
+  sleep 5
+  # shellcheck disable=SC2086
+  kill -KILL $members 2>/dev/null || true
+}
+# run_launcher_shards: the launcher E2E as the hosted jobs run it, launcher_shards shards at once (launcher_shards in config/quality/ci_groups.json, the matrix of
+# .github/workflows/ci.yml). Each shard has its own log and timing file; the logs print in shard order after all shards end. One deadline of launcher_shard_seconds
+# (CI_LAUNCHER_LIMIT_SECONDS replaces it) covers the wait: past it every shard still running is stopped with its processes and the run fails with the shard names.
+run_launcher_shards() {
+  local index count="$1" limit="$2" begun=$SECONDS pending="$1" pid status label bad=()
+  local pids=() ended=() logs=() next_beat=60
+  for ((index = 1; index <= count; index++)); do
+    logs+=("$scratch/launcher_shard_$index.log")
+    timing_files+=("$scratch/launcher_shard_$index.timing")
+    CI_TIMING_FILE="$scratch/launcher_shard_$index.timing" LAUNCHER_SHARD="$index/$count" \
+      timed "launcher E2E shard $index/$count" run_group launcher launcher_e2e >"${logs[$((index - 1))]}" 2>&1 &
+    pids+=("$!")
+    ended+=(0)
+  done
+  while ((pending > 0)); do
+    for ((index = 0; index < count; index++)); do
+      if ((ended[index])); then continue; fi
+      pid="${pids[$index]}"
+      label="launcher E2E shard $((index + 1))/$count"
+      if ! kill -0 "$pid" 2>/dev/null; then
+        status=0
+        wait "$pid" || status=$?
+        if ((status != 0)); then bad+=("$label"); fi
+        ended[index]=1
+        pending=$((pending - 1))
+      elif ((SECONDS - begun > limit)); then
+        printf 'Local CI: %s ran past its deadline of %s s: stopping it.\n' "$label" "$limit" >&2
+        stop_tree "$pid"
+        wait "$pid" 2>/dev/null || true
+        bad+=("$label (deadline $limit s)")
+        ended[index]=1
+        pending=$((pending - 1))
+      fi
+    done
+    if ((pending > 0 && SECONDS - begun >= next_beat)); then
+      printf 'Local CI: %s of %s launcher shards still running after %s s.\n' "$pending" "$count" "$((SECONDS - begun))"
+      next_beat=$((next_beat + 60))
+    fi
+    if ((pending > 0)); then sleep 1; fi
+  done
+  for ((index = 0; index < count; index++)); do
+    printf '\n== launcher shard %s/%s ==\n' "$((index + 1))" "$count"
+    cat "${logs[$index]}"
+  done
+  if ((${#bad[@]})); then
+    failed+=("${bad[@]}")
+    printf '\nLocal CI failed in: %s\n' "${bad[*]}" >&2
+    exit 1
+  fi
+}
+launcher_settings="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json")); print(c["launcher_shards"], c["launcher_shard_seconds"])')"
+read -r launcher_shards launcher_shard_seconds <<<"$launcher_settings"
 if [[ "$part" != "core" ]] && is_selected launcher; then
   require_group_file launcher
   started=$SECONDS
-  timed "launcher E2E${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" run_group launcher launcher_e2e
-  record "launcher${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" $((SECONDS - started))
+  if [[ -z "${LAUNCHER_SHARD:-}" && "$launcher_shards" -gt 1 ]]; then
+    run_launcher_shards "$launcher_shards" "${CI_LAUNCHER_LIMIT_SECONDS:-$launcher_shard_seconds}"
+    record "launcher (all $launcher_shards shards)" $((SECONDS - started))
+  else
+    timed "launcher E2E${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" run_group launcher launcher_e2e
+    record "launcher${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" $((SECONDS - started))
+  fi
 fi
 if [[ "$part" == "launcher" ]]; then
   printf '\nThe launcher part passed.\n'
@@ -201,6 +332,7 @@ hook_partition() {
 hook_privacy() { hook_partition privacy; }
 hook_documentation() { hook_partition documentation; }
 hook_code() { hook_partition code; }
+hook_samples() { hook_partition samples; }
 combine_feature_sources() { run_group lakehouse_features lakehouse_features_combine "sources/$feature_sources_shards"; }
 combine_feature_columns() { run_group lakehouse_features lakehouse_features_combine "columns/$feature_columns_shards"; }
 
@@ -262,7 +394,7 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
 fi
 
 if [[ "$part" == "all" ]] && is_selected repository_hooks; then
-  shared+=(hook_privacy hook_documentation hook_code)
+  shared+=(hook_privacy hook_documentation hook_code hook_samples)
 fi
 
 run_timed_item() {
@@ -273,7 +405,6 @@ run_timed_item() {
   printf '%s\n' $((SECONDS - item_started)) >"$scratch/$item.seconds"
 }
 
-failed=()
 # run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration.
 run_items() {
   local item index pids=() items=("$@")
@@ -341,5 +472,8 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
   fi
 fi
 
+if [[ "$reuse_mode" == "main" && "$full_run" == 1 && "$scope" == "full" && ${#run_groups[@]} -gt 0 ]]; then
+  "$python_bin" -m scripts.quality.ci_main_passes record --groups "${run_groups[@]}" || printf 'Recording the passes failed; the run result stands\n'
+fi
 printf '\nAll local CI checks passed without AWS credentials.\n'
 ci_finished=1

@@ -10,7 +10,7 @@ Run from the repository root:
     .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all --diagnose
     .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>
     .venv/bin/python -m scripts.lakehouse.catalog down
-    .venv/bin/python -m scripts.lakehouse.catalog release   # after a heavy run: stop, restart Docker Desktop
+    .venv/bin/python -m scripts.lakehouse.catalog release   # after a heavy run: stop the catalog, quit Docker Desktop
     scripts/lakehouse/query.sh                      # interactive DuckDB shell, bronze tables attached read-only
 
 This script is a launcher client: it makes no Docker call. The launcher (orchestration/launcher.py) creates the containers from
@@ -20,9 +20,11 @@ database, bootstrap the Polaris realm once and start Polaris, then creates the `
 location is ``lakehouse/`` in the project bucket. A catalog that already exists must match that location exactly.
 It also creates a read-only principal for the DuckDB viewer once and stores its credentials in Parameter Store; a
 principal whose stored secret is missing has its credentials reset, never recreated. ``down`` stops the containers and
-keeps the database files, so the tables survive a restart. ``release`` frees the memory Docker's VM keeps after a heavy
-run: it stops the catalog and restarts Docker Desktop, but only when nothing of the registry runs and no foreign container runs;
-otherwise it changes nothing and names the reason (failure modes 545 to 547). A catalog job runs as an attempt of the template
+keeps the database files, so the tables survive a restart. ``up`` first asks the launcher to start Docker Desktop when it does not
+answer (``desktop_start``, within the launcher's start deadline). ``release`` frees the memory Docker's VM keeps after a heavy
+run: it asks the launcher for ``docker_release``, which stops the idle catalog and quits Docker Desktop, but only when this process (or a
+run that began before it) created a container and nothing of the registry runs and no foreign container runs; otherwise it changes nothing and
+names the reason (failure modes 545 to 547 and Build part 2). The next ``up`` starts Docker Desktop again. A catalog job runs as an attempt of the template
 ``spark_read`` (``pins``), ``spark_write`` (the loaders) or ``spark_e2e`` (the throwaway-catalog checks).
 """
 
@@ -33,6 +35,7 @@ import http.client
 import json
 import os
 import sys
+import time
 import urllib.parse
 import uuid
 from datetime import UTC, datetime
@@ -54,6 +57,8 @@ READER = "lakehouse_reader"
 READER_PRIVILEGES = ("CATALOG_READ_PROPERTIES", "NAMESPACE_LIST", "NAMESPACE_READ_PROPERTIES", "TABLE_LIST", "TABLE_READ_PROPERTIES", "TABLE_READ_DATA")
 POLARIS_HOST = "127.0.0.1"
 POLARIS_PORT = 8181
+# The start of this run: ``release`` skips unless the launcher created a container since then (failure mode R23).
+RUN_STARTED = time.time()
 # The test registry a test of this script passes; the real run never sets it.
 TEST_REGISTRY: str | None = None
 # Job name -> template. The launcher holds the job table (modules, mounts and argument grammar): orchestration/launcher.py SPARK_JOBS.
@@ -217,6 +222,8 @@ def up() -> None:
     (STATE / "polaris_db").mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         link = client()
+        start_wait = link.config.timings.start_wait
+        link.call("desktop_start", {"owner": True, "deadline": start_wait}, {"kind": "any", "owner": True}, timeout=start_wait + 30)
         link.call("catalog_up")
         record = link.wait_for("catalog", "", "phase", ("up", "down"), {"kind": "any"}, 900)
     except launcher.ClientError as error:
@@ -317,16 +324,19 @@ def down() -> None:
     sys.stdout.write("Catalog services stopped; the database in data/lakehouse/polaris_db is kept.\n")
 
 
-def release() -> str:
-    """Restart Docker Desktop to free the VM's memory when nothing of this registry and nothing foreign runs; a refusal raises [545] to [547]."""
+def release(since: float | None = RUN_STARTED) -> str:
+    """Quit Docker Desktop to free the VM's memory when nothing of this registry and nothing foreign runs; a refusal raises [545] to [547].
+
+    ``since`` skips the quit unless a container was created after it (this run's start by default; ``None`` always acts). The launcher stops the idle catalog.
+    """
+    params: dict[str, Any] = {"owner": True} if since is None else {"owner": True, "since": since}
     try:
-        link = client()
-        if (link.call("status", {"what": "catalog"}) or {}).get("phase") in ("up", "starting"):
-            down()
-        link.call("docker_restart", {"owner": True}, {"kind": "any", "owner": True}, timeout=900)
+        answer = client().call("docker_release", params, {"kind": "any", "owner": True}, timeout=900) or {}
     except launcher.ClientError as error:
-        raise CatalogError(f"Docker not restarted: {error}") from error
-    return "Docker restarted; the catalog is stopped."
+        raise CatalogError(f"Docker not quit: {error}") from error
+    if answer.get("outcome") == "quit":
+        return "Docker Desktop quit; the catalog is stopped."
+    return f"Docker not quit: {answer.get('reason') or answer.get('outcome') or 'no reason given'}."
 
 
 def main() -> int:
@@ -343,7 +353,7 @@ def main() -> int:
         if args.command == "job":
             job(args.job_name or "", [value for value in args.job_args if value != "--"])
         elif args.command == "release":
-            sys.stdout.write(release() + "\n")
+            sys.stdout.write(release(None) + "\n")
         else:
             {"up": up, "status": status, "down": down}[args.command]()
     except (CatalogError, OSError, KeyError, json.JSONDecodeError, run_lock.Refused, run_lock.RegistryError) as error:

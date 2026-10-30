@@ -443,7 +443,7 @@ def main() -> int:
         parser.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
     parser.add_argument("--catalog-binding", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "data/orchestration/ecs_target.json")
-    parser.add_argument("--enable", action="store_true", help="Set the rollout switch explicitly after the lead accepts the deployment.")
+    parser.add_argument("--enable", action="store_true", help="Set the rollout switch explicitly after the coordinating agent accepts the deployment.")
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
     try:

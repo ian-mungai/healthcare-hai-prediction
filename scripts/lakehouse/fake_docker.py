@@ -7,7 +7,7 @@ launcher that is killed leaves the fake daemon as it was, and a request that was
 
 The test controls the daemon's timing: a *gate* pauses a request before or after the daemon applies its side effect, an event can be
 published before or after the reply, the event connections can be dropped, the subscription can be registered late (the response
-headers go out first), the daemon can go away for a while like a restarting Docker Desktop, and a created container can
+headers go out first), the daemon can go away for a while like a restarting Docker Desktop (or quit until a test starts it again), and a created container can
 be given a script (how long it runs and how it ends). Every call is recorded.
 """
 
@@ -251,6 +251,14 @@ class FakeDocker:
                 if stop_containers and container["State"]["Running"]:
                     container["State"].update({"Running": False, "Status": "exited", "ExitCode": 137})
 
+    def quit_desktop(self, stop_containers: bool = True) -> None:
+        """Pretend Docker Desktop quits: nothing answers and events drop until ``start_desktop``; containers stop unless the test keeps them."""
+        self.restart(float("inf"), stop_containers)
+
+    def start_desktop(self, after: float = 0.0) -> None:
+        """Pretend Docker Desktop starts: the daemon answers again ``after`` seconds from now."""
+        self.down_until = time.time() + after
+
     def create_rogue(self, name: str, labels: dict[str, str], running: bool = False, image: str | None = None) -> str:
         """Add a container the launcher did not create, as a same-user process calling Docker would, and publish its create event."""
         container_id = uuid.uuid4().hex + uuid.uuid4().hex
@@ -293,6 +301,10 @@ class FakeDocker:
         elif parts[:1] == ["_test"]:
             if parts[1:] == ["restart"]:
                 self.restart(float(query.get("down", "1")), query.get("keep") != "1")
+            elif parts[1:] == ["stop"]:
+                self.quit_desktop(query.get("keep") != "1")
+            elif parts[1:] == ["start"]:
+                self.start_desktop(float(query.get("after", "0")))
             handler.reply(200, {"ok": True})
         elif parts[:1] == ["events"]:
             self.events(handler, query)

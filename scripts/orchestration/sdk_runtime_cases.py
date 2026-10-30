@@ -1082,7 +1082,7 @@ def main() -> int:
         "elapsed_s": time.monotonic() - started,
         "cleanup": "done" if not failed else "inspect failed cases",
         "limits": [
-            "Shared launcher wiring, owner terminal harness, descendants, native omission and Linux evidence require the lead's integrated runs",
+            "Shared launcher wiring, owner terminal harness, descendants, native omission and Linux evidence require the coordinating agent's integrated runs",
             "No cloud requests or source datasets",
         ],
     }

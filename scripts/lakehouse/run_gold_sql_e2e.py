@@ -1212,7 +1212,7 @@ def round4_review_probes() -> list[Probe]:
 
 
 def round5_probes() -> list[Probe]:
-    """GX round 5 (amendment A90, issue WV3-007): a sampled FROM reference restricts a selection, so it may not keep its domain; a null natural
+    """GX round 5 (amendment A90): a sampled FROM reference restricts a selection, so it may not keep its domain; a null natural
     key beside the unknown-member hash is accepted only where the contract exempts it (dim_measure key parts, dim_date)."""
     originals = {probe.name.removeprefix("R4_review_"): probe.sql for probe in round4_review_probes()}
     bad_domain, good_domain = originals["domain_except_selected"], originals["domain_except_subset"]

@@ -1,5 +1,5 @@
 locals {
-  lakehouse_read_prefixes  = ["lakehouse/bronze/", "lakehouse/silver/", "lakehouse/gold/"]
+  lakehouse_read_prefixes  = ["lakehouse/bronze/", "lakehouse/bronze_dictionary/", "lakehouse/silver/", "lakehouse/gold/"]
   lakehouse_write_prefixes = ["lakehouse/silver/", "lakehouse/silver_e2e/", "lakehouse/gold/", "lakehouse/gold_e2e/", "lakehouse/catalog_backups/"]
   role_policy_inputs = {
     AWS_ACCOUNT_ID   = var.expected_account_id

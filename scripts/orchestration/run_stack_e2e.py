@@ -25,7 +25,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher
-from scripts.lakehouse import run_launcher_e2e
+from scripts.lakehouse import memory_budget, run_launcher_e2e
 from scripts.lakehouse.run_launcher_e2e import CaseFailure, Env, catalog_phase, catalog_script, catalog_up, files_holding, refused
 from scripts.orchestration.fake_engine import StackDocker
 from scripts.process import run_command
@@ -555,13 +555,19 @@ def stack_memory_floor(env: StackEnv) -> dict[str, bool]:
 
     refused_at("4.0 GiB free", headroom + 4 * GIB)
     refused_at("one MiB below the minima", headroom + minimum - 1024**2)
-    env.daemon.mem_total = headroom + minimum
+    # The plan's floor applies to the capped allocation, so the stack needs the larger of its minima and the free memory whose cap reaches the floor.
+    lowest = max(minimum, -(-memory_budget.FLOOR * 100 // memory_budget.ALLOCATION_SHARE_PERCENT))
+    if lowest > minimum:
+        refused_at("one MiB below the capped floor", headroom + lowest - 1024**2)
+    env.daemon.mem_total = headroom + lowest
     plan = env.client().call("plan")
-    free = int(plan["environment"]["JOB_MEMORY_LIMIT"])
+    allocation = int(plan["environment"]["JOB_MEMORY_LIMIT"])
     phase = start_stack(env, 40)
     limits = {service: env.body_of(service)["HostConfig"]["Memory"] for service in launcher.ORCHESTRATION_MEMORY} if phase == "up" else {}
-    results["exactly the minima free: the stack starts (control)"] = phase == "up" and free == minimum
-    results["the service limits together do not exceed the plan"] = bool(limits) and sum(limits.values()) <= free
+    results["the lowest admissible free memory starts the stack (control)"] = (
+        phase == "up" and allocation == lowest * memory_budget.ALLOCATION_SHARE_PERCENT // 100 >= memory_budget.FLOOR
+    )
+    results["the service limits together do not exceed the free memory"] = bool(limits) and sum(limits.values()) <= lowest
     env.stack_down()
     # A catalog service holds a growth reserve; the stack may not spend it.
     env.daemon.mem_total = 14 * GIB
