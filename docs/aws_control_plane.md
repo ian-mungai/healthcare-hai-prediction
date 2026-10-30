@@ -228,10 +228,10 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 ## How the workflows run on the host
 
-The silver, gold and maintenance DAGs only call the job broker over HTTP (`orchestration/client.py`). Nothing in the DAGs changes. The scheduler needs `/opt/hai/broker/client.json` and `broker_token`. On the host a broker service writes the endpoint and the token comes from a new Parameter Store secret. A later package adds that service and the job path. That package assumes:
+The DAGs only call the job broker over HTTP (`orchestration/client.py`). Nothing in the DAGs changes. The scheduler needs `/opt/hai/broker/client.json` and `broker_token`. The lean broker service on the host answers them. The scheduler writes both files from a Parameter Store secret when it starts. The steps to apply it are in the [AWS job broker](aws_broker.md) guide. The broker follows these rules:
 
-- The broker keeps its HTTP interface and its ledger. It replaces the launcher with an ECS target: one `RunTask` per launcher template (`pipeline_spark`, `pipeline_publish`, `fixture_dbt`, `quality_*`, `pipeline_export`), idempotent through a start token derived from the submission ID.
-- Status, cancel and logs come from `DescribeTasks`, `StopTask` and CloudWatch Logs. Light steps run on the host capacity provider. Heavy steps run on Fargate Spot with on-demand fallback.
+- The broker keeps its HTTP interface and its ledger. It replaces the launcher with an ECS target: one task per job, run and attempt (`train`, `silver`, `gold`, `features`, `drift`). The steps of a job join the one task. A start token and a tag derived from the job key make a repeated start return the same task.
+- Status, cancel and logs come from `DescribeTasks`, `StopTask` and CloudWatch Logs. Every job runs on on-demand Fargate.
 - Jobs reach Polaris at the host's private address on 8181, read their catalog credentials from Parameter Store through the task definition and reach S3 through the task role.
 - Each run needs shared storage for its run folder (the build database, seals and run record), which the Mac keeps on local disk. The interface decision is open (see below).
 
