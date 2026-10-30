@@ -16,9 +16,11 @@ import math
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -858,6 +860,46 @@ def refused(call: Callable[[], object]) -> bool:
     return False
 
 
+def previous_record(deployment_id: str, candidate: str | None, percent: int) -> bytes:
+    """A deployment record as the first release wrote it: the same format version and no sequence field."""
+    document = {"version": 1, "hai_type": HAI, "deployment_id": deployment_id, "stable_version": PRODUCTION, "candidate_version": candidate, "percent": percent}
+    return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def case_previous_record_format(c: Checker) -> None:
+    """A record written before the sequence field still reads as the first deployment, serves after a cold start and numbers the next deploy one above it."""
+    old = previous_record(RUN_1, CANDIDATE, 20)
+    c.check("a record without a sequence parses as sequence 1", canary.Deployment.parse(old).sequence == 1)
+    try:
+        canary.Deployment.parse(old.replace(b'"percent"', b'"extra":1,"percent"'))
+        unknown_refused = False
+    except canary.DeploymentInvalid:
+        unknown_refused = True
+    c.check("a record with another unknown field is still refused", unknown_refused)
+    with world(deployment=False) as w:
+        w.store.put_history(HAI, RUN_1, old)
+        w.store.replace_active(HAI, old, None)
+        w.clock.now += 31.0
+        reply = ask(w)
+        c.check("a fresh service serves from a previous-format active record", reply.status == 200 and w.api.health().status == 200)
+        later = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=RUN_2)
+        c.check("a deploy over it is numbered 2 and writes the current format", later.status == "written" and later.deployment.sequence == 2)
+        c.check(
+            "a retry of the previous-format deployment is refused as replaced",
+            refused(
+                lambda: deploy.run(
+                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=20, mode="canary", deployment_id=RUN_1
+                )
+            ),
+        )
+        again = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=RUN_2)
+        c.check("a retry of the new deployment changes nothing", again.status == "unchanged")
+    with world(deployment=False) as w:
+        w.store.put_history(HAI, RUN_1, old)
+        finished = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=20, mode="canary", deployment_id=RUN_1)
+        c.check("a previous-format history record with no active record finishes on retry", finished.status == "written" and finished.deployment.sequence == 1)
+
+
 def case_predictions(c: Checker) -> None:
     """The append never fails a request, retries without duplicates and has a deadline. A full buffer refuses new requests and drops no acknowledged row."""
     with world(capacity=5) as w:
@@ -1040,6 +1082,63 @@ def case_replay_budget(c: Checker) -> None:
     c.check("a Retry-After that is not a number waits a short default within the budget", bool(waits) and all(0 < seconds <= 3.0 for seconds in waits))
 
 
+class DrippingApi(BaseHTTPRequestHandler):
+    """A real HTTP answer sent one byte at a time, so each read progresses and the whole answer takes far longer than any one read."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        raw = json.dumps({"served_by": "stable", "prediction": 1.0, "model_version": "3", "padding": "x" * 400}).encode()
+        data = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(raw)}\r\nConnection: close\r\n\r\n".encode() + raw
+        with contextlib.suppress(OSError):
+            for index in range(len(data)):
+                self.wfile.write(data[index : index + 1])
+                self.wfile.flush()
+                time.sleep(0.002)
+        self.close_connection = True
+
+
+def case_replay_http_drip(c: Checker) -> None:
+    """One deadline covers the whole HTTP exchange: an answer that keeps progressing but takes too long ends the replay at the deadline."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DrippingApi)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        started = time.monotonic()
+        outcome = "completed"
+        try:
+            replay.run(replay.http_send(url, KEY_A), [("AAA001", 2022)], HAI, clock=time.monotonic, sleep=time.sleep, deadline_seconds=0.1)
+        except (TimeoutError, replay.ReplayDeadline) as error:
+            outcome = type(error).__name__
+        elapsed = time.monotonic() - started
+        c.check(f"a dripped answer ends the replay with a deadline error, not a result (got {outcome})", outcome in ("TimeoutError", "ReplayDeadline"))
+        c.check(f"and it ends close to the deadline (took {elapsed:.2f} s)", elapsed < 0.6)
+        started = time.monotonic()
+        report = replay.run(replay.http_send(url, KEY_A), [("AAA001", 2022)], HAI, clock=time.monotonic, sleep=time.sleep, deadline_seconds=30.0)
+        c.check("the same answer succeeds inside a generous deadline", report["statuses"] == {"200": 1} and time.monotonic() - started < 10.0)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    clock = Clock()
+
+    def slow(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        clock.now += 2.0
+        return 200, {}, {"served_by": "stable", "prediction": 1.0, "model_version": "3"}
+
+    late = False
+    try:
+        replay.run(slow, [("AAA001", 2022)], HAI, clock=clock, sleep=lambda seconds: None, deadline_seconds=1.0)
+    except replay.ReplayDeadline:
+        late = True
+    c.check("a result that arrives after the deadline is not accepted", late)
+
+
 def deadline_failed(w: World, tick: Callable[[float], None]) -> bool:
     try:
         replay.run(partial(replay_send, w), replay_corpus(40), HAI, clock=w.clock, sleep=tick, deadline_seconds=3.0)
@@ -1205,6 +1304,8 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
     "replay_budget": (case_replay_budget, "canary compare"),
+    "replay_http_drip": (case_replay_http_drip, "timeout network"),
+    "previous_record_format": (case_previous_record_format, "deploy compatibility"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }
