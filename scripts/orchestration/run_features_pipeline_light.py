@@ -1662,7 +1662,15 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     supervisor = (ROOT / "scripts/orchestration/supervisor.py").read_text()
     match = re.search(r"PIPELINE_DAGS = \(([^)]*)\)", supervisor)
     names = set(re.findall(r'"([a-z_]+)"', match.group(1))) if match else set()
-    checks["supervisor_dags"] = {"silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag", FEATURES_DAG, STORE_DAG} == names
+    checks["supervisor_dags"] = {
+        "silver_transform_dag",
+        "gold_transform_dag",
+        "gold_maintenance_dag",
+        FEATURES_DAG,
+        STORE_DAG,
+        "training_dag",
+        "model_promotion_dag",
+    } == names
     return checks
 
 
