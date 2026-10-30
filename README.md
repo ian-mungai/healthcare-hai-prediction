@@ -171,6 +171,7 @@ Each run writes its report under `data/e2e/`. The configuration E2E writes under
 - `docs/infrastructure_controls.md`: the environments, the AWS stacks and project policies, the bucket lifecycle rules and the deferred controls.
 - `docs/architecture_rendering.md`: how to render the architecture diagram.
 - `docs/model_api.md`: the private model API, its canary rollout, the deploy DAG, the owner's steps and what is not yet proven.
+- `docs/streamlit_app.md`: the private Streamlit page that asks the model API for a prediction, its failure handling, the owner's steps and what is not yet proven.
 - `docs/ecs_target_contract.md`: the proposed ECS read target contract.
 - `docs/drift_monitoring.md`: what the drift check compares, its configuration and the minimum of current rows that the owner will review.
 
