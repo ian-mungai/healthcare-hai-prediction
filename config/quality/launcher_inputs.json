@@ -499,7 +499,6 @@
     "data_contracts/lakehouse/gold_contract.json",
     "data_contracts/lakehouse/silver_columns.json",
     "data_contracts/lakehouse/silver_publish.json",
-    "data_contracts/orchestration/README.md",
     "data_contracts/orchestration/dbt_lineage_record.schema.json",
     "data_contracts/orchestration/ecs_input_map.schema.json",
     "data_contracts/orchestration/ecs_job.schema.json",
