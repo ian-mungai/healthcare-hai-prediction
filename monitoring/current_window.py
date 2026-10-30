@@ -107,6 +107,16 @@ def build(root: Path, reader: Any, *, features_run: str, population: str, hai_ty
     return out / "current_manifest.json"
 
 
+def open_reader(stack: contextlib.ExitStack, root: Path, features_run: str) -> Any:
+    """Open the feature store reader inside ``stack``. A missing package or environment is refused as ``dependency_missing`` (exit 3)."""
+    try:
+        return stack.enter_context(training_extract.live_reader(root, os.environ, features_run))
+    except (ImportError, KeyError, RuntimeError) as error:
+        raise CheckError(
+            "dependency_missing", f"the current window reader needs the feature image and its environment: {type(error).__name__}: {error}", 3
+        ) from None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--hai-type", required=True)
@@ -122,12 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         config, _ = drift_config.load(arguments.config)
         features = read_features(arguments.features)
         with deadline(int(config["deadline_seconds"])), contextlib.ExitStack() as stack:
-            try:
-                reader = stack.enter_context(training_extract.live_reader(arguments.root, os.environ, arguments.features_run))
-            except (ImportError, KeyError, RuntimeError) as error:
-                raise CheckError(
-                    "dependency_missing", f"the current window reader needs the feature image and its environment: {type(error).__name__}: {error}", 3
-                ) from None
+            reader = open_reader(stack, arguments.root, arguments.features_run)
             target = build(
                 arguments.root,
                 reader,

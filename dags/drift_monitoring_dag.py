@@ -1,29 +1,34 @@
 """Compare the Production models' features with their training baselines and start ``training_dag`` when enough of them drift (project decision 21).
 
-Three broker steps fetch the baselines, read the current windows and run the drift check for the six HAI types. ``decide`` then reads the drift records of this
-run from ``RECORDS`` and builds at most one request for ``training_dag``: the types whose record says ``triggered``, the primary population, the latest
-publication and ``trigger=drift:<this run>``. The trigger is mapped over that list, so a quiet run starts nothing. The training run id and the trigger run id
-come from the drift run id, so a retry never starts a second training run. A step that exits with 4 found nothing to monitor and skips the rest of the run.
-The training DAG keeps its own approval gate for real runs, and promotion of a retrained model stays with the owner.
+One broker step starts the drift task on AWS. The task covers the six HAI types and publishes its records to ``s3://<data bucket>/drift/<run>/``, with the
+marker ``_complete.json`` last. ``decide`` reads the marker and the records it names, refuses a missing marker, a record of another run, a changed or
+inconsistent record, and builds at most one request for ``training_dag``: the types whose record says ``triggered``, the primary population, the latest
+publication and ``trigger=drift:<this run>``. A run where no type has a Production model has a marker with no records and starts nothing. The trigger is mapped
+over that list, so a quiet run starts nothing. The training run id and the trigger run id come from the drift run id, so a retry never starts a second training
+run. The training DAG keeps its own approval gate for real runs, and promotion of a retrained model stays with the owner.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import os
 from typing import Any
 
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import DAG, Param, get_current_context, task
-from airflow.sdk.exceptions import AirflowSkipException
 
 from orchestration import dag_runtime
 from orchestration.training_contract import HAI_TYPES, RUN_ID, parameters_for
 
-STEPS = ("fetch_baseline", "fetch_current", "check_drift")
-NOTHING_TO_MONITOR = 4
-RECORDS = Path("/opt/hai/data/drift")
+MARKER = "_complete.json"
+
+
+def s3_client() -> Any:
+    """The S3 client of the Airflow service, made on first use so that the DAG file parses without boto3."""
+    import boto3
+
+    return boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
 
 
 def training_run_id(drift_run: str) -> str:
@@ -31,54 +36,57 @@ def training_run_id(drift_run: str) -> str:
     return f"{drift_run[:16]}-{hashlib.sha256(f'training:{drift_run}'.encode()).hexdigest()[:8]}"
 
 
-def read_records(folder: Path, drift_run: str) -> list[dict[str, Any]]:
-    """Read the drift records of this run and refuse a stale, unreadable or inconsistent one, so that it never triggers training."""
+def fetch(s3: Any, bucket: str, key: str) -> bytes | None:
+    """Return the object's bytes, or None when it cannot be read."""
+    try:
+        body: bytes = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except Exception:
+        return None
+    return body
+
+
+def read_records(s3: Any, bucket: str, drift_run: str) -> list[dict[str, Any]]:
+    """Read the drift records the marker of this run names and refuse a stale, changed, unreadable or inconsistent one, so that it never triggers training."""
+    prefix = f"drift/{drift_run}/"
+    raw = fetch(s3, bucket, prefix + MARKER)
+    try:
+        marker = json.loads(raw) if raw is not None else None
+    except ValueError:
+        marker = None
+    if not isinstance(marker, dict) or not isinstance(marker.get("files"), dict):
+        raise RuntimeError(f"the drift run {drift_run} is not complete: there is no readable marker at s3://{bucket}/{prefix}{MARKER}")
+    if marker.get("run_id") != drift_run:
+        raise RuntimeError(f"the marker at {prefix}{MARKER} belongs to another run, {marker.get('run_id')}")
     records = []
-    for hai_type in HAI_TYPES:
-        path = folder / f"drift_{hai_type}.json"
-        if not path.is_file():
-            continue
+    for name, digest in sorted(marker["files"].items()):
+        body = fetch(s3, bucket, prefix + name)
+        if body is None or hashlib.sha256(body).hexdigest() != digest:
+            raise RuntimeError(f"the drift record {name} is missing or changed after it was published")
         try:
-            record = json.loads(path.read_bytes())
+            record = json.loads(body)
         except ValueError:
-            raise RuntimeError(f"the drift record {path.name} is unreadable") from None
-        if record.get("kind") != "drift_record" or record.get("hai_type") != hai_type or not isinstance(record.get("triggered"), bool):
-            raise RuntimeError(f"the drift record {path.name} is not a drift record of {hai_type}")
+            raise RuntimeError(f"the drift record {name} is unreadable") from None
+        if record.get("kind") != "drift_record" or name != f"drift_{record.get('hai_type')}.json" or record.get("hai_type") not in HAI_TYPES:
+            raise RuntimeError(f"the drift record {name} is not a drift record of its HAI type")
+        if not isinstance(record.get("triggered"), bool):
+            raise RuntimeError(f"the drift record {name} has no triggered flag")
         if record.get("run_id") != drift_run:
-            raise RuntimeError(f"the drift record {path.name} belongs to another run, {record.get('run_id')}")
+            raise RuntimeError(f"the drift record {name} belongs to another run, {record.get('run_id')}")
         if record["triggered"] and (record.get("status") != "checked" or record.get("population") != "primary"):
-            raise RuntimeError(f"the drift record {path.name} is inconsistent: only a checked record of the primary population may trigger")
+            raise RuntimeError(f"the drift record {name} is inconsistent: only a checked record of the primary population may trigger")
         records.append(record)
-    if not records:
-        raise RuntimeError(f"no drift record of run {drift_run} in {folder}")
-    return records
+    return sorted(records, key=lambda item: HAI_TYPES.index(item["hai_type"]))
 
 
-def training_requests(drift_run: str, mode: str, mlflow: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def training_requests(drift_run: str, mlflow: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return one request for ``training_dag`` naming every drifted type, or none when no record triggered."""
     drifted = [record["hai_type"] for record in records if record["triggered"]]
     if not drifted:
         return []
     training = {"features_run": "latest", "population": "primary", "hai_types": drifted, "trigger": f"drift:{drift_run}", "mlflow": mlflow}
-    return [{"trigger_run_id": f"drift__{drift_run}", "conf": {"run_id": training_run_id(drift_run), "mode": mode, **parameters_for("training_dag", training)}}]
-
-
-def run_drift_step(name: str) -> str:
-    """Submit the step to the broker. An exit code of 4 means nothing to monitor and skips the run instead of failing it."""
-    try:
-        return dag_runtime.run_step(name)
-    except RuntimeError as error:
-        if f"exit code {NOTHING_TO_MONITOR}" in str(error):
-            raise AirflowSkipException(str(error)) from None
-        raise
-
-
-def step(name: str) -> Any:
-    @task(task_id=name, retries=0, execution_timeout=dag_runtime.STEP_TIMEOUT)
-    def run() -> str:
-        return run_drift_step(name)
-
-    return run().operator
+    return [
+        {"trigger_run_id": f"drift__{drift_run}", "conf": {"run_id": training_run_id(drift_run), "mode": "real", **parameters_for("training_dag", training)}}
+    ]
 
 
 with DAG(
@@ -89,22 +97,27 @@ with DAG(
     tags=["monitoring"],
     params={
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
-        "mode": Param("fixture", type="string", enum=["fixture", "real"]),
+        "mode": Param("real", type="string", enum=["real"]),
         "mlflow": Param("local", type="string", enum=["local", "aws"]),
     },
     default_args={"retries": 0},
 ) as dag:
-    work = [step(name) for name in STEPS]
-    for before, after in zip(work, work[1:], strict=False):
-        before >> after
+
+    @task(task_id="drift_run", retries=0, execution_timeout=dag_runtime.STEP_TIMEOUT)
+    def drift_run() -> str:
+        return dag_runtime.run_step("drift_run")
 
     @task(task_id="decide", retries=0)
     def decide() -> list[dict[str, Any]]:
         params = get_current_context()["params"]
-        return training_requests(params["run_id"], params["mode"], params["mlflow"], read_records(RECORDS / params["run_id"], params["run_id"]))
+        bucket = os.environ.get("DATA_BUCKET_NAME", "")
+        if not bucket:
+            raise RuntimeError("DATA_BUCKET_NAME is not set in the Airflow service environment")
+        return training_requests(params["run_id"], params["mlflow"], read_records(s3_client(), bucket, params["run_id"]))
 
+    ran = drift_run()
     requests = decide()
-    work[-1] >> requests.operator
+    ran.operator >> requests.operator
     TriggerDagRunOperator.partial(
         task_id="trigger_training",
         trigger_dag_id="training_dag",
