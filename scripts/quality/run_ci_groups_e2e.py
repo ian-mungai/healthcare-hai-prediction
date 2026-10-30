@@ -3342,6 +3342,12 @@ FAST_COMMIT_HOOKS = frozenset(
         "subprocess-imports",
         "docker-calls",
         "container-mounts",
+        "check-jsonschema",
+        "import-linter",
+        "tflint",
+        "trivy-config",
+        "typos",
+        "zizmor",
     }
 )
 PUSH_HOOKS = frozenset({"local_ci_pushed", "acquisition-checks"})
