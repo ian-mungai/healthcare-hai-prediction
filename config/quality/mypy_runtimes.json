@@ -4,6 +4,14 @@
       "runtime": "serving",
       "reason": "Cannot find implementation or library stub for module named \"fastapi\"; Cannot find implementation or library stub for module named \"fastapi.concurrency\"; Cannot find implementation or library stub for module named \"fastapi.responses\"; Cannot find implementation or library stub for module named \"starlette.exceptions\""
     },
+    "scripts/streamlit_app/app.py": {
+      "runtime": "streamlit_page",
+      "reason": "Cannot find implementation or library stub for module named \"streamlit\""
+    },
+    "scripts/streamlit_app/app_cases.py": {
+      "runtime": "streamlit_page",
+      "reason": "Cannot find implementation or library stub for module named \"streamlit.testing.v1\""
+    },
     "dags/serving_deploy_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
