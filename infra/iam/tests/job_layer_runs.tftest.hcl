@@ -113,10 +113,13 @@ run "only_silver_and_gold_upload_and_only_under_their_own_run_prefix" {
         aws_iam_role_policy.job_writer_layer_upload[layer].role == aws_iam_role.job_write_layer_task[layer].name &&
         length(jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement) == 1 &&
         jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement[0].Action == ["s3:PutObject"] &&
-        jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/${layer}/*"]
+        jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement[0].Resource == concat(
+          ["arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/${layer}/*"],
+          layer == "gold" ? ["arn:aws:s3:::example-project-ci-bucket/metadata/dbt/*"] : []
+        )
       )])
     )
-    error_message = "Silver and gold may put objects under lakehouse/layer_runs/<layer>/ and nowhere else. Features uploads nothing."
+    error_message = "Silver and gold may put objects under lakehouse/layer_runs/<layer>/ and nowhere else. Gold may also put the dbt files under metadata/dbt/ for the catalog. Features uploads nothing."
   }
 }
 
