@@ -134,6 +134,10 @@
     ],
     "configuration_checks": [
       "^scripts/(infrastructure|quality|training)/",
+      "^monitoring/",
+      "^data_contracts/monitoring/",
+      "^dags/drift_monitoring_dag\\.py$",
+      "^orchestration/launcher\\.py$",
       "^\\.dvc(ignore)?(/|$)",
       "^tests/",
       "^config/",
