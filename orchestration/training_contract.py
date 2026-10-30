@@ -37,10 +37,12 @@ TRAINING_STEPS = (
     "run_record",
 )
 PROMOTION_STEPS = ("acquire_run", "snapshot_training", "promote", "run_record")
+MAC_LANES = ("local",)
+JOB_LANES = ("local", "aws")
 
 
-def parameters_for(dag_id: str, raw: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate a complete closed parameter set, refusing the unbuilt AWS writer route."""
+def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] = MAC_LANES) -> dict[str, Any]:
+    """Validate a complete closed parameter set. The Mac route accepts the local MLflow lane only, a job accepts the lanes its caller names (``JOB_LANES``)."""
     if dag_id == "training_dag":
         expected = {"features_run", "population", "hai_types", "trigger", "mlflow"}
         if set(raw) != expected:
@@ -68,10 +70,10 @@ def parameters_for(dag_id: str, raw: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("model_version must be a positive version string")
     else:
         raise ValueError("training parameters belong only to the training and promotion DAGs")
-    if raw["mlflow"] == "aws":
-        raise ValueError("the AWS training writer route is not built. Use mlflow=local")
-    if raw["mlflow"] != "local":
-        raise ValueError("mlflow must be local")
+    if raw["mlflow"] == "aws" and "aws" not in lanes:
+        raise ValueError("mlflow=aws is not built on the Mac route. It runs only as an AWS task. Use mlflow=local")
+    if raw["mlflow"] not in lanes:
+        raise ValueError(f"mlflow must be {' or '.join(lanes)}")
     return dict(raw)
 
 

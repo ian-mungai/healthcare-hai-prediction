@@ -68,7 +68,7 @@ def parameters_of(path: Path) -> dict[str, Any]:
     """Return the validated training parameters of the run."""
     raw = read_json(path, "parameters")
     try:
-        return training_contract.parameters_for("training_dag", raw)
+        return training_contract.parameters_for("training_dag", raw, training_contract.JOB_LANES)
     except (ValueError, TypeError) as error:
         raise InputError("parameters", str(error)) from None
 

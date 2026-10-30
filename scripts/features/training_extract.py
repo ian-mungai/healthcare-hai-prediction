@@ -21,7 +21,7 @@ from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator
 
-from orchestration.training_contract import HAI_TYPES, parameters_for
+from orchestration.training_contract import HAI_TYPES, JOB_LANES, parameters_for
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -277,7 +277,7 @@ def extract(
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Write verified per-type predictor files and separate auxiliary files, publishing the done mark last."""
-    params = parameters_for("training_dag", parameters)
+    params = parameters_for("training_dag", parameters, JOB_LANES)
     if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", run_id) or not SHA256.fullmatch(code_digest) or not SHA256.fullmatch(writer_lock_sha256):
         raise ExtractError("extraction requires valid run, code and writer-lock identities")
     deadline = clock() + seconds
@@ -509,7 +509,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--writer-lock", type=Path, default=Path("/opt/feature_store/requirements.txt"))
     args = parser.parse_args(argv)
     try:
-        parameters = parameters_for("training_dag", json.loads(args.parameters.read_bytes()))
+        parameters = parameters_for("training_dag", json.loads(args.parameters.read_bytes()), JOB_LANES)
         snapshot = json.loads(args.snapshot_record.read_bytes())
         if snapshot.get("run_id") != args.run:
             raise ExtractError("snapshot record belongs to another training run")
