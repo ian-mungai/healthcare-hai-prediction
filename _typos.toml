@@ -55,3 +55,22 @@ extend-glob = [
   "build_successor.py",
 ]
 extend-words = { ane = "ane", propsed = "propsed", delet = "delet", ser = "ser" }
+
+[type.feature_columns]
+# Source column names the publishers truncate (bene_race_wht_cnt, bene_race_othr_cnt, benes_wth_ptaptb_cnt, ep_disabl) in the feature matrix models and the Feast definitions.
+extend-glob = [
+  "feature_matrix_hospital.sql",
+  "feature_matrix_county_measures.sql",
+  "feature_matrix_county_context.sql",
+  "_feature_matrix__models.yml",
+  "definitions.py",
+]
+extend-words = { wht = "wht", othr = "othr", wth = "wth", disabl = "disabl" }
+
+[type.server_method]
+# The method name `unstall` of the fake and real servers in the online store cases.
+extend-glob = [
+  "online_cases.py",
+  "feast_aws_cases.py",
+]
+extend-words = { unstall = "unstall" }
