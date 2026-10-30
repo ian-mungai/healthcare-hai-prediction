@@ -21,6 +21,7 @@ import re
 import sys
 import tarfile
 import tempfile
+import time
 import traceback
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
@@ -389,12 +390,14 @@ def plan_state(job: Job, arguments: Sequence[str | Path]) -> None:
 
 
 STORED: dict[str, bytes] = {}  # the bucket objects the stand-in publish steps write: the catalog backups
+SLOW_UPLOAD = [0.0]  # seconds the stand-in bucket takes for each upload
 STAGED_VERSION = ["1"]  # the object version of the staged code files; a case changes it to model an input replaced during the run
 
 
 class FakeS3:
     def upload_file(self, filename: str, bucket: str, key: str) -> None:
         require(bucket == BUCKET, bucket)
+        time.sleep(SLOW_UPLOAD[0])
         UPLOADS.append((bucket, key))
         shared_write("upload", key=key)
 
@@ -435,6 +438,7 @@ class Case:
         DEFECTS.clear()
         STORED.clear()
         STAGED_VERSION[0] = "1"
+        SLOW_UPLOAD[0] = 0.0
         self.archive, self.digest = archive(root)
         self.out = ""
         self.err = ""
@@ -610,6 +614,28 @@ def case_stored_backup_differs_from_its_record(case: Case) -> None:
     require("publish_runs" not in kinds() and "table" not in kinds(), "a backup that differs from its record stops the publish before the commit")
 
 
+def started_seconds_ago(case: Case, layer: str, seconds: float) -> None:
+    """Move the task's start time, which the init container writes, to a moment in the past."""
+    (case.work(layer) / "task_started").write_text(f"{time.time() - seconds:.0f}\n")
+
+
+def case_expired_task_deadline_stops_the_next_phase(case: Case) -> None:
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    started_seconds_ago(case, "silver", 30 * 3600)
+    require(case.phase("silver", "publish") != 0 and "deadline" in case.err, case.err)
+    require(writes() == [], "a task past its deadline writes nothing to the catalog")
+
+
+def case_phase_that_outlives_the_deadline_is_stopped(case: Case) -> None:
+    require(case.chain("silver")[:-1] == [0] * 6, case.err)
+    started_seconds_ago(case, "silver", 21600 - 1)
+    SLOW_UPLOAD[0] = 5.0
+    uploads = len(UPLOADS)
+    require(case.phase("silver", "upload") != 0 and "deadline" in case.err, case.err)
+    require(len(UPLOADS) <= uploads + 1, "the upload went on after the deadline")
+
+
 def case_export_names_foreign_table(case: Case) -> None:
     DEFECTS.add("foreign_table")
     for phase in ("pin", "build", "validate", "verify"):
@@ -678,6 +704,8 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a commit naming other snapshots fails and uploads nothing": case_commit_names_wrong_snapshots,
     "an input object replaced after the pin stops publish before any write": case_staged_input_changes_after_the_pin,
     "a stored backup that differs from its record stops before the commit": case_stored_backup_differs_from_its_record,
+    "a task past its deadline stops at the next phase": case_expired_task_deadline_stops_the_next_phase,
+    "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
     "an export with a table outside the contract is refused": case_export_names_foreign_table,
     "dry run writes nothing and prints one plan": case_dry_run_writes_nothing,
     "dry run of features skips Feast": case_dry_run_features_skips_feast,

@@ -272,6 +272,35 @@ def task_dbt(folder: Path) -> None:
     require(profile["attach"][0]["options"]["endpoint"] == values["POLARIS_URI"], "task_dbt_catalog_endpoint")
     require(profile["settings"]["max_temp_directory_size"] == "1048576B", "task_dbt_cap")
     require(profile["settings"]["temp_directory"] == values["HAI_DUCKDB_TEMP_DIRECTORY"], "task_dbt_scratch")
+    require(profile["config_options"]["extension_directory"] == EXTENSION_DIRECTORY, "task_dbt_extension_directory")
+    require(profile["config_options"]["autoinstall_known_extensions"] is False, "task_dbt_no_extension_download")
+
+
+def task_extension_directory(folder: Path) -> None:
+    """The task has an empty home and no egress, so the profile must name the one directory where the image keeps the extensions. The image installs them there
+    read-only and loads them as the layer user with an empty home when it is built. The engine looks only in the directory it is given."""
+    dockerfile = (ROOT / "services/analytics/Dockerfile").read_text()
+    require(EXTENSION_DIRECTORY in dockerfile, "task_extension_directory_in_image")
+    require(
+        "USER 10001" in dockerfile and "LOAD iceberg" in dockerfile and "LOAD httpfs" in dockerfile and "LOAD aws" in dockerfile,
+        "task_extension_load_check_in_image",
+    )
+    require("chmod -R a-w" in dockerfile, "task_extension_directory_read_only")
+    empty, shared = folder / "empty_home", folder / "extensions"
+    empty.mkdir()
+    shared.mkdir()
+    code = (
+        "import sys, duckdb\n"
+        "c = duckdb.connect(config={'extension_directory': sys.argv[1], 'autoinstall_known_extensions': False, 'autoload_known_extensions': False})\n"
+        "print(c.execute(\"select current_setting('extension_directory')\").fetchone()[0])\n"
+        "try:\n    c.execute('LOAD iceberg')\nexcept duckdb.Error as error:\n    print(str(error))\n"
+    )
+    done = run_command(sys.executable, ["-c", code, str(shared)], env={"HOME": str(empty), "PATH": os.environ.get("PATH", "")}, timeout=60)
+    require(done.returncode == 0 and done.stdout.splitlines()[0] == str(shared), "task_extension_directory_setting")
+    require(str(shared) in done.stdout and str(empty) not in done.stdout, "task_extension_search_path")
+
+
+EXTENSION_DIRECTORY = "/opt/duckdb/extensions"
 
 
 def task_profile_endpoint_required(folder: Path) -> None:
@@ -734,6 +763,7 @@ def main() -> int:
     cases = {
         "task_spark": task_spark,
         "task_dbt": task_dbt,
+        "task_extension_directory": task_extension_directory,
         "task_profile_endpoint_required": task_profile_endpoint_required,
         "local_paths": local_paths,
         "credential_refusals": credential_refusals,

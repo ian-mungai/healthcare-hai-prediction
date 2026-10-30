@@ -128,7 +128,7 @@ run "init_step_hands_the_volumes_to_the_job_user" {
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
       jsondecode(output.layer_container_definitions[layer])[0].name == "init" && jsondecode(output.layer_container_definitions[layer])[0].user == "0:0" &&
-      jsondecode(output.layer_container_definitions[layer])[0].command == ["chown 10001:10001 /workspace /tmp"] &&
+      jsondecode(output.layer_container_definitions[layer])[0].command == ["date +%s > /workspace/task_started && chown 10001:10001 /workspace /tmp /workspace/task_started"] &&
       jsondecode(output.layer_container_definitions[layer])[0].linuxParameters.capabilities.add == [] &&
       !contains(jsondecode(output.layer_container_definitions[layer])[0].linuxParameters.capabilities.drop, "CHOWN") &&
       jsondecode(output.layer_container_definitions[layer])[0].secrets == [] && !jsondecode(output.layer_container_definitions[layer])[0].privileged
@@ -143,6 +143,21 @@ run "init_step_hands_the_volumes_to_the_job_user" {
       toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])
     )])])
     error_message = "Every phase container is unprivileged with a read-only root, no capability and the numeric user, and writes only the two volumes."
+  }
+}
+
+run "init_writes_the_task_start_and_fetch_is_bounded" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : (
+      startswith(one([for container in jsondecode(output.layer_container_definitions[layer]) : container.command[0] if container.name == "fetch"]), "timeout 1800 python -I -c '")
+    )])
+    error_message = "The fetch step is not run by the driver, so it carries its own deadline. The driver counts the whole task from the start time that the init step writes."
   }
 }
 

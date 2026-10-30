@@ -19,6 +19,10 @@ checks: the staged input objects still have the versions the pin phase recorded,
 ``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. A retry of one run repeats every step on the same keys
 and snapshot IDs and writes no second publication.
 
+The whole task has a deadline, the one the broker table gives the job, counted from the start time the init container writes to
+``<work>/task_started``. A hand-started task has no broker to stop it, so every phase runs under what is left of that deadline and fails by name when
+it passes.
+
 With ``--dry-run`` or ``LAYER_DRY_RUN=1`` the phases up to ``export`` run as usual, because they write only the task's own working folder. ``publish``
 then reads the catalog without writing, prints and saves the plan of the real publish, ``upload`` uploads nothing and ``feast`` does nothing. The
 first dry phase marks the run folder, so a later phase without the flag stays dry. A new ``pin`` clears the mark."""
@@ -30,9 +34,12 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import sys
 import tarfile
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -50,6 +57,8 @@ PHASES = {
 STEP_SECONDS = 4 * 3600
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
 UPLOAD_PREFIX = "lakehouse/layer_runs"
+JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job, as the broker enforces it
+STARTED_FILE = "task_started"  # in the work folder: the init container writes the start time of the whole task
 STAGE_PREFIX = "lakehouse/run_stage"
 STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb")  # the code copy, the bulk input extracts and the build file the sealed copy repeats
@@ -101,6 +110,36 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
     sys.stderr.write(done.stderr)
     if done.returncode:
         raise StepError(f"{module} exited {done.returncode}")
+
+
+def task_seconds_left(job: Job) -> float:
+    """Seconds left of the whole task: the job's deadline in the broker table, counted from the start time that the init container wrote. A hand-started
+    task has no broker to stop it, so the driver enforces the deadline itself."""
+    limit = float(json.loads(JOBS_FILE.read_text())["jobs"][job.layer]["deadline_seconds"])
+    started = job.code.parent / STARTED_FILE
+    if not started.is_file():
+        started.parent.mkdir(parents=True, exist_ok=True)
+        started.write_text(f"{time.time():.0f}\n")
+    return limit - (time.time() - float(started.read_text()))
+
+
+@contextmanager
+def task_deadline(job: Job) -> Iterator[None]:
+    """Run one phase under what is left of the task deadline: a phase that starts late or runs too long fails by name."""
+    left = task_seconds_left(job)
+    if left <= 0:
+        raise StepError("the task deadline has passed")
+
+    def expire(signum: int, frame: Any) -> None:
+        raise StepError("the task deadline passed during the phase")
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, left)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def s3_client() -> Any:
@@ -638,7 +677,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             job = replace(job, dry_run=True)
         if args.phase in ("publish", "upload") and not args.bucket and args.mode == "real" and not dry:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
-        dispatch(job, args.phase, args)
+        with task_deadline(job):
+            dispatch(job, args.phase, args)
     except (StepError, PipelineError, PublishError, provenance.ProvenanceError, OSError, ValueError, KeyError, tarfile.TarError) as error:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")
         return 1

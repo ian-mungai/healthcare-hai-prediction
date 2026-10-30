@@ -128,10 +128,10 @@ locals {
   }
   layer_steps = {
     for layer in local.layer_jobs : layer => concat(
-      [{ name = "init", script = "chown 10001:10001 /workspace /tmp" }],
+      [{ name = "init", script = "date +%s > /workspace/task_started && chown 10001:10001 /workspace /tmp /workspace/task_started" }],
       [for phase in local.layer_phases[layer] : {
         name   = phase
-        script = phase == "fetch" ? "python -I -c '${local.layer_fetch_python}'" : format(local.layer_driver, phase, layer)
+        script = phase == "fetch" ? "timeout 1800 python -I -c '${local.layer_fetch_python}'" : format(local.layer_driver, phase, layer)
       }]
     )
   }
