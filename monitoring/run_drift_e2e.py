@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from monitoring import drift_cases, reader_cases
+from monitoring import dag_cases, drift_cases, reader_cases
 from scripts.process import SubprocessError, run_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,7 +93,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
     config: list[tuple[str, Callable[[Path], Problems]]] = [("tracked_config_passes", tracked_config_passes), ("copy_passes", copy_passes)]
     config += [(f"config_rejects_{name}", rejection(mutate, key)) for name, mutate, key in CONFIG_REJECTIONS]
     config += [("config_rejects_malformed_file", unreadable_configuration), ("config_rejects_missing_file", missing_configuration)]
-    return config + drift_cases.cases() + reader_cases.cases()
+    return config + drift_cases.cases() + reader_cases.cases() + dag_cases.cases()
 
 
 def main() -> int:
@@ -111,7 +111,7 @@ def main() -> int:
             except drift_cases.Blocked as reason:
                 results.append({"case": name, "passed": False, "blocked": True, "problems": [f"blocked: {reason}"]})
                 continue
-            except (SubprocessError, OSError, ValueError, KeyError, ImportError, AttributeError) as error:
+            except (SubprocessError, OSError, ValueError, KeyError, ImportError, AttributeError, AssertionError) as error:
                 problems = [f"{type(error).__name__}: {error}"]
             results.append({"case": name, "passed": not problems, "blocked": False, "problems": problems})
     finally:
