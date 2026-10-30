@@ -19,7 +19,7 @@ The job broker is the only path from an Airflow DAG to work on AWS. It keeps the
 
 The table `config/orchestration/ecs_broker_jobs.json` names the job of each DAG step. A step with no job (acquire, seal, release and the gates) answers at once. The first step of a job starts its task and the later steps join it, because the containers of one job share a workspace. A job passes only when every container exits 0 and every acceptance container appears in the task report. A job that runs past its deadline is stopped.
 
-The `train` job exists today. Five jobs need task definitions first: `silver`, `gold`, `features`, `drift`, `promote`. The first four also need the layer driver. Their names stay out of `broker_job_families` until those exist. The `promote` job uses the training task role.
+The `train` job exists today. Four jobs need task definitions first: `silver`, `gold`, `features`, `drift`. They also need the layer driver. The `promote` job has its task definition in `infra/jobs` (set by `promote_enabled`) and uses the training task role. A family name stays out of `broker_job_families` until its task definition exists.
 
 ## Apply order
 
@@ -59,7 +59,7 @@ printf '{"run_id": "<RUN_ID>", "dag_id": "model_promotion_dag", "scope": "promot
 aws s3 cp /tmp/promotion_approval.json s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/promotion_approval.json --profile <PROJECT_PROFILE>
 ```
 
-Use `"scope": "rollback"` for a rollback. The record must name the run, the DAG, the operation, the HAI type and the model version of the request. Its date must not be after today. Any other field or value is refused. The record covers one run, so each promotion needs its own. Then trigger `model_promotion_dag` in Airflow with the same run ID, HAI type and version. Training runs need no approval record.
+Use `"scope": "rollback"` for a rollback. The record must name the run, the DAG, the operation, the HAI type and the model version of the request. Its date must not be after today. Any other field or value is refused. The record covers one run, so each promotion needs its own. Register the task definition in `infra/jobs` with `promote_enabled = true` after `train_enabled`. Name `promote` in the families of the IAM and services stacks. Then trigger `model_promotion_dag` in Airflow with the same run ID, HAI type and version. Training runs need no approval record.
 
 ## Sign the first publishes
 
@@ -103,4 +103,4 @@ aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUS
 - Whether `RunTask` returns the same task for a repeated client token after that task stopped.
 - Whether the Airflow trigger operator renders the run ID templates as the offline Jinja check does.
 - The task definitions and layer driver of the silver, gold, features and drift jobs.
-- The task definition of the `promote` job and a `promote` phase in the AWS training run script. Until they exist the broker accepts and checks the approval but has no task to start.
+- The `promote` task and phase against a real MLflow server: the offline cases use a file based registry stand-in.
