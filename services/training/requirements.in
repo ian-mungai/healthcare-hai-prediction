@@ -7,7 +7,7 @@ boto3
 jsonschema
 numpy==2.5.3
 scipy
-pandas
+pandas==2.3.3
 pyarrow
 scikit-learn
 statsmodels
