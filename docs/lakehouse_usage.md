@@ -370,7 +370,7 @@ open the route unless the newest attempt completed and passed for the same cutov
 still match its recorded SHA-256. An attempt that expired or was interrupted refuses them even when an older check
 passed. The receipt records the check's digest. This check does not observe the ECS class-network matrix: lakehouse tasks reach the
 catalog and S3, offline tasks do not reach the catalog and both fail to reach Redis, unrelated hosts and the internet.
-That matrix stays required, under [real AWS read verification](ecs_real_runs.md), before any ECS job uses the catalog.
+The first dry runs and real publishes give that evidence.
 Before the tunnel starts, the network acceptance check requires local tunnel and relay ports other than
 the Mac Polaris port 8181 (defaults 18181 and 18182) and a running project host whose security groups admit only
 project security groups (same account and VPC, with the project tag). A lost route

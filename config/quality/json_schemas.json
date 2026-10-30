@@ -101,12 +101,6 @@
       ]
     },
     {
-      "schema": "data_contracts/orchestration/ecs_real_run_request.schema.json",
-      "files": [
-        "data_contracts/orchestration/examples/ecs_real_run_request.json"
-      ]
-    },
-    {
       "schema": "data_contracts/orchestration/ecs_target.schema.json",
       "files": [
         "data_contracts/orchestration/examples/ecs_target.json"

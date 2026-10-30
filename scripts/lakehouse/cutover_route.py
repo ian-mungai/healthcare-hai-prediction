@@ -11,8 +11,7 @@
 3. ``mac_containers_refused``: while the route is open, no Mac Docker network reaches the tunnel or relay port. Docker runs only in the owner's
    attended terminal: ``route-check`` prints ``probe_command`` and waits, with a deadline, for the network list that command writes last.
 
-Evidence holds no address, credential or response body. The ECS class-network matrix of ``docs/ecs_real_runs.md`` is not observed here and
-stays required before any ECS job uses the catalog.
+Evidence holds no address, credential or response body. The ECS class-network matrix is not observed here.
 """
 
 from __future__ import annotations

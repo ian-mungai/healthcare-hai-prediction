@@ -48,3 +48,18 @@ config docs/quality_checks.md -- trivy-config is the id of the live hook and che
 config scripts/quality/lint_tools.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 config scripts/quality/run_ci_groups_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 config scripts/quality/run_lint_tools_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
+flag data_contracts/orchestration/examples/job_templates.json -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag dbt/tests/assert_bronze_datasets_placed_or_listed.sql -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag docs/aws_broker.md -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag docs/aws_training_run.md -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag orchestration/catalog_transport_child.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag orchestration/launcher.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag requirements-review.txt -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/lakehouse/feature_columns.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/lakehouse/pipeline_build.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/lakehouse/run_launcher_e2e.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/lakehouse/run_project_evaluator.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/lakehouse/run_provenance_e2e.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/orchestration/ecs_engine_cases.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/orchestration/ecs_stage_runtime_cases.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+flag scripts/quality/lint_sources.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone

@@ -130,7 +130,7 @@ def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, de
 
 
 # The Mac-side route observations the cutover needs before its route is used (owner decision, Oct 28 2026, for this one attended cutover
-# only; scripts/lakehouse/cutover_route.py). Each must pass. They do not replace the ECS class-network matrix of docs/ecs_real_runs.md.
+# only; scripts/lakehouse/cutover_route.py). Each must pass. They do not observe the ECS class-network matrix.
 ROUTE_OBSERVATIONS = ("host_without_open_ingress", "catalog_port_only", "mac_containers_refused")
 # An owner exception may accept only this observation when it ran and failed: Docker Desktop forwards host.docker.internal to the Mac's
 # loopback, so containers reach the tunnel and relay ports while Docker runs (owner decision 2026-10-29, temporary migration phase).
