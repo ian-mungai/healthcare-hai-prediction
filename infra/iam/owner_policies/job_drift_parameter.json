@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InjectMlflowAdministratorPasswordForDrift",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": ["arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${DRIFT_MLFLOW_PASSWORD_NAME}"]
+    }
+  ]
+}
