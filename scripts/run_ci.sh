@@ -327,6 +327,7 @@ hook_partition() {
 hook_privacy() { hook_partition privacy; }
 hook_documentation() { hook_partition documentation; }
 hook_code() { hook_partition code; }
+hook_samples() { hook_partition samples; }
 combine_feature_sources() { run_group lakehouse_features lakehouse_features_combine "sources/$feature_sources_shards"; }
 combine_feature_columns() { run_group lakehouse_features lakehouse_features_combine "columns/$feature_columns_shards"; }
 
@@ -388,7 +389,7 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
 fi
 
 if [[ "$part" == "all" ]] && is_selected repository_hooks; then
-  shared+=(hook_privacy hook_documentation hook_code)
+  shared+=(hook_privacy hook_documentation hook_code hook_samples)
 fi
 
 run_timed_item() {
