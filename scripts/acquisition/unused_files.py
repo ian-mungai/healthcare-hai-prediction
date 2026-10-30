@@ -21,7 +21,7 @@ from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
 
 COLUMNS = ("source_id", "snapshot_id", "s3_key", "sha256", "loaded", "retired", "tables")
-KEY_PREFIX_LIMIT = 1000
+BATCH_LIMIT = 1000
 
 
 def read_copies(path: Path) -> list[dict[str, str]]:
@@ -31,6 +31,21 @@ def read_copies(path: Path) -> list[dict[str, str]]:
         if missing:
             raise CaptureError(f"The copies list lacks the columns {', '.join(missing)}.")
         return list(reader)
+
+
+def read_inventory(path: Path | None, copies: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Return the stored files that the copies list does not name. The inventory holds one row per stored object: its source, snapshot, key and SHA-256."""
+    if path is None:
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        missing = [name for name in COLUMNS[:4] if name not in (reader.fieldnames or [])]
+        if missing:
+            raise CaptureError(f"The inventory lacks the columns {', '.join(missing)}.")
+        named = {item["s3_key"] for item in copies}
+        return [
+            {**{name: row[name] for name in COLUMNS[:4]}, "loaded": "false", "retired": "false", "tables": ""} for row in reader if row["s3_key"] not in named
+        ]
 
 
 def read_keep(path: Path | None) -> dict[str, str]:
@@ -56,7 +71,9 @@ def classify(copies: list[dict[str, str]], keep: dict[str, str]) -> dict[str, An
             kept.append({**identity, "reason": "same_bytes_as_loaded_file"})
         elif item["snapshot_id"] in keep:
             kept.append({**identity, "reason": keep[item["snapshot_id"]]})
-        elif int(item["tables"] or 0) == 0:
+        elif item["tables"] == "":
+            unused.append({**identity, "reason": "not_in_bronze_copies"})
+        elif int(item["tables"]) == 0:
             unused.append({**identity, "reason": "no_table_reads_it"})
         else:
             unused.append({**identity, "reason": "not_loaded_by_any_table"})
@@ -67,8 +84,6 @@ def build_plan(classified: dict[str, Any], copies_sha256: str) -> dict[str, Any]
     items = [
         {"snapshot_id": item["snapshot_id"], "s3_key": item["s3_key"], "sha256": item["sha256"], "reason": item["reason"]} for item in classified["unused"]
     ]
-    if len(items) > KEY_PREFIX_LIMIT:
-        raise CaptureError("A removal plan holds at most 1000 keys; split the copies list.")
     body = {
         "kind": "unused_file_removal_plan",
         "copies_sha256": copies_sha256,
@@ -80,10 +95,11 @@ def build_plan(classified: dict[str, Any], copies_sha256: str) -> dict[str, Any]
     return {**body, "plan_sha256": hashlib.sha256(encoded_json(body)).hexdigest()}
 
 
-def plan(copies_path: Path, keep_path: Path | None, output: Path) -> dict[str, Any]:
+def plan(copies_path: Path, keep_path: Path | None, output: Path, inventory_path: Path | None = None) -> dict[str, Any]:
     copies = read_copies(copies_path)
-    classified = classify(copies, read_keep(keep_path))
-    removal = build_plan(classified, hashlib.sha256(copies_path.read_bytes()).hexdigest())
+    classified = classify([*copies, *read_inventory(inventory_path, copies)], read_keep(keep_path))
+    inputs = copies_path.read_bytes() + (inventory_path.read_bytes() if inventory_path else b"")
+    removal = build_plan(classified, hashlib.sha256(inputs).hexdigest())
     write_once(output / "unused_report.json", encoded_json({**classified, "plan_sha256": removal["plan_sha256"]}))
     write_once(output / "removal_plan.json", encoded_json(removal))
     return {"kept": len(classified["kept"]), "unused": len(classified["unused"]), "already_retired": len(classified["already_retired"]), "deleted": 0}
@@ -116,14 +132,14 @@ def apply(client: Any, plan_path: Path, approval_path: Path, output: Path) -> di
     if unknown:
         raise CaptureError("Planned keys have no version in the bucket; review a new plan.")
     pending = [key for key in keys if key not in marked]
-    result: dict[str, Any] = {"Deleted": []}
-    if pending:
-        request = output / "delete_request.json"
+    for number, start in enumerate(range(0, len(pending), BATCH_LIMIT)):
+        batch = pending[start : start + BATCH_LIMIT]
+        request = output / f"delete_request_{number}.json"
         request.parent.mkdir(parents=True, exist_ok=True)
-        request.write_bytes(encoded_json({"Objects": [{"Key": key} for key in pending], "Quiet": False}))
+        request.write_bytes(encoded_json({"Objects": [{"Key": key} for key in batch], "Quiet": False}))
         result = client.call("s3api", "delete-objects", ["--delete", "file://" + str(request.resolve()), "--checksum-algorithm", "SHA256"])
-        if result.get("Errors") or {item["Key"] for item in result.get("Deleted", [])} != set(pending):
-            raise CaptureError("Removal is incomplete; inspect the response before any retry.")
+        if result.get("Errors") or {item["Key"] for item in result.get("Deleted", [])} != set(batch):
+            raise CaptureError("Removal is incomplete; list the versions again before any retry. Keys with a marker are skipped.")
         if any(item.get("DeleteMarker") is not True or not item.get("DeleteMarkerVersionId") for item in result["Deleted"]):
             raise CaptureError("Removal did not confirm a delete marker for every key.")
         marked.update({item["Key"]: item["DeleteMarkerVersionId"] for item in result["Deleted"]})
@@ -141,6 +157,7 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> None:
     planning = commands.add_parser("plan")
     planning.add_argument("--copies", required=True, type=Path)
     planning.add_argument("--keep", type=Path)
+    planning.add_argument("--inventory", type=Path, help="CSV of every stored object: source_id, snapshot_id, s3_key, sha256")
     planning.add_argument("--output", required=True, type=Path)
     applying = commands.add_parser("apply")
     applying.add_argument("--plan", required=True, type=Path)
@@ -149,7 +166,7 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> None:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            summary = plan(args.copies, args.keep, args.output)
+            summary = plan(args.copies, args.keep, args.output, args.inventory)
         else:
             approved_plan(args.plan, args.approval)
             if client is None:

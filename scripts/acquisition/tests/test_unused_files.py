@@ -38,6 +38,32 @@ def write_inputs(folder: Path) -> tuple[Path, Path]:
     return copies, keep
 
 
+def write_inventory(folder: Path) -> Path:
+    inventory = folder / "inventory.csv"
+    stored = [
+        row("S1__1", "used.csv", LOADED, "true", tables="1")[:4],
+        row("S1__7", "twin_of_used.csv", LOADED)[:4],
+        row("S1__8", "never_listed.csv", "1" * 64)[:4],
+        row("S1__4", "never_read.csv", NO_READER)[:4],
+    ]
+    with inventory.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(HEADER[:4])
+        writer.writerows(stored)
+    return inventory
+
+
+def test_a_stored_file_the_copies_list_never_names_is_unused(tmp_path: Path) -> None:
+    inventory = write_inventory(tmp_path)
+    run(tmp_path, "--inventory", str(inventory))
+    report = json.loads((tmp_path / "out" / "unused_report.json").read_text())
+    unused = {item["snapshot_id"]: item["reason"] for item in report["unused"]}
+    check(unused["S1__8"] == "not_in_bronze_copies", "a stored file bronze never lists is unused")
+    kept = {item["snapshot_id"]: item["reason"] for item in report["kept"]}
+    check(kept["S1__7"] == "same_bytes_as_loaded_file", "a stored twin of a loaded file stays")
+    check(unused["S1__4"] == "no_table_reads_it", "a file the copies list names keeps its own reason")
+
+
 def run(folder: Path, *extra: str) -> None:
     copies, keep = write_inputs(folder)
     unused_files.main(["plan", "--copies", str(copies), "--keep", str(keep), "--output", str(folder / "out"), *extra])
