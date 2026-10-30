@@ -51,8 +51,8 @@ NESTED_FIELDS = {
 }
 CARE_VALIDATION = "Validation table, never a predictor (project guide, pipeline section)"
 VALIDATION_ONLY = {
-    "care-hac-cms": "External validation check only, not a predictor: circular with PSI-90 and HAI (goal card)",
-    "care-deaths-cms": CARE_VALIDATION,
+    "care-hac-cms": "External validation check and RQ3 mediator source, never a main-model predictor: circular with PSI-90 and HAI (goal card)",
+    "care-deaths-cms": "Validation table and RQ3 mediator source, never a main-model predictor (project guide, sources section)",
     "care-hrrp-cms": CARE_VALIDATION,
     "care-vbp-cms": CARE_VALIDATION,
     "care-visits-cms": CARE_VALIDATION,

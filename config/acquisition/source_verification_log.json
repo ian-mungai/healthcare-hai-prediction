@@ -1989,7 +1989,7 @@
         "receipt_path": "not recorded"
       },
       "status": "validation-only",
-      "status_reason": "Validation table, never a predictor (project guide, pipeline section)",
+      "status_reason": "Validation table and RQ3 mediator source, never a main-model predictor (project guide, sources section)",
       "deferral_trigger": null,
       "not_recorded": [
         "evidence.capture_candidates",
@@ -2065,7 +2065,7 @@
         "receipt_path": "not recorded"
       },
       "status": "validation-only",
-      "status_reason": "External validation check only, not a predictor: circular with PSI-90 and HAI (goal card)",
+      "status_reason": "External validation check and RQ3 mediator source, never a main-model predictor: circular with PSI-90 and HAI (goal card)",
       "deferral_trigger": null,
       "not_recorded": [
         "evidence.capture_candidates",

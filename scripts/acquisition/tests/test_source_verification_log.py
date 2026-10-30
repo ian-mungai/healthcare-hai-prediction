@@ -49,7 +49,10 @@ def test_rows_cover_bronze_sources_validation_only_and_rejected(built: dict[str,
     rows = rows_by_id(built)
     for source_id in log_module.bronze_source_ids(inputs):
         check(source_id in rows, "source_id in rows")
-    check(rows["care-hac-cms"]["status"] == "validation-only", "rows['care-hac-cms']['status'] == 'validation-only'")
+    for source_id in ("care-hac-cms", "care-deaths-cms", "care-hrrp-cms", "care-vbp-cms", "care-visits-cms"):
+        check(rows[source_id]["status"] == "validation-only", f"{source_id} is validation-only")
+    for source_id in ("care-hac-cms", "care-deaths-cms"):
+        check("RQ3 mediator" in rows[source_id]["status_reason"], f"{source_id} names its RQ3 mediator use")
     for rejected in ("AHRF", "NHSN"):
         check(rows[rejected]["status"] == "rejected", "rows[rejected]['status'] == 'rejected'")
         check(rows[rejected]["status_reason"] != "not recorded", "rows[rejected]['status_reason'] != 'not recorded'")
