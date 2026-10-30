@@ -1004,6 +1004,24 @@ def hac_cases(cases: Any, folder: Path) -> None:
             require(f"window {dropped}" in error and "no predictions" in error, f"the refusal does not name the window: {error}")
             require(listing(fixture.out) == [], "a refused step wrote output")
 
+    def refit_deadline_keeps_the_fit() -> None:
+        from scripts.training.models.common import DeadlineExceeded
+
+        fixture = Fixture(folder / "refit_deadline")
+        real = suite._fit_slot
+
+        def expired(request: Any, slot: str, *args: Any, **kwargs: Any) -> Any:
+            if len(args) >= 2 and args[1] is not None:
+                raise DeadlineExceeded("the validation refit ran out of its slot budget")
+            return real(request, slot, *args, **kwargs)
+
+        with mock.patch.object(suite, "_fit_slot", expired):
+            stage(fixture, "fit")
+        stored = [path for path in (fixture.folder / "in" / "fit").rglob("*") if path.is_file()]
+        documents = [json.loads(path.read_text()) for path in stored if path.name.startswith("hac_predictions_")]
+        require(documents and all(document["status"] == "not_run" for document in documents), f"no not_run validation file: {documents}")
+        require(len(stored) > len(documents), "the fit's own bundle was lost")
+
     def overlap_refused() -> None:
         fixture = Fixture(folder / "overlap")
         with mock.patch.object(hac_validation, "training_cutoff", side_effect=lambda year: year - 1):
@@ -1082,6 +1100,7 @@ def hac_cases(cases: Any, folder: Path) -> None:
     cases.check("job_hac_refuses_window_without_rows", window_without_rows)
     cases.check("job_hac_refuses_training_without_windows_through_y_minus_2", no_training_windows)
     cases.check("job_hac_refuses_window_without_predictions", dropped_predictions)
+    cases.check("job_hac_refit_deadline_keeps_the_fit", refit_deadline_keeps_the_fit)
     cases.check("job_hac_refuses_training_that_overlaps_the_period", overlap_refused)
     cases.check("job_hac_watcher_catches_planted_overlap", planted_overlap_is_caught)
     cases.check("job_hac_stays_out_of_promotion_registry_and_rq", stays_out_of_promotion)
