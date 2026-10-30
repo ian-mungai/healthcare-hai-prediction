@@ -6,24 +6,28 @@ import contextlib
 import copy
 import hashlib
 import json
+import os
+import re
 import shutil
 import tempfile
 import time
 from collections.abc import Callable, Iterator
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 from scripts.features.training_extract import canonical, content_sha256
-from scripts.training import hac_validation, job, job_inputs, mediation
+from scripts.training import hac_validation, job, job_inputs, mediation, run_tracking
+from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
 from scripts.training.lane_b_cases import RUN, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
 from scripts.training.models.common import SLOTS
-from scripts.training.step_records import file_sha256, verify_done
+from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
 HAI_TYPE = "HAI_1"
@@ -137,6 +141,7 @@ class Fixture:
         (folder / "training_parameters.json").write_text(json.dumps(self.parameters) + "\n")
         self.code_root()
         self.late_mediator = late_mediator
+        self.tracking = FileTracking(folder / "tracking")
         self.write_extract(mediator=mediator, hac=hac)
 
     def code_root(self) -> None:
@@ -257,14 +262,116 @@ class Fixture:
 
 @contextlib.contextmanager
 def standins(fixture: Fixture) -> Iterator[None]:
-    """Run the job with the fixture's code root, the host Parquet reader and the explicit numerical library stand-ins."""
+    """Run the job with the fixture's code root, the host Parquet reader, the tracking client stand-in and the numerical library stand-ins."""
     with (
         mock.patch.object(job_inputs, "ROOT", fixture.root),
         mock.patch.object(job_inputs, "read_rows", read_parquet),
+        mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
+        mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100"}),
         libraries(),
         mock.patch.object(panel, "native_fits", side_effect=panel_standin),
     ):
         yield
+
+
+class FileTracking:
+    """A stand-in for the MLflow client: the calls the log_run action makes, with MLflow's rules for parameters, tags and run lookup."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.experiments: dict[str, str] = {}
+        self.runs: dict[str, dict[str, Any]] = {}
+        self.calls: list[str] = []
+        self.fail_on: str | None = None
+
+    def enter(self, call: str) -> None:
+        """Record a call and fail it when the case asks for that failure."""
+        self.calls.append(call)
+        if self.fail_on == call:
+            raise ConnectionError(f"synthetic tracking failure in {call}")
+
+    def get_experiment_by_name(self, name: str) -> SimpleNamespace | None:
+        self.enter("get_experiment_by_name")
+        return SimpleNamespace(experiment_id=self.experiments[name]) if name in self.experiments else None
+
+    def create_experiment(self, name: str) -> str:
+        self.enter("create_experiment")
+        self.experiments[name] = str(len(self.experiments))
+        return self.experiments[name]
+
+    def create_run(self, experiment_id: str, tags: dict[str, str] | None = None, run_name: str | None = None) -> SimpleNamespace:
+        self.enter("create_run")
+        run_id = f"{len(self.runs):032x}"
+        self.runs[run_id] = {"experiment": experiment_id, "name": run_name, "status": "RUNNING", "params": {}, "metrics": {}, "tags": dict(tags or {})}
+        return SimpleNamespace(info=SimpleNamespace(run_id=run_id))
+
+    def search_runs(self, experiment_ids: list[str], filter_string: str = "", max_results: int = 1000) -> list[SimpleNamespace]:
+        self.enter("search_runs")
+        wanted = dict(re.findall(r"tags\.(\w+) = '([^']*)'", filter_string))
+        found = [
+            run_id
+            for run_id, run in self.runs.items()
+            if run["experiment"] in experiment_ids and all(run["tags"].get(key) == value for key, value in wanted.items())
+        ]
+        return [self.get_run(run_id) for run_id in found[:max_results]]
+
+    def log_param(self, run_id: str, key: str, value: Any) -> None:
+        self.enter("log_param")
+        params = self.runs[run_id]["params"]
+        if key in params and params[key] != str(value):
+            raise ValueError(f"param {key} already holds another value")
+        params[key] = str(value)
+
+    def log_metric(self, run_id: str, key: str, value: float, timestamp: int | None = None, step: int | None = None) -> None:
+        self.enter("log_metric")
+        self.runs[run_id]["metrics"].setdefault(key, []).append(float(value))
+
+    def set_tag(self, run_id: str, key: str, value: str) -> None:
+        self.enter("set_tag")
+        self.runs[run_id]["tags"][key] = str(value)
+
+    def log_artifact(self, run_id: str, local_path: str, artifact_path: str | None = None) -> None:
+        self.enter("log_artifact")
+        target = self.root / run_id / (artifact_path or "")
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local_path, target / Path(local_path).name)
+
+    def set_terminated(self, run_id: str, status: str = "FINISHED") -> None:
+        self.enter("set_terminated")
+        self.runs[run_id]["status"] = status
+
+    def get_run(self, run_id: str) -> SimpleNamespace:
+        run = self.runs[run_id]
+        data = SimpleNamespace(params=dict(run["params"]), metrics={key: values[-1] for key, values in run["metrics"].items()}, tags=dict(run["tags"]))
+        return SimpleNamespace(info=SimpleNamespace(run_id=run_id, status=run["status"]), data=data)
+
+    def download_artifacts(self, run_id: str, path: str, dst_path: str | None = None) -> str:
+        source = self.root / run_id / path
+        if not source.is_file():
+            raise FileNotFoundError(path)
+        target = Path(dst_path or tempfile.mkdtemp()) / source.name
+        shutil.copyfile(source, target)
+        return str(target)
+
+    def artifacts(self, run_id: str) -> list[str]:
+        base = self.root / run_id
+        return sorted(path.relative_to(base).as_posix() for path in base.rglob("*") if path.is_file()) if base.is_dir() else []
+
+
+def stage_baseline(fixture: Fixture) -> dict[str, Any]:
+    """Write the mounted outputs of version_extract the way that action records them: a metafile, a baseline record and the completion record."""
+    folder = fixture.folder / "in/version_extract"
+    folder.mkdir(parents=True)
+    records = {}
+    for hai_type in fixture.hai_types:
+        matrix = f"extract_{hai_type}.parquet"
+        metafile = f"{matrix}.dvc"
+        (folder / metafile).write_text(f"outs:\n- md5: {'a' * 32}\n  size: 1\n  path: {matrix}\n")
+        record = {"hai_type": hai_type, "matrix_path": f"data/training/{RUN}/{matrix}", "metafile": metafile, "metafile_sha256": file_sha256(folder / metafile)}
+        (folder / f"baseline_{hai_type}.json").write_text(json.dumps(record, sort_keys=True) + "\n")
+        records[hai_type] = record
+    write_done(folder, "version_extract", DIGEST, sorted(path.name for path in folder.iterdir()))
+    return records
 
 
 def run_action(fixture: Fixture, action: str, out: Path | None = None) -> tuple[int, str, str]:
@@ -572,11 +679,162 @@ def hac_cases(cases: Any, folder: Path) -> None:
     cases.check("job_hac_deadline_named", deadline)
 
 
+def staged(folder: Path, **options: Any) -> Fixture:
+    """Return a fixture whose earlier steps (version_extract, fit, mediation, hac_validate) are complete and mounted."""
+    fixture = Fixture(folder, **options)
+    stage(fixture, "fit", "mediation", "hac_validate")
+    stage_baseline(fixture)
+    return fixture
+
+
+def log_run_cases(cases: Any, folder: Path) -> None:
+    """Log one MLflow run per type with params, metrics, artifacts, the DVC metafile and the snapshot tags, once, even after a retry."""
+
+    def logged() -> None:
+        fixture = staged(folder / "logged")
+        code, out, error = run_action(fixture, "log_run")
+        require(code == 0, f"log_run failed: {error}")
+        store = fixture.tracking
+        require(len(store.runs) == 1, f"expected one run, found {len(store.runs)}")
+        run_id, run = next(iter(store.runs.items()))
+        manifest = fixture.manifest()
+        metafile = fixture.folder / f"in/version_extract/extract_{HAI_TYPE}.parquet.dvc"
+        require(run["status"] == "FINISHED" and run["tags"][run_tracking.COMPLETE_TAG] == "true", "the run was not finished and marked complete")
+        require(run["tags"][HASH_TAG] == file_sha256(metafile), "the metafile hash tag differs from the metafile")
+        require(run["tags"][PATH_TAG] == f"data/training/{RUN}/extract_{HAI_TYPE}.parquet", "the matrix path tag is wrong")
+        snapshots = {key.removeprefix(SNAPSHOT_TAG): value for key, value in run["tags"].items() if key.startswith(SNAPSHOT_TAG)}
+        require(snapshots == {table: str(value) for table, value in manifest["snapshot_set"].items()}, f"snapshot tags differ: {snapshots}")
+        require(run["tags"][run_tracking.RUN_TAG] == RUN and run["tags"]["hai_type"] == HAI_TYPE, "the run does not name its training run and type")
+        require(
+            run["params"]["master_seed"] == "42" and run["params"]["selected_model"] and run["params"]["extract_sha256"] == manifest["sha256"],
+            f"params: {run['params']}",
+        )
+        require("holdout_rmse.m1_ols" in run["metrics"] and "counts.holdout" in run["metrics"], f"metrics: {sorted(run['metrics'])[:8]}")
+        require(
+            any(name.startswith("mediation.PSI_90.") for name in run["metrics"]) and "hac.matched_hospitals" in run["metrics"],
+            "mediation or HAC metrics are missing",
+        )
+        require(all(len(values) == 1 for values in run["metrics"].values()), "a metric was logged twice")
+        artifacts = store.artifacts(run_id)
+        expected = [f"fit/fit_{HAI_TYPE}.json", f"fit/holdout_{HAI_TYPE}.json", f"mediation/mediation_{HAI_TYPE}.json", f"hac/hac_{HAI_TYPE}.json"]
+        require(all(name in artifacts for name in expected) and f"model/model_{HAI_TYPE}.pkl" in artifacts, f"artifacts: {artifacts}")
+        require(f"dvc/{metafile.name}" in artifacts, f"the DVC metafile was not logged: {artifacts}")
+        record = output_of(fixture, "log_run.json")
+        require(record["runs"] == {HAI_TYPE: run_id} and json.loads(out)["resumed"] is False, f"log_run.json: {record}")
+        verify_done(fixture.out, "log_run", DIGEST)
+
+    def retried() -> None:
+        fixture = staged(folder / "retried")
+        require(run_action(fixture, "log_run")[0] == 0, "the first log_run failed")
+        calls = len(fixture.tracking.calls)
+        code, out, error = run_action(fixture, "log_run")
+        require(code == 0 and json.loads(out)["resumed"] is True, f"the retry did not resume: {error}")
+        require(len(fixture.tracking.calls) == calls and len(fixture.tracking.runs) == 1, "a completed step called the tracking store again")
+
+    def interrupted() -> None:
+        fixture = staged(folder / "interrupted")
+        require(run_action(fixture, "log_run")[0] == 0, "the first log_run failed")
+        (fixture.out / "log_run.done.json").unlink()
+        (fixture.out / "log_run.json").unlink()
+        code, _, error = run_action(fixture, "log_run")
+        require(code == 0, f"the retry failed: {error}")
+        runs = fixture.tracking.runs
+        require(len(runs) == 1 and all(len(values) == 1 for values in next(iter(runs.values()))["metrics"].values()), "a retry duplicated a run or a metric")
+
+    def partial_run() -> None:
+        fixture = staged(folder / "partial")
+        fixture.tracking.fail_on = "set_terminated"
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_failed", f"{code} {error}")
+        require(listing(fixture.out) == [] and len(fixture.tracking.runs) == 1, "a failed log_run left output or no run to resume")
+        fixture.tracking.fail_on = None
+        code, _, error = run_action(fixture, "log_run")
+        run = next(iter(fixture.tracking.runs.values()))
+        require(code == 0 and len(fixture.tracking.runs) == 1 and run["status"] == "FINISHED", f"the retry did not finish the same run: {error}")
+        require(all(len(values) == 1 for values in run["metrics"].values()), "a retry duplicated a metric")
+
+    def duplicate_runs() -> None:
+        fixture = staged(folder / "duplicates")
+        require(run_action(fixture, "log_run")[0] == 0, "the first log_run failed")
+        run = next(iter(fixture.tracking.runs.values()))
+        fixture.tracking.runs["f" * 32] = {**run, "tags": dict(run["tags"])}
+        (fixture.out / "log_run.done.json").unlink()
+        (fixture.out / "log_run.json").unlink()
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_duplicate_runs", f"{code} {error}")
+
+    def no_uri() -> None:
+        fixture = staged(folder / "no_uri")
+        with standins(fixture), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": ""}):
+            code, _, error = call(fixture.arguments("log_run"))
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_uri_missing" and not fixture.tracking.calls, f"{code} {error}")
+
+    def tracking_down() -> None:
+        fixture = staged(folder / "down")
+        fixture.tracking.fail_on = "create_run"
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_failed" and "ConnectionError" in error, f"{code} {error}")
+        require(listing(fixture.out) == [], "a failed log_run wrote output")
+
+    def changed_fit() -> None:
+        fixture = staged(folder / "changed_fit")
+        (fixture.folder / "in/fit" / f"fit_{HAI_TYPE}.json").write_text("{}\n")
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_changed" and not fixture.tracking.calls, f"{code} {error}")
+
+    def changed_hac() -> None:
+        fixture = staged(folder / "changed_hac")
+        (fixture.folder / "in/hac_validate" / f"hac_{HAI_TYPE}.json").write_text("{}\n")
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "hac_validate_changed" and not fixture.tracking.calls, f"{code} {error}")
+
+    def changed_metafile() -> None:
+        fixture = staged(folder / "changed_metafile")
+        path = fixture.folder / f"in/version_extract/extract_{HAI_TYPE}.parquet.dvc"
+        path.write_text(path.read_text().replace("a" * 32, "b" * 32))
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "version_extract_changed" and not fixture.tracking.calls, f"{code} {error}")
+
+    def other_extract() -> None:
+        fixture = staged(folder / "other_extract")
+        fixture.rows = fixture.rows[:-1]
+        fixture.write_extract(mediator=True, hac=True)
+        code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_FAILED and failure_of(error) == "fit_inputs_differ" and not fixture.tracking.calls, f"{code} {error}")
+
+    def deadline() -> None:
+        fixture = staged(folder / "deadline")
+        with mock.patch.object(job, "budget", return_value=0.3), mock.patch.object(fixture.tracking, "create_run", side_effect=lambda *_, **__: time.sleep(5)):
+            code, _, error = run_action(fixture, "log_run")
+        require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
+
+    def metric_names() -> None:
+        require(
+            run_tracking.metric_name("effects.feature_matrix_x:c1__value__number") == "effects.feature_matrix_x_c1__value__number", "a metric name kept a colon"
+        )
+        require(len(run_tracking.metric_name("a" * 400)) == 250, "a metric name was not shortened")
+
+    cases.check("job_log_run_logs_params_metrics_artifacts_and_tags", logged)
+    cases.check("job_log_run_retry_resumes_completed", retried)
+    cases.check("job_log_run_retry_after_interrupt_keeps_one_run", interrupted)
+    cases.check("job_log_run_resumes_unfinished_run", partial_run)
+    cases.check("job_log_run_refuses_duplicate_runs", duplicate_runs)
+    cases.check("job_log_run_needs_tracking_uri", no_uri)
+    cases.check("job_log_run_tracking_failure_named", tracking_down)
+    cases.check("job_log_run_refuses_changed_fit_output", changed_fit)
+    cases.check("job_log_run_refuses_changed_hac_output", changed_hac)
+    cases.check("job_log_run_refuses_changed_metafile", changed_metafile)
+    cases.check("job_log_run_refuses_fit_of_another_extract", other_extract)
+    cases.check("job_log_run_deadline_named", deadline)
+    cases.check("job_log_run_metric_names", metric_names)
+
+
 def scenarios(cases: Any, folder: Path) -> None:
     """Register every data-action case."""
     fit_cases(cases, folder / "fit")
     mediation_cases(cases, folder / "mediation")
     hac_cases(cases, folder / "hac")
+    log_run_cases(cases, folder / "log_run")
 
 
 def run(only: str | None = None) -> list[dict[str, Any]]:

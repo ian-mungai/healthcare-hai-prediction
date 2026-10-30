@@ -33,6 +33,7 @@ SOURCE_FILES = (
     "scripts/training/job_failure.py",
     "scripts/training/job_inputs.py",
     "scripts/training/job_actions.py",
+    "scripts/training/run_tracking.py",
     "scripts/training/job_action_cases.py",
     "services/orchestration/docker-compose.orchestration.yaml",
     "scripts/orchestration/transform_fixtures.py",

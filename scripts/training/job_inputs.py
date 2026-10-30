@@ -92,8 +92,8 @@ def manifest_of(extract: Path, hai_type: str, run: str) -> dict[str, Any]:
     return dict(manifest)
 
 
-def table_of(extract: Path, entry: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Read one table whose bytes and row count match its manifest entry."""
+def table_of(extract: Path, entry: Mapping[str, Any], *, read: bool = True) -> list[dict[str, Any]]:
+    """Read one table whose bytes and row count match its manifest entry; with read=False check only the bytes and return no rows."""
     path = extract / str(entry["file"])
     try:
         digest = file_sha256(path)
@@ -103,6 +103,8 @@ def table_of(extract: Path, entry: Mapping[str, Any]) -> list[dict[str, Any]]:
         raise InputError("extract_unreadable", f"{path.name}: {error}") from None
     if digest != entry["sha256"]:
         raise InputError("extract_changed", f"{path.name} differs from its manifest hash")
+    if not read:
+        return []
     rows = read_rows(path)
     if len(rows) != entry["row_count"]:
         raise InputError("extract_changed", f"{path.name} has another row count than its manifest")

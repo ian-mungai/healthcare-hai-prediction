@@ -123,6 +123,15 @@ def record(matrix_path: Path, run: Run, snapshots: Mapping[str, str], *, project
     run_dvc(["add", str(relative)], project, limits.add)
     metafile = project / f"{relative}.dvc"
     run_dvc(["push", str(relative) + ".dvc"], project, limits.push)
+    return log_baseline(metafile, relative, run, snapshots)
+
+
+def log_baseline(metafile: Path, relative: Path, run: Run, snapshots: Mapping[str, str]) -> str:
+    """Log a recorded metafile as an artifact of the run and set the snapshot, path and hash tags; return the metafile hash.
+
+    The tags are set last, in the order a reader depends on: a run that carries the hash tag always carries the metafile. A repeat with the same inputs
+    logs the same artifact and sets the same tags.
+    """
     digest = file_digest(metafile, "sha256")
     run.store.log_artifact(run.run_id, str(metafile), ARTIFACT_FOLDER)
     for table, snapshot in sorted(snapshots.items()):

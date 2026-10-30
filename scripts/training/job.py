@@ -25,7 +25,7 @@ MODULES: dict[str, tuple[str, ...]] = {
     "fit": ("scripts.training.models.suite", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "mediation": ("scripts.training.mediation", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "hac_validate": ("scripts.training.hac_validation", "scripts.training.job_actions", "scripts.training.job_inputs"),
-    "log_run": (),
+    "log_run": ("scripts.training.run_tracking", "scripts.training.dvc_baseline", "scripts.training.job_actions", "scripts.training.job_inputs"),
     "promotion_check": (),
     "promote": (),
     "smoke": (),
@@ -125,10 +125,11 @@ def action_modules() -> tuple[ModuleType, ...]:
     import scripts.training.job_inputs as job_inputs
     import scripts.training.mediation as mediation
     import scripts.training.models.suite as suite
+    import scripts.training.run_tracking as run_tracking
     import scripts.training.step_records as step_records
     import scripts.training.targets as targets
 
-    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation, job_actions, job_inputs)
+    return (guards, targets, step_records, dvc_baseline, suite, mediation, hac_validation, job_actions, job_inputs, run_tracking)
 
 
 def run_smoke(context: Context) -> None:
@@ -166,11 +167,19 @@ def run_hac_validate(context: Context) -> None:
     job_actions.run_hac_validate(context, read_record(context))
 
 
+def run_log_run(context: Context) -> None:
+    """Log one MLflow run per requested HAI type from the mounted outputs of the earlier steps."""
+    from scripts.training import job_actions
+
+    job_actions.run_log_run(context, read_record(context))
+
+
 HANDLERS: dict[str, Callable[[Context], None]] = {
     "guard": run_guard,
     "fit": run_fit,
     "mediation": run_mediation,
     "hac_validate": run_hac_validate,
+    "log_run": run_log_run,
     "smoke": run_smoke,
 }
 
