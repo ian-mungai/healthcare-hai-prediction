@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from monitoring import drift_cases
 from scripts.process import SubprocessError, run_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,10 +90,10 @@ def missing_configuration(folder: Path) -> Problems:
 
 
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
-    config = [("tracked_config_passes", tracked_config_passes), ("copy_passes", copy_passes)]
+    config: list[tuple[str, Callable[[Path], Problems]]] = [("tracked_config_passes", tracked_config_passes), ("copy_passes", copy_passes)]
     config += [(f"config_rejects_{name}", rejection(mutate, key)) for name, mutate, key in CONFIG_REJECTIONS]
     config += [("config_rejects_malformed_file", unreadable_configuration), ("config_rejects_missing_file", missing_configuration)]
-    return config
+    return config + drift_cases.cases()
 
 
 def main() -> int:
@@ -107,20 +108,25 @@ def main() -> int:
             folder.mkdir()
             try:
                 problems = check(folder)
+            except drift_cases.Blocked as reason:
+                results.append({"case": name, "passed": False, "blocked": True, "problems": [f"blocked: {reason}"]})
+                continue
             except (SubprocessError, OSError, ValueError, KeyError) as error:
                 problems = [f"{type(error).__name__}: {error}"]
-            results.append({"case": name, "passed": not problems, "problems": problems})
+            results.append({"case": name, "passed": not problems, "blocked": False, "problems": problems})
     finally:
         shutil.rmtree(top, ignore_errors=True)
     passed = sum(result["passed"] for result in results)
+    blocked = sum(result["blocked"] for result in results)
+    failed = len(results) - passed - blocked
     report = out / "report.json"
-    report.write_text(json.dumps({"pass": passed == len(results), "cases": results}, indent=2) + "\n")
+    report.write_text(json.dumps({"pass": failed == 0 and blocked == 0, "failed": failed, "blocked": blocked, "cases": results}, indent=2) + "\n")
     for result in results:
-        sys.stdout.write(f"{'PASS' if result['passed'] else 'FAIL'} {result['case']}\n")
+        sys.stdout.write(f"{'BLOCKED' if result['blocked'] else 'PASS' if result['passed'] else 'FAIL'} {result['case']}\n")
         for problem in result["problems"]:
             sys.stdout.write(f"  {problem}\n")
-    sys.stdout.write(f"{passed}/{len(results)} passed; report {report}\n")
-    return 0 if passed == len(results) else 1
+    sys.stdout.write(f"{passed}/{len(results)} passed, {blocked} blocked, {failed} failed; report {report}\n")
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":
