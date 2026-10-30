@@ -26,7 +26,7 @@ terraform_checks() {
     stack_root="$scratch/${stack//\//_}"
     test_dir="$stack_root/${source_dir#"$repo_root"/}"
     mkdir -p "$test_dir"
-    for config_read_by_stacks in config/lakehouse/bronze_tables.json config/lakehouse/aws_bronze_grants.json config/orchestration/ecs_broker_jobs.json config/lakehouse/athena_mirror.json; do
+    for config_read_by_stacks in config/lakehouse/bronze_tables.json config/lakehouse/aws_bronze_grants.json config/orchestration/ecs_broker_jobs.json config/lakehouse/athena_mirror.json data_contracts/lakehouse/gold_contract.json; do
       mkdir -p "$stack_root/$(dirname "$config_read_by_stacks")"
       cp "$repo_root/$config_read_by_stacks" "$stack_root/$config_read_by_stacks"
     done
