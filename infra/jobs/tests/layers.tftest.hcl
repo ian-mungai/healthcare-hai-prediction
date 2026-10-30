@@ -61,9 +61,9 @@ run "each_layer_is_one_fargate_task_with_its_own_writer_role" {
   assert {
     condition = (
       toset(keys(aws_ecs_task_definition.layer)) == toset(["silver", "gold", "features"]) &&
-      aws_ecs_task_definition.layer["silver"].family == "example_project_dev_job_layer_silver" &&
-      aws_ecs_task_definition.layer["gold"].family == "example_project_dev_job_layer_gold" &&
-      aws_ecs_task_definition.layer["features"].family == "example_project_dev_job_layer_features" &&
+      aws_ecs_task_definition.layer["silver"].family == "example_project_dev_job_silver" &&
+      aws_ecs_task_definition.layer["gold"].family == "example_project_dev_job_gold" &&
+      aws_ecs_task_definition.layer["features"].family == "example_project_dev_job_features" &&
       aws_ecs_task_definition.layer["silver"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_write_silver_task_dev" &&
       aws_ecs_task_definition.layer["gold"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev" &&
       aws_ecs_task_definition.layer["features"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_write_features_task_dev" &&
@@ -139,7 +139,7 @@ run "init_step_hands_the_volumes_to_the_job_user" {
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([for container in slice(jsondecode(output.layer_container_definitions[layer]), 1, length(jsondecode(output.layer_container_definitions[layer]))) : (
       !container.privileged && container.readonlyRootFilesystem && container.user == "10001:10001" && container.linuxParameters.capabilities.drop == ["ALL"] &&
-      container.logConfiguration.options["awslogs-group"] == "example_project_jobs_dev" && container.logConfiguration.options["awslogs-stream-prefix"] == "layer_${layer}" &&
+      container.logConfiguration.options["awslogs-group"] == "example_project_jobs_dev" && container.logConfiguration.options["awslogs-stream-prefix"] == layer &&
       toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])
     )])])
     error_message = "Every phase container is unprivileged with a read-only root, no capability and the numeric user, and writes only the two volumes."
@@ -272,7 +272,7 @@ run "run_task_contract" {
 
   assert {
     condition = (
-      output.layer_run_tasks["gold"].task_definition == "example_project_dev_job_layer_gold" && output.layer_run_tasks["gold"].task_role_key == "write_gold_task" &&
+      output.layer_run_tasks["gold"].task_definition == "example_project_dev_job_gold" && output.layer_run_tasks["gold"].task_role_key == "write_gold_task" &&
       output.layer_run_tasks["gold"].assign_public_ip == "DISABLED" && output.layer_run_tasks["gold"].capacity_providers == ["FARGATE"] &&
       output.layer_run_tasks["gold"].network == "lakehouse" && output.layer_run_tasks["gold"].propagate_tags == "TASK_DEFINITION" &&
       output.layer_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
