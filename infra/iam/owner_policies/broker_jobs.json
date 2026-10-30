@@ -41,10 +41,13 @@
       "Condition": { "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" } }
     },
     {
-      "Sid": "ReadRunCodeDigest",
+      "Sid": "ReadStagedRunRecords",
       "Effect": "Allow",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/code.sha256"
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/code.sha256",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/promotion_approval.json"
+      ]
     },
     {
       "Sid": "ReadJobLogs",

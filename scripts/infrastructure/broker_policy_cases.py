@@ -25,7 +25,7 @@ REGION = "eu-west-1"
 PROJECT = "example_project"
 ENVIRONMENT = "dev"
 BUCKET = "example-project-ci-bucket"
-FAMILIES = ["gold", "silver", "train"]
+FAMILIES = ["gold", "promote", "silver", "train"]
 CLUSTER = f"{PROJECT}_cluster_{ENVIRONMENT}"
 CLUSTER_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/{CLUSTER}"
 OTHER_CLUSTER_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/another_cluster"
@@ -49,7 +49,13 @@ def task(cluster: str = CLUSTER, identifier: str = "0123456789abcdef") -> str:
 
 def values(families: list[str]) -> dict[str, str]:
     """The template inputs, built as infra/iam/broker.tf builds them."""
-    roles = {"train": "job_train_task", "silver": "job_write_silver_task", "gold": "job_write_gold_task", "features": "job_write_features_task"}
+    roles = {
+        "promote": "job_train_task",
+        "train": "job_train_task",
+        "silver": "job_write_silver_task",
+        "gold": "job_write_gold_task",
+        "features": "job_write_features_task",
+    }
     return {
         "AWS_REGION": REGION,
         "AWS_ACCOUNT_ID": ACCOUNT,
@@ -154,6 +160,16 @@ def cases() -> list[Case]:
     ):
         add(f"pass the unnamed role {name}", "iam:PassRole", role(name), False, pass_context)
     add("read a code digest", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/code.sha256", True)
+    add(
+        "read a promotion approval", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/promotion_approval.json", True
+    )
+    add(
+        "write a promotion approval",
+        "s3:PutObject",
+        f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/promotion_approval.json",
+        False,
+    )
+    add("read an approval of another name", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/approval.json", False)
     for key in ("code.tar.gz", "other.json", "../code.sha256"):
         add(f"read inputs/{key}", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/{key}", False)
     add("read a gold table", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet", False)
