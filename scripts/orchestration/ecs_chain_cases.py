@@ -10,6 +10,7 @@ import re
 import runpy
 import sys
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -160,9 +161,48 @@ def a_retried_bronze_run_names_the_same_runs() -> None:
     require(not set(first.values()) & set(other.values()), "a new bronze run reuses an old DAG run ID")
 
 
+def waits_have_explicit_deadlines() -> None:
+    loaded = load_dag()
+    triggers = [node.settings for node in loaded["operators"] if node.task_id.startswith("run_")]
+    limits = [settings.get("execution_timeout") for settings in triggers]
+    require(len(triggers) == 4 and all(isinstance(limit, timedelta) and limit > timedelta(0) for limit in limits), f"a layer wait has no deadline: {limits}")
+    run_limit = loaded["dag"].settings.get("dagrun_timeout")
+    require(isinstance(run_limit, timedelta) and run_limit >= sum(limits, timedelta(0)), f"the chain run has no deadline that covers its layers: {run_limit}")
+    require(loaded["dag"].settings.get("max_active_runs") == 1, "the chain may run twice at once")
+
+
+# Child DAGs that live on a branch that is not in this tree yet. When a branch is combined, the file appears and this case fails until the entry is removed,
+# which makes the integration a deliberate step with the checks below.
+PENDING_CHILDREN = {"drift_monitoring_dag": "feat/drift-monitoring"}
+
+
+def named_child_dags_exist_and_accept_the_settings() -> None:
+    loaded = load_dag()
+    nodes = {node.task_id: node.settings for node in loaded["operators"]}
+    problems = []
+    for layer, dag_id, _ in loaded["CHAIN"]:
+        path = ROOT / "dags" / f"{dag_id}.py"
+        if dag_id in PENDING_CHILDREN:
+            if path.exists():
+                problems.append(f"{dag_id} is now in the tree: remove it from PENDING_CHILDREN so its settings are checked")
+            continue
+        if not path.exists():
+            problems.append(f"{dag_id} is not in the tree and is not marked as pending on a branch")
+            continue
+        text = path.read_text()
+        if f'dag_id="{dag_id}"' not in text:
+            problems.append(f"{path.name} does not declare {dag_id}")
+        for key in nodes[f"run_{layer}"]["conf"]:
+            if not re.search(rf'"{key}"\s*:\s*Param\(', text):
+                problems.append(f"{dag_id} declares no parameter {key}")
+    require(not problems, "; ".join(problems))
+
+
 CASES: dict[str, Callable[[], None]] = {
     "derived_ids_are_valid_and_stable": derived_ids_are_valid_and_stable,
     "chain_runs_in_order_after_the_gate": chain_runs_in_order_after_the_gate,
     "triggers_send_derived_ids": triggers_send_derived_ids,
     "a_retried_bronze_run_names_the_same_runs": a_retried_bronze_run_names_the_same_runs,
+    "waits_have_explicit_deadlines": waits_have_explicit_deadlines,
+    "named_child_dags_exist_and_accept_the_settings": named_child_dags_exist_and_accept_the_settings,
 }
