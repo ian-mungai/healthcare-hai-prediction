@@ -1,0 +1,20 @@
+# Model API image: the approved versions only. Transitive packages are resolved by services/model_api/compile_lock.sh into requirements.txt and listed at lock
+# review. The pins below are the ones another image of this project already fixes (the MLflow client of the server version, Feast and its stores, NumPy). The model
+# libraries and the web stack carry no project pin yet, so the first lock compile chooses them. The compile then fails when one of the model libraries differs from
+# the training image lock (services/training/requirements.txt), because a model saved with one scikit-learn or XGBoost release is not safe to load with another.
+fastapi
+uvicorn
+pydantic
+mlflow-skinny==3.17.0
+feast[aws,duckdb,iceberg,redis]==0.66.0
+pyiceberg[pyarrow]==0.12.0
+redis==7.4.1
+hiredis==3.4.2
+boto3
+numpy==2.5.3
+pandas
+scipy
+scikit-learn
+statsmodels
+xgboost
+skops

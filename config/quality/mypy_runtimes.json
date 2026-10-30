@@ -1,5 +1,9 @@
 {
   "pending": {
+    "scripts/serving/api.py": {
+      "runtime": "serving",
+      "reason": "Cannot find implementation or library stub for module named \"fastapi\"; Cannot find implementation or library stub for module named \"fastapi.concurrency\"; Cannot find implementation or library stub for module named \"fastapi.responses\""
+    },
     "dags/serving_deploy_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""

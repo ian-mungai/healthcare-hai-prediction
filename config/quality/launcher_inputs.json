@@ -1061,6 +1061,7 @@
     "orchestration/pipeline_session.py",
     "orchestration/remote_run.py",
     "orchestration/sdk_worker.py",
+    "orchestration/serving_contract.py",
     "orchestration/snapshots.py",
     "orchestration/training_approvals.py",
     "orchestration/training_contract.py",
