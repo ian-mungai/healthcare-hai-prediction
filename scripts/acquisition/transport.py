@@ -19,6 +19,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.acquisition.source_registry import reject_constant, unique_object
 
 # Exact publisher resource reviewed on 2026-09-24; no bucket-wide redirect permission.
@@ -28,6 +29,7 @@ SIGNED_REDIRECT_ROUTES = {
 
 
 APPROVED_HOSTS_VARIABLE = "HAI_APPROVED_HOSTS"
+CAPTURE_ROOT_VARIABLE = "HAI_CAPTURE_ROOT"
 
 
 class CaptureError(ValueError):
@@ -124,6 +126,8 @@ def approved_hosts() -> frozenset[str] | None:
 def require_approved(url: str) -> None:
     """Refuse a URL whose host is not on the approved hosts file; no file set means no extra limit."""
     approved = approved_hosts()
+    if approved is None and os.environ.get(CAPTURE_ROOT_VARIABLE) == RAW_ROOT:
+        raise CaptureError("The raw route requires an approved hosts file.")
     if approved is not None and urllib.parse.urlsplit(url).hostname not in approved:
         raise CaptureError("The host is not on the approved hosts file.")
 

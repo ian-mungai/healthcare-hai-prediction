@@ -91,3 +91,16 @@ def test_the_bls_request_is_refused_before_any_secret_read_when_its_host_is_off_
     with pytest.raises(transport.CaptureError, match="approved hosts"):
         bls_api_transport.request_live({"endpoint": "https://api.bls.gov/publicAPI/v2/timeseries/data/"}, {}, cast(AwsCli, client))
     check(client.calls == [], "no identity or secret call was made")
+
+
+def test_the_raw_route_without_a_hosts_file_refuses_every_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(transport.APPROVED_HOSTS_VARIABLE, raising=False)
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
+    with pytest.raises(transport.CaptureError, match="requires an approved hosts file"):
+        transport.HttpsRequest("https://data.example.gov/file.csv")
+
+
+def test_the_root_layout_without_a_hosts_file_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(transport.APPROVED_HOSTS_VARIABLE, raising=False)
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", "")
+    transport.HttpsRequest("https://data.example.gov/file.csv")
