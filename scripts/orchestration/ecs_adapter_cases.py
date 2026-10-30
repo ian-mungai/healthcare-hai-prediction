@@ -121,7 +121,7 @@ def early_failure_names_first_nonzero() -> None:
 
 def stopped_without_exit_codes_fails() -> None:
     adapter, ecs, _ = build()
-    ecs.plan = {name: None for name in ecs.plan}
+    ecs.plan = {name: None for name in ("init", "fetch", "train")}
     report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
     require(report.state == "failed" and report.exit_code == 125, f"a task with no exit codes passed or lost its code: {report}")
 

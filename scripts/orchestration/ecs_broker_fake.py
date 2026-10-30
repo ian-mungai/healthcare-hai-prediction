@@ -17,7 +17,6 @@ from botocore.exceptions import ClientError, ReadTimeoutError
 ACCOUNT = "000000000000"
 CLUSTER = "stand-in-cluster"
 REGION = "stand-in-region"
-CONTAINERS = ("init", "fetch", "prepare", "extract", "train")
 FINISH_AFTER = 3
 
 
@@ -36,7 +35,8 @@ class FakeEcs:
         self.faults: dict[str, list[Exception]] = {}
         self.lose_reply_once = False
         self.hold = False
-        self.plan: dict[str, int | None] = {name: 0 for name in CONTAINERS}
+        self.plan: dict[str, int | None] = {}
+        self.omit: set[str] = set()
         self.finish_after = FINISH_AFTER
 
     def count(self, operation: str) -> int:
@@ -58,6 +58,8 @@ class FakeEcs:
             raise client_error("InvalidParameterException", "RunTask")
         if token in self.tokens:
             return {"tasks": [self.tasks[self.tokens[token]]], "failures": []}
+        names = [item["name"] for item in arguments.get("overrides", {}).get("containerOverrides", [])]
+        names = ["init", *names] if arguments["taskDefinition"].endswith("_train") else names
         digest = hashlib.sha256(token.encode()).hexdigest()[:32]
         arn = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{digest}"
         task = {
@@ -66,7 +68,7 @@ class FakeEcs:
             "startedBy": started_by,
             "lastStatus": "PROVISIONING",
             "desiredStatus": "RUNNING",
-            "containers": [{"name": name, "lastStatus": "PENDING"} for name in CONTAINERS],
+            "containers": [{"name": name, "lastStatus": "PENDING"} for name in names if name not in self.omit],
             "polls": 0,
             "request": dict(arguments),
         }
@@ -106,14 +108,14 @@ class FakeEcs:
         if task is None:
             raise client_error("InvalidParameterException", "StopTask", "The referenced task was not found.")
         if task["lastStatus"] != "STOPPED":
-            self._finish(task, {name: 137 for name in CONTAINERS}, f"Task stopped by user: {arguments.get('reason', '')}", "UserInitiated")
+            self._finish(task, {item["name"]: 137 for item in task["containers"]}, f"Task stopped by user: {arguments.get('reason', '')}", "UserInitiated")
         return {"task": self._view(task)}
 
     @staticmethod
     def _finish(task: dict[str, Any], exits: Mapping[str, int | None], reason: str, code: str = "EssentialContainerExited") -> None:
         task.update(lastStatus="STOPPED", desiredStatus="STOPPED", stoppedReason=reason, stopCode=code)
         for container in task["containers"]:
-            code_of = exits.get(container["name"])
+            code_of = exits.get(container["name"], 0)
             container["lastStatus"] = "STOPPED"
             if code_of is not None:
                 container["exitCode"] = code_of

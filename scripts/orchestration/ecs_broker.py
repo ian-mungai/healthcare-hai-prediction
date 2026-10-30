@@ -48,8 +48,12 @@ SUBMISSION = re.compile(
     r"^([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}):([a-z][a-z0-9_]{1,40}):(fixture|publish_fixture|real):([0-9]{1,2})(?::([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}))?$"
 )
 DIGEST = re.compile(r"[a-f0-9]{64}")
+RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+GATE = "@gate"
+CLOSED = "the chain is closed until the first silver and gold publishes are signed"
 JOB_MODE = "real"
 TIMEOUT_EXIT = 124
+NO_CHECK_EXIT = 125
 CANCEL_EXIT = 143
 REDACTED = "[redacted]"
 OUTCOME_STATE = {"succeeded": State.SUCCEEDED, "control": State.SUCCEEDED, "failed": State.FAILED, "timeout": State.FAILED, "cancelled": State.CANCELLED}
@@ -78,7 +82,8 @@ def load_jobs(root: Path) -> dict[str, Any]:
     errors = sorted(Draft202012Validator(schema).iter_errors(document), key=str)
     if errors:
         raise BrokerError(f"{JOBS_FILE.name}: {errors[0].message}")
-    unknown = sorted({job for job in document["steps"].values() if job is not None and job not in document["jobs"]})
+    unknown = sorted({job for job in document["steps"].values() if job not in (None, GATE) and job not in document["jobs"]})
+    unknown += sorted(job["after"] for job in document["jobs"].values() if "after" in job and job["after"] not in document["jobs"])
     if unknown:
         raise BrokerError(f"{JOBS_FILE.name}: steps name unknown jobs {unknown}")
     return document
@@ -108,6 +113,22 @@ def s3_digest_reader(s3: S3Reader, bucket: str) -> Callable[[str], str]:
     return read
 
 
+def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
+    """Read the record of the signed first publishes from a Parameter Store value, or None while the parameter does not exist."""
+
+    def read() -> str | None:
+        try:
+            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                return None
+            raise TaskUnavailable("signed_record_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("signed_record_unreadable") from None
+
+    return read
+
+
 def parse_submission(submission_id: str) -> tuple[str, str, str, int]:
     """The run, template, mode and attempt of a handle's key."""
     found = SUBMISSION.fullmatch(submission_id)
@@ -120,7 +141,14 @@ class EcsBroker:
     """Submissions recorded in a ledger and run as ECS tasks."""
 
     def __init__(
-        self, state: Path, jobs: dict[str, Any], adapter: EcsAdapter, settings: BrokerSettings, code_digest: Callable[[str], str], clock: Callable[[], float]
+        self,
+        state: Path,
+        jobs: dict[str, Any],
+        adapter: EcsAdapter,
+        settings: BrokerSettings,
+        code_digest: Callable[[str], str],
+        signed_reader: Callable[[], str | None],
+        clock: Callable[[], float],
     ) -> None:
         self.ledger = Ledger(state, "ecs_ledger_line.schema.json")
         self.requests = schema_validator("submission_request.schema.json")
@@ -129,6 +157,7 @@ class EcsBroker:
         self.adapter = adapter
         self.settings = settings
         self.code_digest = code_digest
+        self.signed_reader = signed_reader
         self.clock = clock
         self.secrets: set[str] = set()
 
@@ -142,18 +171,52 @@ class EcsBroker:
         if request.template not in self.steps:
             raise SubmissionRefused(f"{request.template} has no ECS job")
         job = self.steps[request.template]
+        if job == GATE:
+            self.require_signed()
+            return None
         if job is None:
             return None
         if request.mode != JOB_MODE:
             raise SubmissionRefused(f"{request.template} runs on AWS in real mode only")
         if job not in self.adapter.settings.families:
             raise SubmissionRefused(f"the {job} job is not enabled")
+        if self.jobs[job].get("chain"):
+            self.require_signed()
+        after = self.jobs[job].get("after")
+        if after:
+            self.require_passed(job, after, request.input_run_id)
         if self.jobs[job].get("needs_training_parameters"):
             try:
                 parameters_for(request.dag_id, request.training or {}, JOB_LANES)
             except ValueError as error:
                 raise SubmissionRefused(str(error)) from None
         return job
+
+    def require_signed(self) -> None:
+        """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
+        try:
+            raw = self.signed_reader()
+        except TaskUnavailable as error:
+            raise Unavailable(str(error)) from None
+        try:
+            record = json.loads(raw) if raw else None
+        except ValueError:
+            record = None
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"silver", "gold"}
+            or not all(isinstance(run, str) and RUN_ID.fullmatch(run) for run in record.values())
+        ):
+            raise SubmissionRefused(CLOSED)
+
+    def require_passed(self, job: str, after: str, input_run: str | None) -> None:
+        """Refuse a job unless the run it publishes from finished its previous job with every acceptance check passed."""
+        if input_run is None:
+            raise SubmissionRefused(f"the {job} job needs the {after} run it publishes from")
+        with self.ledger.locked(input_run):
+            lines = self.ledger.read(input_run)
+        if not any(line["event"] == "finished" and line.get("job") == after and line.get("outcome") == "succeeded" for line in lines):
+            raise SubmissionRefused(f"the {job} job needs a {after} job that passed in run {input_run}")
 
     def variables(self, request: SubmissionRequest, names: list[str]) -> dict[str, str]:
         values = {
@@ -249,6 +312,10 @@ class EcsBroker:
                 return self.append({"event": "finished", **identity, "exit_code": TIMEOUT_EXIT, "outcome": "timeout", "reason": "deadline"})
             if report.state == "gone":
                 return self.append({"event": "failed_closed", **identity, "reason": "task_not_found"})
+            missing = [name for name in self.jobs[job].get("acceptance", []) if dict(report.containers).get(name) != 0] if report.state == "succeeded" else []
+            if missing:
+                reason = f"acceptance_check_missing:{','.join(missing)}"
+                return self.append({"event": "finished", **identity, "exit_code": NO_CHECK_EXIT, "outcome": "failed", "reason": reason})
             outcome = "succeeded" if report.state == "succeeded" else "failed"
             return self.append({"event": "finished", **identity, "exit_code": report.exit_code, "outcome": outcome, "reason": self.redact(report.reason)})
 
@@ -470,12 +537,14 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     session = boto3.session.Session(region_name=region)
     adapter = EcsAdapter(session.client("ecs", config=config), session.client("logs", config=config), settings)
     digest = s3_digest_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
+    signed = ssm_signed_reader(session.client("ssm", config=config), required(env, "BROKER_SIGNED_PARAMETER"))
     broker = EcsBroker(
         Path(env.get("BROKER_STATE", "/var/lib/hai/broker")),
         jobs,
         adapter,
         BrokerSettings(required(env, "BROKER_POLARIS_URI"), required(env, "BROKER_MLFLOW_URI")),
         digest,
+        signed,
         lambda: datetime.now(UTC).timestamp(),
     )
     listener = Listener(broker, "127.0.0.1", int(env.get("BROKER_PORT", "18790")), token)

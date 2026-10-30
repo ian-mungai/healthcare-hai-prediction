@@ -59,7 +59,12 @@
         "upload": [
           "RUN_ID"
         ]
-      }
+      },
+      "chain": true,
+      "acceptance": [
+        "validate",
+        "verify"
+      ]
     },
     "gold": {
       "deadline_seconds": 21600,
@@ -92,7 +97,12 @@
         "upload": [
           "RUN_ID"
         ]
-      }
+      },
+      "chain": true,
+      "acceptance": [
+        "validate"
+      ],
+      "after": "silver"
     },
     "features": {
       "deadline_seconds": 21600,
@@ -126,7 +136,12 @@
           "RUN_ID",
           "POLARIS_URI"
         ]
-      }
+      },
+      "chain": true,
+      "acceptance": [
+        "validate"
+      ],
+      "after": "gold"
     },
     "drift": {
       "deadline_seconds": 7200,
@@ -141,7 +156,8 @@
           "POLARIS_URI",
           "MLFLOW_TRACKING_URI"
         ]
-      }
+      },
+      "chain": true
     }
   },
   "steps": {
@@ -149,6 +165,7 @@
     "catalog_backup": "gold",
     "catalog_release": null,
     "catalog_up": null,
+    "chain_gate": "@gate",
     "check_drift": "drift",
     "commit_publish": "gold",
     "cross_layer_checks": "gold",

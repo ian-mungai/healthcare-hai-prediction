@@ -1820,6 +1820,7 @@ run "broker_service_shape" {
           "BROKER_PORT=18790",
           "BROKER_POLARIS_URI=http://10.0.1.20:8181/api/catalog",
           "BROKER_MLFLOW_URI=http://10.0.1.20:5100",
+          "BROKER_SIGNED_PARAMETER=/healthcare_hai_prediction/first_publishes_signed",
           "BROKER_SUBNETS=subnet-0example1",
           "BROKER_SECURITY_GROUPS=sg-0example1",
         ] : contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : "${item.name}=${item.value}"], expected)
