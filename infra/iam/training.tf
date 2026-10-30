@@ -54,6 +54,24 @@ resource "aws_iam_role_policy" "mlflow_artifacts" {
   policy = local.training_policy_documents.mlflow_artifacts
 }
 
+# The shared job execution policy names three image repositories and the host execution policy names eight parameters. Both stay unchanged. The new tasks
+# add exactly their own grant here, and only while the flag is true.
+resource "aws_iam_role_policy" "train_image_pull" {
+  count = var.training_prepared ? 1 : 0
+
+  name   = "train_images"
+  role   = aws_iam_role.job["execution"].name
+  policy = templatefile("${path.module}/owner_policies/job_train_images.json", local.job_policy_inputs)
+}
+
+resource "aws_iam_role_policy" "mlflow_parameter" {
+  count = var.training_prepared ? 1 : 0
+
+  name   = "mlflow_parameter"
+  role   = aws_iam_role.task_execution.name
+  policy = templatefile("${path.module}/owner_policies/mlflow_parameter.json", merge(local.owner_policy_values, { MLFLOW_DB_PASSWORD_NAME = var.mlflow_db_password_name }))
+}
+
 resource "aws_security_group" "training" {
   #checkov:skip=CKV2_AWS_5:The training run task attaches this group when it starts.
   count = var.training_prepared ? 1 : 0
