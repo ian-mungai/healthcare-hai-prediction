@@ -11,6 +11,7 @@ bucket goes through ``shared_write``, so a case can prove what a run wrote, and 
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import io
@@ -95,8 +96,54 @@ def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
+# Options a step never reads although the parser gives them a /workspace default: the pin step pins the input layer and touches no publish folder, and
+# the four publish steps write their records into the publish folder, not to --record.
+UNUSED_DEFAULTS = {("silver_publish", "pin"): {"publish_dir"}} | {
+    (module, step): {"record"} for module in ("silver_publish", "gold_publish", "features_publish") for step in ("candidates", "reconcile", "backup", "commit")
+}
+
+
+def parser_options(module: str) -> dict[str, tuple[bool, str | None]]:
+    """Each ``--option`` the module's parser declares: whether it is required and its default when that is a literal or ``Path`` of a literal. The source is
+    read, not imported, because the quality and Spark modules need packages that only their images carry."""
+    tree = ast.parse((Path(__file__).resolve().parents[2] / (module.replace(".", "/") + ".py")).read_text())
+    options: dict[str, tuple[bool, str | None]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument" and node.args):
+            continue
+        names = [arg.value for arg in node.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("--")]
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+        default = keywords.get("default")
+        if isinstance(default, ast.Call) and default.args:
+            default = default.args[0]
+        value = default.value if isinstance(default, ast.Constant) else None
+        required = isinstance(keywords.get("required"), ast.Constant) and keywords["required"].value is True
+        for name in names:
+            options[name] = (required, value if isinstance(value, str) else None)
+    return options
+
+
+def argument_contract(module: str, arguments: Sequence[str | Path]) -> None:
+    """Check the driver's arguments against the module's own parser: every option must exist, every required one must be given, and no option that has a
+    default under /workspace may be left to it, because the task's code folder is elsewhere and a default would read or write the wrong run."""
+    options = parser_options(module)
+    require(options, f"{module} declares no parser options")
+    given = [str(item) for item in arguments if str(item).startswith("--")]
+    step = str(arguments[0]) if arguments else ""
+    unused = UNUSED_DEFAULTS.get((module.rsplit(".", 1)[1], step), set())
+    problems = [f"{name} is not an option of {module}" for name in given if name not in options]
+    problems += [f"{name} is required by {module}" for name, (required, _) in options.items() if required and name not in given]
+    problems += [
+        f"{module} {step}: {name} is left at the default {default}"
+        for name, (_, default) in options.items()
+        if default and default.startswith("/workspace") and name not in given and name[2:].replace("-", "_") not in unused
+    ]
+    require(not problems, "; ".join(problems))
+
+
 def standin(job: Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str] | None = None) -> None:
     """One stand-in for every module the driver runs; the digest checks are the ones the real modules make."""
+    argument_contract(module, arguments)
     folder = job.folder
     name = module.rsplit(".", 1)[1]
     step = str(arguments[0]) if arguments else ""
