@@ -216,6 +216,13 @@ repos:
         pass_filenames: false
         files: ^(.*\.py|\.importlinter|config/quality_tools\.json)$
         stages: [pre-commit]
+      - id: typos
+        # Homebrew typos at the pinned version with _typos.toml; local only.
+        name: Text and source files have no common misspellings (typos)
+        entry: .venv/bin/python -m scripts.quality.lint_tools typos
+        language: system
+        types: [text]
+        stages: [pre-commit]
       - id: model-metadata
         name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
         entry: .venv/bin/python -m scripts.quality.model_metadata

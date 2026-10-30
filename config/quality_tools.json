@@ -163,6 +163,12 @@
       "installer": "scripts/quality/install_lint_tools.py",
       "requirements": "scripts/quality/lint_requirements/import_linter.txt",
       "executable": ".tools/import-linter/bin/lint-imports"
+    },
+    "typos": {
+      "version": "1.51.1",
+      "installer": "homebrew",
+      "formula": "typos-cli",
+      "executable": "/opt/homebrew/bin/typos"
     }
   }
 }
