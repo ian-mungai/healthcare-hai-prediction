@@ -103,21 +103,21 @@ Named manual steps. These are the only setup steps no script performs:
    password is `/healthcare_hai_prediction/airflow_admin`
    (`airflow_admin_secret_name`; the username is `admin`): it exists already
    (see the Airflow administrator password step below) and the project profile
-   may read it and never write it. The other 14 are
+   may read it and never write it. The other 15 are
    managed: no person creates them by hand. They hold the local catalog,
    workflow, lineage and feature store credentials, each as plain text:
    `postgres_password`, `polaris_root_secret`, `polaris_reader_client_id`,
    `polaris_reader_client_secret`, `polaris_gold_client_id`,
    `polaris_gold_client_secret`, `polaris_silver_client_id`,
    `polaris_silver_client_secret`, `airflow_db_password`, `airflow_fernet_key`,
-   `airflow_jwt_secret`, `airflow_api_secret_key`, `marquez_db_password` and
-   `redis_password`. Each name is a root variable in `infra/iam/variables.tf`
+   `airflow_jwt_secret`, `airflow_api_secret_key`, `marquez_db_password`,
+   `redis_password` and `mlflow_db_password`. Each name is a root variable in `infra/iam/variables.tf`
    (the secret's last path part with `_name`, for example
    `postgres_password_name`) with its full name as default. A name starts with a
    slash and has up to 15 parts of letters, digits and underscores. It never
    starts with `aws` or `ssm` (the AWS naming rules for a hierarchy). The `ssm`
-   policy file grants the project profile `ssm:GetParameter` on the 15 parameter
-   ARNs and `ssm:PutParameter` on the 14 managed ones. It grants nothing else: no
+   policy file grants the project profile `ssm:GetParameter` on the 16 parameter
+   ARNs and `ssm:PutParameter` on the 15 managed ones. It grants nothing else: no
    `kms` action (the key policy of the AWS managed key admits the account's
    principals through Parameter Store), no `DescribeParameters`, no
    `GetParametersByPath` and no wildcard. A parameter ARN is

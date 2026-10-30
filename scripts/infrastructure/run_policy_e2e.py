@@ -167,7 +167,7 @@ def difference(label: str, actual: set[str], expected: set[str]) -> list[str]:
 def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLES) -> list[str]:
     """The names in the statements equal the Terraform variable defaults, and the defaults equal the owner's approved list.
 
-    The parameter read set is the 15 project parameters and the write set the 14 managed ones, the same lists as ``read_parameter_names`` and
+    The parameter read set is the 16 project parameters and the write set the 15 managed ones, the same lists as ``read_parameter_names`` and
     ``managed_parameter_names`` in ``infra/iam/main.tf`` (its tests pin those). The sts policy grants the two lakehouse roles and the task execution
     policy injects eight of the managed parameters, each from its own variable, checked here with ``PROJECT_NAME`` set to a value that no variable
     default contains. The approved lists are written out in ``policy_cases``, not read from a file.
