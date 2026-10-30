@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration import training_render
+from orchestration import training_contract
 from scripts.process import run_command
 from scripts.training import guards, job, job_failure
 from scripts.training.lane_b_cases import RUN, Cases, require
@@ -74,7 +74,7 @@ def listing(folder: Path) -> list[str]:
 
 def dispatch_cases(cases: Cases, folder: Path) -> None:
     """Require one dispatch per action to its own callable, and a named refusal where no implementation exists."""
-    cases.check("job_actions_match_renderer", lambda: require(set(job.ACTIONS) == set(training_render.PREREQUISITES) - {"extract"}, "action lists differ"))
+    cases.check("job_actions_match_contract", lambda: require(set(job.ACTIONS) == set(training_contract.PREREQUISITES) - {"extract"}, "action lists differ"))
     cases.check("job_unknown_action_refused", lambda: require(call(["nonsense"])[0] == 2, "an unknown action was accepted"))
     for action in job.ACTIONS:
 

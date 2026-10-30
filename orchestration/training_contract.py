@@ -37,6 +37,20 @@ TRAINING_STEPS = (
     "run_record",
 )
 PROMOTION_STEPS = ("acquire_run", "snapshot_training", "promote", "run_record")
+PREREQUISITES = {
+    "guard": (),
+    "extract": ("guard",),
+    "version_extract": ("extract",),
+    "fit": ("extract", "version_extract"),
+    "mediation": ("extract", "version_extract", "fit"),
+    "hac_validate": ("extract", "fit", "mediation"),
+    "log_run": ("extract", "version_extract", "fit", "mediation", "hac_validate"),
+    "promotion_check": ("extract", "version_extract", "fit", "log_run"),
+    "promote": (),
+    "smoke": (),
+}
+
+INPUT_STEPS = {**PREREQUISITES, "mediation": ("extract",), "hac_validate": ("extract", "fit")}
 MAC_LANES = ("local",)
 JOB_LANES = ("local", "aws")
 
