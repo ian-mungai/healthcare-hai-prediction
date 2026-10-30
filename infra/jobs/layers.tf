@@ -178,7 +178,7 @@ locals {
           options = {
             awslogs-group         = var.log_group_name
             awslogs-region        = var.aws_region
-            awslogs-stream-prefix = "layer_${layer}"
+            awslogs-stream-prefix = layer
             mode                  = "non-blocking"
             max-buffer-size       = "16m"
           }
@@ -191,7 +191,7 @@ locals {
 resource "aws_ecs_task_definition" "layer" {
   for_each = local.layer_jobs
 
-  family                   = "${var.project_name}_${var.environment}_job_layer_${each.key}"
+  family                   = "${var.project_name}_${var.environment}_job_${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = tostring(var.layer_resources.cpu)
