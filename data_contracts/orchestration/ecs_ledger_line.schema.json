@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_ledger_line.schema.json",
+  "title": "ECS broker ledger line",
+  "description": "One line of <state>/<run_id>.jsonl in the lean ECS broker. The broker appends and fsyncs a line before the action it announces. Order per submission: intent, then started, then finished. failed_closed ends a submission the cloud refused for good. A control step has intent then finished.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event", "at", "submission_id", "run_id", "template", "mode", "attempt", "request_version", "dag_id", "task_id", "dag_run_id", "job"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "request_version": {"const": 2},
+    "event": {"enum": ["intent", "started", "finished", "failed_closed"]},
+    "at": {"type": "string", "format": "date-time"},
+    "submission_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}:[a-z][a-z0-9_]{1,40}:(fixture|publish_fixture|real):[0-9]{1,2}(:[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})?$"},
+    "run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
+    "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+    "mode": {"enum": ["fixture", "publish_fixture", "real"]},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 99},
+    "dag_id": {"type": "string", "minLength": 1, "maxLength": 250},
+    "task_id": {"type": "string", "minLength": 1, "maxLength": 250},
+    "dag_run_id": {"type": "string", "minLength": 1, "maxLength": 250},
+    "input_run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
+    "target": {"enum": ["auto", "ecs", "docker"]},
+    "training": {"type": "object"},
+    "job": {"type": ["string", "null"], "description": "The job family, or null for a control step"},
+    "job_key": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}:[a-z][a-z0-9_]{1,40}:[0-9]{1,2}$"},
+    "task_arn": {"type": "string", "minLength": 1, "maxLength": 300},
+    "job_started_at": {"type": "string", "format": "date-time"},
+    "exit_code": {"type": "integer"},
+    "outcome": {"enum": ["succeeded", "failed", "cancelled", "timeout", "control"]},
+    "reason": {"type": "string", "maxLength": 300}
+  },
+  "allOf": [
+    {"if": {"properties": {"event": {"const": "started"}}, "required": ["event"]}, "then": {"required": ["job_key", "task_arn", "job_started_at"]}},
+    {"if": {"properties": {"event": {"const": "finished"}}, "required": ["event"]}, "then": {"required": ["exit_code", "outcome"]}},
+    {"if": {"properties": {"event": {"const": "failed_closed"}}, "required": ["event"]}, "then": {"required": ["reason"]}}
+  ]
+}

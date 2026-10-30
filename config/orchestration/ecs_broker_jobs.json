@@ -1,0 +1,218 @@
+{
+  "version": 1,
+  "jobs": {
+    "train": {
+      "deadline_seconds": 21600,
+      "log_container": "train",
+      "needs_training_parameters": true,
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "prepare": [
+          "RUN_ID",
+          "CODE_SHA256",
+          "TRAINING_PARAMETERS"
+        ],
+        "extract": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "train": [
+          "RUN_ID",
+          "MLFLOW_TRACKING_URI"
+        ]
+      }
+    },
+    "silver": {
+      "deadline_seconds": 21600,
+      "log_container": "publish",
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "pin": [
+          "RUN_ID",
+          "CODE_SHA256",
+          "POLARIS_URI"
+        ],
+        "build": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "validate": [
+          "RUN_ID"
+        ],
+        "verify": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "export": [
+          "RUN_ID"
+        ],
+        "publish": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "upload": [
+          "RUN_ID"
+        ]
+      }
+    },
+    "gold": {
+      "deadline_seconds": 21600,
+      "log_container": "publish",
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "pin": [
+          "RUN_ID",
+          "CODE_SHA256",
+          "POLARIS_URI",
+          "INPUT_RUN_ID"
+        ],
+        "build": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "validate": [
+          "RUN_ID"
+        ],
+        "export": [
+          "RUN_ID"
+        ],
+        "publish": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "upload": [
+          "RUN_ID"
+        ]
+      }
+    },
+    "features": {
+      "deadline_seconds": 21600,
+      "log_container": "publish",
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "pin": [
+          "RUN_ID",
+          "CODE_SHA256",
+          "POLARIS_URI",
+          "INPUT_RUN_ID"
+        ],
+        "build": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "validate": [
+          "RUN_ID"
+        ],
+        "export": [
+          "RUN_ID"
+        ],
+        "publish": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ],
+        "feast": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ]
+      }
+    },
+    "drift": {
+      "deadline_seconds": 7200,
+      "log_container": "drift",
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_SHA256"
+        ],
+        "drift": [
+          "RUN_ID",
+          "POLARIS_URI",
+          "MLFLOW_TRACKING_URI"
+        ]
+      }
+    }
+  },
+  "steps": {
+    "acquire_run": null,
+    "catalog_backup": "gold",
+    "catalog_release": null,
+    "catalog_up": null,
+    "check_drift": "drift",
+    "commit_publish": "gold",
+    "cross_layer_checks": "gold",
+    "drift_final_gate_accepted": null,
+    "drift_final_gate_rejected": null,
+    "extract": "train",
+    "feast_apply": "features",
+    "feast_materialize": "features",
+    "feature_store_final_gate_accepted": null,
+    "feature_store_final_gate_rejected": null,
+    "features_backup": "features",
+    "features_build": "features",
+    "features_candidates": "features",
+    "features_commit": "features",
+    "features_export": "features",
+    "features_final_gate_accepted": null,
+    "features_final_gate_rejected": null,
+    "features_reconcile": "features",
+    "features_validate": "features",
+    "fetch_baseline": "drift",
+    "fetch_current": "drift",
+    "fit": "train",
+    "gold_build": "gold",
+    "gold_export": "gold",
+    "gold_final_gate_accepted": null,
+    "gold_final_gate_rejected": null,
+    "gold_validate": "gold",
+    "guard": "train",
+    "hac_validate": "train",
+    "log_run": "train",
+    "mediation": "train",
+    "online_store_up": null,
+    "pin_bronze": "silver",
+    "pin_gold": "features",
+    "pin_silver": "gold",
+    "promotion_check": "train",
+    "publish_candidates": "gold",
+    "read_gold": "features",
+    "read_silver": "gold",
+    "reconcile_candidates": "gold",
+    "record_features_snapshot": "features",
+    "record_silver_snapshot": "silver",
+    "release_accepted": null,
+    "release_rejected": null,
+    "reserve_gold": null,
+    "reserve_silver": null,
+    "run_record": null,
+    "seal_features": null,
+    "seal_gold": null,
+    "seal_silver": null,
+    "silver_backup": "silver",
+    "silver_build": "silver",
+    "silver_candidates": "silver",
+    "silver_commit": "silver",
+    "silver_export": "silver",
+    "silver_final_gate_accepted": null,
+    "silver_final_gate_rejected": null,
+    "silver_reconcile": "silver",
+    "silver_validate": "silver",
+    "snapshot_project": null,
+    "snapshot_training": null,
+    "training_final_gate_accepted": null,
+    "training_final_gate_rejected": null,
+    "verify_bronze": "silver",
+    "version_extract": "train"
+  }
+}

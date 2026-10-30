@@ -515,6 +515,7 @@
     "data_contracts/orchestration/dbt_lineage_record.schema.json",
     "data_contracts/orchestration/ecs_input_map.schema.json",
     "data_contracts/orchestration/ecs_job.schema.json",
+    "data_contracts/orchestration/ecs_ledger_line.schema.json",
     "data_contracts/orchestration/ecs_outputs.schema.json",
     "data_contracts/orchestration/ecs_real_run_request.schema.json",
     "data_contracts/orchestration/ecs_target.schema.json",

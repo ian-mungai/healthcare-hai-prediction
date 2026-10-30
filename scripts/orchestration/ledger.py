@@ -80,10 +80,10 @@ def now() -> str:
 class Ledger:
     """The ledger files of one state folder."""
 
-    def __init__(self, folder: Path) -> None:
-        """``folder`` holds one ``<run_id>.jsonl`` per run and its ``.lock`` file."""
+    def __init__(self, folder: Path, schema: str = "ledger_line.schema.json") -> None:
+        """``folder`` holds one ``<run_id>.jsonl`` per run and its ``.lock`` file. ``schema`` names the contract its lines follow."""
         self.folder = folder
-        self._schema = schema_validator("ledger_line.schema.json")
+        self._schema = schema_validator(schema)
 
     def path(self, run_id: str) -> Path:
         """The ledger file of one run; refuses a malformed run ID before it reaches a path."""
