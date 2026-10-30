@@ -70,8 +70,8 @@ class Deployment:
             document: Any = json.loads(raw)
         except ValueError:
             raise DeploymentInvalid("the deployment record is not JSON") from None
-        expected = {"version", "hai_type", "deployment_id", "stable_version", "candidate_version", "percent", "sequence"}
-        if not isinstance(document, dict) or set(document) != expected or document["version"] != 1:
+        expected = {"version", "hai_type", "deployment_id", "stable_version", "candidate_version", "percent"}
+        if not isinstance(document, dict) or set(document) - {"sequence"} != expected or document["version"] != 1:
             raise DeploymentInvalid("the deployment record has other fields than the format")
         return cls(
             document["hai_type"],
@@ -79,7 +79,7 @@ class Deployment:
             document["stable_version"],
             document["candidate_version"],
             document["percent"],
-            document["sequence"],
+            document.get("sequence", 1),
         )
 
 
