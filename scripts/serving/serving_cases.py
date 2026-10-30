@@ -527,6 +527,9 @@ def case_deploy_order(c: Checker) -> None:
         after_rollback = w.store.read_active(HAI)
         c.check("the rollback is active", after_rollback is not None and canary.Deployment.parse(after_rollback.body).candidate_version is None)
         c.check("a retry of the older canary deploy is refused", refused(lambda: canary_run(RUN_1)))
+        c.check(
+            "and the refusal says a later deployment replaced it", refusal_text(lambda: canary_run(RUN_1)).startswith("a later deployment replaced this one")
+        )
         c.check("the refused retry left the rollback active", w.store.read_active(HAI) == after_rollback)
         c.check("a retry of the rollback changes nothing", rollback_run(RUN_2).status == "unchanged" and w.store.read_active(HAI) == after_rollback)
         later = canary_run(RUN_3, "5", 20)
@@ -835,6 +838,14 @@ def case_key_tool(c: Checker) -> None:
         "the document points to the tool and no longer hashes a file with a newline",
         "scripts.serving.keys new" in text and "openssl rand" not in text and "shasum" not in text,
     )
+
+
+def refusal_text(call: Callable[[], object]) -> str:
+    try:
+        call()
+    except deploy.DeployRefused as error:
+        return str(error)
+    return ""
 
 
 def refused(call: Callable[[], object]) -> bool:
