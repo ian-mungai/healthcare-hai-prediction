@@ -178,7 +178,19 @@ def verify(job: Job) -> None:
     run_module(job, "scripts.lakehouse.pins", ["verify", "--run", job.run])
 
 
+def link_profile_folder(job: Job) -> None:
+    """The tracked dbt profiles keep their database at /workspace/out/staging.duckdb. Make that folder a link to the run folder, so the build writes the
+    file that validation and the sealed copy read."""
+    out = job.code.parent / "out"
+    if out.is_symlink():
+        out.unlink()
+    elif out.exists():
+        raise StepError(f"{out} exists and is not a link to a run folder")
+    out.symlink_to(job.folder)
+
+
 def build(job: Job) -> None:
+    link_profile_folder(job)
     source = source_digest(job)
     input_sha, extract = input_digests(job)
     snapshot = job.folder / "snapshot"
@@ -198,7 +210,9 @@ def build(job: Job) -> None:
             provenance.VARIABLE_REVISION: identity(job)["git_revision"],
             provenance.VARIABLE_REQUIRED: "1",
         }
-    arguments: list[str | Path] = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", snapshot / "project"]
+    # The features builder takes the parent of --project as the repository root and reads the contracts and seeds there, so it gets the code folder.
+    project = job.code / "dbt" if job.layer == "features" else snapshot / "project"
+    arguments: list[str | Path] = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", project]
     arguments += ["--source-sha256", source, "--input-sha256", input_sha, *(["--extract-sha256", extract] if extract else [])]
     if job.layer == "features":
         run_module(job, "scripts.features.features_build", arguments, environment)
