@@ -13,6 +13,7 @@ import shlex
 import socket
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -47,8 +48,11 @@ ROUTE_CASES = (
     "relay_rebind",
     "relay_live_conflict",
 )
-CASES = ("normal", "half_close", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
+CASES = ("normal", "half_close", "reverse_half_close", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
 BODY = b'{"catalog":"synthetic"}'
+# Both payloads exceed the relay buffer (1 MiB) plus the loopback socket buffers, so a relay that drops or reorders bytes under backpressure fails.
+UPLOAD = bytes(range(256)) * 8192
+DOWNLOAD = b"HTTP/1.1 200 Synthetic\r\nConnection: close\r\n\r\n" + bytes(reversed(range(256))) * 16384
 
 
 class TransportCleanupUnconfirmed(RuntimeError):
@@ -68,15 +72,117 @@ def _request(endpoint: str) -> bytes:
         connection.close()
 
 
-def _half_closed_request(endpoint: str) -> bytes:
-    """Send a whole request, close only the sending side as a tunnel peer may, then read until the relay ends the stream."""
-    with socket.create_connection(("127.0.0.1", urlsplit(endpoint).port or 0), timeout=3) as peer:
-        peer.sendall(b"GET / HTTP/1.1\r\nHost: synthetic\r\nX-Synthetic-Client: catalog\r\nConnection: close\r\n\r\n")
-        peer.shutdown(socket.SHUT_WR)
-        reply = bytearray()
+class _StreamTarget:
+    """One loopback target that serves a single connection with a fixed half-close order and records what it received."""
+
+    def __init__(self, mode: str, lifetime: float) -> None:
+        self.mode = mode
+        self.lifetime = lifetime
+        self.received = bytearray()
+        self.saw_eof = False
+        self.replied_after_eof = False
+        self.error: str | None = None
+        self.port = 0
+        self._listener: socket.socket | None = None
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> _StreamTarget:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+        except BaseException:
+            listener.close()
+            raise
+        self._listener = listener
+        self.port = listener.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, name="catalog_stream_target")
+        self._thread.start()
+        return self
+
+    def finish(self) -> bool:
+        """Wait for the served connection to end, at most until the target lifetime."""
+        if self._thread is not None:
+            self._thread.join(timeout=max(0.1, self.lifetime - time.monotonic()))
+        return self._thread is None or not self._thread.is_alive()
+
+    def __exit__(self, *_: object) -> None:
+        if self._listener is not None:
+            self._listener.close()
+        self.finish()
+
+    def _drain(self, peer: socket.socket) -> None:
         while chunk := peer.recv(65536):
-            reply.extend(chunk)
+            self.received.extend(chunk)
+        self.saw_eof = True
+
+    def _serve(self) -> None:
+        """Serve the first connection that sends bytes. A readiness probe that connects and closes sends none and is skipped."""
+        listener = self._listener
+        if listener is None:
+            return
+        try:
+            while True:
+                listener.settimeout(max(0.01, self.lifetime - time.monotonic()))
+                peer, _ = listener.accept()
+                with peer:
+                    peer.settimeout(max(0.01, self.lifetime - time.monotonic()))
+                    if self._serve_connection(peer):
+                        return
+        except OSError as error:
+            self.error = type(error).__name__
+
+    def _serve_connection(self, peer: socket.socket) -> bool:
+        if self.mode == "wait_for_eof":
+            self._drain(peer)
+            if not self.received:
+                self.saw_eof = False
+                return False
+            self.replied_after_eof = True
+            peer.sendall(DOWNLOAD)
+            peer.shutdown(socket.SHUT_WR)
+            return True
+        while b"\r\n\r\n" not in self.received:
+            chunk = peer.recv(65536)
+            if not chunk:
+                return False
+            self.received.extend(chunk)
+        del self.received[:]
+        peer.sendall(DOWNLOAD)
+        peer.shutdown(socket.SHUT_WR)
+        self._drain(peer)
+        return True
+
+
+def _read_to_eof(peer: socket.socket, *, slow: bool) -> bytes:
+    """Read until the relay ends the stream. A slow reader makes the relay hold bytes while the target still sends."""
+    reply = bytearray()
+    while chunk := peer.recv(65536):
+        reply.extend(chunk)
+        if slow:
+            time.sleep(0.002)
     return bytes(reply)
+
+
+def _half_closed_request(endpoint: str) -> bytes:
+    """Send a whole request, close only the sending side as a tunnel peer may, then read the whole reply slowly until the relay ends the stream."""
+    with socket.create_connection(("127.0.0.1", urlsplit(endpoint).port or 0), timeout=5) as peer:
+        peer.sendall(b"POST / HTTP/1.1\r\nHost: synthetic\r\nConnection: close\r\n\r\n" + UPLOAD)
+        peer.shutdown(socket.SHUT_WR)
+        return _read_to_eof(peer, slow=True)
+
+
+def _reverse_half_closed_request(endpoint: str) -> tuple[bytes, bool]:
+    """Read the target's whole reply to its end, then send the upload on the same connection and close only the sending side."""
+    with socket.create_connection(("127.0.0.1", urlsplit(endpoint).port or 0), timeout=5) as peer:
+        peer.sendall(b"POST / HTTP/1.1\r\nHost: synthetic\r\nConnection: close\r\n\r\n")
+        reply = _read_to_eof(peer, slow=True)
+        try:
+            peer.sendall(UPLOAD)
+            peer.shutdown(socket.SHUT_WR)
+        except OSError:
+            return reply, False
+        return reply, True
 
 
 def _unavailable(transport: CatalogTransport) -> bool:
@@ -147,6 +253,23 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
         try:
             if name == "stderr_flood":
                 checks["stderr_tunnel_flood_does_not_block_route"] = _stderr_route(transport, scratch) == BODY
+            elif name in {"half_close", "reverse_half_close"}:
+                lifetime = time.monotonic() + 12
+                with _StreamTarget("wait_for_eof" if name == "half_close" else "reply_then_receive", lifetime) as target:
+                    endpoint = transport.start_relay(target.port, deadline=lifetime)
+                    if name == "half_close":
+                        reply = transport.execute(lambda: _half_closed_request(endpoint), deadline=lifetime)
+                        checks["target_ended_within_its_lifetime"] = target.finish()
+                        checks["target_got_the_whole_request_then_eof"] = bytes(target.received).endswith(UPLOAD) and target.saw_eof
+                        checks["target_replied_only_after_eof"] = target.replied_after_eof
+                        checks["half_closed_request_gets_its_whole_reply_then_eof"] = reply == DOWNLOAD
+                    else:
+                        reply, sent = transport.execute(lambda: _reverse_half_closed_request(endpoint), deadline=lifetime)
+                        checks["target_ended_within_its_lifetime"] = target.finish()
+                        checks["client_got_the_whole_reply_then_eof_before_sending"] = reply == DOWNLOAD
+                        checks["client_upload_after_target_half_close_was_accepted"] = sent
+                        checks["target_kept_receiving_the_whole_upload_then_eof"] = bytes(target.received) == UPLOAD and target.saw_eof
+                    checks["stream_target_had_no_socket_error"] = target.error is None
             elif name == "dead_target":
                 failed = False
                 count = 0
@@ -185,10 +308,6 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
                         execute_runs_once=count == 1,
                         single_request=sum(event.kind == "request" for event in peer.events) == 1,
                     )
-                elif name == "half_close":
-                    reply = transport.execute(lambda: _half_closed_request(endpoint), deadline=lifetime)
-                    checks["half_closed_request_gets_its_whole_reply"] = reply.endswith(BODY) and reply.startswith(b"HTTP/1.1 200")
-                    checks["half_close_single_request"] = sum(event.kind == "request" for event in peer.events) == 1
                 elif name == "relay_death":
                     killed = stop_owned(transport.handles[0], min(lifetime, time.monotonic() + 5))
                     checks["relay_group_was_killed"] = killed.confirmed and group_state(transport.handles[0].pgid) == "gone"
