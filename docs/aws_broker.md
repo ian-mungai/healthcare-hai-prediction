@@ -14,12 +14,14 @@ The job broker is the only path from an Airflow DAG to work on AWS. It keeps the
 | Part | Where | What it does |
 | --- | --- | --- |
 | Broker service | The container host, loopback port 18790 | Takes a DAG step, writes the ledger line, starts or joins the job task and reports its state |
-| Job task | Fargate, on demand | One task per job, run and attempt. A job is `train`, `silver`, `gold`, `features`, `drift` or `promote` |
-| Chain DAG `bronze_chain_dag` | Airflow | The owner starts it by hand. It asks the broker whether the chain is open, then triggers silver, gold, features and drift in order |
+| Job task | Fargate, on demand | One task per job, run and attempt. A job is `train`, `silver`, `gold`, `features`, `drift`, `promote` or `metadata` |
+| Chain DAG `bronze_chain_dag` | Airflow | The owner starts it by hand. It asks the broker whether the chain is open, then triggers silver, gold, features and drift in order and last starts `metadata_ingest_dag` without waiting for it |
 
 The table `config/orchestration/ecs_broker_jobs.json` names the job of each DAG step. A step with no job (acquire, seal, release and the gates) answers at once. The first step of a job starts its task and the later steps join it, because the containers of one job share a workspace. A job passes only when every container exits 0 and every acceptance container appears in the task report. A job that runs past its deadline is stopped.
 
 The `train`, `silver`, `gold`, `features` and `promote` jobs have task definitions behind flags that default to false. The `promote` job uses the training task role and is set by `promote_enabled`. The `drift` job has its task definition behind `drift_enabled` in `infra/jobs` and its role behind `drift_prepared` in `infra/iam`. Both default to false. A job name stays out of `broker_job_families` until its task definition and role exist.
+
+The `metadata` job starts the on-demand OpenMetadata catalog task. Its task definition is set by `openmetadata_enabled` in `infra/jobs` and its role by `openmetadata_prepared` in `infra/iam` (see the OpenMetadata catalog document). The task ends by itself at its lifetime. The broker deadline in `config/orchestration/ecs_broker_jobs.json` is that lifetime plus 900 seconds, 8100 seconds for the default of 7200. Change both together, because an offline case compares them.
 
 ## Apply order
 
@@ -126,7 +128,7 @@ aws ssm start-session --profile <PROJECT_PROFILE> --region <REGION> --target <IN
 {"run_id": "<BRONZE_RUN_ID>", "mode": "real"}
 ```
 
-Every wait in the chain has a limit. A layer's trigger gives up after eight hours (drift after three). The whole chain run ends after 28 hours. The chain starts the DAG `drift_monitoring_dag` as its last step.
+Every wait in the chain has a limit. A layer's trigger gives up after eight hours (drift after three). The whole chain run ends after 28 hours. The chain starts the DAG `drift_monitoring_dag` and then starts the catalog task as its last step. The catalog start waits for nothing, so a failed or slow catalog task never fails or delays a chain run.
 
 Every run ID and every triggered DAG run ID derives from the bronze run ID. A second trigger for the same bronze run names the DAG runs that exist and starts nothing. Gold needs a silver run that passed. Features needs a gold run that passed. A failed acceptance check therefore stops the chain before the later layers. A failed layer is not retried under the same IDs. Its pin phase writes `state/pinned.json` once, so a layer that failed after the pin cannot run again under its run ID. The chain derives the same child IDs from the same bronze run ID. After a failure, the owner checks the abandoned catalog branch. Then stage the code under a new run ID (step 6 of the setup) and trigger `bronze_chain_dag` with that new run ID. Do not clear the failed DAG run to retry it: the next attempt stops at the pin by name.
 

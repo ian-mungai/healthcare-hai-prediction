@@ -216,6 +216,17 @@
           "MLFLOW_TRACKING_URI"
         ]
       }
+    },
+    "metadata": {
+      "deadline_seconds": 8100,
+      "log_container": "ingest_polaris",
+      "containers": {
+        "ingest_polaris": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ]
+      },
+      "chain": true
     }
   },
   "steps": {
@@ -256,6 +267,7 @@
     "hac_validate": "train",
     "log_run": "train",
     "mediation": "train",
+    "metadata_run": "metadata",
     "online_store_up": null,
     "pin_bronze": "silver",
     "pin_gold": "features",

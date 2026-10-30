@@ -47,6 +47,11 @@ def chain_run(layer: str, bronze_run: str) -> str:
     raise ValueError(f"{layer} is not in the chain")
 
 
+def metadata_run_id(bronze_run: str) -> str:
+    """The run ID of the catalog start in the chain that starts at ``bronze_run``."""
+    return derived_run_id(chain_run("drift", bronze_run), "metadata")
+
+
 def dag_run_id(dag_id: str, run: str) -> str:
     """The DAG run ID a trigger uses, so a repeated trigger names the run that already exists."""
     return f"chain__{dag_id}__{run}"
@@ -87,7 +92,7 @@ with DAG(
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
         "mode": Param("real", type="string", enum=["real"]),
     },
-    user_defined_macros={"chain_run": chain_run, "dag_run_id": dag_run_id},
+    user_defined_macros={"chain_run": chain_run, "dag_run_id": dag_run_id, "metadata_run_id": metadata_run_id},
     default_args={"retries": 0},
 ) as dag:
 
@@ -100,3 +105,16 @@ with DAG(
         current = trigger_for(position)
         previous >> current
         previous = current
+
+    # The catalog start is the last step and nothing waits for it, so a failed or slow catalog task never fails or delays a chain run. A retried bronze run
+    # names the same DAG run, which is skipped.
+    previous >> TriggerDagRunOperator(
+        task_id="start_metadata",
+        trigger_dag_id="metadata_ingest_dag",
+        trigger_run_id="{{ dag_run_id('metadata_ingest_dag', metadata_run_id(params.run_id)) }}",
+        conf={"run_id": "{{ metadata_run_id(params.run_id) }}", "mode": "{{ params.mode }}"},
+        wait_for_completion=False,
+        skip_when_already_exists=True,
+        reset_dag_run=False,
+        retries=0,
+    )

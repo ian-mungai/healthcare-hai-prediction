@@ -12,8 +12,8 @@ variable "broker_job_families" {
   nullable    = false
 
   validation {
-    condition     = alltrue([for family in var.broker_job_families : contains(["train", "silver", "gold", "features", "drift", "promote"], family)]) && length(var.broker_job_families) == length(distinct(var.broker_job_families))
-    error_message = "Name distinct job families from train, silver, gold, features, drift and promote."
+    condition     = alltrue([for family in var.broker_job_families : contains(["train", "silver", "gold", "features", "drift", "promote", "metadata"], family)]) && length(var.broker_job_families) == length(distinct(var.broker_job_families))
+    error_message = "Name distinct job families from train, silver, gold, features, drift, promote and metadata."
   }
 
   validation {
@@ -55,6 +55,7 @@ locals {
     features = "job_write_features_task"
     drift    = "job_drift_task"
     promote  = "job_train_task"
+    metadata = "job_openmetadata_task"
   }
   broker_families = sort(var.broker_job_families)
   broker_policy_values = merge(local.owner_policy_values, {
