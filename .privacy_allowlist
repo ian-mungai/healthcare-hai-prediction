@@ -32,3 +32,4 @@ aws-account infra/jobs/tests/writers.tftest.hcl -- synthetic all-ones account ID
 aws-account infra/iam/tests/job_writer_layers.tftest.hcl -- synthetic all-ones, all-twos and all-zero account IDs in mocked layer writer IAM tests; not the project's account
 aws-account scripts/infrastructure/layer_writer_policy_cases.py -- synthetic all-ones and all-twos account IDs in the layer writer policy cases; not the project's account
 aws-account tests/test_services_preparation.py -- synthetic all-ones account IDs in reviewed services input cases; not the project's account
+aws-account scripts/orchestration/ecs_broker_fake.py -- a synthetic all-zeros account ID that marks stand-in ARNs; not the project's account
