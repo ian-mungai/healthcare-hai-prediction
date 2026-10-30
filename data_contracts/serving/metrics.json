@@ -1,0 +1,9 @@
+{
+  "note": "The metrics the model API exposes for Prometheus, copied from the hai_api entry of the monitoring stack's known metrics list. The dashboard and the alerts name exactly these. A change here needs the same change there.",
+  "path": "/metrics",
+  "port": 8000,
+  "metrics": {
+    "hai_api_requests_total": {"type": "counter", "labels": ["route", "method", "status"]},
+    "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]}
+  }
+}

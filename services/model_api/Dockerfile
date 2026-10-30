@@ -22,7 +22,7 @@ WORKDIR /app
 
 COPY --chmod=0444 orchestration/__init__.py orchestration/serving_contract.py orchestration/training_contract.py /app/orchestration/
 COPY --chmod=0444 scripts/features/__init__.py scripts/features/online_protocol.py scripts/features/publication_reads.py scripts/features/serving_contract_client.py /app/scripts/features/
-COPY --chmod=0444 scripts/serving/__init__.py scripts/serving/api.py scripts/serving/canary.py scripts/serving/iceberg_sink.py scripts/serving/keys.py scripts/serving/limiter.py scripts/serving/main.py scripts/serving/manifests.py scripts/serving/mlflow_loader.py scripts/serving/predictions.py scripts/serving/service.py /app/scripts/serving/
+COPY --chmod=0444 scripts/serving/__init__.py scripts/serving/api.py scripts/serving/canary.py scripts/serving/iceberg_sink.py scripts/serving/keys.py scripts/serving/limiter.py scripts/serving/main.py scripts/serving/manifests.py scripts/serving/metrics.py scripts/serving/mlflow_loader.py scripts/serving/predictions.py scripts/serving/service.py /app/scripts/serving/
 COPY --chmod=0444 data_contracts/serving/predictions.json /app/data_contracts/serving/predictions.json
 COPY --chmod=0444 data_contracts/training/model_contract.json /app/data_contracts/training/model_contract.json
 COPY --chmod=0444 feature_store/feature_store_aws.yaml /app/feature_store/feature_store_aws.yaml

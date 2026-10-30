@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import logging
+import re
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from typing import Any
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
-from scripts.serving import canary, deploy, keys, limiter, manifests, predictions, service
+from scripts.serving import canary, deploy, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -73,6 +74,8 @@ class Loader:
 
     def __init__(self) -> None:
         self.broken: set[str] = set()
+        self.cost = 0.0
+        self.clock: Clock | None = None
         self.unloadable: set[str] = set()
         self.loaded: list[str] = []
         self.released: list[str] = []
@@ -83,6 +86,8 @@ class Loader:
         self.loaded.append(version)
 
         def predict(row: Mapping[str, Any]) -> float:
+            if self.clock is not None:
+                self.clock.now += self.cost
             if version in self.broken:
                 raise RuntimeError("synthetic prediction failure")
             return float(version) + sum(len(str(value)) for value in row.values()) / 10000
@@ -151,7 +156,7 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
 
         api = service.ModelService(
             keys=keys.KeyRing.from_hashes({"ops": keys.hash_key(KEY_A), "other": keys.hash_key(KEY_B)}),
-            limiter=limiter.RateLimiter(rate_per_minute=rate, burst=burst, clock=clock),
+            limiter=options.pop("limiter", None) or limiter.RateLimiter(rate_per_minute=rate, burst=burst, clock=clock),
             read_marker=online_cases.markers(server),
             read_features=reading,
             manifests=store,
@@ -165,6 +170,7 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
             refresh_seconds=30.0,
             failure_limit=3,
         )
+        loader.clock = clock
         world_ = World(server, registry, store, loader, sink, clock, api, counted)
         yield world_
 
@@ -552,6 +558,193 @@ def case_dag(c: Checker) -> None:
     )
 
 
+def replay_send(w: World, payload: dict[str, Any]) -> tuple[int, dict[str, str], dict[str, Any]]:
+    reply = w.api.predict(KEY_A, None, payload)
+    return reply.status, reply.headers, reply.body
+
+
+def replay_corpus(count: int) -> list[tuple[str, int]]:
+    return [(key.split(":")[0], 2022) for key in hospital_keys(count)]
+
+
+def case_replay_and_compare(c: Checker) -> None:
+    """Replayed requests give the split counts and the prediction comparison, wait out a rate limit within a deadline and never print the key."""
+    with world(count=200, percent=20) as w:
+
+        def pause(seconds: float) -> None:
+            w.clock.now += seconds
+
+        result = replay.run(partial(replay_send, w), replay_corpus(200), HAI, clock=w.clock, sleep=pause, deadline_seconds=60.0)
+        c.check("all 200 replayed requests answered 200", result["statuses"] == {"200": 200})
+        canary_count = result["served_by"].get("canary", 0)
+        c.check("the replay sent between 23 and 57 requests to the canary", 23 <= canary_count <= 57 and canary_count + result["served_by"]["stable"] == 200)
+        comparison = result["comparison"]
+        c.check(
+            "the comparison is made with enough rows on each side",
+            comparison["status"] == "ok" and comparison["stable"]["count"] >= 30 and comparison["canary"]["count"] >= 30,
+        )
+        c.check("disjoint prediction sets give a distance of 1", comparison["ks_statistic"] == 1.0)
+        c.check("the mean shift is the gap between the stub models", 0.9 < comparison["mean_shift"] < 1.1)
+        c.check("the report holds no key", KEY_A not in json.dumps(result))
+    with world(count=4, percent=20) as w:
+        small = replay.run(partial(replay_send, w), replay_corpus(4), HAI, clock=w.clock, sleep=lambda seconds: None, deadline_seconds=60.0)
+        c.check("too few rows on a side give no comparison", small["comparison"]["status"] == "insufficient")
+    with world(count=40, rate=60, burst=5) as w:
+        waits: list[float] = []
+
+        def record(seconds: float) -> None:
+            waits.append(seconds)
+            w.clock.now += seconds
+
+        limited = replay.run(partial(replay_send, w), replay_corpus(40), HAI, clock=w.clock, sleep=record, deadline_seconds=300.0)
+        c.check("a rate limit is waited out until every request answers 200", limited["statuses"] == {"200": 40} and len(waits) > 0)
+    with world(count=40, rate=60, burst=1) as w:
+
+        def tick(seconds: float) -> None:
+            w.clock.now += seconds
+
+        c.check("a replay that cannot finish within its deadline fails", deadline_failed(w, tick))
+    c.check("a corpus line that is not a ccn and a year is refused", corpus_refused("AAA001,2022\nnot-a-line\n"))
+    c.check("a corpus over the line limit is refused", corpus_refused("AAA001,2022\n" * (replay.MAX_CORPUS + 1)))
+
+
+def deadline_failed(w: World, tick: Callable[[float], None]) -> bool:
+    try:
+        replay.run(partial(replay_send, w), replay_corpus(40), HAI, clock=w.clock, sleep=tick, deadline_seconds=3.0)
+    except replay.ReplayDeadline:
+        return True
+    return False
+
+
+def corpus_refused(text: str) -> bool:
+    try:
+        replay.parse_corpus(text)
+    except ValueError:
+        return True
+    return False
+
+
+SAMPLE = re.compile(r"^([a-z_]+)(?:\{([^}]*)\})? (\S+)$")
+
+
+def scrape(text: str) -> tuple[dict[str, str], list[tuple[str, dict[str, str], float]]]:
+    """Parse the exposition text into the TYPE of each family and its samples, refusing a line that is neither a comment nor a sample."""
+    types: dict[str, str] = {}
+    samples: list[tuple[str, dict[str, str], float]] = []
+    for line in text.splitlines():
+        if line.startswith("# TYPE "):
+            _, _, name, kind = line.split(" ", 3)
+            types[name] = kind
+        elif line and not line.startswith("#"):
+            match = SAMPLE.fullmatch(line)
+            if match is None:
+                raise ValueError(f"unreadable line {line!r}")
+            labels = dict(re.findall(r'([a-z_]+)="((?:[^"\\]|\\.)*)"', match.group(2) or ""))
+            samples.append((match.group(1), labels, float(match.group(3))))
+    return types, samples
+
+
+def series(samples: list[tuple[str, dict[str, str], float]], name: str, **labels: str) -> list[float]:
+    return [value for sample, found, value in samples if sample == name and all(found.get(key) == wanted for key, wanted in labels.items())]
+
+
+def case_metrics(c: Checker) -> None:
+    """The /metrics text has the names, types and labels of the monitoring contract, counts every answer, bounds its series and holds no key or hospital."""
+    contract = json.loads((ROOT / "data_contracts/serving/metrics.json").read_text())["metrics"]
+    with world(rate=600, burst=10) as w:
+        w.loader.cost = 0.3
+        ask(w)
+        ask(w, presented=None)
+        ask(w, "ZZZ999:2022")
+        ask(w, "AAA:2022")
+        w.api.health()
+        text = w.api.metrics.render()
+        types, samples = scrape(text)
+        c.check("the families are exactly the contract's, with its types", types == {name: spec["type"] for name, spec in contract.items()})
+        counter = [(labels, value) for sample, labels, value in samples if sample == "hai_api_requests_total"]
+        c.check(
+            "the counter carries the contract's labels and no other",
+            all(set(labels) == set(contract["hai_api_requests_total"]["labels"]) for labels, _ in counter),
+        )
+        for status, expected in (("200", 1), ("401", 1), ("404", 1), ("422", 1)):
+            c.check(
+                f"one predict answer with status {status} is counted",
+                series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status=status) == [expected],
+            )
+        c.check("the health answer is counted", series(samples, "hai_api_requests_total", route="/v1/health", method="GET", status="200") == [1])
+        buckets = [
+            (labels, value) for sample, labels, value in samples if sample == "hai_api_request_duration_seconds_bucket" and labels.get("route") == "/v1/predict"
+        ]
+        c.check("the histogram buckets carry the route and the bound only", all(set(labels) == {"route", "le"} for labels, _ in buckets))
+        ordered = [value for _, value in buckets]
+        c.check(
+            "the buckets are cumulative and end at +Inf with every predict answer",
+            ordered == sorted(ordered) and buckets[-1][0]["le"] == "+Inf" and ordered[-1] == 4,
+        )
+        c.check(
+            "the answer that took 0.3 seconds is above the 0.25 bound and inside the 0.5 bound",
+            series(samples, "hai_api_request_duration_seconds_bucket", route="/v1/predict", le="0.25") == [3.0]
+            and series(samples, "hai_api_request_duration_seconds_bucket", route="/v1/predict", le="0.5") == [4.0],
+        )
+        c.check(
+            "the sum and the count are the predict answers",
+            series(samples, "hai_api_request_duration_seconds_count", route="/v1/predict") == [4.0]
+            and abs(series(samples, "hai_api_request_duration_seconds_sum", route="/v1/predict")[0] - 0.3) < 1e-9,
+        )
+        c.check(
+            "a bucket bound sits at one second for the latency alert",
+            series(samples, "hai_api_request_duration_seconds_bucket", route="/v1/predict", le="1") == [4.0],
+        )
+        c.check(
+            "only metrics of the contract are emitted",
+            {name for name, _, _ in samples if name.startswith("hai_api")}
+            <= {
+                "hai_api_requests_total",
+                "hai_api_request_duration_seconds_bucket",
+                "hai_api_request_duration_seconds_sum",
+                "hai_api_request_duration_seconds_count",
+            },
+        )
+        c.check(
+            "the text holds no key, key hash or hospital",
+            KEY_A not in text and keys.hash_key(KEY_A) not in text and "AAA001" not in text and "ZZZ999" not in text,
+        )
+        c.check("two renders of one state are equal and end with a newline", text == w.api.metrics.render() and text.endswith("\n"))
+    with world(rate=1, burst=1) as w:
+        ask(w)
+        ask(w)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("a rate limited answer is counted as 429", series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="429") == [1])
+    with world(limiter=BrokenLimiter(rate_per_minute=60, burst=5, clock=Clock())) as w:
+        raised = False
+        try:
+            ask(w)
+        except RuntimeError:
+            raised = True
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "an unexpected failure is counted as 500 and still raised",
+            raised and series(samples, "hai_api_requests_total", route="/v1/predict", method="POST", status="500") == [1],
+        )
+    fresh = metrics.Metrics()
+    for number in range(1000):
+        fresh.observe(metrics.route_label(f"/scan/{number}"), metrics.method_label(f"M{number}"), metrics.status_label(number), 0.001)
+    _, samples = scrape(fresh.render())
+    c.check(
+        "a thousand scanned paths, methods and statuses make a bounded number of series",
+        len(samples) <= 60 and series(samples, "hai_api_requests_total", route="other", method="other", status="other") != [],
+    )
+    c.check(
+        "the known routes keep their names",
+        [metrics.route_label(path) for path in ("/v1/predict", "/v1/health", "/metrics", "/v1/predict/")] == ["/v1/predict", "/v1/health", "/metrics", "other"],
+    )
+
+
+class BrokenLimiter(limiter.RateLimiter):
+    def check(self, key_id: str) -> float | None:
+        raise RuntimeError("synthetic failure")
+
+
 def rejected(call: Callable[..., object], *arguments: Any) -> bool:
     try:
         call(*arguments)
@@ -571,5 +764,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
     "predictions_append": (case_predictions, "iceberg"),
+    "replay_and_compare": (case_replay_and_compare, "canary compare"),
+    "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }

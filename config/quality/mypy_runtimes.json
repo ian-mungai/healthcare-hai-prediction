@@ -2,7 +2,7 @@
   "pending": {
     "scripts/serving/api.py": {
       "runtime": "serving",
-      "reason": "Cannot find implementation or library stub for module named \"fastapi\"; Cannot find implementation or library stub for module named \"fastapi.concurrency\"; Cannot find implementation or library stub for module named \"fastapi.responses\""
+      "reason": "Cannot find implementation or library stub for module named \"fastapi\"; Cannot find implementation or library stub for module named \"fastapi.concurrency\"; Cannot find implementation or library stub for module named \"fastapi.responses\"; Cannot find implementation or library stub for module named \"starlette.exceptions\""
     },
     "dags/serving_deploy_dag.py": {
       "runtime": "orchestration_image",

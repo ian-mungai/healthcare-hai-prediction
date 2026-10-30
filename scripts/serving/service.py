@@ -21,6 +21,7 @@ from scripts.serving import canary
 from scripts.serving.keys import KeyRing
 from scripts.serving.limiter import RateLimiter
 from scripts.serving.manifests import ManifestStore
+from scripts.serving.metrics import Metrics
 from scripts.serving.predictions import PredictionBuffer
 
 LOG = logging.getLogger(__name__)
@@ -86,8 +87,10 @@ class ModelService:
         hai_types: Sequence[str],
         refresh_seconds: float,
         failure_limit: int,
+        metrics: Metrics | None = None,
     ) -> None:
         self.keys, self.limiter, self.buffer = keys, limiter, buffer
+        self.metrics = metrics if metrics is not None else Metrics()
         self._read_marker, self._read_features = read_marker, read_features
         self._manifests, self._loader, self._clock, self._new_id = manifests, loader, clock, new_id
         self._hai_types, self._refresh_seconds, self._failure_limit = tuple(hai_types), refresh_seconds, failure_limit
@@ -137,6 +140,12 @@ class ModelService:
                 self._loader.release(slot.model)
 
     def health(self) -> Reply:
+        started = self._clock()
+        reply = self._health()
+        self.metrics.observe("/v1/health", "GET", str(reply.status), self._clock() - started)
+        return reply
+
+    def _health(self) -> Reply:
         body: dict[str, Any] = {}
         for hai_type in self._hai_types:
             active = self._active.get(hai_type)
@@ -152,6 +161,17 @@ class ModelService:
         return Reply(200 if ready else 503, body)
 
     def predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
+        """Answer one request and count it with its duration. A failure no rule expected is counted as 500 and raised."""
+        started = self._clock()
+        try:
+            reply = self._predict(api_key, request_id, payload)
+        except BaseException:
+            self.metrics.observe("/v1/predict", "POST", "500", self._clock() - started)
+            raise
+        self.metrics.observe("/v1/predict", "POST", str(reply.status), self._clock() - started)
+        return reply
+
+    def _predict(self, api_key: str | None, request_id: str | None, payload: Any) -> Reply:
         key_id = self.keys.identify(api_key)
         if key_id is None:
             return refusal(401, "unauthorized")
