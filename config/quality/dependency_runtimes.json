@@ -63,13 +63,13 @@
       "code": ["feature_store/*.py"]
     },
     "serving": {
-      "reason": "The model API runs in the image that services/model_api/Dockerfile builds. Until the owner compiles the hash-pinned lock requirements.txt with services/model_api/compile_lock.sh, the approved versions in requirements.in are the runtime's requirements.",
-      "requirements": ["services/model_api/requirements.in"],
+      "reason": "The model API runs in the image that services/model_api/Dockerfile builds. The hash-pinned lock requirements.txt is compiled with services/model_api/compile_lock.sh from requirements.in.",
+      "requirements": ["services/model_api/requirements.txt"],
       "code": ["scripts/serving/api.py", "scripts/serving/api_image_cases.py", "scripts/serving/iceberg_sink.py", "scripts/serving/main.py", "scripts/serving/mlflow_loader.py"]
     },
     "streamlit_page": {
-      "reason": "The Streamlit page runs in the image that services/streamlit/Dockerfile builds. Until the owner compiles the hash-pinned lock requirements.txt with services/streamlit/compile_lock.sh, the approved versions in requirements.in are the runtime's requirements. The client, the words and the stand-in use the standard library only.",
-      "requirements": ["services/streamlit/requirements.in"],
+      "reason": "The Streamlit page runs in the image that services/streamlit/Dockerfile builds. The hash-pinned lock requirements.txt is compiled with services/streamlit/compile_lock.sh from requirements.in. The client, the words and the stand-in use the standard library only.",
+      "requirements": ["services/streamlit/requirements.txt"],
       "code": ["scripts/streamlit_app/app.py", "scripts/streamlit_app/app_cases.py"]
     },
     "sqlfluff": {
