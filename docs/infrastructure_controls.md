@@ -246,7 +246,7 @@ The following rules describe the host and its network:
   console that is a directory and with one that is a named pipe nobody reads.
   A copy that ends one second after the script is not a leftover, because the
   kernel finishes a stopped process after the script has exited. The check polls
-  for up to 10 seconds and reports a copy that is still running after that. The
+  for up to 10 seconds and reports a copy that is still running after that. A process that cannot be inspected (a denied `ps` query) is reported as such and never read as ended. The
   E2E also plants eight defects (final lines not flushed, copy left running, no
   prefix, AWS output on the console, a token in the log, an unbounded wait, a
   success line after a failure and no step markers). Each must be reported.

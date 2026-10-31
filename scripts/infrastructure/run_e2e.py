@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import logging
@@ -1731,16 +1732,40 @@ def boot_host(
     return root, environment, step, result
 
 
+class ProcessInspectionError(Exception):
+    """The state of a process could not be read, which is not the same as the process being gone."""
+
+
+def process_state(pid: int) -> str | None:
+    """Return the state letters of the process, or None when its absence is confirmed by the signal check; raise when it cannot be told either way."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    try:
+        result = run_command("ps", ["-o", "stat=", "-p", str(pid)], timeout=30)
+    except (OSError, TimeoutExpired) as error:
+        raise ProcessInspectionError(f"ps did not run: {type(error).__name__}") from None
+    state = result.stdout.strip()
+    if result.returncode == 0 and state:
+        return state
+    detail = result.stderr.strip() or f"exit status {result.returncode} with no output"
+    raise ProcessInspectionError(f"ps cannot read process {pid} and the signal check still finds it: {detail}")
+
+
 def copy_process_running(pid: int, grace_seconds: float) -> bool:
     """Return True when the process is still running ``grace_seconds`` after the boot script exited.
 
     The script sends KILL to a copy stuck on the console and exits at once, so the kernel finishes the copy after the script, and a copy that
     has ended stays listed as a zombie until its new parent collects it. Neither is a leftover: poll until the process is gone or a zombie.
+    Only a confirmed absence or a zombie ends the poll. A process that cannot be inspected raises ``ProcessInspectionError``.
     """
     deadline = time.monotonic() + grace_seconds
     while True:
-        state = run_command("ps", ["-o", "stat=", "-p", str(pid)], timeout=30).stdout.strip()
-        if not state or state.startswith("Z"):
+        state = process_state(pid)
+        if state is None or state.startswith("Z"):
             return False
         if time.monotonic() >= deadline:
             return True
@@ -1761,9 +1786,18 @@ def console_copy_problems(
     if copy_process is None:
         problems.append("the log does not name the console copy process")
     else:
-        if copy_process_running(int(copy_process.group(1)), exit_grace):
-            problems.append("the console copy process was still running after the script exited")
-            os.kill(int(copy_process.group(1)), signal.SIGKILL)
+        copy_pid = int(copy_process.group(1))
+        try:
+            running: bool | None = copy_process_running(copy_pid, exit_grace)
+        except ProcessInspectionError as error:
+            problems.append(f"the console copy process could not be inspected after the script exited: {error}")
+            running = None
+        else:
+            if running:
+                problems.append("the console copy process was still running after the script exited")
+        if running is not False:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(copy_pid, signal.SIGKILL)
     if duration >= flush_limit:
         problems.append(f"the script took {duration:.1f} seconds, not under {flush_limit} seconds")
     if BOOT_METADATA_SENTINEL in text or "AssociationId" in text or '"State"' in text:
