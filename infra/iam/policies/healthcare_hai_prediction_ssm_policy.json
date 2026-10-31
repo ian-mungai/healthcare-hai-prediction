@@ -47,20 +47,15 @@
       }
     },
     {
-      "Sid": "PortForwardDocumentOnly",
+      "Sid": "PortForwardDocumentsOnly",
       "Effect": "Allow",
       "Action": [
         "ssm:StartSession"
       ],
-      "Resource": "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSession"
-    },
-    {
-      "Sid": "PortForwardToCatalogTaskDocumentOnly",
-      "Effect": "Allow",
-      "Action": [
-        "ssm:StartSession"
-      ],
-      "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_catalog_forward_${ENVIRONMENT}"
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSession",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_catalog_forward_${ENVIRONMENT}"
+      ]
     },
     {
       "Sid": "EndOwnSessions",
@@ -88,7 +83,9 @@
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_ID_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_SECRET_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_ID_NAME}",
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_SECRET_NAME}"
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_SECRET_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SERVING_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SERVING_CLIENT_SECRET_NAME}"
       ]
     }
   ]
