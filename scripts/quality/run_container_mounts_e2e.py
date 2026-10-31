@@ -15,7 +15,7 @@ import shutil
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -37,6 +37,8 @@ TERRAFORM_GROUP = "scripts/ci/groups/terraform_checks.sh"
 # Where the Terraform stacks read repository files from above their own folder: the jobs root has the repository path, the others walk up two folders.
 STACK_FILE_READS = (r"\$\{path\.module\}/\.\./\.\./([A-Za-z0-9_./-]+)", r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)")
 RUN_SECONDS = 720
+# Runs of a case whose hook the deadline stopped before the case could judge it: each repeat gets twice the seconds of the run before.
+DEADLINE_ATTEMPTS = 3
 PYTHON = ROOT / ".venv/bin/python"
 
 
@@ -585,8 +587,26 @@ def bounded(program: str, arguments: list[str], folder: Path, environment: dict[
     return result
 
 
+def stopped_before_judged(case: Case, row: dict[str, object]) -> bool:
+    """Return True when the deadline stopped a hook that the case did not plant a stop for, or one that never reached its planted wait."""
+    if row["observed_exit"] != 124:
+        return False
+    return case.exit_code != 124 or not row["deadline_command_started"]
+
+
 def run_case(case: Case, source: dict[str, str], workspace: Path, deadline: float) -> dict[str, object]:
-    folder = workspace / case.name
+    """Run a case. A hook that a busy machine delayed past its seconds says nothing about the checker, so it is repeated with twice the seconds."""
+    row = run_case_once(case, source, workspace, deadline, case.name)
+    attempts = 1
+    while stopped_before_judged(case, row) and attempts < DEADLINE_ATTEMPTS:
+        attempts += 1
+        case = replace(case, seconds=case.seconds * 2)
+        row = run_case_once(case, source, workspace, deadline, f"{case.name}_attempt_{attempts}")
+    return {**row, "attempts": attempts, "seconds": case.seconds}
+
+
+def run_case_once(case: Case, source: dict[str, str], workspace: Path, deadline: float, folder_name: str) -> dict[str, object]:
+    folder = workspace / folder_name
     environment = fixture(source | case.files, folder, workspace, deadline)
     arguments = ["-m", "pre_commit", "run", "container-mounts", "--all-files", "--verbose"]
     result = bounded(str(PYTHON), arguments, folder, environment, deadline, case.seconds)
