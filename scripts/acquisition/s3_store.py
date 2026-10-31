@@ -223,7 +223,9 @@ def store_file(client: AwsCli, path: Path, key: str, *, manifest: bool = False) 
             verify_version(client, candidate["key"], candidate["version_id"], digest, size)
             return {**candidate, "verification": "version_get_sha256_and_length_match"}, False
         prefix = "bronze_evidence" if scope == "evidence_objects" else "bronze_objects"
-        key = f"{prefix}/sha256/{digest}"
+        key = f"{root}{prefix}/sha256/{digest}"
+    if root and not key.startswith(root):
+        raise CaptureError(f"The final object key is outside {root} on this route.")
     created = False
     try:
         head = client.call("s3api", "head-object", ["--key", key, "--checksum-mode", "ENABLED"])

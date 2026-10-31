@@ -1290,6 +1290,7 @@
     "scripts/acquisition/tests/test_reference_documents_e2e.py",
     "scripts/acquisition/tests/test_retire_layout.py",
     "scripts/acquisition/tests/test_s3_store.py",
+    "scripts/acquisition/tests/test_single_copy_raw.py",
     "scripts/acquisition/tests/test_source_receipt_index.py",
     "scripts/acquisition/tests/test_source_verification_log.py",
     "scripts/acquisition/transport.py",
