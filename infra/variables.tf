@@ -60,6 +60,13 @@ variable "expected_account_id" {
   }
 }
 
+variable "athena_retention_enabled" {
+  description = "Add the rule that expires Athena query results under athena/results/ after 7 days and their replaced versions after 1 day. Off by default, because the rule changes the live lifecycle configuration of the data bucket; the owner sets it in the apply step that prepares the Athena mirror."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "mlflow_retention_enabled" {
   description = "Add the rule that expires replaced MLflow artifact versions under mlflow/ after 30 days. Off by default, because the rule changes the live lifecycle configuration of the data bucket; the owner sets it in the apply step that prepares MLflow."
   type        = bool

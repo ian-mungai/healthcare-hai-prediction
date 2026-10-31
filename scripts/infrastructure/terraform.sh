@@ -10,6 +10,7 @@ preparation_inputs=""
 preparation_sha256=""
 identity_probe=false
 mlflow_retention=false
+athena_retention=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,6 +22,11 @@ while [[ $# -gt 0 ]]; do
     --mlflow-retention)
       [[ "$mlflow_retention" == false ]] || { printf 'Select the MLflow retention rule once.\n' >&2; exit 2; }
       mlflow_retention=true
+      shift
+      ;;
+    --athena-retention)
+      [[ "$athena_retention" == false ]] || { printf 'Select the Athena retention rule once.\n' >&2; exit 2; }
+      athena_retention=true
       shift
       ;;
     --identity-probe)
@@ -47,6 +53,9 @@ if [[ "$identity_probe" == true ]]; then
 fi
 if [[ "$mlflow_retention" == true ]]; then
   [[ "$stack" == storage ]] || { printf 'The MLflow retention rule belongs to the storage stack: use it without --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
+fi
+if [[ "$athena_retention" == true ]]; then
+  [[ "$stack" == storage ]] || { printf 'The Athena retention rule belongs to the storage stack: use it without --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
   [[ "$stack" == jobs || "$stack" == services ]] || { printf 'Preparation inputs are allowed only with --jobs or --services.\n' >&2; exit 2; }
@@ -89,6 +98,9 @@ renderer=scripts.infrastructure.render_project_config
 render_args=(--stack "$stack")
 if [[ "$stack" == storage && "$mlflow_retention" == true ]]; then
   render_args+=(--mlflow-retention)
+fi
+if [[ "$stack" == storage && "$athena_retention" == true ]]; then
+  render_args+=(--athena-retention)
 fi
 if [[ "$stack" == platform || "$stack" == services ]]; then
   # The shared renderer writes only the inputs the selected stack declares.

@@ -143,7 +143,7 @@ Polaris stays the catalog and the source of truth. Athena is for the owner to re
 
 Before the owner names the user, two checks must pass. Do not skip them, because the reader role is the only thing that makes Confidential rows readable through Athena.
 
-1. **Results expiry.** Plan and apply the storage stack, then read the rule back from the bucket:
+1. **Results expiry.** Plan and apply the storage stack with `terraform.sh --athena-retention`, which sets `athena_retention_enabled`, then read the rule back from the bucket:
 
    ```sh
    aws s3api get-bucket-lifecycle-configuration --profile <PROJECT_PROFILE> --bucket <DATA_BUCKET> --query "Rules[?ID=='expire_athena_results']"

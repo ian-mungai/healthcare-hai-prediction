@@ -269,6 +269,9 @@ def main() -> None:
     parser.add_argument(
         "--mlflow-retention", action="store_true", help="Render mlflow_retention_enabled for the storage stack; without it the stack keeps its default (off)."
     )
+    parser.add_argument(
+        "--athena-retention", action="store_true", help="Render athena_retention_enabled for the storage stack; without it the stack keeps its default (off)."
+    )
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true", help="Verify that the project profile authenticates as the derived policy user.")
@@ -280,6 +283,10 @@ def main() -> None:
             if arguments.stack != "storage":
                 raise ConfigurationError("--mlflow-retention belongs to the storage stack: select --stack storage.")
             storage_inputs["mlflow_retention_enabled"] = True
+        if arguments.athena_retention:
+            if arguments.stack != "storage":
+                raise ConfigurationError("--athena-retention belongs to the storage stack: select --stack storage.")
+            storage_inputs["athena_retention_enabled"] = True
         preparation = load_preparation(storage["data_bucket_name"]) if arguments.stack in ("iam", "both") else None
         selected = {"storage": (REPO_ROOT / "infra", storage_inputs), "iam": (REPO_ROOT / "infra" / "iam", iam)}
         if arguments.check_plan:
