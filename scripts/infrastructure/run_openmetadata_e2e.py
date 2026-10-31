@@ -509,6 +509,75 @@ def polaris_and_marquez_configs_use_the_same_database_name() -> None:
     )
 
 
+def slow_marquez_routes(delay: float, datasets: int) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
+    """A Marquez stand-in whose lineage answers take ``delay`` seconds each, over ``datasets`` datasets in one namespace."""
+
+    def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        base, _, query = path.partition("?")
+        if base == "/api/v1/namespaces":
+            return 200, {"namespaces": [{"name": "file"}]}
+        if base == "/api/v1/namespaces/file/datasets":
+            return 200, {"datasets": [{"name": f"silver/set_{index}"} for index in range(datasets)], "totalCount": datasets}
+        if base == "/api/v1/lineage":
+            time.sleep(delay)
+            return 200, {"graph": []}
+        return 404, {}
+
+    return route
+
+
+def marquez_step_carries_its_deadline_through_every_graph_request() -> None:
+    edges: list[dict[str, Any]] = []
+    with serving(slow_marquez_routes(1.5, 6)) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
+        token = Path(folder) / "token"
+        token.write_text(BEARER_VALUE)
+        args = [
+            "--marquez",
+            marquez.url,
+            "--om-base",
+            om.url + "/api",
+            "--token-file",
+            str(token),
+            "--config",
+            str(INGESTION / "marquez.json"),
+            "--deadline-seconds",
+            "2",
+        ]
+        started = time.monotonic()
+        code, _, err = run_marquez(args)
+        took = time.monotonic() - started
+    require(
+        code == 1 and took < 6 and "deadline" in err.lower(),
+        f"six slow graph requests must stop at the deadline: exit {code}, {took:.1f} seconds, {err.strip()}",
+    )
+
+
+def marquez_step_carries_its_deadline_through_the_openmetadata_requests() -> None:
+    def slow_om(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        time.sleep(3)
+        return 200, {"id": "table-id"}
+
+    with serving(marquez_routes()) as marquez, serving(slow_om) as om, tempfile.TemporaryDirectory() as folder:
+        token = Path(folder) / "token"
+        token.write_text(BEARER_VALUE)
+        args = [
+            "--marquez",
+            marquez.url,
+            "--om-base",
+            om.url + "/api",
+            "--token-file",
+            str(token),
+            "--config",
+            str(INGESTION / "marquez.json"),
+            "--deadline-seconds",
+            "1",
+        ]
+        started = time.monotonic()
+        code, _, err = run_marquez(args)
+        took = time.monotonic() - started
+    require(code == 1 and took < 2.8, f"a slow OpenMetadata must stop at the deadline: exit {code}, {took:.1f} seconds, {err.strip()}")
+
+
 def bounded_environment(root: Path, deadline_in: int) -> dict[str, str]:
     """The environment of one wrapper run: a deadline file the given number of seconds from now, an abort file path, a 1 second poll and a 3 second grace."""
     (root / "deadline").write_text(f"{int(time.time()) + deadline_in}\n")
@@ -769,6 +838,8 @@ def project_policies_pass_the_catalog_role_and_only_the_catalog_forward_document
 
 
 CASES: list[Callable[[], None]] = [
+    marquez_step_carries_its_deadline_through_every_graph_request,
+    marquez_step_carries_its_deadline_through_the_openmetadata_requests,
     marquez_step_pages_namespaces_and_datasets_to_the_end,
     marquez_step_stops_at_its_deadline_when_paging_never_ends,
     polaris_and_marquez_configs_use_the_same_database_name,
