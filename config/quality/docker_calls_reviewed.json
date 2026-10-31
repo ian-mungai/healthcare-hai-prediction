@@ -1366,7 +1366,7 @@
       "dependencies": {
         "scripts/acquisition/cli_tools.py": "sha256:aa5f092234a646fd25971f7edbd53b420d48600fc80f2902a3d8899b800066d0",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_platform_config.py": "sha256:1234964f22156205146c58e37afe2784fa8d916f470289470e27666b38ca7c4a",
+        "scripts/infrastructure/render_platform_config.py": "sha256:22347b27c8463106ea61905607a38d33add5d0eb49dcd42a021f351f69f334a8",
         "scripts/infrastructure/render_project_config.py": "sha256:4aa41fd65c7493830ac1d4e9db05e9251c46d59cd756cf3241be07b966b5fefa",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
