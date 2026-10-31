@@ -75,6 +75,7 @@ def dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **run_fields: Any)
         return {"outcome": "exact_match"}
 
     monkeypatch.setattr(harness, "handle", handle)
+    monkeypatch.setattr(harness, "run_private", handle)
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     queue = tmp_path / "queue.json"
     queue.write_text(json.dumps({"run": 2, "queue": UNITS}))

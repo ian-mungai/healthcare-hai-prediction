@@ -37,11 +37,13 @@ from scripts.acquisition import bls_api_transport, data_paths, stored_mirror
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
+from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.collection_layout import capture_root
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json, require
 from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure, on_raw_route
+from scripts.process import SubprocessError
 
 ACTIVE = ("api", "direct_download", "approved_manual")
 BYTE_CAP = 128 * 2**30
@@ -1017,6 +1019,53 @@ def private_safe(fields: dict) -> dict:
     return safe | {"withheld_fields": withheld} if withheld else safe
 
 
+PRIVATE_DEADLINE_SECONDS = 4 * 3600
+
+
+def run_private(unit: dict, run: Run) -> dict:
+    """Run a unit whose original names people in a worker process and return its fixed fields.
+
+    This process never loads the unit's data. The worker has no output, answers through one small file and is filtered again here.
+    """
+    folder = run.state_root / ".private_jobs"
+    folder.mkdir(parents=True, mode=0o700, exist_ok=True)
+    identity = unit["snapshot_id"]
+    job, answer = folder / f"{identity}.job.json", folder / f"{identity}.answer.json"
+    answer.unlink(missing_ok=True)
+    paths = {
+        "queue_path": str(run.queue_path),
+        "state_root": str(run.state_root),
+        "base": str(run.base),
+        "state_parent": str(run.state_parent) if run.state_parent else None,
+        "stored_root": str(run.stored_root) if run.stored_root else None,
+        "manual_folder": str(run.manual_folder) if run.manual_folder else None,
+        "snapshot_id": identity,
+        "result_path": str(answer),
+    }
+    job.write_bytes(encoded_json(paths))
+    job.chmod(0o600)
+    try:
+        run_argv(
+            [sys.executable, "-B", "-m", "scripts.acquisition.private_worker", str(job)], cwd=REPO_ROOT, env=dict(os.environ), timeout=PRIVATE_DEADLINE_SECONDS
+        )
+        result = json.loads(answer.read_text(encoding="utf-8"))
+        kind = result["kind"]
+    except (OSError, ValueError, KeyError, TypeError, SubprocessError):
+        result, kind = {}, "none"
+    if kind == "ok" and isinstance(result.get("fields"), dict):
+        if type(result.get("budget_used")) is int:
+            run.cache["private_budget_used"] = result["budget_used"]
+        return private_safe(result["fields"])
+    if kind == "pause":
+        raise Pause(f"retry_after_seconds={int(result['retry_after_seconds']) if type(result.get('retry_after_seconds')) is int else 0}")
+    if kind == "pending":
+        raise Pending("A manual download is not in the folder yet")
+    if kind == "budget":
+        raise controls.BudgetExceeded("Byte cap would be exceeded" if result.get("bytes") is True else "Attempt budget exhausted")
+    category = result.get("category") if kind == "failed" else "worker_failed"
+    return {"attempts": 1, "outcome": "blocked", "reason": "collector_validation_failed", "error_category": category if is_category(category) else "other"}
+
+
 def lane_of(unit: dict) -> str:
     """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
     mode = handler_mode(unit)
@@ -1291,18 +1340,12 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         try:
             boundary = controls.Boundary(run.state_root, run.base, identity, run.byte_cap, used=used_bytes(run))
             try:
-                with controls.active(boundary):
-                    fields = handle(unit, run)
-                    if private:
-                        fields = private_safe(fields)
-            except (Pause, Pending, controls.BudgetExceeded):
-                raise
-            except Exception as error:
-                if not private:
-                    raise
-                # An original names people, so an error message could carry one. Only its category is kept.
-                record_diagnostic(run, identity, error)
-                fields = {"attempts": 1, "outcome": "blocked", "reason": "collector_validation_failed", "error_category": error_category(error)}
+                if private:
+                    fields = run_private(unit, run)
+                    boundary.used = run.cache.pop("private_budget_used", boundary.used)
+                else:
+                    with controls.active(boundary):
+                        fields = handle(unit, run)
             finally:
                 run.cache["budget_used"] = boundary.used
         except Pending:
