@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "infra/iam/owner_policies/broker_jobs.json"
 PARAMETER_TEMPLATE = ROOT / "infra/iam/owner_policies/broker_parameter.json"
 BRONZE_REQUEST_TEMPLATE = ROOT / "infra/iam/owner_policies/broker_bronze_request.json"
+SERVING_REQUEST_TEMPLATE = ROOT / "infra/iam/owner_policies/broker_serving_request.json"
 ACCOUNT = "111111111111"
 REGION = "eu-west-1"
 PROJECT = "example_project"
@@ -53,6 +54,7 @@ def values(families: list[str]) -> dict[str, str]:
     roles = {
         "promote": "job_train_task",
         "train": "job_train_task",
+        "serve": "job_serve_task",
         "bronze": "job_write_bronze_task",
         "silver": "job_write_silver_task",
         "gold": "job_write_gold_task",
@@ -110,7 +112,7 @@ def cases() -> list[Case]:
     for family in FAMILIES:
         add(f"run the {family} definition", "ecs:RunTask", definition(family), True, run_context(family))
     add("run another revision of train", "ecs:RunTask", definition("train", "12"), True, run_context("train"))
-    for family in ("features", "drift", "plain_silver", "write_gold", "train_extra"):
+    for family in ("features", "drift", "serve", "plain_silver", "write_gold", "train_extra"):
         add(f"run the unnamed {family} definition", "ecs:RunTask", definition(family), False, run_context("train"))
     add(
         "run a service definition",
@@ -151,6 +153,7 @@ def cases() -> list[Case]:
     for name in (
         "job_write_features_task",
         "job_drift_task",
+        "job_serve_task",
         "job_write_bronze_task",
         "job_read_task",
         "job_try_writer",
@@ -252,6 +255,27 @@ def bronze_request_cases() -> list[Case]:
     ]
 
 
+def serving_request_cases() -> list[Case]:
+    """The grant that exists only with the serve family: one get action on the staged serving request key of a run."""
+    stage = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T120000Z-5e5e5e5e/inputs"
+    return [
+        ("read the staged serving request", "s3:GetObject", f"{stage}/serving_request.json", True, {}),
+        ("read the code archive for serving", "s3:GetObject", f"{stage}/code.tar.gz", False, {}),
+        ("read the bronze request for serving", "s3:GetObject", f"{stage}/bronze_request.json", False, {}),
+        ("read a serving request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/serving/deployments/inputs/serving_request.json", False, {}),
+        (
+            "read a serving request in another bucket",
+            "s3:GetObject",
+            "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/serving_request.json",
+            False,
+            {},
+        ),
+        ("write the staged serving request", "s3:PutObject", f"{stage}/serving_request.json", False, {}),
+        ("delete the staged serving request", "s3:DeleteObject", f"{stage}/serving_request.json", False, {}),
+        ("read a deployment record", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/serving/deployments/active/HAI_1.json", False, {}),
+    ]
+
+
 def evaluate(document: dict[str, Any], rows: list[Case]) -> list[dict[str, Any]]:
     observations = []
     for label, action, resource, expected, context in rows:
@@ -290,10 +314,12 @@ def verify(output: Path) -> int:
     document = render(TEMPLATE, FAMILIES)
     parameter = render(PARAMETER_TEMPLATE, FAMILIES)
     request = render(BRONZE_REQUEST_TEMPLATE, FAMILIES)
+    serving = render(SERVING_REQUEST_TEMPLATE, FAMILIES)
     document_rows = cases() + extra_action_cases(document)
     parameter_rows = token_cases() + extra_action_cases(parameter)
     request_rows = bronze_request_cases() + extra_action_cases(request)
-    checks = evaluate(document, document_rows) + evaluate(parameter, parameter_rows) + evaluate(request, request_rows)
+    serving_rows = serving_request_cases() + extra_action_cases(serving)
+    checks = evaluate(document, document_rows) + evaluate(parameter, parameter_rows) + evaluate(request, request_rows) + evaluate(serving, serving_rows)
     defects = []
     for name, changed in mutations(document):
         failures = [item["case"] for item in evaluate(changed, document_rows) if not item["passed"]]
@@ -304,6 +330,9 @@ def verify(output: Path) -> int:
     for name, changed in mutations(request):
         failures = [item["case"] for item in evaluate(changed, request_rows) if not item["passed"]]
         defects.append({"defect": f"bronze_request_{name}", "caught": bool(failures), "failed_cases": failures[:3]})
+    for name, changed in mutations(serving):
+        failures = [item["case"] for item in evaluate(changed, serving_rows) if not item["passed"]]
+        defects.append({"defect": f"serving_request_{name}", "caught": bool(failures), "failed_cases": failures[:3]})
     output.mkdir(parents=True, exist_ok=False)
     (output / "report.json").write_text(json.dumps({"checks": checks, "defects": defects}, indent=2) + "\n")
     failed = [item["case"] for item in checks if not item["passed"]] + [f"defect not caught: {item['defect']}" for item in defects if not item["caught"]]
