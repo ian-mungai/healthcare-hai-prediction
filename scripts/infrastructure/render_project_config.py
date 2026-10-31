@@ -25,11 +25,30 @@ BRONZE_TABLES_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_collection", "bronze_writer_prepared", "job_writer_e2e_prepared"})
 PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
 # Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
-OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared", "athena_mirror_prepared", "monitoring_enabled")
+OPTIONAL_PREPARATION_FLAGS = (
+    "job_endpoints_enabled",
+    "training_prepared",
+    "athena_mirror_prepared",
+    "monitoring_enabled",
+    "broker_prepared",
+    "drift_prepared",
+    "job_writer_layers_prepared",
+    "job_layer_runs_prepared",
+    "model_api_prepared",
+    "model_api_prediction_writes",
+    "openmetadata_prepared",
+    "openmetadata_marquez_reachable",
+    "serve_prepared",
+)
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
-OPTIONAL_PREPARATION_TEXT = ("athena_owner_user",)
-OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT})
+OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix")
+# Lists that may be left out: the job families the broker role may start.
+OPTIONAL_PREPARATION_LISTS = ("broker_job_families",)
+BROKER_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
+OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS})
 OWNER_USER = re.compile(r"[A-Za-z0-9_+=,.@-]{1,64}")
+REGISTRY_KEY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,500}")
+MANIFEST_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
@@ -118,6 +137,13 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
     owner = document.get("athena_owner_user", "")
     if not isinstance(owner, str) or (owner and not OWNER_USER.fullmatch(owner)):
         raise ConfigurationError("Set athena_owner_user to empty or one IAM user name in the IAM preparation file.")
+    for name, pattern in (("model_api_registry_key", REGISTRY_KEY), ("model_api_manifest_prefix", MANIFEST_PREFIX)):
+        value = document.get(name, "")
+        if not isinstance(value, str) or (value and (not pattern.fullmatch(value) or value.startswith("lakehouse/serving"))):
+            raise ConfigurationError(f"Set {name} to empty or one object key without a leading or trailing slash in the IAM preparation file.")
+    families = document.get("broker_job_families", [])
+    if not isinstance(families, list) or len(set(map(str, families))) != len(families) or not all(item in BROKER_FAMILIES for item in families):
+        raise ConfigurationError("Set broker_job_families to distinct job families in the IAM preparation file.")
     collection = document["bronze_qualification_collection"]
     if not isinstance(collection, str) or (collection and not COLLECTION_PATTERN.fullmatch(collection)):
         raise ConfigurationError("Set bronze_qualification_collection to empty or a publisher/collection name in the IAM preparation file.")

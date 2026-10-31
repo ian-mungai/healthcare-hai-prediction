@@ -128,7 +128,7 @@ The `load` phase runs the existing bronze loader. It lists the versioned manifes
 
 A dry run (`"dry_run": true` or `BRONZE_DRY_RUN=1` on every container of a hand-started task) runs `pin`, then reads the manifests and every object version, checks each hash and size and prints the plan. It starts no loader and needs no catalog, so it writes nothing to the catalog or the bucket. Read the plan in the jobs log group, stream `bronze/load/<task id>`. The line that starts with `DRY_RUN_PLAN` and a space holds the plan as JSON.
 
-Apply the bronze job in this order. Each apply is the owner's.
+Apply the bronze job in this order. Each apply is the owner's. Set each switch through the wrapper as `docs/infrastructure_controls.md` describes under activation inputs. The IAM stack takes its file. The platform, services and jobs stacks take a reviewed file and its digest.
 
 1. `infra/iam` (administrator profile): add `bronze` to `broker_job_families`, then plan and apply. The broker role gains the bronze task definition, the pass grant for the bronze writer role and the read of `bronze_request.json`. The bronze writer role gains the object prefixes of its two test twins.
 2. Catalog (owner): the bronze writer principal needs create and load rights on the namespaces `bronze_e2e` and `bronze_dictionary_e2e` before a qualification run. The production namespaces keep their rights.
