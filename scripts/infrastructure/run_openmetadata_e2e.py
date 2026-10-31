@@ -744,7 +744,7 @@ def dag_runs_one_broker_step_with_bounds_and_no_schedule() -> None:
     def task(*args: Any, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def wrap(function: Callable[..., Any]) -> Callable[..., Any]:
             Recorder.current.tasks.append({"name": function.__name__, **kwargs})
-            return lambda *call_args, **call_kwargs: None
+            return lambda *_arguments, **_options: None
 
         return wrap
 
