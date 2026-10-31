@@ -305,9 +305,9 @@ def check_input_versions(job: Job, bucket: str, client: Any) -> None:
 
 
 def check_pin_tables(job: Job) -> None:
-    """Silver: the pin names exactly the configured bronze tables. Gold: a contract check, not a comparison with the silver publish_runs row. It compares the
-    pin's table list with the tables of the silver publish contract. The row itself is readable only inside the silver pin step, so that comparison is left to
-    the hand check of the first gold run. Features has no check here: its builder compares the gold pin with the gold contract."""
+    """Silver: the pin names exactly the configured bronze tables. Gold: the pin step has already read the selected silver publish_runs row and pinned its
+    snapshot set, so this compares the pin's table list with the tables of the silver publish contract. The first gold run adds the hand check of
+    scripts.lakehouse.layer_acceptance. Features has no check here: its builder compares the gold pin with the gold contract."""
     if job.layer == "silver":
         pinned = set(json.loads((job.folder / PIN_FILE["silver"]).read_text()))
         wanted, source = set(pins.mapped_tables(BRONZE_TABLES)), BRONZE_TABLES.name

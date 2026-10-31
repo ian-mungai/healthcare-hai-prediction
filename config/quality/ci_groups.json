@@ -149,7 +149,8 @@
       "^infra/",
       "^monitoring/",
       "^\\.env\\.example$",
-      "^scripts/lakehouse/(aws_catalog_setup|run_aws_catalog_setup_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
+      "^docs/aws_broker\\.md$",
       "^scripts/ci/groups/configuration_checks\\.sh$"
     ],
     "sql_style": [

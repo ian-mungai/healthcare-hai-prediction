@@ -242,3 +242,13 @@ output "job_layer_runs_contract" {
     production_activation = false
   }
 }
+
+# The shared execution policy names three image repositories. The features layer job also runs the feature store image, and the training grant for that
+# repository belongs to the training flag, so this one grant stands alone and names that single repository.
+resource "aws_iam_role_policy" "job_features_image_pull" {
+  count = var.job_features_image_prepared ? 1 : 0
+
+  name   = "features_image"
+  role   = aws_iam_role.job["execution"].name
+  policy = templatefile("${path.module}/owner_policies/job_features_image.json", local.job_policy_inputs)
+}
