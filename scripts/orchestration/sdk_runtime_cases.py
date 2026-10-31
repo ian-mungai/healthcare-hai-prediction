@@ -45,6 +45,10 @@ SOURCE_PATHS = (
 REAPERS = frozenset({"wait", "waitpid", "waitid", "wait3", "wait4"})
 SIGNAL_FUNCTIONS = frozenset({"kill", "killpg", "signal_group", "signal_owned", "waitpid"})
 SLOW_MODES = ("delay_headers", "drip_headers", "hang_body", "drip_body")
+# Calls a deadline case may make before it reports that the request never reached the stand-in, each with twice the budget of the one before.
+DEADLINE_ATTEMPTS = 4
+# Seconds the stand-in may take to see the client close, which a busy machine delays; the wait ends at once when the close is seen.
+PEER_CLOSE_WAIT_S = 5.0
 
 
 def _call_name(call: ast.Call, aliases: dict[str, str]) -> str:
@@ -240,58 +244,75 @@ def _startup_probe_s(folder: Path, operation: str) -> float:
         return time.monotonic() - started
 
 
+def _deadline_attempt(folder: Path, operation: str, mode: str, budget_s: float) -> dict[str, Any]:
+    """Make one call under an absolute deadline against a stand-in that stalls in one response stage; return the checks and the evidence."""
+    from orchestration.ecs_api import WorkerConfig
+
+    scratch = tempfile.mkdtemp(prefix="sdk_deadline_", dir=folder)
+    path = Path(scratch)
+    params = _deadline_params(operation, path)
+    with (
+        WorkerStandin(Scenario(operation, mode, lifetime_s=15, drip_interval_s=0.05)) as standin,
+        _owned_api(WorkerConfig(region="us-west-2", test_endpoint=standin.endpoint), path / "registry") as api,
+    ):
+        started = time.monotonic()
+        deadline = started + budget_s
+        reply = api.call(operation, params, deadline=deadline)
+        stopped = time.monotonic()
+        shutdown = api.close(deadline=time.monotonic() + 10)
+        until = time.monotonic() + PEER_CLOSE_WAIT_S
+        while not any(event.kind == "peer_closed" for event in standin.events) and time.monotonic() < until:
+            time.sleep(0.02)
+        header_only = operation == "s3_head" and mode in {"hang_body", "drip_body"}
+        checks = {
+            "head_finishes_without_body" if header_only else "typed_deadline": reply.get("ok") is True
+            if header_only
+            else reply.get("error", {}).get("kind") == "deadline",
+            "absolute_bound": stopped <= deadline + 5.2,
+            "request_reached_http": sum(event.kind == "request" for event in standin.events) == 1,
+            "peer_closed": any(event.kind == "peer_closed" for event in standin.events),
+            "groups_absent": _check_absence(api),
+            "shutdown_confirmed": shutdown["confirmed"],
+            "partial_removed": not (path / "download.partial").exists(),
+        }
+        return {
+            "case": "absolute_call_deadline",
+            "operation": operation,
+            "mode": mode,
+            "checks": checks,
+            "budget_s": budget_s,
+            "reply_error": reply.get("error"),
+            "elapsed_s": stopped - started,
+            "events": [{"kind": event.kind, "connection": event.connection, "elapsed_s": event.elapsed_s} for event in standin.events],
+        }
+
+
+def _request_never_arrived(row: dict[str, Any]) -> bool:
+    """Return True when the deadline ran out before the request reached the stand-in, so no response stage was exercised and the call proves nothing."""
+    return row["reply_error"] is not None and row["reply_error"].get("kind") == "deadline" and not any(event["kind"] == "request" for event in row["events"])
+
+
 def deadline_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, Any]]:
     """Keep absolute deadlines armed through all HTTP response stages.
 
-    Each budget is a 0.8 second stall window plus triple the slowest unfaulted call measured so far, so the request reaches the stand-in first.
+    The first budget is a 0.8 second stall window plus triple the slowest unfaulted call measured so far. A one-shot worker starts inside each call,
+    so a machine that got busier after that measurement can use the whole budget before the request reaches the stand-in. Such a call never reached a
+    response stage and says nothing about the deadline, so it is repeated with twice the budget, up to `DEADLINE_ATTEMPTS` calls. Every other result
+    stands, and the row names the budgets that were used up.
     """
-    from orchestration.ecs_api import WorkerConfig
-
     results: list[dict[str, Any]] = []
     startup_s = 0.0
     for operation in operations:
         startup_s = max(startup_s, _startup_probe_s(folder, operation))
         for mode in SLOW_MODES:
-            scratch = tempfile.mkdtemp(prefix="sdk_deadline_", dir=folder)
-            path = Path(scratch)
-            params = _deadline_params(operation, path)
-            with (
-                WorkerStandin(Scenario(operation, mode, lifetime_s=15, drip_interval_s=0.05)) as standin,
-                _owned_api(WorkerConfig(region="us-west-2", test_endpoint=standin.endpoint), path / "registry") as api,
-            ):
-                budget_s = 0.8 + 3 * startup_s
-                started = time.monotonic()
-                deadline = started + budget_s
-                reply = api.call(operation, params, deadline=deadline)
-                stopped = time.monotonic()
-                shutdown = api.close(deadline=time.monotonic() + 10)
-                until = time.monotonic() + 1
-                while not any(event.kind == "peer_closed" for event in standin.events) and time.monotonic() < until:
-                    time.sleep(0.02)
-                header_only = operation == "s3_head" and mode in {"hang_body", "drip_body"}
-                checks = {
-                    "head_finishes_without_body" if header_only else "typed_deadline": reply.get("ok") is True
-                    if header_only
-                    else reply.get("error", {}).get("kind") == "deadline",
-                    "absolute_bound": stopped <= deadline + 5.2,
-                    "request_reached_http": sum(event.kind == "request" for event in standin.events) == 1,
-                    "peer_closed": any(event.kind == "peer_closed" for event in standin.events),
-                    "groups_absent": _check_absence(api),
-                    "shutdown_confirmed": shutdown["confirmed"],
-                    "partial_removed": not (path / "download.partial").exists(),
-                }
-                results.append(
-                    {
-                        "case": "absolute_call_deadline",
-                        "operation": operation,
-                        "mode": mode,
-                        "checks": checks,
-                        "budget_s": budget_s,
-                        "reply_error": reply.get("error"),
-                        "elapsed_s": stopped - started,
-                        "events": [{"kind": event.kind, "connection": event.connection, "elapsed_s": event.elapsed_s} for event in standin.events],
-                    }
-                )
+            budget_s = 0.8 + 3 * startup_s
+            missed: list[float] = []
+            row = _deadline_attempt(folder, operation, mode, budget_s)
+            while _request_never_arrived(row) and len(missed) + 1 < DEADLINE_ATTEMPTS:
+                missed.append(budget_s)
+                budget_s *= 2
+                row = _deadline_attempt(folder, operation, mode, budget_s)
+            results.append({**row, "attempts": len(missed) + 1, "missed_budgets_s": missed})
     return results
 
 
