@@ -17,6 +17,8 @@ CONTRACT = {
     "deadline_variable": "HAI_DEADLINE_UTC",
     "hosts_file": "/workspace/inputs/publisher_hosts.json",
     "hosts_approval_file": "/workspace/inputs/hosts_approval.json",
+    "stored_mirror_root": "/workspace/inputs/mirror",
+    "stored_index_file": "/workspace/inputs/stored_index.json",
 }
 
 
@@ -47,6 +49,8 @@ def test_no_selection_needs_no_contract() -> None:
         {"deadline_variable": "DEADLINE"},
         {"hosts_file": "/workspace/other/hosts.json"},
         {"hosts_approval_file": ""},
+        {"stored_mirror_root": "/workspace/code"},
+        {"stored_index_file": "/workspace/other.json"},
     ],
 )
 def test_any_other_publisher_contract_is_refused(change: dict) -> None:

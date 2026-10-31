@@ -15,6 +15,17 @@
       "Resource": "${BUCKET_ARN}/raw/*"
     },
     {
+      "Sid": "ReadStoredPayloadVersions",
+      "Effect": "Allow",
+      "Action": ["s3:GetObjectVersion"],
+      "Resource": [
+        "${BUCKET_ARN}/*/*/datasets/*",
+        "${BUCKET_ARN}/*/*/references/*",
+        "${BUCKET_ARN}/bronze_objects/sha256/*",
+        "${BUCKET_ARN}/bronze_evidence/sha256/*"
+      ]
+    },
+    {
       "Sid": "ListRawVersions",
       "Effect": "Allow",
       "Action": ["s3:ListBucket", "s3:ListBucketVersions"],

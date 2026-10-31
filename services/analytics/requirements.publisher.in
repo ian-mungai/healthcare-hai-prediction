@@ -1,0 +1,8 @@
+# Extra packages for the run 3 publisher task, which runs the redownload code in this image.
+# boto3 and botocore read the stored captures with the task role. defusedxml reads office documents. python-dotenv is imported by the project
+# configuration module, which every acquisition module loads, though a task reads its settings from the environment.
+# The owner resolves this file into requirements.publisher.txt with hashes.
+boto3
+defusedxml
+botocore
+python-dotenv

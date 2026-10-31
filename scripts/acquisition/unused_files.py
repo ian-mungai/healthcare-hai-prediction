@@ -21,7 +21,6 @@ from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
-from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
 
 COPY_COLUMNS = ("source_id", "snapshot_id", "s3_key", "sha256", "loaded", "retired", "tables")
 INVENTORY_COLUMNS = ("source_id", "snapshot_id", "s3_key", "s3_version_id", "sha256")
@@ -221,6 +220,8 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> None:
         else:
             approved_plan(args.plan, args.approval)
             if client is None:
+                from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
+
                 settings, _ = load_configuration(REPO_ROOT / ".env")
                 verify_project_identity(settings)
                 client = AwsCli(settings)

@@ -108,6 +108,8 @@ run "publisher_contract_states_public_ip_capacity_and_the_dispatch_bindings" {
         deadline_variable   = "HAI_DEADLINE_UTC"
         hosts_file          = "/workspace/inputs/publisher_hosts.json"
         hosts_approval_file = "/workspace/inputs/hosts_approval.json"
+        stored_mirror_root  = "/workspace/inputs/mirror"
+        stored_index_file   = "/workspace/inputs/stored_index.json"
       }
     }
     error_message = "The publisher contract must name its class, role, on-demand capacity, own network group, the public IP the no-NAT network needs, the raw root, the container to override and read logs from, the deadline variable and the staged hosts files."
@@ -128,6 +130,11 @@ run "publisher_container_matches_its_contract_and_enforces_the_hosts_files_itsel
       jsondecode(output.container_definitions["publisher_fetch"])[0].logConfiguration.options["awslogs-stream-prefix"] == output.publisher_dispatch_contracts["publisher_fetch"].log_container &&
       contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "HAI_APPROVED_HOSTS", value = "/workspace/inputs/publisher_hosts.json" }) &&
       contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" }) &&
+      contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "HAI_STORED_MIRROR", value = "/workspace/inputs/mirror" }) &&
+      contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "HAI_STORED_INDEX", value = "/workspace/inputs/stored_index.json" }) &&
+      contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "EXPECTED_ACCOUNT_ID", value = "111111111111" }) &&
+      contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "TASK_ROLE_NAME", value = "example_project_job_publisher_task_dev" }) &&
+      jsondecode(output.container_definitions["publisher_fetch"])[0].secrets == [] &&
       jsondecode(output.container_definitions["publisher_fetch"])[0].entryPoint[0] == "/opt/hai/deadline_run"
     )
     error_message = "The one container must carry the contract's name, send logs under it, set both hosts file paths itself so the downloader fails closed, and start through the deadline entry point."

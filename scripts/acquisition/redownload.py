@@ -24,7 +24,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -33,7 +33,7 @@ from xml.etree import ElementTree
 
 from defusedxml import ElementTree as SafeElementTree
 
-from scripts.acquisition import bls_api_transport, data_paths
+from scripts.acquisition import bls_api_transport, data_paths, stored_mirror
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
@@ -41,7 +41,7 @@ from scripts.acquisition.collection_layout import capture_root
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json, require
-from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure
+from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure, on_raw_route
 
 ACTIVE = ("api", "direct_download", "approved_manual")
 BYTE_CAP = 128 * 2**30
@@ -76,8 +76,15 @@ class Run:
     client_factory: Callable | None = None
     byte_cap: int = BYTE_CAP
     route: route.RouteFiles | None = None
+    materialize: Callable[[Path], bool] | None = None
+    stored_root: Path | None = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def data_root(self) -> Path:
+        """Where stored captures, frozen inputs and job files live. In a task this is the stored mirror, otherwise the base."""
+        return self.stored_root or self.base
 
     def client(self) -> Any:
         """The project AWS client, created once and only for collectors that read an API key."""
@@ -126,7 +133,7 @@ def runtime_controls(run: Run) -> dict:
     inputs = set((run.base / "config/acquisition").rglob("*.json"))
     from scripts.acquisition.collect_mmd_api import TEMPLATE
 
-    template = run.base / TEMPLATE
+    template = run.data_root / TEMPLATE
     if template.is_file() or run.base == REPO_ROOT:
         inputs.add(template)
     if (run.base / ".env").is_file():
@@ -135,7 +142,7 @@ def runtime_controls(run: Run) -> dict:
     for relative in document.get("inputs_sha256", {}):
         # Status documentation is mutable; the immutable queue and this snapshot are the execution controls.
         if not relative.endswith(".md"):
-            path = run.base / current(relative) if "/" in relative else run.base / "data/acquisition_planning/full_redownload_20260929" / relative
+            path = run.data_root / current(relative) if "/" in relative else run.data_root / "data/acquisition_planning/full_redownload_20260929" / relative
             require(digest(path.read_bytes()) == document["inputs_sha256"][relative], "Frozen queue input changed")
             inputs.add(path)
     for unit in queue:
@@ -150,7 +157,7 @@ def runtime_controls(run: Run) -> dict:
         **({} if scope is None else {"scope_sources": scope}),
         "state_root": root_label(run),
         "code_sha256": {str(path.relative_to(REPO_ROOT)): digest(path.read_bytes()) for path in code_paths},
-        "operational_sha256": {str(path.relative_to(run.base)): digest(path.read_bytes()) for path in sorted(inputs)},
+        "operational_sha256": {operational_key(path, run): digest(path.read_bytes()) for path in sorted(inputs)},
         # The harness and the collectors resolve recorded paths through this map while they run (failure mode S46).
         "path_map_sha256": digest(data_paths.MAP_PATH.read_bytes()),
         "limits": {"byte_cap": BYTE_CAP, "bls_rolling_24h": BLS_LIMIT, "attempts_per_primary_page_probe": MAX_ATTEMPTS},
@@ -246,6 +253,19 @@ def review_gate(run: Run) -> str:
     return sha
 
 
+def operational_key(path: Path, run: Run) -> str:
+    """An operational input's repository relative path, whether it sits in the code root or in the stored mirror."""
+    if run.stored_root is not None and path.is_relative_to(run.stored_root):
+        return str(path.relative_to(run.stored_root))
+    return str(path.relative_to(run.base))
+
+
+def ensure_stored(path: Path, run: Run) -> None:
+    """On the AWS route the stored payload is read from S3 the first time a comparison needs its bytes."""
+    if run.materialize is not None and not path.is_file():
+        run.materialize(path)
+
+
 def route_gate(run: Run) -> None:
     """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
@@ -269,7 +289,7 @@ def verify_path_map(run: Run) -> None:
 
 def verify_input(path: Path, run: Run) -> None:
     """Refuse changes to the individual operational input at its point of use."""
-    expected = run.cache.get("controls", {}).get("operational_sha256", {}).get(str(path.relative_to(run.base)))
+    expected = run.cache.get("controls", {}).get("operational_sha256", {}).get(operational_key(path, run))
     if expected is not None:
         require(digest(path.read_bytes()) == expected, "Operational input changed")
 
@@ -372,7 +392,7 @@ def require_bls_budget(roots: list[Path], now: datetime, limit: int = BLS_LIMIT)
 def receipt_file(unit: dict, run: Run) -> Path:
     """The stored capture's receipt; queues frozen before the dataset move name its old folder [226]."""
     verify_path_map(run)
-    return run.base / current(unit["receipt"])
+    return run.data_root / current(unit["receipt"])
 
 
 def stored_receipt(unit: dict, run: Run) -> dict:
@@ -434,6 +454,8 @@ def compare_download(result: Any, attempts: int, stored_sha256: str, run: Run, s
     if not result.complete:
         blocked = result.failure in {"size_limit", "html_instead_of_data", "unexpected_signed_response_media_type"}
         return fields | {"outcome": "blocked" if blocked else "unavailable", "reason": known_failure(result.failure)}
+    if result.sha256 != stored_sha256 and stored is not None:
+        ensure_stored(stored, run)
     if result.sha256 == stored_sha256 or stored is None or not stored.is_file():
         return fields | {"outcome": "exact_match" if result.sha256 == stored_sha256 else "changed_needs_review", "excluded_parts": []}
     differing, excluded = compare_files(stored, result.path, stored.name, stored_sha256)
@@ -745,7 +767,7 @@ def planned(unit: dict, run: Run) -> tuple[dict, dict]:
     verify_path_map(run)
     for relative in run.cache.get("controls", {}).get("operational_sha256", {}):
         if relative.startswith("config/acquisition/"):
-            verify_input(run.base / relative, run)
+            verify_input(run.data_root / relative, run)
     if f"plans:{module_name}" not in run.cache:
         # Loading a plan re-validates the registry, so each locked plan is loaded once per invocation.
         loaded = getattr(importlib.import_module(f"scripts.acquisition.{module_name}"), loader)()
@@ -827,7 +849,7 @@ def adapt_mmd(unit: dict, run: Run) -> Path:
     from scripts.acquisition import collect_mmd_api as collector
 
     measure, year = mmd_selection(unit, run)
-    verify_input(run.base / collector.TEMPLATE, run)
+    verify_input(run.data_root / collector.TEMPLATE, run)
     return Path(collector.execute(measure, year, True, False, root=run.state_root / "collectors" / "mmd_api")["receipt_path"])
 
 
@@ -888,6 +910,8 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
     return Path(collector.execute(plan, fresh_root(unit, run), True, False, None, {}, run.opener, limits)["receipt_path"])
 
 
+# These collectors read an API key from the secret store. The publisher task holds no secret, so on the raw route they are reported, never attempted.
+SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
 ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {
     "bls_api_v2": adapt_bls,
     "census_acs_api": adapt_census_api,
@@ -1000,6 +1024,8 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
         if stored.get(key) == identities.get(key):
             continue
         # A data file present on both sides may differ only in its download date [S17].
+        if key in stored_paths:
+            ensure_stored(stored_paths[key], run)
         if key in stored_paths and key in fresh_paths and stored_paths[key].is_file() and fresh_paths[key].is_file():
             controls.validate_path(fresh_paths[key], run.state_root)
             names, parts = compare_files(stored_paths[key], fresh_paths[key], key[1], stored[key])
@@ -1122,6 +1148,9 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         # Checked again for every unit at dispatch time, against the accepted controls only (failure mode 59).
         if not in_reviewed_scope(run, source):
             continue
+        if on_raw_route() and handler_mode(unit) in SECRET_MODES:
+            summary.setdefault("needs_secret", []).append(identity)
+            continue
         pilot_id = pilots[(source, unit["route"], unit["mode"])]
         if identity != pilot_id:
             first = outcome(run, pilot_id)
@@ -1240,6 +1269,25 @@ def report(run: Run) -> dict:
     }
 
 
+def run_from(
+    args: argparse.Namespace, environment: Mapping[str, str], factory: Callable[[str, str], Any] = stored_mirror.default_client, base: Path = REPO_ROOT
+) -> Run:
+    """The run for the command line. A task whose environment names a stored mirror reads stored payloads from S3, after its identity check."""
+    state_root = args.state_root or default_state_root(args.queue)
+    paths = [args.removal_plan, args.removal_approval, args.removal_record, args.hosts, args.hosts_approval]
+    files = route.RouteFiles(*paths) if all(paths) else None
+    mirror = stored_mirror.from_environment(environment, factory) if environment.get(stored_mirror.MIRROR_VARIABLE) else None
+    return Run(
+        queue_path=args.queue,
+        state_root=state_root,
+        base=base,
+        manual_folder=args.manual_folder,
+        route=files,
+        materialize=mirror.materialize if mirror else None,
+        stored_root=mirror.root if mirror else None,
+    )
+
+
 def main() -> None:
     """Command line: a dry run by default; ``--execute`` makes requests; ``--report`` writes a dated report."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1257,10 +1305,7 @@ def main() -> None:
     for name in ("removal-plan", "removal-approval", "removal-record", "hosts", "hosts-approval"):
         parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
     args = parser.parse_args()
-    state_root = args.state_root or default_state_root(args.queue)
-    paths = [args.removal_plan, args.removal_approval, args.removal_record, args.hosts, args.hosts_approval]
-    files = route.RouteFiles(*paths) if all(paths) else None
-    run = Run(queue_path=args.queue, state_root=state_root, manual_folder=args.manual_folder, route=files)
+    run = run_from(args, os.environ)
 
     def emit(item: dict) -> None:
         sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")

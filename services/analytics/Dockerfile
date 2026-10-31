@@ -14,6 +14,12 @@ COPY requirements.txt /opt/analytics/requirements.txt
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/analytics/requirements.txt
 
+# The run 3 publisher task needs boto3 and defusedxml too. They install from their own hash-locked file only when the build asks for them
+# (--build-arg PUBLISHER_DEPENDENCIES=1), so an ordinary build stays as it was. The glob keeps the build working while the lock is unresolved.
+ARG PUBLISHER_DEPENDENCIES=0
+COPY requirements.publisher.tx[t] /opt/analytics/
+RUN if [ "$PUBLISHER_DEPENDENCIES" = "1" ]; then /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/analytics/requirements.publisher.txt; fi
+
 ENV PATH=/opt/venv/bin:${PATH}
 # dbt sends no usage data and makes no version check over the network.
 ENV DBT_SEND_ANONYMOUS_USAGE_STATS=false \

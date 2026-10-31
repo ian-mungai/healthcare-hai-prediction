@@ -35,7 +35,11 @@ locals {
   publisher_environment = [
     { name = "HAI_CAPTURE_ROOT", value = "raw/" },
     { name = "HAI_APPROVED_HOSTS", value = "/workspace/inputs/publisher_hosts.json" },
-    { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" }
+    { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" },
+    { name = "HAI_STORED_MIRROR", value = "/workspace/inputs/mirror" },
+    { name = "HAI_STORED_INDEX", value = "/workspace/inputs/stored_index.json" },
+    { name = "EXPECTED_ACCOUNT_ID", value = var.expected_account_id },
+    { name = "TASK_ROLE_NAME", value = "${var.project_name}_job_publisher_task_${var.environment}" }
   ]
   publisher_specs = {
     publisher_fetch = { class = "publisher", image = "analytics", role = "publisher_task" }

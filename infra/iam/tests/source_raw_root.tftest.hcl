@@ -143,10 +143,25 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
     condition = (
       !strcontains(aws_iam_role_policy.job_publisher[0].policy, "Delete") &&
       !strcontains(aws_iam_role_policy.job_publisher[0].policy, "lakehouse") &&
-      alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))]) &&
-      strcontains(aws_iam_role_policy.job_publisher[0].policy, "s3:if-none-match")
+      strcontains(aws_iam_role_policy.job_publisher[0].policy, "s3:if-none-match") &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : (
+        statement.Sid == "ReadStoredPayloadVersions" ? true : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))
+      )])
     )
-    error_message = "The publisher role must reach only raw, create objects once and hold no delete action."
+    error_message = "Outside the stored payload read the publisher role must reach only raw, create objects once and hold no delete action."
+  }
+
+  assert {
+    condition = (
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStoredPayloadVersions"][0].Action == ["s3:GetObjectVersion"] &&
+      toset([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStoredPayloadVersions"][0].Resource) == toset([
+        "arn:aws:s3:::example-data-bucket/*/*/datasets/*",
+        "arn:aws:s3:::example-data-bucket/*/*/references/*",
+        "arn:aws:s3:::example-data-bucket/bronze_objects/sha256/*",
+        "arn:aws:s3:::example-data-bucket/bronze_evidence/sha256/*",
+      ])
+    )
+    error_message = "The stored payload read is version reads only, on the payload, reference and single-copy prefixes."
   }
 
   assert {
