@@ -1934,12 +1934,12 @@ run "broker_accepts_the_bronze_family" {
     broker_enabled       = true
     broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
     broker_jobs = {
-      subnet_id         = "subnet-0example1"
-      security_group_id = "sg-0example1"
-      log_group_name    = "example_project_jobs_dev"
-      bucket_name       = "example-project-data-dev"
-      host_ip           = "10.0.1.20"
-      families          = ["train", "bronze"]
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["train", "bronze"]
     }
   }
 
@@ -1947,6 +1947,47 @@ run "broker_accepts_the_bronze_family" {
     condition     = contains(keys(aws_ecs_service.service), "broker") && strcontains(aws_ecs_task_definition.service["broker"].container_definitions, "bronze")
     error_message = "The broker accepts the bronze family and passes it to the broker container."
   }
+}
+
+run "broker_accepts_the_serve_and_metadata_families" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["serve", "metadata"]
+    }
+  }
+
+  assert {
+    condition     = strcontains(aws_ecs_task_definition.service["broker"].container_definitions, "serve,metadata")
+    error_message = "The broker accepts the serve and metadata families and passes them to the broker container."
+  }
+}
+
+run "serve_without_the_training_security_group_is_refused" {
+  command = plan
+
+  variables {
+    broker_enabled       = true
+    broker_task_role_arn = "arn:aws:iam::111111111111:role/example-broker"
+    broker_jobs = {
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-data-dev"
+      host_ip            = "10.0.1.20"
+      families           = ["serve"]
+    }
+  }
+
+  expect_failures = [var.broker_jobs]
 }
 
 run "broker_with_unknown_family_is_refused" {
