@@ -262,6 +262,20 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         (binary / "plan.json").write_text(json.dumps(altered))
         result = run_command(sys.executable, args, cwd=workspace, env=env, timeout=15)
         checks[name] = result.returncode == (0 if accepted else 2) and (accepted or "saved jobs plan" in result.stderr)
+    bronze = writer_documents["bronze"]
+    raw_read = bronze | {"variables": bronze["variables"] | {"bronze_read_environment": {"HAI_READ_RAW_ROOT": "true"}}}
+    enabled = invoke(raw_read)
+    rendered = json.loads(output.read_text()) if output.exists() else {}
+    checks["raw_read_environment_is_rendered"] = enabled.returncode == 0 and rendered.get("bronze_read_environment") == {"HAI_READ_RAW_ROOT": "true"}
+    for label, wrong in (
+        ("another_name", {"HAI_OTHER": "true"}),
+        ("another_value", {"HAI_READ_RAW_ROOT": "yes"}),
+        ("an_extra_name", {"HAI_READ_RAW_ROOT": "true", "HAI_OTHER": "1"}),
+    ):
+        refused = invoke(bronze | {"variables": bronze["variables"] | {"bronze_read_environment": wrong}})
+        checks["raw_read_environment_" + label + "_is_refused"] = refused.returncode == 2
+    off = invoke(bronze)
+    checks["raw_read_environment_off_renders_without_the_field"] = off.returncode == 0 and "bronze_read_environment" not in json.loads(output.read_text())
     checks.update(_host_room_cases(workspace, environment_file, prep, output, document, values))
     return checks
 

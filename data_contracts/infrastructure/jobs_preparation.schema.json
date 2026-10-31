@@ -699,6 +699,15 @@
         "openmetadata_ingestion_token_name": {
           "type": "string",
           "pattern": "^/[a-z][a-z0-9_]+/openmetadata_bot_ingestion$"
+        },
+        "bronze_read_environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "HAI_READ_RAW_ROOT": {
+              "const": "true"
+            }
+          }
         }
       }
     },
