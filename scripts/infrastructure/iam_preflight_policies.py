@@ -8,6 +8,7 @@ removes a listed grant is found without AWS. ``python -m scripts.infrastructure.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -35,6 +36,17 @@ OFFLINE_VALUES = {
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 ROW_KEYS = {"role", "action", "resource", "context", "scope", "granted_by"}
 ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments", "kind"}
+EVIDENCE_SOURCES = (
+    "layer_acceptance.py",
+    "layer_run.py",
+    "silver_publish.py",
+    "gold_publish.py",
+    "gold_publish_record.py",
+    "silver_export.py",
+    "pipeline_build.py",
+    "pipeline_quality.py",
+    "pins.py",
+)
 SCOPES = ("silver",)
 KINDS = ("role", "user")
 # The project user holds every policy file of ``infra/iam/policies``: the owner attaches them with ``manage_policies``, not Terraform.
@@ -323,7 +335,110 @@ def grant_problems(documents: list[dict[str, Any]], request: Request, shared: li
     return found
 
 
-def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str, str] = OFFLINE_VALUES) -> list[str]:
+LAKEHOUSE = REPO_ROOT / "scripts" / "lakehouse"
+RUN_PREFIX = "lakehouse/layer_runs/silver/example_run/"
+# Every JSON name that the publish code and the build and quality steps put in a string, and where the upload sends it: the path under the run's upload
+# prefix, or the reason it is not part of a silver upload. ``layer_acceptance`` is the list of what the owner reads. Every uploaded file needs a writer row
+# and an owner row.
+RUN_FILES = {
+    "layer_run.json": "layer_run.json",
+    "pins.json": "pins.json",
+    "build_receipt.json": "build_receipt.json",
+    "silver_snapshot.json": "silver_snapshot.json",
+    "state/pinned.json": "state/pinned.json",
+    "target/run_results.json": "target/run_results.json",
+    "result.json": "quality_silver/result.json",
+    "candidates.json": "publish/candidates.json",
+    "reconcile.json": "publish/reconcile.json",
+    "backup.json": "publish/backup.json",
+    "commit.json": "publish/commit.json",
+    "consumer_result.json": "publish/consumer_result.json",
+    "export/manifest.json": "publish/export/manifest.json",
+}
+NOT_UPLOADED = {
+    "publish/dry_run_plan.json": "a dry run uploads nothing",
+    "publish/catalog_state.json": "a dry run uploads nothing",
+    "catalog_state.json": "a dry run uploads nothing",
+    "tfvars.json": "an input the task reads",
+    "manifest.json": "the gold dbt copy, the gold export and the silver_input folder, which the upload skips",
+    "catalog.json": "the gold dbt copy to metadata/dbt",
+    "run_results.json": "the gold dbt copy to metadata/dbt",
+    "silver_pins.json": "gold layer",
+    "gold_pins.json": "features layer",
+    "features_snapshot.json": "features layer",
+    "baselines.json": "a quality input the task reads",
+    "fixture_baselines.json": "a quality input the task reads",
+    "mirror.json": "the Glue mirror covers gold only",
+    "workspace/out/silver_snapshot.json": "the default of an option that layer_run replaces with the run folder",
+}
+
+
+def string_constants(tree: ast.AST) -> dict[str, int]:
+    """Every string in the code that holds a JSON file name, with its line. Documentation strings are skipped."""
+    docs = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body and isinstance(node.body[0], ast.Expr)
+    }
+    found: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+            for name in re.findall(r"[A-Za-z_]+(?:/[A-Za-z_]+)*\.json", node.value):
+                if not name.startswith(("config/", "data_contracts/", "infra/")):
+                    found.setdefault(name, node.lineno)
+    return found
+
+
+def acceptance_reads(path: Path) -> set[str]:
+    """The run files that ``layer_acceptance`` reads for a silver run: its evidence list, its pin file and every file it loads by name."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names = {node.targets[0].id: node.value for node in tree.body if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+    text = {key: value.value for key, value in names.items() if isinstance(value, ast.Constant) and isinstance(value.value, str)}
+    reads: set[str] = set()
+    evidence, pins = names["EVIDENCE_FILES"], names["PIN_FILE"]
+    if not isinstance(evidence, ast.Tuple) or not isinstance(pins, ast.Dict):
+        raise KeyError("EVIDENCE_FILES or PIN_FILE has another form")
+    for item in evidence.elts:
+        reads.add(str(item.value if isinstance(item, ast.Constant) else text[item.id if isinstance(item, ast.Name) else ""]))
+    for key, value in zip(pins.keys, pins.values, strict=True):
+        if isinstance(key, ast.Constant) and key.value == "silver" and isinstance(value, ast.Constant):
+            reads.add(str(value.value))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "load_in" and len(node.args) > 1:
+            name = node.args[1]
+            if isinstance(name, ast.Constant) and isinstance(name.value, str):
+                reads.add(name.value)
+    return reads
+
+
+def evidence_problems(table: Mapping[str, Any], lakehouse: Path = LAKEHOUSE) -> list[str]:
+    """Each file the silver run uploads and each file the owner reads has a writer row (``PutObject`` by the task role) and an owner row (``GetObject``)."""
+    try:
+        reads = acceptance_reads(lakehouse / "layer_acceptance.py")
+        named: dict[str, str] = {}
+        for source in EVIDENCE_SOURCES[1:]:
+            for name in string_constants(ast.parse((lakehouse / source).read_text(encoding="utf-8"))):
+                named.setdefault(name, source)
+    except (OSError, SyntaxError, KeyError, AttributeError, StopIteration) as error:
+        return [f"the evidence sources cannot be read ({type(error).__name__})"]
+    found = [
+        f"{name} ({source}) is named by the publish code and is not classified in RUN_FILES or NOT_UPLOADED"
+        for name, source in sorted(named.items())
+        if name not in RUN_FILES and name not in NOT_UPLOADED
+    ]
+    found += [f"{name} is classified but no publish code names it any more" for name in sorted((RUN_FILES.keys() | NOT_UPLOADED.keys()) - named.keys())]
+    uploaded = set(RUN_FILES.values())
+    found += [f"layer_acceptance reads {name}, which no writer in RUN_FILES produces" for name in sorted(reads - uploaded)]
+    rows = {(row["role"], row["action"], row["resource"]) for row in table["checks"] if row.get("scope") == "silver"}
+    bucket = "arn:aws:s3:::${DATA_BUCKET_NAME}/"
+    for name in sorted(uploaded | reads):
+        for role, action, who in (("write_silver", "s3:PutObject", "no writer row"), ("project_user", "s3:GetObject", "no owner row")):
+            if (role, action, bucket + RUN_PREFIX + name) not in rows:
+                found.append(f"{name}: {who} ({role} {action} {RUN_PREFIX}{name})")
+    return found
+
+
+def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str, str] = OFFLINE_VALUES, lakehouse: Path = LAKEHOUSE) -> list[str]:
     """Every row that the policy files do not support, and every policy that Terraform does not attach to its role."""
     names = infra_names(infra)
     found = []
@@ -349,16 +464,20 @@ def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str,
             continue
         request = Request(row["action"], expand(row["resource"], expanded), context)
         found += [f"{label}: {message}" for message in grant_problems(documents[row["role"]], request, row.get("granted_by", []))]
-    return found
+    return found + evidence_problems(table, lakehouse)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Print the offline problems; exit non-zero when there is one. ``--infra`` names a copy of the IAM stack to check."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--infra", type=Path, default=INFRA, help="The IAM stack folder to check.")
+    parser.add_argument("--table", type=Path, default=TABLE, help="The table of role, action and resource rows.")
+    parser.add_argument(
+        "--lakehouse", type=Path, default=LAKEHOUSE, help="The folder with layer_acceptance and the publish code, the sources of the evidence files."
+    )
     arguments = parser.parse_args(argv)
     try:
-        found = problems(load_table(), arguments.infra)
+        found = problems(load_table(arguments.table), arguments.infra, lakehouse=arguments.lakehouse)
     except TableError as error:
         sys.stderr.write(f"ERROR {error}\n")
         return 2

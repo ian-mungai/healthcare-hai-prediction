@@ -1142,6 +1142,60 @@
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/silver_snapshot.json",
       "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/build_receipt.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/build_receipt.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/consumer_result.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/consumer_result.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/quality_silver/result.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/quality_silver/result.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/target/run_results.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/target/run_results.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/state/pinned.json",
+      "scope": "silver"
     }
   ]
 }
