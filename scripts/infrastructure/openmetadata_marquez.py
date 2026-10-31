@@ -2,9 +2,10 @@
 
 OpenMetadata has no Marquez connector. This step reads the datasets and lineage graphs from the Marquez HTTP API, maps each Marquez dataset name to an
 OpenMetadata table name with the pattern in ``config/metadata/ingestion/marquez.json`` and adds one edge for each pair of an input and an output dataset of
-a job. A dataset whose name does not match counts as unmapped and gets no edge. Adding an edge twice leaves one edge. Marquez being unreachable is a failure
-(exit 1), so the task shows it. Runs in the ingestion image: ``python openmetadata_marquez.py --marquez URL``. The Marquez and OpenMetadata routes are unproven
-against the real servers. Output holds counts and names of steps, never a token.
+a job. A dataset whose name does not match counts as unmapped and gets no edge. Adding an edge twice leaves one edge. The whole step, every Marquez and
+OpenMetadata request included, ends at ``--deadline-seconds``. Marquez being unreachable is a failure (exit 1), so the task shows it. Runs in the ingestion
+image: ``python openmetadata_marquez.py --marquez URL``. The Marquez and OpenMetadata routes are unproven against the real servers. Output holds counts and
+names of steps, never a token.
 """
 
 from __future__ import annotations
@@ -28,17 +29,26 @@ class Unreachable(Exception):
     """A server did not answer."""
 
 
-def call(method: str, url: str, body: Mapping[str, Any] | None, headers: Mapping[str, str], timeout: float) -> tuple[int, Any]:
-    """Send one JSON request to a plain-HTTP address and return the status and parsed body. A missing answer raises ``Unreachable``."""
+def call(method: str, url: str, body: Mapping[str, Any] | None, headers: Mapping[str, str], timeout: float, limit_at: float) -> tuple[int, Any]:
+    """Send one JSON request to a plain-HTTP address and return the status and parsed body.
+
+    The request never starts after ``limit_at`` (a monotonic time) and waits at most until then, whatever ``timeout`` says.
+    A missing or late answer raises ``Unreachable``.
+    """
     parts = urllib.parse.urlsplit(url)
-    connection = http.client.HTTPConnection(parts.hostname or "", parts.port, timeout=timeout)
+    remaining = limit_at - time.monotonic()
+    if remaining <= 0:
+        raise Unreachable("the deadline passed")
+    connection = http.client.HTTPConnection(parts.hostname or "", parts.port, timeout=min(timeout, remaining))
     try:
         connection.request(method, parts.path + (f"?{parts.query}" if parts.query else ""), json.dumps(body) if body is not None else None, dict(headers))
         reply = connection.getresponse()
         raw = reply.read()
+        if time.monotonic() > limit_at:
+            raise Unreachable("the deadline passed")
         return reply.status, json.loads(raw) if raw else {}
     except (OSError, http.client.HTTPException, ValueError):
-        raise Unreachable(parts.netloc) from None
+        raise Unreachable(parts.netloc or "the deadline passed") from None
     finally:
         connection.close()
 
@@ -50,7 +60,7 @@ def listing(marquez: str, path: str, key: str, timeout: float, limit_at: float) 
     for _ in range(MAX_PAGES):
         if time.monotonic() >= limit_at:
             raise Unreachable("the listing did not end before the deadline")
-        status, page = call("GET", f"{marquez}{path}{separator}limit={PAGE}&offset={len(rows)}", None, {}, timeout)
+        status, page = call("GET", f"{marquez}{path}{separator}limit={PAGE}&offset={len(rows)}", None, {}, timeout, limit_at)
         if status != 200:
             raise Unreachable(path)
         batch = page.get(key, [])
@@ -71,9 +81,9 @@ def dataset_ids(marquez: str, timeout: float, limit_at: float) -> list[str]:
     return found
 
 
-def job_edges(marquez: str, node: str, timeout: float) -> set[tuple[str, str]]:
+def job_edges(marquez: str, node: str, timeout: float, limit_at: float) -> set[tuple[str, str]]:
     """The (input dataset, output dataset) pairs of every job next to one dataset in the lineage graph."""
-    status, reply = call("GET", f"{marquez}/api/v1/lineage?nodeId={urllib.parse.quote(node, safe='')}&depth=1", None, {}, timeout)
+    status, reply = call("GET", f"{marquez}/api/v1/lineage?nodeId={urllib.parse.quote(node, safe='')}&depth=1", None, {}, timeout, limit_at)
     if status != 200:
         raise Unreachable("marquez lineage")
     pairs: set[tuple[str, str]] = set()
@@ -106,11 +116,11 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv)
     settings = json.loads(options.config.read_text())
     auth = {"Authorization": f"Bearer {options.token_file.read_text().strip()}", "Content-Type": "application/json"}
+    limit_at = time.monotonic() + options.deadline_seconds
     try:
         pairs: set[tuple[str, str]] = set()
-        limit_at = time.monotonic() + options.deadline_seconds
         for node in dataset_ids(options.marquez, options.timeout_seconds, limit_at):
-            pairs |= job_edges(options.marquez, node, options.timeout_seconds)
+            pairs |= job_edges(options.marquez, node, options.timeout_seconds, limit_at)
     except Unreachable as error:
         sys.stderr.write(f"openmetadata_marquez: marquez did not answer ({error}) or its listing hit the deadline\n")
         return 1
@@ -119,7 +129,7 @@ def main(argv: list[str]) -> int:
 
     def table_id(fqn: str) -> str | None:
         if fqn not in identifiers:
-            status, reply = call("GET", f"{options.om_base}/v1/tables/name/{urllib.parse.quote(fqn, safe='')}", None, auth, options.timeout_seconds)
+            status, reply = call("GET", f"{options.om_base}/v1/tables/name/{urllib.parse.quote(fqn, safe='')}", None, auth, options.timeout_seconds, limit_at)
             identifiers[fqn] = reply.get("id") if status == 200 else None
         return identifiers[fqn]
 
@@ -134,13 +144,13 @@ def main(argv: list[str]) -> int:
                 absent += 1
                 continue
             edge = {"edge": {"fromEntity": {"id": ids[0], "type": "table"}, "toEntity": {"id": ids[1], "type": "table"}}}
-            status, _ = call("PUT", f"{options.om_base}/v1/lineage", edge, auth, options.timeout_seconds)
+            status, _ = call("PUT", f"{options.om_base}/v1/lineage", edge, auth, options.timeout_seconds, limit_at)
             if status not in (200, 201):
                 sys.stderr.write(f"openmetadata_marquez: OpenMetadata refused an edge with status {status}\n")
                 return 1
             added += 1
     except Unreachable:
-        sys.stderr.write("openmetadata_marquez: OpenMetadata did not answer\n")
+        sys.stderr.write("openmetadata_marquez: OpenMetadata did not answer before the deadline\n")
         return 1
     sys.stdout.write(f"openmetadata_marquez: edges={added} unmapped={unmapped} table_missing={absent}\n")
     return 0
