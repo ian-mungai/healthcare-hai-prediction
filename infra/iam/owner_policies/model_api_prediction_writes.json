@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PredictionTableObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+      "Resource": ${PREDICTION_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListPredictionTablePrefix",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": ["${BUCKET_ARN}"],
+      "Condition": {"StringLike": {"s3:prefix": ${PREDICTION_LIST_PREFIXES}}}
+    }
+  ]
+}

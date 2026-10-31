@@ -73,8 +73,8 @@ A deployment record names the stable version, at most one canary version and the
 | Share | 1 to 50 percent |
 | Canary fails a request | The request falls back to the stable model and the row records both versions. A failure is an exception or a prediction that is not a finite number. A feature error that belongs to the canary also counts: another schema hash, an absent view row or a missing feature. A store that is loading or did not answer fails every model alike and counts against none |
 | Canary fails three in a row | The canary is ejected until the next deployment. The stable model keeps serving |
-| Canary does not load | The stable model serves every request. Health reports the canary as `failed` |
-| Stable fails | Only the requests routed to it answer 503. The canary still answers its own |
+| Canary does not load | The stable model serves every request. Health reports the canary as `failed`. Each refresh tries the load again. A model that loads then serves |
+| Stable fails | Only the requests routed to it answer 503. The canary still answers its own. A stable model that did not load is tried again at each refresh. Health turns 200 when it loads |
 | Refresh | The service reads the active record at most every 30 seconds. The first request after that interval pays for the read and for any model load. An unreadable record keeps the last good deployment |
 | Rollback | A deployment without a candidate. After the next refresh every request goes to the stable model and the canary model is released |
 
@@ -127,8 +127,8 @@ The owner does every step. Show each plan first and apply exactly that plan.
 
 1. Compile the image lock after the training image lock exists: `docker run` of `services/model_api/compile_lock.sh` as its header shows. The compile fails if a model library differs from the training lock.
 2. Add `model_api` to the ECR repository list of `infra/platform` and to `infra/services/images.json`. Build the image with the command in `services/model_api/Dockerfile` and push it with the push script.
-3. In `infra/iam`, add a task role for the API with read access to the model artifacts, the Feast registry and the deployment prefix. Grant nothing else. Add the five new parameter names to the execution role (the `parameter_names_used` output lists them). Let the training task role write the deployment prefix.
-4. In Polaris, approve the namespace `serving`, create a principal that can append to it and run `create_table` from `scripts/serving/iceberg_sink.py` under the catalog administrator.
+3. In `infra/iam`, set `model_api_prepared = true` with `model_api_registry_key` and `model_api_manifest_prefix`. The role reads the Feast registry object and the deployment records and lists the deployment prefix, so an absent record reads as absent and not as denied. It reads the model artifacts through the MLflow server, so it holds no grant for them. It cannot append predictions yet. Set `model_api_prediction_writes = true` to let it write the data and manifest objects of the prediction table under `lakehouse/serving/` and nowhere else. Both switches default to false. Add the five new parameter names to the execution role (the `parameter_names_used` output lists them). Let the training task role write the deployment prefix.
+4. In Polaris, approve the namespace `serving`, create a principal that can append to it and run `create_table` from `scripts/serving/iceberg_sink.py` under the catalog administrator. The principal needs the catalog read privilege and the namespace privileges that the silver and gold writers hold: list the namespace, read the table's properties and read and write its data. It needs none of the forbidden ones. `scripts/lakehouse/aws_catalog_setup.py` has no `serving` identity yet, so this step has no tool. Check that the created table's location is under `lakehouse/serving/` before you enable the writes.
 5. Put the five parameters: the key hashes, the writer's client id, the writer's credential, the MLflow user and the MLflow credential.
 6. In `infra/services` set `model_api_enabled = true` with the role ARN, the three S3 and MLflow addresses and the image digests. Apply the shown plan.
 7. Open the port forward:
@@ -141,6 +141,21 @@ The owner does every step. Show each plan first and apply exactly that plan.
 8. Check `http://127.0.0.1:8000/v1/health`, then stage a request file and run `serving_deploy_dag`, then replay.
 
 To stop, set `model_api_enabled = false` and apply the shown plan. The deployment records and the predictions table stay.
+
+## What an append calls
+
+The catalog has `stsUnavailable` set, so it hands out no storage credentials. The sink therefore needs more than a Polaris grant. Reasoned from the sink, PyIceberg's append and the project's catalog setup, one append makes these calls:
+
+| Call | Needs |
+| --- | --- |
+| Token request to Polaris | The writer's client id and credential from the parameters |
+| Catalog configuration read | The catalog read privilege of the principal |
+| Table load | The table read privilege of the principal |
+| Read of the table's metadata and manifest list in S3 | `s3:GetObject` under `lakehouse/serving/` for the task role |
+| Write of the data, manifest and manifest list files in S3 | `s3:PutObject` and the multipart actions under `lakehouse/serving/` plus `s3:ListBucket` on that prefix for the task role |
+| Commit to the catalog | The table data write privilege of the principal. The catalog service then writes the new table metadata with its own role, which already covers `lakehouse/` |
+
+The role grants no delete, so a failed commit leaves its files behind. None of this has run.
 
 ## Memory limits assumed
 
@@ -156,6 +171,7 @@ The host is short of memory. The service reserves 640 MiB and may use 1,280 MiB,
 - That the AWS broker runs the `serve_deploy` job. The job file is `scripts/serving/deploy_job.py`. The broker job table and the task definition belong with the AWS broker work and are not part of this change. The local launcher has no template for the DAG, so a run there is refused.
 - That Polaris grants the writer principal an append to a new namespace.
 - Any timeout of PyIceberg's REST calls. The sink sets the S3 timeouts and the token timeout. The one-worker rule is what bounds the rest.
+- That an append under the task role and the writer principal commits to `serving.predictions`. The table location, the S3 actions and the catalog privileges above come from the code and the project's catalog setup, not from a run.
 - Throughput, latency and memory under load.
 
 ## Not built
