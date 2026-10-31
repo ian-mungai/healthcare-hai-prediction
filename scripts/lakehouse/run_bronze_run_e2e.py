@@ -566,6 +566,25 @@ def case_a_raw_only_capture_is_refused_by_name(case: Case) -> None:
     require(writes() == [] and LOADS == [], "nothing runs")
 
 
+def case_the_raw_location_is_one_function_and_stays_off(case: Case) -> None:
+    """The raw prefix is read only after the redownload route lands. Until then every place that lists a collection asks one function for its roots, which names
+    the bucket root alone. A raw-only capture is refused. Adding the raw root to that one function finds the capture, and the inventory records its raw key."""
+    require(bronze.source_roots("org_c/set_three") == ("org_c/set_three/",), f"the default roots are {bronze.source_roots('org_c/set_three')}")
+    store(case.storage, "raw/org_c/set_three", "empty", "snap_raw", b"id,value\n1,r\n")
+    require(case.phase("pin", tables="empty_data", extra=["--dry-run"]) != 0 and "no objects" in case.err, "the default must not read raw")
+    case.err = ""
+
+    def both(collection: str) -> tuple[str, ...]:
+        return (f"{collection}/", f"raw/{collection}/")
+
+    case.shas = None
+    with mock.patch.object(bronze, "source_roots", both):
+        code = case.phase("pin", label="flipped", tables="empty_data", extra=["--dry-run"])
+        require(code == 0, f"with the raw root the capture must be found: {case.err}")
+        keys = [row[1] for row in json.loads(STAGED["bronze_inventory.json"])["objects"]]
+        require(len(keys) == 1 and keys[0].startswith("raw/org_c/set_three/"), f"the inventory records {keys}")
+
+
 def case_the_owner_cannot_stage_an_inventory_with_an_empty_table(case: Case) -> None:
     out = case.root / "staged_empty"
     arguments = ["inventory", "--run", RUN, "--code", str(case.root / "src"), "--bucket", BUCKET, "--tables", "alpha_data,empty_data", "--target", "real"]
@@ -604,6 +623,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "the Spark image installs every package the driver imports": case_the_spark_image_has_every_package_the_driver_imports,
     "a selected table without objects is refused by name in dry and real runs": case_a_selected_table_without_objects_is_refused,
     "a raw-only capture gives no objects and is refused by name": case_a_raw_only_capture_is_refused_by_name,
+    "the raw location is one function and stays off": case_the_raw_location_is_one_function_and_stays_off,
     "the owner cannot stage an inventory with an empty table": case_the_owner_cannot_stage_an_inventory_with_an_empty_table,
 }
 

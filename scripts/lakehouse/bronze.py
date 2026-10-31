@@ -238,6 +238,16 @@ def select(table: dict[str, Any], dataset_id: str, file_name: str, snapshot_id: 
     return re.search(table["member_pattern"], file_name) is not None
 
 
+def source_roots(collection: str) -> tuple[str, ...]:
+    """The key prefixes under which a collection's captures are read: the bucket root alone for now.
+
+    Every listing of a collection's manifests and documents asks this function, and nothing else names a prefix. When the redownload route stores new captures
+    under ``raw/`` and the owner qualifies the reload from there, the one change is to return ``(f"{collection}/", f"raw/{collection}/")``. The grants of the
+    bronze writer role and the classification of the keys in ``scripts/acquisition/single_copy.py`` change in the same step.
+    """
+    return (f"{collection}/",)
+
+
 def single_document(storage: Storage, bucket: str, collection: str, manifest_key: str, manifest: dict[str, Any]) -> dict[str, Any]:
     """Read a single-document manifest as a storage manifest with one object, found by its SHA-256 [153] [154].
 
@@ -248,7 +258,12 @@ def single_document(storage: Storage, bucket: str, collection: str, manifest_key
     scope = manifest.get("scope_exception")
     if scope is not None and (scope.get("allowed_document_sha256") != digest or scope.get("allowed_role") != role):
         raise BronzeError(f"{manifest_key}: the scope exception does not allow this document and role")
-    found = [(key, version) for key, version in storage.list_current(bucket, f"{collection}/") if f"/{digest}/" in key and "/manifests/" not in key]
+    found = [
+        (key, version)
+        for root in source_roots(collection)
+        for key, version in storage.list_current(bucket, root)
+        if f"/{digest}/" in key and "/manifests/" not in key
+    ]
     if len(found) != 1:
         raise BronzeError(
             f"{manifest_key}: no stored object has the document's SHA-256" if not found else f"{manifest_key}: {len(found)} stored objects share it"
@@ -403,11 +418,12 @@ def discover(
     inputs: list[dict[str, Any]] = []
     unselected: list[dict[str, Any]] = []
     for collection, group in sorted(by_collection.items()):
-        listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(f"{collection}/")}
+        listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(source_roots(collection))}
         matched: set[tuple[str, str]] = set()
         stored_manifests = {
             (manifest_key, manifest_version): storage.get(bucket, manifest_key, manifest_version)
-            for manifest_key, manifest_version in storage.list_keys(bucket, f"{collection}/manifests/")
+            for root in source_roots(collection)
+            for manifest_key, manifest_version in storage.list_keys(bucket, f"{root}manifests/")
             if manifest_key.endswith("/manifest.json")
         }
         skipped = superseded(stored_manifests)
