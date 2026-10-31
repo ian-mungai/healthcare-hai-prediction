@@ -1,4 +1,4 @@
-"""The owner's AWS catalog setup: create or verify the AWS catalog and report the fourteen AWS Polaris pair parameters, under the project profile only.
+"""The owner's AWS catalog setup: create or verify the AWS catalog and report the AWS Polaris pair parameters, under the project profile only.
 
 Run from the repository root at a terminal:
 
@@ -15,9 +15,11 @@ fails visibly and is never repeated inside a run; a rerun converges, because an 
 mode is ``already present`` and one that differs is refused, never changed.
 
 The tool refuses to start unless the configured profile resolves to the project user. The Polaris root credential is read from Parameter
-Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only. ``check`` reports each of the
-fourteen AWS Polaris pair parameters by exact name with its type and version, never a value: it reads without decryption and drops the encrypted
-value unread, and it never reads the root secret. ``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
+Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only.
+
+``check`` reports each AWS Polaris pair parameter that the project user's policy lets it read by exact name with its type and version, never a value.
+The features pair stays with the administrator: ``check`` names it as an administrator item and does not read it. ``check`` reads without decryption,
+drops the encrypted value unread and never reads the root secret. ``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
 catalog and each identity's roles and grants and changes nothing.
 
 ``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
@@ -66,6 +68,8 @@ CATALOG = "hai_lakehouse"
 MAC_POLARIS_PORT = 8181
 REPO_ROOT = Path(__file__).resolve().parents[2]
 IDENTITIES = ("reader", "e2e", "bronze", "silver", "gold", "features", "serving")
+# The project user's policy has no grant for these pairs: the administrator sets them up and the check does not read them.
+ADMINISTRATOR_IDENTITIES = ("features",)
 WRITER_VARIABLES = "job_writer_variables.tf"
 OAUTH_PATH = "/api/catalog/v1/oauth/tokens"
 CATALOG_PATH = f"/api/management/v1/catalogs/{CATALOG}"
@@ -519,11 +523,16 @@ def step_catalog(services: Services, instance: str, seconds: float, clock: Clock
 
 
 def step_check(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Report the fourteen pair parameters by exact name, metadata only: nothing is decrypted, not even the root secret, and nothing is changed."""
+    """Report the pair parameters the project profile may read by exact name, metadata only: nothing is decrypted and nothing is changed.
+
+    The pairs of the administrator identities are named but never read, because the project user's policy has no grant for them.
+    """
     deadline = clock() + seconds
     vault = services.vault()
     parameters = []
     for identity, pair in configured_pairs().items():
+        if identity in ADMINISTRATOR_IDENTITIES:
+            continue
         for name in pair:
             left = min(SECRET_SECONDS, check_deadline(deadline, clock))
             try:
@@ -531,7 +540,8 @@ def step_check(services: Services, seconds: float, clock: Clock = time.monotonic
             except secret_store.SecretStoreError as error:
                 raise SetupError("parameters", str(error)) from None
             parameters.append({"identity": identity, **found})
-    return {"parameters": parameters}
+    administrator = [{"identity": identity, "names": sorted(configured_pairs()[identity])} for identity in ADMINISTRATOR_IDENTITIES]
+    return {"parameters": parameters, "administrator_items": administrator}
 
 
 def step_inspect(services: Services, instance: str, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:

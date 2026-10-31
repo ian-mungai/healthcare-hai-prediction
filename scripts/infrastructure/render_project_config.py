@@ -34,6 +34,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "drift_prepared",
     "job_writer_layers_prepared",
     "job_layer_runs_prepared",
+    "job_features_image_prepared",
     "model_api_prepared",
     "model_api_prediction_writes",
     "openmetadata_prepared",

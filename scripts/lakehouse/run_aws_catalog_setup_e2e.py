@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from botocore.exceptions import ClientError
+
 from orchestration import ecs_target
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli
@@ -238,13 +240,22 @@ class Services:
     bucket = BUCKET
     region = REGION
 
-    def __init__(self, ssm: StandIn, polaris: Polaris, execute: setup.Execute = setup.direct, relay: Path | None = None, state: Path | None = None) -> None:
-        self.ssm, self.polaris, self.execute, self.relay = ssm, polaris, execute, relay
+    def __init__(
+        self,
+        ssm: StandIn,
+        polaris: Polaris,
+        execute: setup.Execute = setup.direct,
+        relay: Path | None = None,
+        state: Path | None = None,
+        denied: frozenset[str] = frozenset(),
+    ) -> None:
+        self.ssm, self.polaris, self.execute, self.relay, self.denied = ssm, polaris, execute, relay, denied
         self.state = state or STATE_ROOT / secrets.token_hex(6)
         self.approvals = self.state / "namespace_approvals"
         self.locks = self.state / "principal_locks"
         self.registry = run_lock.Registry(self.state / "registry", "test")
         self.decryption: list[bool] = []
+        self.refused: list[str] = []
         self.closed: list[bool] = []
 
     def vault(self) -> setup.PairVault:
@@ -252,8 +263,13 @@ class Services:
         real = parameters.get_parameter
         seen = self.decryption
 
+        denied, refused = self.denied, self.refused
+
         def spy(**kwargs: Any) -> Any:
             seen.append(bool(kwargs.get("WithDecryption")))
+            if kwargs.get("Name") in denied:
+                refused.append(kwargs["Name"])
+                raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}}, "GetParameter")
             return real(**kwargs)
 
         parameters.get_parameter = spy
@@ -584,7 +600,7 @@ def case_profile_refused(_: Path) -> dict[str, bool]:
 
 
 def case_check_metadata(_: Path) -> dict[str, bool]:
-    """The check reports all fourteen names by exact name with type and version, reads nothing with decryption and prints no value."""
+    """The check reports the names the project profile may read by exact name with type and version, reads nothing with decryption and prints no value."""
     pairs = setup.configured_pairs()
     seeded = {pairs["reader"][0]: "reader-id-" + secrets.token_hex(6), pairs["reader"][1]: "reader-secret-" + secrets.token_hex(6)}
     seeded[pairs["gold"][1]] = "gold-secret-" + secrets.token_hex(6)
@@ -595,7 +611,7 @@ def case_check_metadata(_: Path) -> dict[str, bool]:
         SECRETS_SEEN.extend(seeded.values())
         return {
             "the check succeeds": code == 0,
-            "all fourteen names are reported": set(found) == set(setup.writable_names()),
+            "every name the project profile may read is reported": set(found) == set(project_names()),
             "presence matches the store": all(found[name]["present"] == (name in seeded) for name in found),
             "present names report SecureString and a version": all(found[name].get("type") == "SecureString" and found[name].get("version") for name in seeded),
             "no read asked for decryption": bool(services.decryption) and not any(services.decryption),
@@ -603,6 +619,36 @@ def case_check_metadata(_: Path) -> dict[str, bool]:
             "the root secret was not read": (("GetParameter", secret_store.POLARIS_ROOT_SECRET) not in ssm.requests()),
             "nothing was written": ssm.writes() == 0,
             "no catalog request was sent": not polaris.calls,
+        }
+
+
+def project_names() -> set[str]:
+    """The pair names the project user's policy grants: every identity except the ones that stay with the administrator."""
+    return {name for identity, pair in setup.configured_pairs().items() if identity not in setup.ADMINISTRATOR_IDENTITIES for name in pair}
+
+
+def case_check_project_policy(_: Path) -> dict[str, bool]:
+    """The project user's policy has no grant for the features pair, so the check must not read it and must name it as an administrator item."""
+    pairs = setup.configured_pairs()
+    features = frozenset(pairs["features"])
+    policy = json.loads((REPO_ROOT / "infra/iam/policies/healthcare_hai_prediction_ssm_policy.json").read_text())
+    statement = next(item for item in policy["Statement"] if item["Sid"] == "SetUpAwsPolarisPairs")
+    granted = {
+        identity for identity in setup.IDENTITIES if any(f"AWS_POLARIS_{identity.upper()}_CLIENT_ID_NAME" in resource for resource in statement["Resource"])
+    }
+    with world() as (ssm, polaris, root):
+        services = Services(ssm, polaris, denied=features)
+        code, out, err = call(["check"], services, root)
+        result = outcome(out) or {}
+        reported = {item["name"] for item in result.get("parameters", [])}
+        return {
+            "the policy grants exactly the identities the check reads": granted == set(setup.IDENTITIES) - set(setup.ADMINISTRATOR_IDENTITIES),
+            "the check succeeds when the features pair is denied": code == 0,
+            "the denied names are not reported as parameters": not reported & features,
+            "every other name is reported": reported == set(project_names()),
+            "the features pair is named as an administrator item": result.get("administrator_items") == [{"identity": "features", "names": sorted(features)}],
+            "the denied names were never asked for": not services.refused,
+            "the error output is empty": err == "",
         }
 
 
@@ -1327,6 +1373,7 @@ CASES: dict[str, Case] = {
     "transport_folder_private": case_transport_folder_private,
     "profile_refused": case_profile_refused,
     "check_metadata": case_check_metadata,
+    "check_project_policy": case_check_project_policy,
     "check_catalog": case_check_catalog,
     "vault_scope": case_vault_scope,
     "pair_names": case_pair_names,
