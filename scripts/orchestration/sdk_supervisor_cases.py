@@ -81,8 +81,9 @@ def main() -> int:
     for mode in ("normal", "drip_body"):
         with WorkerStandin(Scenario("describe_tasks", mode, b'{"tasks":[],"failures":[]}', lifetime_s=15, drip_interval_s=0.05)) as standin:
             supervisor = module.Supervisor("us-west-2", test_endpoint=standin.endpoint, stderr_folder=args.output.parent / f"stderr_{mode}")
+            started = time.monotonic()
             try:
-                deadline = time.monotonic() + (5 if mode == "normal" else 0.8)
+                deadline = started + (5 if mode == "normal" else 0.8)
                 reply = supervisor.call("describe_tasks", {"cluster": "synthetic_cluster", "tasks": ["synthetic_task"], "include": ["TAGS"]}, deadline=deadline)
             finally:
                 cleaned = supervisor.close(deadline=time.monotonic() + 5)
@@ -92,7 +93,19 @@ def main() -> int:
                 "reaped_handles": all(handle.state == "read_only" and handle.confirmed for handle in supervisor.handles),
                 "stderr_readers_complete": all(handle.stderr_reader is not None and handle.stderr_reader.complete for handle in supervisor.handles),
             }
-            rows.append({"mode": mode, "checks": checks, "stderr": [handle.stderr_reader.snapshot() for handle in supervisor.handles]})
+            rows.append(
+                {
+                    "mode": mode,
+                    "checks": checks,
+                    # The typed error of a failed reply and what the stand-in saw name the cause of a failed check; they hold no payload or secret.
+                    "reply_error": reply.get("error"),
+                    "elapsed_s": round(time.monotonic() - started, 3),
+                    "stand_in_events": [
+                        {"kind": event.kind, "connection": event.connection, "elapsed_s": round(event.elapsed_s, 3)} for event in standin.events
+                    ],
+                    "stderr": [handle.stderr_reader.snapshot() for handle in supervisor.handles],
+                }
+            )
             if not cleaned:
                 break
     unchanged = hashes == {name: hashlib.sha256((args.bootstrap_folder / name).read_bytes()).hexdigest() for name in BOOTSTRAP_SOURCES}
