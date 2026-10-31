@@ -105,6 +105,13 @@ class Env:
     def evidence(self) -> Path:
         return self.root / "evidence"
 
+    @property
+    def source(self) -> Env:
+        """The silver run that a gold run reads. A silver run has none."""
+        if self.producer is None:
+            raise RuntimeError("this run has no producer")
+        return self.producer
+
 
 def spec(layer: str, run: str, tag: str, tables: tuple[str, ...] | None = None) -> Spec:
     return Spec(layer, run, tag, tuple(tables if tables is not None else CONTRACT_TABLES[layer]))
@@ -351,10 +358,21 @@ def make(work: Path, name: str, item: Spec, producer: Env | None = None, signed:
     return env
 
 
-def edit(path: Path, change: Callable[[Any], None]) -> None:
+def edit(path: Path, change: Callable[[Any], object]) -> None:
     document = json.loads(path.read_text())
     change(document)
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+
+def edit_each(root: Path, names: tuple[str, ...], change: Callable[[Any], object]) -> None:
+    for name in names:
+        edit(root / name, change)
+
+
+def empty_sets(env: Env, pin: str) -> None:
+    """The gold pin and the silver record it names both hold an empty snapshot set, so the two sets match."""
+    edit(env.evidence / pin, lambda d: d.update(snapshot_set={}))
+    edit(env.source.evidence / "silver_snapshot.json", lambda d: d.update(snapshot_set={}))
 
 
 def relink(env: Env) -> None:
@@ -419,13 +437,13 @@ NAMES = {
 }
 
 
-Case = tuple[str, Callable[[Env, Env], None], tuple[str, ...]]
+Case = tuple[str, Callable[[Env, Env], object], tuple[str, ...]]  # the callback's result is ignored: a case may return what its last call returns
 
 
 def common_cases() -> list[Case]:
     """Defects of either layer: (label, change given the run and another real run, the checks that must fail)."""
 
-    def overrides_with(change: Callable[[dict[str, Any]], None]) -> Callable[[Env, Env], None]:
+    def overrides_with(change: Callable[[dict[str, Any]], object]) -> Callable[[Env, Env], None]:
         def apply(env: Env, other: Env) -> None:
             edit(env.root / "describe.json", lambda d: change(d["tasks"][0]["overrides"]))
 
@@ -532,7 +550,7 @@ def common_cases() -> list[Case]:
         ),
         (
             "a historical delete marker that is another one than the pin saw",
-            lambda e, o: [edit(e.root / name, lambda d: d["deleted"][0].update(version="other")) for name in ("before.json", "after.json")],
+            lambda e, o: edit_each(e.root, ("before.json", "after.json"), lambda d: d["deleted"][0].update(version="other")),
             (NAMES["listing"],),
         ),
         (
@@ -592,23 +610,20 @@ def layer_cases(layer: str) -> list[Case]:
             ),
             (NAMES["task"],),
         ),
-        ("an unsigned silver producer", lambda e, o: e.producer.root.joinpath("qualification.signed.json").unlink(), (NAMES["signed"],)),
+        ("an unsigned silver producer", lambda e, o: e.source.root.joinpath("qualification.signed.json").unlink(), (NAMES["signed"],)),
         (
             "a silver report changed after it was signed",
-            lambda e, o: e.producer.root.joinpath("qualification.json").write_text(e.producer.root.joinpath("qualification.json").read_text() + " "),
+            lambda e, o: e.source.root.joinpath("qualification.json").write_text(e.source.root.joinpath("qualification.json").read_text() + " "),
             (NAMES["signed"],),
         ),
         (
             "a silver record changed after it was signed",
-            lambda e, o: edit(e.producer.evidence / "silver_snapshot.json", lambda d: d.update(note="x")),
+            lambda e, o: edit(e.source.evidence / "silver_snapshot.json", lambda d: d.update(note="x")),
             (NAMES["signed"],),
         ),
         (
             "matching empty snapshot sets",
-            lambda e, o: [
-                edit(e.evidence / gold_input, lambda d: d.update(snapshot_set={})),
-                edit(e.producer.evidence / "silver_snapshot.json", lambda d: d.update(snapshot_set={})),
-            ],
+            lambda e, o: empty_sets(e, gold_input),
             (NAMES["pin"], NAMES["signed"]),
         ),
     ]
