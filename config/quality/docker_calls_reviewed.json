@@ -80,11 +80,11 @@
     },
     {
       "path": "scripts/acquisition/redownload.py",
-      "line": 773,
+      "line": 782,
       "code_sha256": "1f9cde2b11b126d85b0a497a720ed502098d56b9be95ecc5ee818a47b3260b0d",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "825bcc6af4c90c3e056b9ba4b04d97604bcd3070576b7a7aa83127b9c55740ad",
+      "file_sha256": "f5e6abbd6dc16f4d23057aeb87eda0960b0188544bb95c6e6a938d875c93d386",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:d0efbfd4bf360bfe439f038ccbc37384daabba7f6e45714b0c72a99b0a06623d",
         "scripts/acquisition/collect_bls_api.py": "sha256:07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
@@ -96,7 +96,7 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mmd_api_contract.py": "sha256:e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
-        "scripts/acquisition/redownload_route.py": "sha256:6d0516f5e24eacb116be6a3b2faab737efa698a1f34ba8ed35feb7e7252eaa9f",
+        "scripts/acquisition/redownload_route.py": "sha256:6da72c8b507548cc4c0f2b6f9855ba7dd075fd9983f31b2c7b903d119cc11106",
         "scripts/acquisition/s3_store.py": "sha256:919ddcff2c681c3010db3853b5ab4c40f85857c60eead08d09487677078501c5",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
@@ -112,11 +112,11 @@
     },
     {
       "path": "scripts/acquisition/redownload.py",
-      "line": 100,
+      "line": 102,
       "code_sha256": "465341b9818d9470082c277fe541dde751a8de546e5d0df64cc7b3e909e87322",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "825bcc6af4c90c3e056b9ba4b04d97604bcd3070576b7a7aa83127b9c55740ad",
+      "file_sha256": "f5e6abbd6dc16f4d23057aeb87eda0960b0188544bb95c6e6a938d875c93d386",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:d0efbfd4bf360bfe439f038ccbc37384daabba7f6e45714b0c72a99b0a06623d",
         "scripts/acquisition/collect_bls_api.py": "sha256:07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
@@ -128,7 +128,7 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mmd_api_contract.py": "sha256:e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
-        "scripts/acquisition/redownload_route.py": "sha256:6d0516f5e24eacb116be6a3b2faab737efa698a1f34ba8ed35feb7e7252eaa9f",
+        "scripts/acquisition/redownload_route.py": "sha256:6da72c8b507548cc4c0f2b6f9855ba7dd075fd9983f31b2c7b903d119cc11106",
         "scripts/acquisition/s3_store.py": "sha256:919ddcff2c681c3010db3853b5ab4c40f85857c60eead08d09487677078501c5",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
@@ -271,7 +271,7 @@
       "occurrences": 1,
       "file_sha256": "c1304afc43816561700d2606c25fe41cd47131eb450241729ee2611de8d8ab27",
       "dependencies": {
-        "scripts/acquisition/redownload.py": "sha256:825bcc6af4c90c3e056b9ba4b04d97604bcd3070576b7a7aa83127b9c55740ad",
+        "scripts/acquisition/redownload.py": "sha256:f5e6abbd6dc16f4d23057aeb87eda0960b0188544bb95c6e6a938d875c93d386",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
       },
       "reason": "imports a plan module named in the PLANNED table; the plan loaders read and validate plans and start no process",

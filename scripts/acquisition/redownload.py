@@ -78,6 +78,8 @@ class Run:
     route: route.RouteFiles | None = None
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
+    keyed_lane: bool = False
+    lane_approval: Path | None = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
 
@@ -270,11 +272,18 @@ def route_gate(run: Run) -> None:
     """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
         return
+    if run.keyed_lane:
+        if run.stored_root is not None or any(name in os.environ for name in TASK_ENVIRONMENT):
+            raise RegistryError("The keyed lane runs on the owner's Mac only, so the keys stay off AWS")
+        require(json.loads(run.queue_path.read_bytes()).get("run") == 3, "The keyed lane belongs to run 3")
     files = run.route
     if files is None:
         raise RegistryError("Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
     problems = route.check(run.queue_path, files.plan, files.approval, files.record, capture_root(), files.hosts, files.hosts_approval)
     require(not problems, "Run 3 route gate: " + "; ".join(problems))
+    if run.keyed_lane:
+        lane = route.lane_problems(run.queue_path, run.lane_approval or run.queue_path.with_name("lane_approval.json"))
+        require(not lane, "Run 3 lane approval: " + "; ".join(lane))
     # The downloader reads the hosts file and its approval from these paths, so it enforces exactly what the gate checked.
     os.environ[APPROVED_HOSTS_VARIABLE] = str(files.hosts)
     os.environ[APPROVED_HOSTS_APPROVAL_VARIABLE] = str(files.hosts_approval)
@@ -911,7 +920,31 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
 
 
 # These collectors read an API key from the secret store. The publisher task holds no secret, so on the raw route they are reported, never attempted.
-SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
+SECRET_MODES = route.SECRET_MODES
+TASK, KEYED = "task", "keyed_mac_lane"
+MANUAL_MODES = frozenset({"hud_xlsx", "wonder_export", "reference_download"})
+TASK_ENVIRONMENT = (
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "ECS_CONTAINER_METADATA_URI",
+    "ECS_CONTAINER_METADATA_URI_V4",
+)
+
+
+def lane_of(unit: dict) -> str:
+    """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
+    mode = handler_mode(unit)
+    if mode in SECRET_MODES:
+        return KEYED
+    if unit["disposition"] == "approved_manual" or mode in MANUAL_MODES:
+        return "needs_person"
+    if mode in PRIVATE_COLLECTORS:
+        return "needs_owner_decision_private"
+    if mode == "mmd_api":
+        return "needs_local_data"
+    return TASK if mode in {"file", "il_directory"} else "unclassified"
+
+
 ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {
     "bls_api_v2": adapt_bls,
     "census_acs_api": adapt_census_api,
@@ -1148,7 +1181,15 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         # Checked again for every unit at dispatch time, against the accepted controls only (failure mode 59).
         if not in_reviewed_scope(run, source):
             continue
-        if on_raw_route() and handler_mode(unit) in SECRET_MODES:
+        lane = lane_of(unit)
+        if run.keyed_lane:
+            if lane != KEYED:
+                continue
+        elif run.stored_root is not None:
+            if lane != TASK:
+                summary.setdefault("not_attempted", {}).setdefault(lane, []).append(identity)
+                continue
+        elif on_raw_route() and lane == KEYED:
             summary.setdefault("needs_secret", []).append(identity)
             continue
         pilot_id = pilots[(source, unit["route"], unit["mode"])]
@@ -1285,6 +1326,8 @@ def run_from(
         route=files,
         materialize=mirror.materialize if mirror else None,
         stored_root=mirror.root if mirror else None,
+        keyed_lane=bool(getattr(args, "keyed_lane", False)),
+        lane_approval=getattr(args, "lane_approval", None),
     )
 
 
@@ -1304,6 +1347,8 @@ def main() -> None:
     parser.add_argument("--decision")
     for name in ("removal-plan", "removal-approval", "removal-record", "hosts", "hosts-approval"):
         parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
+    parser.add_argument("--keyed-lane", action="store_true", help="run only the units that need an API key, on the owner's Mac")
+    parser.add_argument("--lane-approval", type=Path, help="the owner's approval of the keyed lane")
     args = parser.parse_args()
     run = run_from(args, os.environ)
 

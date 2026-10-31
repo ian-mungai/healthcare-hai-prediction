@@ -20,6 +20,10 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, 
 from scripts.acquisition.unused_files import approved_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
+# These collectors read an API key from the secret store. The AWS task holds no secret, so only the owner's Mac lane may run them.
+SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
+LANE_NAME = "mac_keyed_units"
+LANE_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the units of the listed modes only"
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,43 @@ class RouteFiles:
     record: Path
     hosts: Path
     hosts_approval: Path
+
+
+def lane_template(queue_body: bytes) -> dict:
+    """The approval the owner reviews and signs for the Mac lane: the queue, the keyed modes and how many units that is."""
+    queue = json.loads(queue_body)["queue"]
+    return {
+        "lane": LANE_NAME,
+        "departs_from": LANE_DEPARTURE,
+        "queue_sha256": hashlib.sha256(queue_body).hexdigest(),
+        "modes": sorted(SECRET_MODES),
+        "units": sum(1 for unit in queue if unit["disposition"] in ACTIVE and unit["mode"] in SECRET_MODES),
+        "keys_stay_off_aws": True,
+        "approved_by": None,
+    }
+
+
+def write_lane_template(queue_path: Path, output: Path) -> dict:
+    document = lane_template(queue_path.read_bytes())
+    write_once(output, encoded_json(document))
+    return document
+
+
+def lane_problems(queue_path: Path, approval_path: Path) -> list[str]:
+    """Return why the Mac lane may not start. Only an approval that names this lane, queue, modes and unit count lets it."""
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        expected = lane_template(queue_path.read_bytes())
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return [f"the lane approval is missing or unreadable: {error}"]
+    if not isinstance(approval, dict):
+        return ["the lane approval is not a record"]
+    named = {key: approval.get(key) for key in expected if key != "approved_by"}
+    if named != {key: value for key, value in expected.items() if key != "approved_by"}:
+        return ["the lane approval does not name this lane, queue, modes and unit count"]
+    if not (isinstance(approval.get("approved_by"), str) and approval["approved_by"].strip()):
+        return ["the lane approval has no approver"]
+    return []
 
 
 def record_problems(record_path: Path, removal: dict | None) -> list[str]:
@@ -130,6 +171,9 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
     deriving = commands.add_parser("hosts")
     deriving.add_argument("--queue", required=True, type=Path)
     deriving.add_argument("--output", required=True, type=Path)
+    templating = commands.add_parser("lane-template")
+    templating.add_argument("--queue", required=True, type=Path)
+    templating.add_argument("--output", required=True, type=Path)
     checking = commands.add_parser("check")
     for name in ("queue", "plan", "approval", "record", "hosts", "hosts-approval"):
         checking.add_argument(f"--{name}", required=True, type=Path)
@@ -138,6 +182,10 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
         if args.command == "hosts":
             document = derive_hosts(args.queue, args.output)
             sys.stdout.write(json.dumps({"hosts": len(document["hosts"]), "hosts_sha256": document["hosts_sha256"]}) + "\n")
+            return
+        if args.command == "lane-template":
+            document = write_lane_template(args.queue, args.output)
+            sys.stdout.write(json.dumps({"units": document["units"], "approved_by": None}) + "\n")
             return
         found = check(args.queue, args.plan, args.approval, args.record, capture_root() if root is None else root, args.hosts, args.hosts_approval)
     except (OSError, KeyError, ValueError) as error:
