@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Reviewed platform preparation inputs",
-  "description": "Nonsecret switches of the platform stack that add its monitoring and serving repositories, bound to a reviewed byte digest.",
+  "description": "Nonsecret inputs of the platform stack, bound to a reviewed byte digest: the monitoring and serving switches and the reviewed additions to its repositories and log groups. Each list keeps every committed default.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,6 +25,139 @@
         },
         "serving_enabled": {
           "type": "boolean"
+        },
+        "ecr_repositories": {
+          "description": "The full repository set: every committed default and only the reviewed additions of the training, drift and catalog owner steps.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "airflow",
+              "analytics",
+              "drift",
+              "egress_proxy",
+              "feature_store",
+              "marquez",
+              "marquez_web",
+              "mlflow",
+              "openmetadata_database",
+              "openmetadata_ingestion",
+              "openmetadata_search",
+              "openmetadata_server",
+              "polaris",
+              "polaris_admin",
+              "postgres",
+              "quality",
+              "redis",
+              "spark",
+              "training"
+            ]
+          },
+          "allOf": [
+            {
+              "contains": {
+                "const": "airflow"
+              }
+            },
+            {
+              "contains": {
+                "const": "analytics"
+              }
+            },
+            {
+              "contains": {
+                "const": "egress_proxy"
+              }
+            },
+            {
+              "contains": {
+                "const": "marquez"
+              }
+            },
+            {
+              "contains": {
+                "const": "marquez_web"
+              }
+            },
+            {
+              "contains": {
+                "const": "polaris"
+              }
+            },
+            {
+              "contains": {
+                "const": "polaris_admin"
+              }
+            },
+            {
+              "contains": {
+                "const": "postgres"
+              }
+            },
+            {
+              "contains": {
+                "const": "quality"
+              }
+            },
+            {
+              "contains": {
+                "const": "redis"
+              }
+            },
+            {
+              "contains": {
+                "const": "spark"
+              }
+            }
+          ]
+        },
+        "log_groups": {
+          "description": "The full log group set: every committed default and the MLflow group of the training owner step.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "airflow",
+              "jobs",
+              "marquez",
+              "mlflow",
+              "polaris",
+              "postgres",
+              "redis"
+            ]
+          },
+          "allOf": [
+            {
+              "contains": {
+                "const": "airflow"
+              }
+            },
+            {
+              "contains": {
+                "const": "jobs"
+              }
+            },
+            {
+              "contains": {
+                "const": "marquez"
+              }
+            },
+            {
+              "contains": {
+                "const": "polaris"
+              }
+            },
+            {
+              "contains": {
+                "const": "postgres"
+              }
+            },
+            {
+              "contains": {
+                "const": "redis"
+              }
+            }
+          ]
         }
       }
     }

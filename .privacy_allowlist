@@ -54,3 +54,4 @@ aws-account infra/jobs/tests/bronze.tftest.hcl -- synthetic all-ones account IDs
 aws-account infra/iam/tests/serve.tftest.hcl -- synthetic all-ones account IDs in mocked serve IAM tests; not the project's account
 aws-account infra/jobs/tests/serve.tftest.hcl -- synthetic all-ones account IDs in serve task definition plans and refusal cases. These are not the project account.
 aws-account scripts/infrastructure/run_activation_inputs_e2e.py -- synthetic all-ones account IDs in inert activation input fixtures; not the project account
+aws-account infra/iam/tests/silver_first_run.tftest.hcl -- synthetic all-ones account IDs in mocked silver first run IAM tests; not the project account

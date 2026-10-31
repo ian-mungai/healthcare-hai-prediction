@@ -58,7 +58,7 @@ At the default of 4 vCPU and 24 GiB the task costs about $0.27 an hour on x86 an
 
 Each apply is the owner's. Show the plan first and apply exactly that plan.
 
-1. Platform stack: add `openmetadata_server`, `openmetadata_ingestion`, `openmetadata_search` and `openmetadata_database` to `ecr_repositories` in the platform variable file, then apply the shown plan.
+1. Platform stack: write a nonsecret reviewed inputs file with `schema_version` 1, `root` `platform` and the variable `ecr_repositories` set to the 11 default names plus `openmetadata_server`, `openmetadata_ingestion`, `openmetadata_search` and `openmetadata_database`. When the training step already added its repositories, keep them in the list, because the list is the full set. Bind the file to its digest, plan with `bash scripts/infrastructure/terraform.sh --platform --preparation-inputs <FILE> --preparation-sha256 <SHA256> plan -out <PLAN>` and apply that plan. The plan must add four repositories and nothing else.
 2. Images: pick a release of the four upstream images in `config/metadata/images.json` and decide the platform. If you want Arm, run `docker buildx imagetools inspect` for each and require `linux/arm64`. Push each by digest to its repository and record the four digests in the `openmetadata_images` variable of `infra/jobs`. Keep the variable file out of Git.
 3. Start commands: read the entry point of the server, search and database images and correct `openmetadata_commands` in `infra/jobs` if it differs from the default.
 4. Password: put a new value in the parameter `/<project>/openmetadata_admin_password` without printing it. The server needs at least eight characters with an upper-case letter, a lower-case letter, a digit and a special character.

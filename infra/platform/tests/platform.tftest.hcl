@@ -184,6 +184,28 @@ run "serving_repositories_are_off_by_default" {
   }
 }
 
+# The owner steps of the training, drift and catalog setups add repositories and the MLflow log group to the committed lists through the reviewed platform file.
+run "reviewed_additions_create_their_repositories_and_log_group" {
+  command = plan
+
+  variables {
+    ecr_repositories = [
+      "airflow", "analytics", "egress_proxy", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark",
+      "drift", "feature_store", "mlflow", "training", "openmetadata_database", "openmetadata_ingestion", "openmetadata_search", "openmetadata_server",
+    ]
+    log_groups = ["airflow", "jobs", "marquez", "polaris", "postgres", "redis", "mlflow"]
+  }
+
+  assert {
+    condition = (
+      length(aws_ecr_repository.image) == 19 &&
+      alltrue([for name in ["drift", "feature_store", "mlflow", "training", "openmetadata_server", "openmetadata_ingestion", "openmetadata_search", "openmetadata_database"] : contains(keys(aws_ecr_repository.image), name)]) &&
+      contains(keys(output.log_group_names), "mlflow") && contains(keys(output.log_group_names), "jobs")
+    )
+    error_message = "The reviewed additions create exactly their repositories and the MLflow log group beside the committed ones."
+  }
+}
+
 run "cluster_capacity" {
   command = plan
 
