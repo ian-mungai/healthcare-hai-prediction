@@ -29,14 +29,6 @@ RUN = "20261031T120000Z-abcdef12"
 INPUT_RUN = "20261031T080000Z-12345678"
 CODE = "a" * 64
 TABLES = ("hospital_measures", "state_measures")
-JSON_FILES = (
-    "layer_run.json",
-    "publish/candidates.json",
-    "publish/reconcile.json",
-    "publish/backup.json",
-    "publish/commit.json",
-    "publish/export/manifest.json",
-)
 
 
 def write(path: Path, document: Any) -> str:
