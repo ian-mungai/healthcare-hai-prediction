@@ -688,10 +688,10 @@ def case_images(c: Checker) -> None:
 
 def case_parameter_names(c: Checker) -> None:
     """The services stack injects the six parameters under the names the IAM stack lets the execution role read: one default per name on both sides."""
-    iam = {}
+    iam: dict[str, str] = {}
     for name in ("variables.tf", "model_api_variables.tf"):
         iam |= secret_store.terraform_variables(ROOT / "infra/iam" / name)
-    services = {}
+    services: dict[str, str] = {}
     for name in ("model_api.tf", "streamlit.tf"):
         services |= secret_store.terraform_variables(ROOT / "infra/services" / name)
     pairs = {
