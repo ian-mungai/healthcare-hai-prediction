@@ -313,6 +313,38 @@ variable "grafana_admin_password_name" {
   }
 }
 
+variable "aws_polaris_serving_client_id_name" {
+  description = "Name of the AWS serving writer client ID parameter, which the model API appends predictions with. The owner issues its value through the catalog setup."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_serving_client_id"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_serving_client_id_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_serving_client_id$", var.aws_polaris_serving_client_id_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_serving_client_id_name))
+    )
+    error_message = "Use the dedicated aws_polaris_serving_client_id parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
+variable "aws_polaris_serving_client_secret_name" {
+  description = "Name of the AWS serving writer client secret parameter, which the model API appends predictions with. The owner issues its value through the catalog setup."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_serving_client_secret"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_serving_client_secret_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_serving_client_secret$", var.aws_polaris_serving_client_secret_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_serving_client_secret_name))
+    )
+    error_message = "Use the dedicated aws_polaris_serving_client_secret parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
 variable "lakehouse_reader_role_name" {
   description = "IAM role name of the lakehouse reader; only the project user may assume it, and the launcher asks for a short session of it for a read job."
   type        = string

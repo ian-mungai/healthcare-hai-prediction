@@ -105,7 +105,7 @@ variable "model_api_key_hashes_name" {
 variable "model_api_writer_client_id_name" {
   description = "Parameter Store SecureString name of the client id of the Polaris principal that may append to the serving namespace."
   type        = string
-  default     = "/healthcare_hai_prediction/model_api_writer_client_id"
+  default     = "/healthcare_hai_prediction/aws_polaris_serving_client_id"
 
   validation {
     condition     = length(var.model_api_writer_client_id_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_writer_client_id_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_writer_client_id_name))
@@ -116,7 +116,7 @@ variable "model_api_writer_client_id_name" {
 variable "model_api_writer_client_credential_name" {
   description = "Parameter Store SecureString name of the client credential of the Polaris principal that may append to the serving namespace."
   type        = string
-  default     = "/healthcare_hai_prediction/model_api_writer_client_credential"
+  default     = "/healthcare_hai_prediction/aws_polaris_serving_client_secret"
 
   validation {
     condition     = length(var.model_api_writer_client_credential_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_writer_client_credential_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_writer_client_credential_name))

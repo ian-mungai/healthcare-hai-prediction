@@ -104,8 +104,10 @@ EXECUTION_PARAMETERS = (
 )
 SHARED_KEYS = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 AWS_READER_PARAMETERS = ("aws_polaris_reader_client_id", "aws_polaris_reader_client_secret")
-# The AWS catalog setup's writer pairs: the project user writes all ten AWS Polaris names and reads these eight besides the reader pair.
-AWS_WRITER_PARAMETERS = tuple(f"aws_polaris_{identity}_client_{part}" for identity in ("e2e", "bronze", "silver", "gold") for part in ("id", "secret"))
+# The AWS catalog setup's writer pairs: the project user writes all twelve AWS Polaris names and reads these ten besides the reader pair.
+AWS_WRITER_PARAMETERS = tuple(
+    f"aws_polaris_{identity}_client_{part}" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")
+)
 AWS_POLARIS_PARAMETERS = (*AWS_READER_PARAMETERS, *AWS_WRITER_PARAMETERS)
 JOB_TASK_ROLES = ("job_execution", "job_offline_task", "job_seal_task", "job_read_task")
 
@@ -950,7 +952,7 @@ def job_project_cases() -> Iterator[Case]:
 
 
 def aws_polaris_pair_cases() -> Iterator[Case]:
-    """The AWS catalog setup under the project user: write the ten AWS Polaris names, read the eight writer names, nothing wider and no listing."""
+    """The AWS catalog setup under the project user: write the twelve AWS Polaris names, read the ten writer names, nothing wider and no listing."""
     for name in AWS_POLARIS_PARAMETERS:
         for action in ("PutParameter", "GetParameter"):
             yield Case(f"aws pair: {action} {name}", request(f"ssm:{action}", parameter(name), region=None), True, "SetUpAwsPolarisPairs")

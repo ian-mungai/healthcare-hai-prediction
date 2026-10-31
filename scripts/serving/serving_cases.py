@@ -30,7 +30,7 @@ from unittest import mock
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
-from scripts.infrastructure import push_images
+from scripts.infrastructure import push_images, secret_store
 from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -683,6 +683,33 @@ def case_images(c: Checker) -> None:
     platform = (ROOT / "infra/platform/main.tf").read_text()
     c.check(
         "the platform stack adds both repositories only behind serving_enabled", "var.serving_enabled" in platform and '"model_api", "streamlit"' in platform
+    )
+
+
+def case_parameter_names(c: Checker) -> None:
+    """The services stack injects the six parameters under the names the IAM stack lets the execution role read: one default per name on both sides."""
+    iam = {}
+    for name in ("variables.tf", "model_api_variables.tf"):
+        iam |= secret_store.terraform_variables(ROOT / "infra/iam" / name)
+    services = {}
+    for name in ("model_api.tf", "streamlit.tf"):
+        services |= secret_store.terraform_variables(ROOT / "infra/services" / name)
+    pairs = {
+        "model_api_key_hashes_name": "model_api_key_hashes_name",
+        "model_api_writer_client_id_name": "aws_polaris_serving_client_id_name",
+        "model_api_writer_client_credential_name": "aws_polaris_serving_client_secret_name",
+        "model_api_mlflow_user_name": "model_api_mlflow_user_name",
+        "model_api_mlflow_credential_name": "model_api_mlflow_credential_name",
+        "streamlit_api_key_name": "streamlit_model_api_key_name",
+    }
+    for service_variable, iam_variable in pairs.items():
+        found = services.get(service_variable)
+        c.check(f"{service_variable} has the default of {iam_variable}", found is not None and found == iam.get(iam_variable))
+    c.check("the six names are distinct", len({services.get(name) for name in pairs}) == len(pairs))
+    pair_ids = [iam.get(f"aws_polaris_serving_client_{part}_name", "") for part in ("id", "secret")]
+    c.check(
+        "the serving pair names are the leaf names the catalog setup requires",
+        [Path(name).name for name in pair_ids] == ["aws_polaris_serving_client_id", "aws_polaris_serving_client_secret"],
     )
 
 
@@ -1495,6 +1522,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "deploy_order": (case_deploy_order, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),
     "images_and_repositories": (case_images, "deploy aws"),
+    "parameter_names_agree": (case_parameter_names, "iam services"),
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
