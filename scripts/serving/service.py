@@ -124,7 +124,10 @@ class ModelService:
     def _refresh_one(self, hai_type: str) -> None:
         stored = self._manifests.read_active(hai_type)
         before = self._active.get(hai_type)
-        if stored is None or (before is not None and before.token == stored.token):
+        if stored is None:
+            return
+        if before is not None and before.token == stored.token:
+            self._retry_failed(hai_type, before)
             return
         deployment = canary.Deployment.parse(stored.body)
         if deployment.hai_type != hai_type:
@@ -132,7 +135,7 @@ class ModelService:
         held = {} if before is None else {slot.version: slot for slot in (before.stable, before.candidate) if slot is not None}
 
         def slot_for(version: str) -> Slot:
-            if version in held and held[version].state != "ejected":
+            if version in held and held[version].state == "loaded":
                 return held[version]
             try:
                 return Slot(version, self._loader.load(hai_type, version), "loaded")
@@ -147,6 +150,20 @@ class ModelService:
         for version, slot in held.items():
             if version not in kept and slot.model is not None:
                 self._loader.release(slot.model)
+
+    def _retry_failed(self, hai_type: str, active: Active) -> None:
+        """Load again each model that failed to load, once per refresh. A loaded model stays, and an ejected one stays out until the next deployment."""
+        for slot in (active.stable, active.candidate):
+            if slot is None or slot.state != "failed":
+                continue
+            try:
+                slot.model = self._loader.load(hai_type, slot.version)
+            except Exception as error:
+                LOG.warning("model version %s of %s still did not load (%s)", slot.version, hai_type, type(error).__name__)
+                continue
+            slot.failures = 0
+            slot.state = "loaded"
+            LOG.info("model version %s of %s loaded on retry", slot.version, hai_type)
 
     def health(self) -> Reply:
         started = self._clock()
