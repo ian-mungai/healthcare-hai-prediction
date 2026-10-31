@@ -59,8 +59,8 @@ Anyone who can open the page through the tunnel uses the page's key and its shar
 The owner does every step. Show each plan first and apply exactly that plan.
 
 1. Compile the image lock: `docker run` of `services/streamlit/compile_lock.sh` as its header shows. Review the diff and pin the Streamlit release in `services/streamlit/requirements.in`.
-2. Add `streamlit` to the ECR repository list of `infra/platform` and to `infra/services/images.json`. Build the image with the command in `services/streamlit/Dockerfile` and push it with the push script.
-3. In `infra/iam`, add a task role for the page that grants nothing. Add the parameter name from the `parameter_names_used` output to the execution role.
+2. Set `serving_enabled = true` in the platform variable file and apply the platform stack. It adds the repository `streamlit` beside `model_api`. `infra/services/images.json` lists the image. Build it with the command in `services/streamlit/Dockerfile` (the repository root is the build context) and push it with the push script.
+3. In `infra/iam`, set `model_api_prepared = true`. It creates the page role `streamlit_task`, which holds no policy. The same flag adds the page key to the six parameters that the execution role may inject.
 4. Make a key and keep it out of chat and logs:
 
    ```sh
