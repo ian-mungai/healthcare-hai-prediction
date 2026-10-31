@@ -29,6 +29,7 @@ SIGNED_REDIRECT_ROUTES = {
 
 
 APPROVED_HOSTS_VARIABLE = "HAI_APPROVED_HOSTS"
+APPROVED_HOSTS_APPROVAL_VARIABLE = "HAI_APPROVED_HOSTS_APPROVAL"
 CAPTURE_ROOT_VARIABLE = "HAI_CAPTURE_ROOT"
 
 
@@ -118,6 +119,9 @@ def approved_hosts() -> frozenset[str] | None:
             or document["hosts_sha256"] != hosts_digest(hosts)
         ):
             raise ValueError("hosts list differs from its digest")
+        approval = json.loads(Path(os.environ[APPROVED_HOSTS_APPROVAL_VARIABLE]).read_text(encoding="utf-8"))
+        if approval["hosts_sha256"] != document["hosts_sha256"] or not approval["approved_by"]:
+            raise ValueError("the approval does not name this hosts list")
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise CaptureError("The approved hosts file is unusable, so the run is refused.") from error
     return frozenset(hosts)

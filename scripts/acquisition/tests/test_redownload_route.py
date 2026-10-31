@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.acquisition import redownload
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition.s3_store import encoded_json
 from tests.support import check
@@ -21,14 +22,19 @@ def write_state(folder: Path, units: list[dict], removed: list[str]) -> dict[str
     queue.write_bytes(body)
     lock = folder / "queue.lock.json"
     lock.write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest()}))
-    plan_body = {"kind": "unused_file_removal_plan", "items": [{"snapshot_id": name, "s3_key": f"raw/{name}"} for name in removed]}
+    plan_body = {
+        "kind": "unused_file_removal_plan",
+        "bucket": "example-bucket",
+        "items": [{"snapshot_id": name, "s3_key": f"raw/{name}", "version_id": f"v-{name}"} for name in removed],
+    }
     plan = folder / "removal_plan.json"
     plan.write_bytes(encoded_json({**plan_body, "plan_sha256": hashlib.sha256(encoded_json(plan_body)).hexdigest()}))
     plan_sha = json.loads(plan.read_text())["plan_sha256"]
     approval = folder / "approval.json"
     approval.write_text(json.dumps({"plan_sha256": plan_sha, "approved_by": "owner"}))
     record = folder / "removal_record.json"
-    record.write_bytes(encoded_json({"plan_sha256": plan_sha, "items": []}))
+    marked = [{"s3_key": f"raw/{name}", "version_id": f"v-{name}", "delete_marker_version_id": f"m-{name}"} for name in removed]
+    record.write_bytes(encoded_json({"plan_sha256": plan_sha, "bucket": "example-bucket", "items": marked}))
     hosts = folder / "publisher_hosts.json"
     route.derive_hosts(queue, hosts)
     hosts_approval = folder / "hosts_approval.json"
@@ -53,7 +59,7 @@ def test_removal_must_be_recorded_before_run_3(tmp_path: Path) -> None:
 
 def test_the_record_must_belong_to_the_approved_plan(tmp_path: Path) -> None:
     paths = write_state(tmp_path, [unit("S__1")], ["S__9"])
-    paths["record"].write_bytes(encoded_json({"plan_sha256": "0" * 64, "items": []}))
+    paths["record"].write_bytes(encoded_json({"plan_sha256": "0" * 64, "bucket": "example-bucket", "items": []}))
     check(any("another plan" in item for item in problems(paths)), "record of another plan blocks run 3")
 
 
@@ -126,3 +132,62 @@ def test_a_hosts_file_made_for_another_queue_blocks_run_3(tmp_path: Path) -> Non
     document = json.loads(paths["hosts"].read_text())
     paths["hosts"].write_text(json.dumps({**document, "queue_sha256": "0" * 64}))
     check(any("another queue" in item for item in problems(paths)), "a hosts file of another queue blocks run 3")
+
+
+def rewrite_record(paths: dict[str, Path], change: dict) -> None:
+    record = json.loads(paths["record"].read_text())
+    paths["record"].write_bytes(encoded_json({**record, **change}))
+
+
+def test_an_empty_record_for_a_nonempty_plan_blocks_run_3(tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], ["S__8", "S__9"])
+    rewrite_record(paths, {"items": []})
+    check(any("marker" in item for item in problems(paths)), "an empty record does not cover the plan")
+
+
+def test_a_record_that_covers_only_part_of_the_plan_blocks_run_3(tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], ["S__8", "S__9"])
+    record = json.loads(paths["record"].read_text())
+    rewrite_record(paths, {"items": record["items"][:1]})
+    check(any("marker" in item for item in problems(paths)), "a partial record blocks run 3")
+
+
+def test_a_record_with_a_missing_marker_a_repeated_key_or_another_bucket_blocks_run_3(tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], ["S__9"])
+    record = json.loads(paths["record"].read_text())
+    first = record["items"][0]
+    rewrite_record(paths, {"items": [{**first, "delete_marker_version_id": ""}]})
+    check(any("marker" in item for item in problems(paths)), "an item without a marker blocks run 3")
+    rewrite_record(paths, {"items": [first, first]})
+    check(any("marker" in item for item in problems(paths)), "a repeated key blocks run 3")
+    rewrite_record(paths, {"items": [first], "bucket": "another-bucket"})
+    check(any("bucket" in item for item in problems(paths)), "another bucket blocks run 3")
+    rewrite_record(paths, {"items": [{**first, "version_id": "v-other"}], "bucket": "example-bucket"})
+    check(any("marker" in item for item in problems(paths)), "a marker over another version blocks run 3")
+
+
+def execution_run(folder: Path, number: int, files: route.RouteFiles | None = None) -> redownload.Run:
+    queue = folder / "queue.json"
+    body = json.dumps({"run": number, "queue": []}).encode()
+    queue.write_bytes(body)
+    queue.with_name("queue.lock.json").write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest(), "entries": 0}))
+    return redownload.Run(queue_path=queue, state_root=folder / "run", base=folder / "base", route=files)
+
+
+def test_executing_run_3_without_route_files_is_refused_before_the_review_gate(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="route files"):
+        redownload.execute(execution_run(tmp_path, 3), allow_network=True)
+
+
+def test_executing_run_3_with_an_incomplete_route_is_refused_with_the_gate_problems(tmp_path: Path) -> None:
+    (tmp_path / "route").mkdir()
+    paths = write_state(tmp_path / "route", [unit("S__1")], ["S__9"])
+    paths["record"].unlink()
+    files = route.RouteFiles(paths["plan"], paths["approval"], paths["record"], paths["hosts"], paths["hosts_approval"])
+    with pytest.raises(ValueError, match="removal record"):
+        redownload.execute(execution_run(tmp_path, 3, files), allow_network=True)
+
+
+def test_other_runs_do_not_need_the_route_gate(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="independent review"):
+        redownload.execute(execution_run(tmp_path, 2), allow_network=True)

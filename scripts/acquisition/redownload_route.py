@@ -11,6 +11,7 @@ import json
 import sys
 import urllib.parse
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
@@ -19,6 +20,41 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, 
 from scripts.acquisition.unused_files import approved_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
+
+
+@dataclass(frozen=True)
+class RouteFiles:
+    """The records run 3 needs on the AWS route: the approved removal plan, its record and the approved hosts file."""
+
+    plan: Path
+    approval: Path
+    record: Path
+    hosts: Path
+    hosts_approval: Path
+
+
+def record_problems(record_path: Path, removal: dict | None) -> list[str]:
+    """Return why the removal record does not prove that every planned file got its delete marker."""
+    if not record_path.is_file():
+        return ["the removal record is missing, so removal has not run"]
+    if removal is None:
+        return []
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        if record.get("plan_sha256") != removal["plan_sha256"]:
+            return ["the removal record belongs to another plan"]
+        if record.get("bucket") != removal["bucket"]:
+            return ["the removal record names another bucket than the plan"]
+        planned = {item["s3_key"]: item["version_id"] for item in removal["items"]}
+        recorded = [(item["s3_key"], item["version_id"], item["delete_marker_version_id"]) for item in record["items"]]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return [f"the removal record is unusable: {error}"]
+    complete = (
+        len(recorded) == len({key for key, _, _ in recorded})
+        and {key: version for key, version, _ in recorded} == planned
+        and all(isinstance(marker, str) and marker for _, _, marker in recorded)
+    )
+    return [] if complete else ["the removal record does not show one delete marker for every planned file"]
 
 
 def queue_hosts(queue: dict) -> set[str]:
@@ -80,10 +116,7 @@ def check(queue_path: Path, plan_path: Path, approval_path: Path, record_path: P
     except (CaptureError, OSError, KeyError, ValueError) as error:
         problems.append(f"the approved removal plan is not usable: {error}")
         removal = None
-    if not record_path.is_file():
-        problems.append("the removal record is missing, so removal has not run")
-    elif removal is not None and json.loads(record_path.read_text(encoding="utf-8")).get("plan_sha256") != removal["plan_sha256"]:
-        problems.append("the removal record belongs to another plan")
+    problems.extend(record_problems(record_path, removal))
     problems.extend(host_problems(queue_body, hosts_path, hosts_approval_path))
     for unit in json.loads(queue_body)["queue"]:
         if unit["snapshot_id"] in removed and unit["disposition"] in ACTIVE:

@@ -36,10 +36,12 @@ from defusedxml import ElementTree as SafeElementTree
 from scripts.acquisition import bls_api_transport, data_paths
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
+from scripts.acquisition import redownload_route as route
+from scripts.acquisition.collection_layout import capture_root
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json, require
-from scripts.acquisition.transport import CaptureError, Limits, download, known_failure
+from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure
 
 ACTIVE = ("api", "direct_download", "approved_manual")
 BYTE_CAP = 128 * 2**30
@@ -73,6 +75,7 @@ class Run:
     api_request: Callable | None = None
     client_factory: Callable | None = None
     byte_cap: int = BYTE_CAP
+    route: route.RouteFiles | None = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
 
@@ -241,6 +244,19 @@ def review_gate(run: Run) -> str:
     require(run.byte_cap <= BYTE_CAP, "Byte cap exceeds approved limit")
     run.cache["controls"] = actual
     return sha
+
+
+def route_gate(run: Run) -> None:
+    """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
+    if json.loads(run.queue_path.read_bytes()).get("run") != 3:
+        return
+    require(run.route is not None, "Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
+    files = run.route
+    problems = route.check(run.queue_path, files.plan, files.approval, files.record, capture_root(), files.hosts, files.hosts_approval)
+    require(not problems, "Run 3 route gate: " + "; ".join(problems))
+    # The downloader reads the hosts file and its approval from these paths, so it enforces exactly what the gate checked.
+    os.environ[APPROVED_HOSTS_VARIABLE] = str(files.hosts)
+    os.environ[APPROVED_HOSTS_APPROVAL_VARIABLE] = str(files.hosts_approval)
 
 
 def verify_path_map(run: Run) -> None:
@@ -1064,6 +1080,7 @@ def execute(
         require_readable_root(run)
         return execute_locked(run, pilot, False, selected_sources(preview_scope(run), sources), max_units, log)
     validate_root(run)
+    route_gate(run)
     run.cache["controls_sha256"] = review_gate(run)
     # The scope comes only from the controls the gate just accepted, never from a separate file read (failure mode 56).
     chosen = selected_sources(run.cache["controls"].get("scope_sources"), sources)
@@ -1236,9 +1253,13 @@ def main() -> None:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--resume-source")
     parser.add_argument("--decision")
+    for name in ("removal-plan", "removal-approval", "removal-record", "hosts", "hosts-approval"):
+        parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
     args = parser.parse_args()
     state_root = args.state_root or default_state_root(args.queue)
-    run = Run(queue_path=args.queue, state_root=state_root, manual_folder=args.manual_folder)
+    paths = [args.removal_plan, args.removal_approval, args.removal_record, args.hosts, args.hosts_approval]
+    files = route.RouteFiles(*paths) if all(paths) else None
+    run = Run(queue_path=args.queue, state_root=state_root, manual_folder=args.manual_folder, route=files)
 
     def emit(item: dict) -> None:
         sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")
