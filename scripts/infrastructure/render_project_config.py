@@ -160,7 +160,7 @@ def verify_project_identity(storage: dict[str, str]) -> None:
 
 
 def dvc_local_config(storage: Mapping[str, str]) -> str:
-    """The ignored DVC configuration that names the remote: the ``dvc/`` prefix of the data bucket (decision 20)."""
+    """The ignored DVC configuration that names the remote: the ``dvc/`` prefix of the data bucket."""
     return (
         f"[core]\n    remote = {DVC_REMOTE_NAME}\n"
         f"['remote \"{DVC_REMOTE_NAME}\"']\n    url = s3://{storage['data_bucket_name']}/dvc/\n    region = {storage['aws_region']}\n"

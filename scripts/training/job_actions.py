@@ -100,7 +100,7 @@ def run_step(context: Any, record: Mapping[str, Any], step: str, allowed: Callab
 
 
 def check_targets(root: Path) -> None:
-    """Check the target and earlier-outcome lists against the gold control bridge, as the guard does (project decision 1)."""
+    """Check the target and earlier-outcome lists against the gold control bridge, as the guard does."""
     try:
         problems = targets.check(root / "config/training/targets.json", root / "dbt/seeds/gold/hai_outcome_measures_bridge.csv")
     except OSError as error:

@@ -1,5 +1,5 @@
 variable "train_enabled" {
-  description = "Register the owner-run training task (decision 56). It needs the training and feature store image digests, the execution and training roles and the jobs log group."
+  description = "Register the owner-run training task. It needs the training and feature store image digests, the execution and training roles and the jobs log group."
   type        = bool
   default     = false
   nullable    = false

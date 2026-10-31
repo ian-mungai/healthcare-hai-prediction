@@ -1,4 +1,4 @@
-"""Compare the current feature windows with the Production model's baseline and write one drift record (project decision 21).
+"""Compare the current feature windows with the Production model's baseline and write one drift record.
 
 ``python -m monitoring.drift_check --reference-matrix P --reference-manifest P --current-matrix P --current-manifest P --features P --run-id ID --out DIR``
 reads two Parquet matrices (the Production run's DVC baseline and the latest features), the manifests that name their HAI type and population, and the

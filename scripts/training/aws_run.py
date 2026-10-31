@@ -1,4 +1,4 @@
-"""Run one phase of a training run inside an AWS task (project decision 56).
+"""Run one phase of a training run inside an AWS task.
 
     python -m scripts.training.aws_run prepare|extract|train|promote --run <run ID> [--mode real|fixture] [--work /workspace]
 

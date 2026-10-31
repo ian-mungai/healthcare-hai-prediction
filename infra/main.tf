@@ -105,7 +105,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
-  # DVC stores each training matrix once, as an object named by its content hash under dvc/ (project decision 20), and a push never replaces an
+  # DVC stores each training matrix once, as an object named by its content hash under dvc/, and a push never replaces an
   # object with different content. Only replaced or deleted versions are old, so they expire after 30 days. Current DVC objects never expire.
   rule {
     id     = "expire_replaced_dvc_versions"
@@ -124,7 +124,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
-  # The MLflow server writes each artifact once, under mlflow/ (project decision 56). Only replaced or deleted versions are old, so they expire after
+  # The MLflow server writes each artifact once, under mlflow/. Only replaced or deleted versions are old, so they expire after
   # 30 days. Current artifacts never expire.
   rule {
     id     = "expire_replaced_mlflow_versions"

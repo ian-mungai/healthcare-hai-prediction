@@ -1,4 +1,4 @@
-"""Compare the Production models' features with their training baselines and start ``training_dag`` when enough of them drift (project decision 21).
+"""Compare the Production models' features with their training baselines and start ``training_dag`` when enough of them drift.
 
 One broker step starts the drift task on AWS. The task covers the six HAI types and publishes its records to ``s3://<data bucket>/drift/<run>/``, with the
 marker ``_complete.json`` last. ``decide`` reads the marker and the records it names, refuses a missing marker, a record of another run, a changed or

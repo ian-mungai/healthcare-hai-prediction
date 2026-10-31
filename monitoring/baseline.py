@@ -1,4 +1,4 @@
-"""Fetch the Production model's drift baseline from MLflow and DVC (project decision 21).
+"""Fetch the Production model's drift baseline from MLflow and DVC.
 
 ``python -m monitoring.baseline --hai-type HAI_1 --tracking-uri URI --out DIR`` looks up the ``production`` alias of the type's registered model, reads the
 source run's ``bundle/feature_list.json`` and ``extract/manifest_<type>.json`` artifacts, loads the run's training matrix with ``dvc_baseline.load`` and

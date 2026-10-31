@@ -1,4 +1,4 @@
-"""E2E for the drift check (project decision 21): the tracked configuration and its check.
+"""E2E for the drift check: the tracked configuration and its check.
 
 Run from the repository root: ``.venv/bin/python -m monitoring.run_drift_e2e``. Every case starts the real command as a child process on a temporary copy of
 the tracked configuration and judges the exit code, the message and the files it leaves. Planted defects must fail for their own cause, so each rejection case

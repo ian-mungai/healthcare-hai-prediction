@@ -584,7 +584,7 @@ def case_profile_refused(_: Path) -> dict[str, bool]:
 
 
 def case_check_metadata(_: Path) -> dict[str, bool]:
-    """P6: the check reports all twelve names by exact name with type and version, reads nothing with decryption and prints no value."""
+    """The check reports all twelve names by exact name with type and version, reads nothing with decryption and prints no value."""
     pairs = setup.configured_pairs()
     seeded = {pairs["reader"][0]: "reader-id-" + secrets.token_hex(6), pairs["reader"][1]: "reader-secret-" + secrets.token_hex(6)}
     seeded[pairs["gold"][1]] = "gold-secret-" + secrets.token_hex(6)
@@ -621,7 +621,7 @@ def case_check_catalog(_: Path) -> dict[str, bool]:
 
 
 def case_vault_scope(_: Path) -> dict[str, bool]:
-    """P2, P12: the vault writes only the twelve AWS pair names, refuses the Mac and root names before any request and reads the root secret."""
+    """The vault writes only the twelve AWS pair names, refuses the Mac and root names before any request and reads the root secret."""
     pairs = setup.configured_pairs()
     with world() as (ssm, polaris, root):
         vault = Services(ssm, polaris).vault()
@@ -846,7 +846,7 @@ def case_e2e_principal(_: Path) -> dict[str, bool]:
 
 
 def case_layer_writers(_: Path) -> dict[str, bool]:
-    """P12: the silver, gold and features writers write their own namespace only, and their pairs go to the AWS names, never the Mac names."""
+    """The silver, gold and features writers write their own namespace only, and their pairs go to the AWS names, never the Mac names."""
     checks: dict[str, bool] = {}
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
