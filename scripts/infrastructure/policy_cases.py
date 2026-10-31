@@ -77,6 +77,9 @@ PARAMETERS = (
     "marquez_db_password",
     "mlflow_admin_password",
     "mlflow_db_password",
+    "model_api_key_hashes",
+    "model_api_mlflow_credential",
+    "model_api_mlflow_user",
     "polaris_gold_client_id",
     "polaris_gold_client_secret",
     "polaris_reader_client_id",
@@ -86,6 +89,7 @@ PARAMETERS = (
     "polaris_silver_client_secret",
     "postgres_password",
     "redis_password",
+    "streamlit_model_api_key",
 )
 READ_ONLY_PARAMETERS = ("airflow_admin",)
 # The old hand-made Secrets Manager copy of the Airflow administrator password; no policy grants it since the one-time copy was done.
@@ -951,6 +955,31 @@ def job_project_cases() -> Iterator[Case]:
     yield Case("job reader: refuse writer parameter", request("ssm:GetParameter", parameter("aws_polaris_writer_client_secret"), region=None), False)
 
 
+PARAMETER_ACTIONS = (
+    "GetParameter",
+    "PutParameter",
+    "GetParameters",
+    "GetParametersByPath",
+    "GetParameterHistory",
+    "DeleteParameter",
+    "DeleteParameters",
+    "LabelParameterVersion",
+    "UnlabelParameterVersion",
+    "AddTagsToResource",
+    "RemoveTagsFromResource",
+    "ListTagsForResource",
+)
+
+
+def project_parameter_grid_cases() -> Iterator[Case]:
+    """Every action on every project parameter: a managed name may be read and put, the Airflow administrator password may be read only, and no other
+    action reaches any of them. The grid is written out here, so it holds whatever statements carry the grants."""
+    for name in (*PARAMETERS, *READ_ONLY_PARAMETERS):
+        allowed = {"GetParameter", "PutParameter"} if name in PARAMETERS else {"GetParameter"}
+        for action in PARAMETER_ACTIONS:
+            yield Case(f"parameter grid: {action} {name}", request(f"ssm:{action}", parameter(name), region=None), action in allowed)
+
+
 def aws_polaris_pair_cases() -> Iterator[Case]:
     """The AWS catalog setup under the project user: write the twelve AWS Polaris names, read the ten writer names, nothing wider and no listing."""
     for name in AWS_POLARIS_PARAMETERS:
@@ -1436,6 +1465,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from parameter_cases()
     yield from pass_role_cases()
     yield from job_project_cases()
+    yield from project_parameter_grid_cases()
     yield from aws_polaris_pair_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
@@ -1595,13 +1625,13 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         by_sid(documents, "ecr", "PushAndPullProjectImages")["Resource"] = f"arn:aws:ecr:{R}:{A}:repository/*"
 
     def parameter_wildcard(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ssm", "ReadProjectParameters")["Resource"] = f"arn:aws:ssm:{R}:{A}:parameter/{PARAMETER_FOLDER}/*"
+        by_sid(documents, "ssm", "ManageProjectParameters")["Resource"] = f"arn:aws:ssm:{R}:{A}:parameter/{PARAMETER_FOLDER}/*"
 
     def parameter_path_read(documents: dict[str, dict[str, Any]]) -> None:
-        add_action(documents, "ssm", "ReadProjectParameters", "ssm:GetParametersByPath")
+        add_action(documents, "ssm", "ManageProjectParameters", "ssm:GetParametersByPath")
 
     def admin_password_write(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ssm", "WriteManagedProjectParameters")["Resource"] = by_sid(documents, "ssm", "ReadProjectParameters")["Resource"]
+        add_action(documents, "ssm", "ReadAirflowAdminParameter", "ssm:PutParameter")
 
     def roles_wildcard(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sts", "AssumeLakehouseRolesOnly")["Resource"] = f"arn:aws:iam::{A}:role/*"

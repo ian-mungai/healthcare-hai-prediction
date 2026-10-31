@@ -38,6 +38,6 @@ locals {
     var.redis_password_name,
     var.mlflow_db_password_name,
     var.mlflow_admin_password_name,
-  ], var.monitoring_enabled ? [var.grafana_admin_password_name] : [])
+  ], var.monitoring_enabled ? [var.grafana_admin_password_name] : [], var.model_api_prepared ? [var.model_api_key_hashes_name, var.model_api_mlflow_user_name, var.model_api_mlflow_credential_name, var.streamlit_model_api_key_name] : [])
   read_parameter_names = concat([var.airflow_admin_secret_name], local.managed_parameter_names)
 }

@@ -136,8 +136,8 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
     """The resources of the statements that carry a name from a variable (secrets, parameters, lakehouse roles), for these names."""
     return {
         ("secretsmanager", "ReadSharedApiKeys"): {secret_arn(name) for name in names["SHARED_SECRET_NAME"]},
-        ("ssm", "ReadProjectParameters"): {parameter_arn(name) for name in names["READ_PARAMETER_NAME"]},
-        ("ssm", "WriteManagedProjectParameters"): {parameter_arn(name) for name in names["MANAGED_PARAMETER_NAME"]},
+        ("ssm", "ManageProjectParameters"): {parameter_arn(name) for name in names["MANAGED_PARAMETER_NAME"]},
+        ("ssm", "ReadAirflowAdminParameter"): {parameter_arn(names["AIRFLOW_ADMIN_SECRET_NAME"])},
         STS: {role_arn(names[key]) for key in ROLE_PLACEHOLDERS},
         INJECT: {parameter_arn(names[key]) for key in EXECUTION_PLACEHOLDERS},
         AWS_PAIRS: {parameter_arn(names[key]) for key in AWS_POLARIS_PLACEHOLDERS},
@@ -253,7 +253,7 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         for resource in as_list(statement["Resource"])
         if ":parameter" in resource
     } - {public}
-    allowed = expected[("ssm", "ReadProjectParameters")] | expected[("ssm", "WriteManagedProjectParameters")] | expected[INJECT] | expected[AWS_PAIRS]
+    allowed = expected[("ssm", "ManageProjectParameters")] | expected[("ssm", "ReadAirflowAdminParameter")] | expected[INJECT] | expected[AWS_PAIRS]
     problems += difference("parameter resources of all policies against the injected names", granted, allowed)
     named_secrets = {
         resource
@@ -309,16 +309,21 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         return mutated
 
     record(
-        "a parameter name in the read list drifts from its variable default",
-        check_names(drift(documents, "ssm", "ReadProjectParameters", "redis_password", "redis_passwd")),
+        "a parameter name in the managed list drifts from its variable default",
+        check_names(drift(documents, "ssm", "ManageProjectParameters", "redis_password", "redis_passwd")),
     )
     record(
-        "a parameter name in the write list drifts from its variable default",
-        check_names(drift(documents, "ssm", "WriteManagedProjectParameters", "postgres_password", "postgres_passwd")),
+        "another parameter name in the managed list drifts from its variable default",
+        check_names(drift(documents, "ssm", "ManageProjectParameters", "postgres_password", "postgres_passwd")),
     )
-    record("a managed parameter is missing from the read list", check_names(dropped(documents, "ssm", "ReadProjectParameters", "marquez_db_password")))
-    record("a managed parameter is missing from the write list", check_names(dropped(documents, "ssm", "WriteManagedProjectParameters", "airflow_fernet_key")))
-    record("the Airflow administrator password is missing from the read list", check_names(dropped(documents, "ssm", "ReadProjectParameters", "airflow_admin")))
+    record("a managed parameter is missing from the managed list", check_names(dropped(documents, "ssm", "ManageProjectParameters", "marquez_db_password")))
+    record(
+        "another managed parameter is missing from the managed list", check_names(dropped(documents, "ssm", "ManageProjectParameters", "airflow_fernet_key"))
+    )
+    record(
+        "the Airflow administrator password is missing from its read grant",
+        check_names(dropped(documents, "ssm", "ReadAirflowAdminParameter", "airflow_admin")),
+    )
     record("a shared API key is missing from the Secrets Manager grant", check_names(dropped(documents, "secretsmanager", "ReadSharedApiKeys", "jev_api_key")))
     record(
         "a shared API key name drifts from its variable default", check_names(drift(documents, "secretsmanager", "ReadSharedApiKeys", "hud_api_key", "hud_key"))
@@ -355,8 +360,8 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
 
         literal = copied("literal_names")
         template = literal / "healthcare_hai_prediction_ssm_policy.json"
-        names = terraform_names()["READ_PARAMETER_NAME"]
-        placeholder = '"arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${READ_PARAMETER_NAME}"'
+        names = terraform_names()["MANAGED_PARAMETER_NAME"]
+        placeholder = '"arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MANAGED_PARAMETER_NAME}"'
         listed = ",\n        ".join(f'"arn:aws:ssm:${{AWS_REGION}}:${{AWS_ACCOUNT_ID}}:parameter{name}"' for name in names)
         template.write_text(plant(template.read_text(encoding="utf-8"), placeholder, listed), encoding="utf-8")
         same_values = check_names(load_policies(literal, policy_cases.VALUES))
