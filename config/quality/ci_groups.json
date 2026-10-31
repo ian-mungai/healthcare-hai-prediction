@@ -140,6 +140,7 @@
       "^scripts/(infrastructure|quality|training)/",
       "^monitoring/",
       "^data_contracts/monitoring/",
+      "^data_contracts/infrastructure/",
       "^dags/drift_monitoring_dag\\.py$",
       "^orchestration/launcher\\.py$",
       "^\\.dvc(ignore)?(/|$)",

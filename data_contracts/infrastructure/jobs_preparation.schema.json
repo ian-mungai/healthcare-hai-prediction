@@ -492,6 +492,154 @@
         "mlflow_admin_password_name": {
           "type": "string",
           "pattern": "^/[a-z][a-z0-9_]+/mlflow_admin_password$"
+        },
+        "layer_jobs_enabled": {
+          "type": "boolean"
+        },
+        "layer_jobs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "silver",
+              "gold",
+              "features"
+            ]
+          }
+        },
+        "layer_resources": {
+          "$ref": "#/$defs/job_resources"
+        },
+        "layer_feast_redis_host": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"
+        },
+        "drift_enabled": {
+          "type": "boolean"
+        },
+        "drift_images": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "training": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_training_(dev|prod)@sha256:[a-f0-9]{64}$"
+            },
+            "feature_store": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_feature_store_(dev|prod)@sha256:[a-f0-9]{64}$"
+            },
+            "drift": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_drift_(dev|prod)@sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "drift_roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:job_execution)_(dev|prod)$"
+            },
+            "drift_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:job_drift_task)_(dev|prod)$"
+            }
+          }
+        },
+        "drift_resources": {
+          "$ref": "#/$defs/job_resources"
+        },
+        "bronze_job_enabled": {
+          "type": "boolean"
+        },
+        "bronze_resources": {
+          "$ref": "#/$defs/job_resources"
+        },
+        "promote_enabled": {
+          "type": "boolean"
+        },
+        "promote_resources": {
+          "$ref": "#/$defs/job_resources"
+        },
+        "serve_enabled": {
+          "type": "boolean"
+        },
+        "serve_roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serve_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:job_serve_task)_(dev|prod)$"
+            }
+          }
+        },
+        "serve_manifest_prefix": {
+          "type": "string",
+          "pattern": "^(?!lakehouse/)[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]$"
+        },
+        "serve_resources": {
+          "$ref": "#/$defs/job_resources"
+        },
+        "openmetadata_enabled": {
+          "type": "boolean"
+        },
+        "openmetadata_images": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "server": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_openmetadata_server_(dev|prod)@sha256:[a-f0-9]{64}$"
+            },
+            "ingestion": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_openmetadata_ingestion_(dev|prod)@sha256:[a-f0-9]{64}$"
+            },
+            "search": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_openmetadata_search_(dev|prod)@sha256:[a-f0-9]{64}$"
+            },
+            "database": {
+              "type": "string",
+              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z][a-z0-9_]+_openmetadata_database_(dev|prod)@sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "openmetadata_roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:job_execution)_(dev|prod)$"
+            },
+            "openmetadata_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:job_openmetadata_task)_(dev|prod)$"
+            }
+          }
+        },
+        "openmetadata_resources": {
+          "$ref": "#/$defs/job_resources"
+        },
+        "openmetadata_lifetime_seconds": {
+          "type": "integer",
+          "minimum": 1800,
+          "maximum": 14400
+        },
+        "openmetadata_cpu_architecture": {
+          "enum": [
+            "X86_64",
+            "ARM64"
+          ]
+        },
+        "openmetadata_marquez_url": {
+          "type": "string",
+          "pattern": "^$|^http://[0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{2,5}$"
         }
       }
     },
@@ -585,6 +733,37 @@
       }
     },
     "writer_task_resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu",
+        "memory",
+        "ephemeral_storage_gib"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "integer",
+          "enum": [
+            1024,
+            2048,
+            4096,
+            8192,
+            16384
+          ]
+        },
+        "memory": {
+          "type": "integer",
+          "minimum": 2048,
+          "maximum": 122880
+        },
+        "ephemeral_storage_gib": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 200
+        }
+      }
+    },
+    "job_resources": {
       "type": "object",
       "additionalProperties": false,
       "required": [
