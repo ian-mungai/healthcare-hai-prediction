@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.lakehouse import version_listing
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,7 +58,6 @@ REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")
 TASK_ARN = re.compile(r"arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9_-]+/[a-f0-9]{32}")
 LIMIT = 1 << 28  # the largest input: a version listing of the lakehouse prefix
-PAGE = 1000  # the entries of one page of the version listing, which the driver digest follows
 EXPORT = "publish/export/manifest.json"
 EVIDENCE_FILES = (
     "layer_run.json",
@@ -168,6 +168,8 @@ def task_is_this_runs(layer: str, run: str, task: Mapping[str, Any], approved_sh
     wanted = read_json(JOBS_FILE)["jobs"][layer]["containers"]
     given = {}
     for item in mapping(task.get("overrides")).get("containerOverrides") or []:
+        if item == {"name": "init"}:  # describe-tasks lists the container that has no override by its name alone
+            continue
         environment = item.get("environment") if isinstance(item, dict) else None
         if not isinstance(environment, list) or not all(isinstance(entry, dict) for entry in environment):
             return False
@@ -190,15 +192,6 @@ def read_listing(records: Records, path: Path, name: str) -> tuple[list[tuple[st
     return versions, deleted
 
 
-def listing_digest(prefix: str, versions: Sequence[tuple[str, str, str, int]]) -> dict[str, Any]:
-    """The digest the driver records at the pin (``layer_run.input_listing``): the sorted lines of each page of 1000, page after page."""
-    digest = hashlib.sha256()
-    for start in range(0, len(versions), PAGE):
-        for line in sorted(f"V\t{key}\t{version}\t{etag}\t{size}\n" for key, version, etag, size in versions[start : start + PAGE]):
-            digest.update(line.encode())
-    return {"prefix": prefix, "versions": len(versions), "sha256": digest.hexdigest()}
-
-
 def listing_checks(layer: str, run: str, records: Records, arguments: argparse.Namespace, recorded: Any) -> dict[str, bool]:
     """H2 and the write scope from two listings of ``lakehouse/`` (and ``metadata/dbt/`` for gold): one before the task and one after."""
     before, before_deleted = read_listing(records, arguments.before, "before")
@@ -208,13 +201,14 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     held_after = [item for item in after if item[0].startswith(prefix)]
     markers = [item for item in before_deleted if item[0].startswith(prefix)]
     same = held_before == held_after and markers == [item for item in after_deleted if item[0].startswith(prefix)]
+    entries = sorted([("V", *item) for item in held_before] + [("D", key, version, "", 0) for key, version in markers], key=lambda entry: entry[1])
     allowed = (*WRITE_PREFIXES[layer], f"lakehouse/layer_runs/{layer}/{run}/")
     seen_before = {(key, version) for key, version, _, _ in before} | set(before_deleted)
     seen_after = {(key, version) for key, version, _, _ in after} | set(after_deleted)
     added = [key for key, _ in seen_after - seen_before]
     return {
         "H2: the input object versions are the same before and after the task": same,
-        "H2: the pin recorded the digest and count of the listing taken before the task": not markers and recorded == listing_digest(prefix, held_before),
+        "H2: the pin recorded the digest and count of the listing taken before the task": recorded == version_listing.canonical_digest(prefix, entries),
         "the task added versions only under the layer's prefixes and its own run prefix": bool(added) and all(key.startswith(allowed) for key in added),
         "the task removed no version": not seen_before - seen_after,
     }

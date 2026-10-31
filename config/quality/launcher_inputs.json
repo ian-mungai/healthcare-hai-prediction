@@ -1391,6 +1391,7 @@
     "scripts/lakehouse/source_labels.py",
     "scripts/lakehouse/storage_metadata_comparison.py",
     "scripts/lakehouse/ui.sh",
+    "scripts/lakehouse/version_listing.py",
     "scripts/orchestration/__init__.py",
     "scripts/orchestration/airflow_api.py",
     "scripts/orchestration/broker.py",
