@@ -181,6 +181,93 @@ MUTATIONS = (
 )
 
 
+@dataclass(frozen=True)
+class StopMutation:
+    """A defect planted in the task supervisor's stop and the fake-backed stop case that must fail for it."""
+
+    name: str
+    before: str
+    after: str
+    check: str
+
+
+SUPERVISOR = "services/hai/bootstrap/supervisor.py"
+SUPERVISOR_SIBLINGS = ("services/hai/deadline_run.py", "orchestration/worker_protocol.py", "orchestration/worker_stderr.py")
+RETRY_SLEEP = "time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))\n"
+STOP_MUTATIONS = (
+    StopMutation(
+        "task_stop_gives_up_on_a_failed_listing",
+        f'                            reason = "listing_unavailable"\n                            {RETRY_SLEEP}                            continue\n',
+        '                            return {"status": "survivor", "confirmed": False}\n',
+        "task_transient_listing_failure_is_retried",
+    ),
+    StopMutation(
+        "task_stop_gives_up_on_an_unreapable_leader",
+        f'                    reason = "leader_not_reapable"\n                    {RETRY_SLEEP}',
+        '                    return {"status": "survivor", "confirmed": False}\n',
+        "task_zombie_leader_with_exiting_threads_is_retried",
+    ),
+    StopMutation(
+        "task_stop_confirms_an_unproven_group_at_the_deadline",
+        '"confirmed": False, "reason": reason}\n        finally:',
+        '"confirmed": True, "reason": reason}\n        finally:',
+        "task_persistent_listing_failure_is_unconfirmed_at_the_deadline",
+    ),
+    StopMutation(
+        "task_stop_waits_past_its_deadline",
+        "                while time.monotonic() < deadline:\n                    if not ready_to_reap:",
+        "                while time.monotonic() < deadline + 100:\n                    if not ready_to_reap:",
+        "task_unreapable_leader_is_unconfirmed_at_the_deadline",
+    ),
+)
+
+
+def stop_mutation_rows(run_folder: Path) -> list[dict[str, Any]]:
+    """Plant each stop defect in a copy of the supervisor and require the named fake-backed stop case to fail, after a passing baseline."""
+    from scripts.orchestration.sdk_owned_cases import _retry_cases
+
+    source = (ROOT / SUPERVISOR).read_text()
+
+    def checks_of(text: str, label: str) -> dict[str, bool]:
+        root = run_folder / label
+        for relative in SUPERVISOR_SIBLINGS:
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_text((ROOT / relative).read_text())
+        target = root / SUPERVISOR
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        spec = importlib.util.spec_from_file_location(f"hai_stop_mutation_{label}", target)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("stop_mutation_loader_unavailable")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return _retry_cases(module)
+
+    baseline = checks_of(source, "stop_baseline")
+    if not baseline or not all(baseline.values()):
+        raise RuntimeError("stop_mutations_require_passing_baseline")
+    rows = []
+    for mutation in STOP_MUTATIONS:
+        if source.count(mutation.before) != 1:
+            raise ValueError("stop_mutation_location_changed")
+        changed = source.replace(mutation.before, mutation.after, 1)
+        ast.parse(changed)
+        observed = checks_of(changed, mutation.name)
+        rows.append(
+            {
+                "name": mutation.name,
+                "source": SUPERVISOR,
+                "assertion": mutation.check,
+                "observed": observed.get(mutation.check),
+                "caught": observed.get(mutation.check) is False,
+                "mutant_sha256": hashlib.sha256(changed.encode()).hexdigest(),
+                "proof": "fake-backed stop cases, not the Linux kernel",
+            }
+        )
+    return rows
+
+
 def run(output: Path) -> dict[str, Any]:
     """Require a passing baseline and an intended failed assertion for every planted source defect."""
     baseline = source_checks()
@@ -255,6 +342,7 @@ def run(output: Path) -> dict[str, Any]:
             "proof": "test sensitivity only",
         }
     )
+    rows.extend(stop_mutation_rows(run_folder))
     unchanged = all((ROOT / path).read_text() == source for path, source in frozen.items())
     return {
         "classification": "Synthetic",
@@ -264,7 +352,7 @@ def run(output: Path) -> dict[str, Any]:
         "production_sources_unchanged": unchanged,
         "source_sha256": {path: hashlib.sha256(source.encode()).hexdigest() for path, source in frozen.items()},
         "checker_sha256": hashlib.sha256(case_source.encode()).hexdigest(),
-        "runtime_mutations": "pending lead execution",
+        "runtime_mutations": "stop mutants ran against fake observations only; process and Linux mutants pending lead execution",
         "limits": ["No process, HTTP, terminal, socket, descendant or Linux mutation executed", "A syntax or import failure never counts as a caught mutation"],
         "cleanup": "done; source copies retained as local evidence",
     }
