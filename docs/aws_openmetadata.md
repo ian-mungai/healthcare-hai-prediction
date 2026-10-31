@@ -72,19 +72,21 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 5. dbt files: the gold publish job copies `manifest.json`, `catalog.json` (when the run wrote it) and `run_results.json` to `s3://<DATA_BUCKET>/metadata/dbt/` in its upload phase, with the gold writer role. The copy is best effort: a refused or failed copy is logged and never fails the publish. A catalog start finds the files of the latest gold publish. Before the first gold publish with this change, copy the files by hand under the project profile.
 6. `infra/iam` (administrator profile): set `openmetadata_prepared = true`. This creates the role `job_openmetadata_task`, the image and parameter grants on the execution role and two security group rules. Then run `manage_policies plan` and `manage_policies apply` for the project user's new pass-role statement and the remote-host port forward document.
 7. `infra/jobs` (project profile): set `openmetadata_enabled = true` with the four digests, the two roles from the IAM outputs and the log group. The apply registers a task definition and starts nothing.
-8. Broker: add the `metadata` job to the broker table with a deadline of the lifetime plus 900 seconds. Add the `metadata` family to the broker role and to the broker service families. Until the broker code carries the job, use the hand start below.
+8. Broker: the broker table already holds the `metadata` job with a deadline of the lifetime plus 900 seconds. Add the `metadata` family to the broker role and to the broker service families. Without the broker, use the hand start below.
 9. Marquez step, off until after the batch merge: Marquez listens on `127.0.0.1` of the host today, so the task cannot reach it. Later, change its listener in the services stack to the host's private address, set `openmetadata_marquez_reachable = true` in `infra/iam` and set `openmetadata_marquez_url` in `infra/jobs`. The step pages through all namespaces and datasets. Every request it makes ends within one five minute budget. The catalog database name `hai_lakehouse` is set in both `polaris.json` and `marquez.json`. An offline check compares them.
 10. Start `metadata_ingest_dag` by hand once with `{"run_id": "<RUN_ID>", "mode": "real"}` and read the logs of the stream `metadata/<container>/<task id>` in the jobs log group.
 
 ## Start by hand
 
-A hand start needs the cluster, the job subnet and the lakehouse job security group from the IAM outputs and the private address of the host. It needs no broker. The task runs the same containers and stops itself at the same deadline.
+A hand start needs the cluster, the job subnet and the lakehouse job security group from the IAM outputs and the private address of the host. It needs no broker. The task runs the same containers and stops itself at the same deadline. Write the overrides with `scripts.orchestration.job_overrides`, which reads the container and its empty variables from the broker table and refuses by name when a value is missing:
 
 ```sh
+.venv/bin/python -m scripts.orchestration.job_overrides --job metadata --run <RUN_ID> \
+  --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog > overrides.json
 aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> \
   --capacity-provider-strategy capacityProvider=FARGATE,weight=1 --task-definition <PROJECT>_<ENVIRONMENT>_job_metadata \
   --network-configuration "awsvpcConfiguration={subnets=[<SUBNET_ID>],securityGroups=[<LAKEHOUSE_SECURITY_GROUP_ID>],assignPublicIp=DISABLED}" \
-  --overrides '{"containerOverrides":[{"name":"ingest_polaris","environment":[{"name":"POLARIS_URI","value":"http://<HOST_PRIVATE_IP>:8181/api/catalog"}]}]}'
+  --overrides file://overrides.json
 ```
 
 ## Open the UI privately
