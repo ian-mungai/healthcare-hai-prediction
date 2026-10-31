@@ -32,11 +32,11 @@ def approve_fixture(run: Any) -> None:
 def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> None:
     """Use real harness dispatch and real request boundaries with fake publisher responses."""
 
-    def build(label: str, private: bool = False) -> tuple[Any, dict, Any]:
+    def build(label: str) -> tuple[Any, dict, Any]:
         base = root / label
         base.mkdir()
         fixture, web = fixture_type(base), web_type()
-        unit = fixture.stored("ALPHA", "a.csv", b"a\n1\n", flags=[harness.PRIVATE_FLAG] if private else [])
+        unit = fixture.stored("ALPHA", "a.csv", b"a\n1\n")
         queue = fixture.freeze()
         run = harness.Run(queue, base / "data/redownload_checks/run", base=base, opener=web, sleep=lambda _n: None)
         approve_fixture(run)
@@ -98,27 +98,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         raise ValueError("Symlinked staging directory accepted")
 
     scenario("symlinked_staging_directory_is_rejected", symlink)
-
-    def paused_private() -> None:
-        run, unit, web = build("private_pause", True)
-        web.serve(unit["url"], (429, b"private partial response"))
-        harness.execute(run)
-        harness.execute(harness.Run(run.queue_path, run.state_root, base=run.base, opener=web))
-        require(len(web.requests) == 1, "Restart retried a durable 429 pause")
-        retained = read_json(run.state_root / "private_retention.json")["originals"]
-        require(retained == [f"private/{unit['snapshot_id']}"], "Paused private directory omitted")
-
-    scenario("private_429_is_retained_and_stays_paused_after_restart", paused_private)
-
-    def partial_retry() -> None:
-        run, unit, web = build("private_retry", True)
-        web.serve(unit["url"], (503, b"partial"), (200, b"a\n1\n"))
-        harness.execute(run)
-        retained = read_json(run.state_root / "private_retention.json")
-        require(retained["originals"] == [f"private/{unit['snapshot_id']}"], "Retry did not retain whole private directory")
-        require(len(retained["files"]) >= 4, "Private retry files missing from exact inventory")
-
-    scenario("all_private_retry_attempts_are_in_the_deletion_inventory", partial_retry)
 
     def duplicate_zip() -> None:
         path = root / "duplicate.zip"
@@ -867,40 +846,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
             controls.writing(run.state_root / "cache.json", len(raw))
 
     scenario("received_collector_bytes_and_cache_copies_share_one_cap", response_cap, "Byte cap would be exceeded")
-
-    def private_collector_429(mode: str) -> None:
-        from scripts.acquisition import redownload_controls as controls
-        from scripts.acquisition import store_cms_owners, store_hcai_util, store_onc_mu
-        from scripts.acquisition.transport import Limits
-
-        run, unit, web = build(f"private_429_{mode}")
-        unit["mode"] = mode
-        web.serve(unit["url"], (429, b"private rate limit response"))
-        bounds = Limits(attempts=2)
-
-        def adapter(_unit: dict, _run: Any) -> Path:
-            top = harness.fresh_root(unit, run)
-            if mode == "cms_owners_org":
-                store_cms_owners.fetch({"id": "release", "url": unit["url"], "period_start": "2020-01-01"}, top, True, web, bounds)
-            elif mode == "hcai_util_workbook":
-                with patch.object(store_hcai_util, "install_redirect"):
-                    store_hcai_util.fetch({"year": 2020, "url": unit["url"], "redirect_target": "synthetic"}, top, True, web, bounds)
-            else:
-                store_onc_mu.fetch({"url": unit["url"]}, top, True, web, bounds)
-            raise ValueError("Private 429 did not pause")
-
-        with controls.active(controls.Boundary(run.state_root, run.base, unit["snapshot_id"], run.byte_cap)):
-            try:
-                harness.collector_unit(unit, run, adapter)
-            except controls.Pause:
-                require(len(web.requests) == 1, "Private collector retried 429")
-                retained = read_json(run.state_root / "private_retention.json")["originals"]
-                require(retained == [f"collectors/{mode}/private_original"], "Private collector pause not retained")
-                return
-        raise ValueError("Private collector rate-limit pause missing")
-
-    for mode in ("cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"):
-        scenario(f"real_{mode}_429_pauses_once_and_finalizes_private_retention", lambda mode=mode: private_collector_429(mode))
 
     def mmd_browser_identity() -> None:
         run, unit, _web = build("mmd_browser_identity")

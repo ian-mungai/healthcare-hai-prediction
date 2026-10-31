@@ -20,12 +20,15 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, 
 from scripts.acquisition.unused_files import read_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
+# A unit whose stored original names people. This tool never downloads, compares or records such a unit. The owner checks it locally with private_digest.
+PRIVATE_FLAG = "original_contains_personal_details"
+PRIVATE_COLLECTORS = frozenset({"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"})
 # These collectors read an API key from the secret store. The AWS task holds no secret, so only the owner's Mac lane may run them.
 SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
 LANE_NAME = "mac_keyed_units"
 PERSON_LANE = "mac_person_units"
-PERSON_CLASSES = frozenset({"needs_person", "needs_owner_decision_private"})
-PERSON_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the browser saves and the originals that name people, by owner decision 120"
+PERSON_CLASSES = frozenset({"needs_person"})
+PERSON_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the browser saves only, by owner decision 120"
 LANE_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the units of the listed modes only"
 
 
@@ -37,6 +40,11 @@ class RouteFiles:
     confirmation: Path
     hosts: Path
     hosts_approval: Path
+
+
+def is_private_unit(unit: dict) -> bool:
+    """True for a unit with the private-original flag or a collector that keeps such originals. Only queue metadata is read."""
+    return any(str(flag).startswith(PRIVATE_FLAG) for flag in unit.get("flags", [])) or unit.get("mode") in PRIVATE_COLLECTORS
 
 
 def lane_template(queue_body: bytes, lane: str = LANE_NAME) -> dict:
@@ -53,8 +61,6 @@ def lane_template(queue_body: bytes, lane: str = LANE_NAME) -> dict:
             "queue_sha256": queue_sha256,
             "classes": sorted(PERSON_CLASSES),
             "units": sum(1 for unit in active if redownload.lane_of(unit) in PERSON_CLASSES),
-            "originals_stay_local": True,
-            "records": "digests, sizes and counts only",
             "approved_by": None,
         }
     return {

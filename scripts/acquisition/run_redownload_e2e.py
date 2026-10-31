@@ -5,7 +5,6 @@ import copy
 import io
 import json
 import os
-import stat
 import sys
 import tempfile
 import time
@@ -17,9 +16,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.acquisition import bls_api_contract as bls_contract
-from scripts.acquisition import onc_mu_contract as onc_contract
 from scripts.acquisition import redownload as harness
-from scripts.acquisition import run_onc_mu_e2e as onc_e2e
 from scripts.acquisition import run_redownload_controls_e2e as control_e2e
 from scripts.acquisition import run_wonder_export_e2e as wonder_e2e
 from scripts.acquisition import wonder_export_contract as wonder_contract
@@ -29,7 +26,6 @@ from scripts.acquisition.run_bls_api_e2e import fixture as bls_fixture
 from scripts.acquisition.run_hud_xlsx_e2e import download_metadata, set_origin
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
-from scripts.acquisition.store_onc_mu import execute as onc_execute
 from scripts.acquisition.store_wonder_export import execute as wonder_execute
 from scripts.acquisition.tests.test_s3_store import FakeS3
 
@@ -276,7 +272,7 @@ def exercise(root: Path) -> list[dict]:
     def dry_run() -> None:
         summary = harness.execute(run, allow_network=False)
         require(not web.requests and not (root / "state").exists(), "Dry run requested or wrote")
-        require(summary["active_units"] == 19 and summary["planned"] == 19, f"Dry-run counts differ: {summary}")
+        require(summary["active_units"] == 19 and summary["planned"] == 18, f"Dry-run counts differ: {summary}")
 
     scenario("dry_run_makes_no_request_and_writes_nothing", dry_run)
 
@@ -339,20 +335,13 @@ def exercise(root: Path) -> list[dict]:
 
     scenario("duplicate_dropped_and_derived_entries_never_requested", inactive)
 
-    def private_original() -> None:
-        result = recorded(run, private["snapshot_id"])
-        path = root / "state" / result["fresh_path"]
-        require(result["outcome"] == "exact_match" and path.relative_to(root / "state").parts[0] == "private", "Private original outside the private folder")
-        require(stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700, "Private original not owner-only")
+    def private_unit_is_refused() -> None:
+        require(web.count(private["url"]) == 0 and harness.outcome(run, private["snapshot_id"]) is None, "A private unit was requested or recorded")
+        require(not (root / "state" / "private" / private["snapshot_id"]).exists(), "A private original folder was created")
         text = "\n".join(p.read_text(errors="ignore") for p in (root / "state").rglob("*.json"))
         require("Synthetic Person" not in text, "Personal detail copied into a record")
-        require(
-            # The collector failure scenario in this run also keeps a private diagnostic, listed beside the original.
-            read_json(root / "state" / "private_retention.json")["originals"] == sorted([f"private/{private['snapshot_id']}", "private/diagnostics"]),
-            "Private original missing from the retention record",
-        )
 
-    scenario("private_original_owner_only_and_listed_for_deletion", private_original)
+    scenario("private_unit_is_never_requested_or_recorded", private_unit_is_refused)
 
     def adapters() -> None:
         require(recorded(run, adapted["snapshot_id"])["outcome"] == "exact_match", "Collector match not recorded")
@@ -463,7 +452,6 @@ def exercise(root: Path) -> list[dict]:
 
     scenario("report_counts_match_the_outcome_files", report)
     real_bls_adapter(scenario, root)
-    real_private_adapter(scenario, root)
     content_scenarios(scenario, root)
     real_wonder_adapter(scenario, root)
     control_e2e.exercise(scenario, root, Fixture, Web)
@@ -532,72 +520,6 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
             require(not list(fresh.rglob("completed.json")) and not list(fresh.rglob("s3_collections_reconciliation.json")), "Fresh run stored to S3")
 
         scenario("real_bls_collector_runs_in_a_fresh_root_with_storage_off", matches)
-
-
-def real_private_adapter(scenario: Any, root: Path) -> None:
-    """The real ONC adapter keeps the fresh original private and blocks a file that no longer matches its plan."""
-    base = root / "onc_base"
-    base.mkdir()
-    data = onc_e2e.body()
-    plan, plan_path = onc_e2e.locked(base, data)
-    versions = base / "versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
-    with patch.object(onc_contract, "PLAN_PATH", plan_path), patch.object(onc_contract, "VERSIONS_PATH", versions):
-        old_root = base / "old"
-        onc_execute(plan, old_root, True, False, None, {}, onc_e2e.Web(data), onc_e2e.LIMITS)
-        receipt = old_root / "batches" / plan["id"] / "capture/receipt.json"
-        entry = {
-            "snapshot_id": read_json(receipt)["snapshot_id"],
-            "source_id": "ONC_PI",
-            "receipt": str(receipt.relative_to(base)),
-            "receipt_sha256": harness.digest(receipt.read_bytes()),
-            "url": plan["url"],
-            "mode": "onc_mu_hospital",
-            "bytes": len(data),
-            "pages": 1,
-            "disposition": "direct_download",
-            "route": "publisher_url",
-            "flags": ["original_contains_personal_details:private_owner_only"],
-        }
-        fixture = Fixture(base)
-        fixture.entries.append(entry)
-        queue = fixture.freeze()
-
-        def matches() -> None:
-            run = harness.Run(
-                queue_path=queue, state_root=root / "onc_state", base=base, opener=onc_e2e.Web(data), sleep=lambda _s: None, private_in_process=True
-            )
-            control_e2e.approve_fixture(run)
-            harness.execute(run)
-            result = recorded(run, entry["snapshot_id"])
-            require(result["outcome"] == "exact_match", f"Real ONC adapter outcome differs: {result}")
-            private_root = root / "onc_state" / "collectors" / "onc_mu_hospital" / "private_original"
-            originals = list(private_root.rglob("*.csv"))
-            require(len(originals) == 1 and stat.S_IMODE(originals[0].stat().st_mode) == 0o600, "Fresh original not owner-only")
-            retention = read_json(root / "onc_state" / "private_retention.json")["originals"]
-            require(retention == ["collectors/onc_mu_hospital/private_original"], f"Private folder not listed for deletion: {retention}")
-            outside = "\n".join(
-                p.read_bytes().decode("utf-8", "ignore") for p in (root / "onc_state").rglob("*") if p.is_file() and "private_original" not in p.parts
-            )
-            require(not any(npi in outside for npi in onc_e2e.CLINICIAN_NPIS), "Clinician data outside the private original")
-
-        scenario("real_onc_collector_keeps_the_fresh_original_private", matches)
-
-        def changed() -> None:
-            revised = onc_e2e.body(lambda rows: rows.append(list(rows[1])))
-            run = harness.Run(
-                queue_path=queue, state_root=root / "onc_changed", base=base, opener=onc_e2e.Web(revised), sleep=lambda _s: None, private_in_process=True
-            )
-            control_e2e.approve_fixture(run)
-            harness.execute(run)
-            result = recorded(run, entry["snapshot_id"])
-            require(result["outcome"] == "blocked" and result["reason"] == "collector_validation_failed", f"Changed original outcome differs: {result}")
-            retention = read_json(root / "onc_changed" / "private_retention.json")["originals"]
-            expected = ["collectors/onc_mu_hospital/private_original", "private/diagnostics"]
-            require(retention == expected, f"Rejected private original or its diagnostic not listed for deletion: {retention}")
-            require("ONC_PI" in harness.stopped_sources(run), "Changed original did not stop its source")
-
-        scenario("real_onc_collector_blocks_a_file_that_no_longer_matches_its_plan", changed)
 
 
 # Stored and fresh bodies for the content scenarios: each fresh body differs from its stored body in the noted way. Only

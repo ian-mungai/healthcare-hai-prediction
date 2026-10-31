@@ -26,9 +26,10 @@ KINDS = {
     "wonder": ("wonder_export", "approved_manual", [], "needs_person"),
     "reference": ("reference_download", "approved_manual", [], "needs_person"),
     "manual_file": ("file", "approved_manual", [], "needs_person"),
-    "owners": ("cms_owners_org", "direct_download", ["original_contains_personal_details"], "needs_owner_decision_private"),
-    "hcai": ("hcai_util_workbook", "direct_download", ["original_contains_personal_details"], "needs_owner_decision_private"),
-    "onc": ("onc_mu_hospital", "direct_download", ["original_contains_personal_details"], "needs_owner_decision_private"),
+    "owners": ("cms_owners_org", "direct_download", ["original_contains_personal_details"], "private_local"),
+    "hcai": ("hcai_util_workbook", "direct_download", ["original_contains_personal_details"], "private_local"),
+    "onc": ("onc_mu_hospital", "direct_download", ["original_contains_personal_details"], "private_local"),
+    "flagged_file": ("file", "direct_download", ["original_contains_personal_details:private_owner_only"], "private_local"),
 }
 
 
@@ -75,7 +76,6 @@ def dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **run_fields: Any)
         return {"outcome": "exact_match"}
 
     monkeypatch.setattr(harness, "handle", handle)
-    monkeypatch.setattr(harness, "run_private", handle)
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     queue = tmp_path / "queue.json"
     queue.write_text(json.dumps({"run": 2, "queue": UNITS}))
@@ -91,7 +91,7 @@ def test_the_task_attempts_only_the_units_its_mirror_can_serve_and_lists_the_res
     seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror")
     served = sorted(unit_id for unit_id, lane in LANES.items() if lane == "task")
     check(sorted(seen) == served, f"the task attempted {sorted(seen)}")
-    for lane in ("needs_local_data", "needs_person", "needs_owner_decision_private", "keyed_mac_lane"):
+    for lane in ("needs_local_data", "needs_person", "private_local", "keyed_mac_lane"):
         expected = sorted(unit_id for unit_id, found in LANES.items() if found == lane)
         check(sorted(summary["not_attempted"][lane]) == expected, f"{lane} units are listed: {summary.get('not_attempted')}")
 

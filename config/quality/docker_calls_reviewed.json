@@ -80,14 +80,13 @@
     },
     {
       "path": "scripts/acquisition/redownload.py",
-      "line": 820,
+      "line": 803,
       "code_sha256": "1f9cde2b11b126d85b0a497a720ed502098d56b9be95ecc5ee818a47b3260b0d",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "92810992c291bfdd05dc4af178bb5a27c4f809aed13e3e2d63a76ea05db44f1d",
+      "file_sha256": "f1e03938cdbc50f876900b989b4eeb4ebd92de9a599c84ab227416bfe98e3e98",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:d0efbfd4bf360bfe439f038ccbc37384daabba7f6e45714b0c72a99b0a06623d",
-        "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/collect_bls_api.py": "sha256:07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
         "scripts/acquisition/collect_mmd_api.py": "sha256:61d431708f215904f71c91815245e32cab5258a9232ced3ae03b2c9b0d9261b6",
         "scripts/acquisition/collection_layout.py": "sha256:12267b4b3642b9abb16acf1a303cd668010775c5a24440118de915f0f2ceb138",
@@ -97,15 +96,14 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mmd_api_contract.py": "sha256:e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
-        "scripts/acquisition/redownload_route.py": "sha256:b286e06ccb3cc27b4b8219ae64c7ccbffa8ecfd202a06958b6ef8aa0f161b482",
+        "scripts/acquisition/redownload_route.py": "sha256:36815c3531f377b901f77a32a6557fcbca06a4b2af9f5db5e1f945cf3cf50bf1",
         "scripts/acquisition/s3_store.py": "sha256:919ddcff2c681c3010db3853b5ab4c40f85857c60eead08d09487677078501c5",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
         "scripts/acquisition/stored_mirror.py": "sha256:21a999213bcf4e448ee6b865bcaf1b264fae4a0d2a42aa9cd918bf105574f335",
         "scripts/acquisition/transport.py": "sha256:841a88575ed287442571716e73af8e01d3daf652b1169539114e869899cffad9",
         "scripts/acquisition/wonder_export_contract.py": "sha256:68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9",
-        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
-        "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "imports a plan module named in the PLANNED table (scripts.acquisition collector contracts); the plan loaders read and validate plans and start no process",
       "lines": [
@@ -114,14 +112,13 @@
     },
     {
       "path": "scripts/acquisition/redownload.py",
-      "line": 107,
+      "line": 102,
       "code_sha256": "465341b9818d9470082c277fe541dde751a8de546e5d0df64cc7b3e909e87322",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "92810992c291bfdd05dc4af178bb5a27c4f809aed13e3e2d63a76ea05db44f1d",
+      "file_sha256": "f1e03938cdbc50f876900b989b4eeb4ebd92de9a599c84ab227416bfe98e3e98",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:d0efbfd4bf360bfe439f038ccbc37384daabba7f6e45714b0c72a99b0a06623d",
-        "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/collect_bls_api.py": "sha256:07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
         "scripts/acquisition/collect_mmd_api.py": "sha256:61d431708f215904f71c91815245e32cab5258a9232ced3ae03b2c9b0d9261b6",
         "scripts/acquisition/collection_layout.py": "sha256:12267b4b3642b9abb16acf1a303cd668010775c5a24440118de915f0f2ceb138",
@@ -131,15 +128,14 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mmd_api_contract.py": "sha256:e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
-        "scripts/acquisition/redownload_route.py": "sha256:b286e06ccb3cc27b4b8219ae64c7ccbffa8ecfd202a06958b6ef8aa0f161b482",
+        "scripts/acquisition/redownload_route.py": "sha256:36815c3531f377b901f77a32a6557fcbca06a4b2af9f5db5e1f945cf3cf50bf1",
         "scripts/acquisition/s3_store.py": "sha256:919ddcff2c681c3010db3853b5ab4c40f85857c60eead08d09487677078501c5",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
         "scripts/acquisition/stored_mirror.py": "sha256:21a999213bcf4e448ee6b865bcaf1b264fae4a0d2a42aa9cd918bf105574f335",
         "scripts/acquisition/transport.py": "sha256:841a88575ed287442571716e73af8e01d3daf652b1169539114e869899cffad9",
         "scripts/acquisition/wonder_export_contract.py": "sha256:68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9",
-        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
-        "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "aws_runner (imported from the BLS collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -275,7 +271,7 @@
       "occurrences": 1,
       "file_sha256": "c1304afc43816561700d2606c25fe41cd47131eb450241729ee2611de8d8ab27",
       "dependencies": {
-        "scripts/acquisition/redownload.py": "sha256:92810992c291bfdd05dc4af178bb5a27c4f809aed13e3e2d63a76ea05db44f1d",
+        "scripts/acquisition/redownload.py": "sha256:f1e03938cdbc50f876900b989b4eeb4ebd92de9a599c84ab227416bfe98e3e98",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
       },
       "reason": "imports a plan module named in the PLANNED table; the plan loaders read and validate plans and start no process",

@@ -37,13 +37,11 @@ from scripts.acquisition import bls_api_transport, data_paths, stored_mirror
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
-from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.collection_layout import capture_root
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json, require
 from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure, on_raw_route
-from scripts.process import SubprocessError
 
 ACTIVE = ("api", "direct_download", "approved_manual")
 BYTE_CAP = 128 * 2**30
@@ -52,9 +50,7 @@ MAX_ATTEMPTS = 2
 RETRYABLE_STATUS = {408, 500, 502, 503, 504}
 RETRYABLE_FAILURE = {"URLError", "TimeoutError", "ConnectionResetError", "incomplete_read"}
 FORMATS = {".csv": "csv", ".txt": "txt", ".zip": "zip", ".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf", ".json": "json", ".docx": "docx", ".gz": "gzip"}
-PRIVATE_FLAG = "original_contains_personal_details"
 MMD_API_FLAG = "browser_export_moved_to_api"
-PRIVATE_COLLECTORS = {"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"}
 
 
 Pause = controls.Pause
@@ -81,7 +77,6 @@ class Run:
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
     state_parent: Path | None = None
-    private_in_process: bool = False
     keyed_lane: bool = False
     person_lane: bool = False
     lane_approval: Path | None = None
@@ -291,7 +286,9 @@ def resolve_context(number: int | None, *, keyed: bool, person: bool, mirror: bo
 
 
 def may_attempt(run: Run, lane: str) -> bool:
-    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only."""
+    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only, and none takes a private unit."""
+    if lane == PRIVATE:
+        return False
     if run.keyed_lane:
         return lane == KEYED
     if run.person_lane:
@@ -455,10 +452,6 @@ def collection_root(receipt: Path) -> Path:
     return next(parent.parent for parent in receipt.parents if parent.name == "batches")
 
 
-def is_private(unit: dict) -> bool:
-    return any(flag.startswith(PRIVATE_FLAG) for flag in unit["flags"])
-
-
 def record_private(run: Run, relative: str) -> None:
     """Keep the list of fresh originals that hold personal details, for the closeout deletion list."""
     path = run.state_root / "private_retention.json"
@@ -516,18 +509,8 @@ def file_unit(unit: dict, run: Run) -> dict:
         from scripts.acquisition.history_redirects import install_redirect
 
         install_redirect(unit["url"], redirect)
-    private = is_private(unit)
-    folder = run.state_root / ("private" if private else "files") / unit["snapshot_id"]
-    if private:
-        folder.mkdir(parents=True, mode=0o700, exist_ok=True)
-        (run.state_root / "private").chmod(0o700)
-    if private:
-        record_private(run, str(folder.relative_to(run.state_root)))
-    try:
-        result, attempts = fetch(unit["url"], artifact["stored_file_name"], expected_format, artifact["role"], unit["bytes"], folder, run)
-    finally:
-        if private:
-            record_private(run, str(folder.relative_to(run.state_root)))
+    folder = run.state_root / "files" / unit["snapshot_id"]
+    result, attempts = fetch(unit["url"], artifact["stored_file_name"], expected_format, artifact["role"], unit["bytes"], folder, run)
     return compare_download(result, attempts, artifact["sha256"], run, receipt_file(unit, run).parent / artifact["storage_path"])
 
 
@@ -959,7 +942,7 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
 
 # These collectors read an API key from the secret store. The publisher task holds no secret, so on the raw route they are reported, never attempted.
 SECRET_MODES = route.SECRET_MODES
-TASK, KEYED = "task", "keyed_mac_lane"
+TASK, KEYED, PRIVATE = "task", "keyed_mac_lane", "private_local"
 MANUAL_MODES = frozenset({"hud_xlsx", "wonder_export", "reference_download"})
 TASK_ENVIRONMENT = (
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
@@ -969,113 +952,15 @@ TASK_ENVIRONMENT = (
 )
 
 
-PRIVATE_OUTCOMES = frozenset({"exact_match", "changed_needs_review", "blocked", "unavailable"})
-PRIVATE_REASONS = frozenset({"collector_validation_failed", "byte_budget_exhausted", "attempt_or_disk_budget_exhausted", "unrecognised_failure"})
-DIGEST = re.compile(r"[0-9a-f]{64}")
-
-
-def is_count(value: object) -> bool:
-    return type(value) is int
-
-
-def is_digest(value: object) -> bool:
-    return isinstance(value, str) and DIGEST.fullmatch(value) is not None
-
-
-def is_outcome(value: object) -> bool:
-    return value in PRIVATE_OUTCOMES
-
-
-def is_reason(value: object) -> bool:
-    return isinstance(value, str) and (value in PRIVATE_REASONS or known_failure(value) == value)
-
-
-def is_category(value: object) -> bool:
-    return value in {category for _kind, category in ERROR_CATEGORIES} | {"other"}
-
-
-PRIVATE_CHECKS: dict[str, Callable[[object], bool]] = {
-    "outcome": is_outcome,
-    "attempts": is_count,
-    "fresh_bytes": is_count,
-    "stored_sha256": is_digest,
-    "fresh_sha256": is_digest,
-    "reason": is_reason,
-    "error_category": is_category,
-}
-PRIVATE_COUNTS = {"differing_data_files": "differing_file_count", "excluded_parts": "excluded_part_count"}
-
-
-def private_safe(fields: dict) -> dict:
-    """Keep only digests, sizes, counts and fixed codes of a unit whose original names people. Anything else is counted and dropped."""
-    safe: dict[str, Any] = {}
-    withheld = 0
-    for key, value in fields.items():
-        if key in PRIVATE_CHECKS and PRIVATE_CHECKS[key](value):
-            safe[key] = value
-        elif key in PRIVATE_COUNTS and isinstance(value, list):
-            safe[PRIVATE_COUNTS[key]] = len(value)
-        else:
-            withheld += 1
-    return safe | {"withheld_fields": withheld} if withheld else safe
-
-
-PRIVATE_DEADLINE_SECONDS = 4 * 3600
-
-
-def run_private(unit: dict, run: Run) -> dict:
-    """Run a unit whose original names people in a worker process and return its fixed fields.
-
-    This process never loads the unit's data. The worker has no output, answers through one small file and is filtered again here.
-    """
-    folder = run.state_root / ".private_jobs"
-    folder.mkdir(parents=True, mode=0o700, exist_ok=True)
-    identity = unit["snapshot_id"]
-    job, answer = folder / f"{identity}.job.json", folder / f"{identity}.answer.json"
-    answer.unlink(missing_ok=True)
-    paths = {
-        "queue_path": str(run.queue_path),
-        "state_root": str(run.state_root),
-        "base": str(run.base),
-        "state_parent": str(run.state_parent) if run.state_parent else None,
-        "stored_root": str(run.stored_root) if run.stored_root else None,
-        "manual_folder": str(run.manual_folder) if run.manual_folder else None,
-        "snapshot_id": identity,
-        "result_path": str(answer),
-    }
-    job.write_bytes(encoded_json(paths))
-    job.chmod(0o600)
-    try:
-        run_argv(
-            [sys.executable, "-B", "-m", "scripts.acquisition.private_worker", str(job)], cwd=REPO_ROOT, env=dict(os.environ), timeout=PRIVATE_DEADLINE_SECONDS
-        )
-        result = json.loads(answer.read_text(encoding="utf-8"))
-        kind = result["kind"]
-    except (OSError, ValueError, KeyError, TypeError, SubprocessError):
-        result, kind = {}, "none"
-    if kind == "ok" and isinstance(result.get("fields"), dict):
-        if type(result.get("budget_used")) is int:
-            run.cache["private_budget_used"] = result["budget_used"]
-        return private_safe(result["fields"])
-    if kind == "pause":
-        raise Pause(f"retry_after_seconds={int(result['retry_after_seconds']) if type(result.get('retry_after_seconds')) is int else 0}")
-    if kind == "pending":
-        raise Pending("A manual download is not in the folder yet")
-    if kind == "budget":
-        raise controls.BudgetExceeded("Byte cap would be exceeded" if result.get("bytes") is True else "Attempt budget exhausted")
-    category = result.get("category") if kind == "failed" else "worker_failed"
-    return {"attempts": 1, "outcome": "blocked", "reason": "collector_validation_failed", "error_category": category if is_category(category) else "other"}
-
-
 def lane_of(unit: dict) -> str:
     """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
+    if route.is_private_unit(unit):
+        return PRIVATE
     mode = handler_mode(unit)
     if mode in SECRET_MODES:
         return KEYED
     if unit["disposition"] == "approved_manual" or mode in MANUAL_MODES:
         return "needs_person"
-    if mode in PRIVATE_COLLECTORS:
-        return "needs_owner_decision_private"
     if mode == "mmd_api":
         return "needs_local_data"
     return TASK if mode in {"file", "il_directory"} else "unclassified"
@@ -1180,10 +1065,6 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
     except (ValueError, OSError, KeyError) as error:
         record_diagnostic(run, unit["snapshot_id"], error)
         return {"attempts": 1, "outcome": "blocked", "reason": "collector_validation_failed", "error_category": error_category(error)}
-    finally:
-        # These collectors keep the publisher's original, which names people, in an owner-only folder under their root.
-        if unit["mode"] in PRIVATE_COLLECTORS and (fresh_root(unit, run) / "private_original").exists():
-            record_private(run, str((fresh_root(unit, run) / "private_original").relative_to(run.state_root)))
     controls.validate_path(receipt_path, run.state_root)
     fresh = [item for item in read_json(receipt_path)["artifacts"] if item["role"] == "data"]
     identities = {(item["role"], item["stored_file_name"]): item["sha256"] for item in fresh}
@@ -1338,22 +1219,11 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
             break
         require(used_bytes(run) + unit["bytes"] <= run.byte_cap, "Byte cap would be exceeded")
         require(shutil.disk_usage(run.state_root).free > 2 * unit["bytes"] + 2**30, "Not enough free disk space for the next unit")
-        private = lane == "needs_owner_decision_private"
         try:
             boundary = controls.Boundary(run.state_root, run.base, identity, run.byte_cap, used=used_bytes(run))
             try:
-                if private and run.private_in_process:
-                    require(
-                        not (run.person_lane or on_raw_route()), "A unit whose original names people runs in the worker on the raw route and in the person lane"
-                    )
-                    with controls.active(boundary):
-                        fields = private_safe(handle(unit, run))
-                elif private:
-                    fields = run_private(unit, run)
-                    boundary.used = run.cache.pop("private_budget_used", boundary.used)
-                else:
-                    with controls.active(boundary):
-                        fields = handle(unit, run)
+                with controls.active(boundary):
+                    fields = handle(unit, run)
             finally:
                 run.cache["budget_used"] = boundary.used
         except Pending:
