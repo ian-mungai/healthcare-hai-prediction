@@ -9,6 +9,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -161,18 +162,27 @@ REAL_HTTPS_CONNECTION = http.client.HTTPSConnection
 class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
     """Connect only to a validated public address and keep the approved name for the TLS check."""
 
+    def __init__(self, *args: Any, context: ssl.SSLContext | None = None, source_address: tuple[str, int] | None = None, **kwargs: Any) -> None:
+        self.tls_context = context if context is not None else ssl.create_default_context()
+        self.bound_source = source_address
+        super().__init__(*args, context=self.tls_context, source_address=source_address, **kwargs)
+
     def connect(self) -> None:
         address = public_addresses(self.host, self.port)[0]
-        sock = socket.create_connection((address, self.port), self.timeout, self.source_address)
+        sock = socket.create_connection((address, self.port), self.timeout, self.bound_source)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        self.sock = self.tls_context.wrap_socket(sock, server_hostname=self.host)
 
 
 class PublicHTTPSHandler(urllib.request.HTTPSHandler):
     """The urllib handler for PublicHTTPSConnection, so a redirect target is validated like the first request."""
 
+    def __init__(self, context: ssl.SSLContext | None = None) -> None:
+        super().__init__(context=context)
+        self.tls_context = context
+
     def https_open(self, req: Any) -> Any:
-        return self.do_open(PublicHTTPSConnection, req, context=self._context)
+        return self.do_open(PublicHTTPSConnection, req, context=self.tls_context)
 
 
 class ReviewedTransport:

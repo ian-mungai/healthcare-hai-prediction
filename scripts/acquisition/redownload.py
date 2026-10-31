@@ -250,8 +250,9 @@ def route_gate(run: Run) -> None:
     """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
         return
-    require(run.route is not None, "Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
     files = run.route
+    if files is None:
+        raise RegistryError("Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
     problems = route.check(run.queue_path, files.plan, files.approval, files.record, capture_root(), files.hosts, files.hosts_approval)
     require(not problems, "Run 3 route gate: " + "; ".join(problems))
     # The downloader reads the hosts file and its approval from these paths, so it enforces exactly what the gate checked.
