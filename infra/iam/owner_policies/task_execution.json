@@ -43,8 +43,7 @@
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_JWT_SECRET_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_API_SECRET_KEY_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${REDIS_PASSWORD_NAME}",
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${POLARIS_ROOT_SECRET_NAME}",
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${GRAFANA_ADMIN_PASSWORD_NAME}"
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${POLARIS_ROOT_SECRET_NAME}"
       ]
     }
   ]

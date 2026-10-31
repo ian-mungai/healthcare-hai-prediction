@@ -213,6 +213,15 @@ resource "aws_iam_role_policy" "task_execution" {
   policy = templatefile("${path.module}/owner_policies/task_execution.json", local.owner_policy_values)
 }
 
+# The Grafana password is injected only while monitoring is on, so the IAM stack is unchanged while it is off.
+resource "aws_iam_role_policy" "task_execution_monitoring" {
+  count = var.monitoring_enabled ? 1 : 0
+
+  name   = "task_execution_monitoring"
+  role   = aws_iam_role.task_execution.id
+  policy = templatefile("${path.module}/owner_policies/task_execution_monitoring.json", local.owner_policy_values)
+}
+
 resource "aws_iam_role" "polaris_task" {
   name               = format(local.platform_name, "polaris_task")
   description        = "Polaris catalog service: Iceberg files under lakehouse/ only."

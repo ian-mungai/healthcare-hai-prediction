@@ -254,7 +254,10 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
     roles = [f"arn:aws:iam::{ACCOUNT}:role/{declared[key]}" for key in ("LAKEHOUSE_READER_ROLE_NAME", "LAKEHOUSE_WRITER_ROLE_NAME")]
     check(statement_resources(documents, "sts", "AssumeLakehouseRolesOnly") == roles, "the sts roles must be the role-name variable defaults, not PROJECT_NAME")
     owner = render_policy.render_template((REPO_ROOT / "infra/iam/owner_policies/task_execution.json").read_text(encoding="utf-8"), values)
+    monitoring = render_policy.render_template((REPO_ROOT / "infra/iam/owner_policies/task_execution_monitoring.json").read_text(encoding="utf-8"), values)
     injected_names = [item for item in owner["Statement"] if item["Sid"] == "InjectNamedParameters"][0]["Resource"]
+    check(len(injected_names) == 8 and not any("grafana" in item for item in injected_names), "the base task execution policy names no Grafana parameter")
+    injected_names = [*injected_names, *monitoring["Statement"][0]["Resource"]]
     check(
         len(injected_names) == 9 and all(item.removeprefix(prefix) in declared["MANAGED_PARAMETER_NAME"] for item in injected_names),
         "the task execution parameters must be managed parameters named by their variables, not PROJECT_NAME",

@@ -54,8 +54,8 @@ def code_revision() -> dict[str, Any]:
 def load_all() -> dict[str, dict[str, Any]]:
     """The 13 project user policies by template stem and the policies the IAM stack renders, as ``owner_<name>``."""
     documents = load_policies(POLICY_DIRECTORY, policy_cases.VALUES)
-    for name in ("snapshots", "task_execution"):
-        documents[f"owner_{name}"] = render_template((OWNER_DIRECTORY / f"{name}.json").read_text(encoding="utf-8"), policy_cases.VALUES)
+    documents["owner_snapshots"] = render_template((OWNER_DIRECTORY / "snapshots.json").read_text(encoding="utf-8"), policy_cases.VALUES)
+    documents[TASK_EXECUTION] = render_task_execution(OWNER_DIRECTORY)
     return documents
 
 
@@ -150,12 +150,41 @@ def statement_resources(documents: dict[str, dict[str, Any]], key: tuple[str, st
     return resources(documents[service if service.startswith("owner_") else f"healthcare_hai_prediction_{service}_policy"], sid)
 
 
+def render_task_execution(directory: Path, names: dict[str, Any] | None = None, values: dict[str, str] | None = None) -> dict[str, Any]:
+    """The task execution policy with monitoring on: the base template plus the one Grafana statement, joined under ``InjectNamedParameters``.
+
+    The IAM stack attaches the Grafana statement as a separate policy and only while monitoring is on. The cases evaluate the largest grant, so the
+    parameter checks cover all nine names. ``check_monitoring_gate`` holds the base template to eight names and the monitoring template to one.
+    """
+    values = values or policy_cases.VALUES
+    document = render_template((directory / "task_execution.json").read_text(encoding="utf-8"), values, names)
+    monitoring = render_template((directory / "task_execution_monitoring.json").read_text(encoding="utf-8"), values, names)
+    grant = next(statement for statement in document["Statement"] if statement["Sid"] == "InjectNamedParameters")
+    grant["Resource"] = [*as_list(grant["Resource"]), *(resource for statement in monitoring["Statement"] for resource in as_list(statement["Resource"]))]
+    return document
+
+
 def with_task_execution(documents: dict[str, dict[str, Any]], names: dict[str, Any], directory: Path = OWNER_DIRECTORY) -> dict[str, dict[str, Any]]:
     """The documents with the task execution policy rendered from the same names, unless they already hold one."""
     if TASK_EXECUTION in documents:
         return documents
-    text = (directory / "task_execution.json").read_text(encoding="utf-8")
-    return {**documents, TASK_EXECUTION: render_template(text, policy_cases.VALUES, names)}
+    return {**documents, TASK_EXECUTION: render_task_execution(directory, names)}
+
+
+def check_monitoring_gate(directory: Path = OWNER_DIRECTORY) -> list[str]:
+    """The base task execution template names no Grafana parameter, and the monitoring template names exactly that one."""
+    base = (directory / "task_execution.json").read_text(encoding="utf-8")
+    monitoring = render_template((directory / "task_execution_monitoring.json").read_text(encoding="utf-8"), policy_cases.VALUES)
+    problems = []
+    if "GRAFANA" in base.upper():
+        problems.append("the base task execution template names the Grafana parameter, so the IAM stack changes while monitoring is off")
+    granted = {resource for statement in monitoring["Statement"] for resource in as_list(statement["Resource"])}
+    wanted = {f"arn:aws:ssm:{policy_cases.R}:{policy_cases.A}:parameter/{policy_cases.PARAMETER_FOLDER}/grafana_admin_password"}
+    if granted != wanted:
+        problems.append(f"the monitoring template grants {sorted(granted)}, not exactly the Grafana parameter")
+    if any(as_list(statement["Action"]) != ["ssm:GetParameters"] for statement in monitoring["Statement"]):
+        problems.append("the monitoring template grants an action other than ssm:GetParameters")
+    return problems
 
 
 def difference(label: str, actual: set[str], expected: set[str]) -> list[str]:
@@ -174,7 +203,7 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
     """
     names = terraform_names(variables)
     documents = with_task_execution(documents, names)
-    problems = []
+    problems = check_monitoring_gate()
     for key, expected in expected_grants(names).items():
         problems += difference(f"{key[0]} {key[1]} against the variable defaults", statement_resources(documents, key), expected)
     folder = f"/{policy_cases.PARAMETER_FOLDER}/"
@@ -370,12 +399,12 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         template = owner / "task_execution.json"
         original_owner = template.read_text(encoding="utf-8")
         template.write_text(plant(original_owner, "parameter${POSTGRES_PASSWORD_NAME}", "parameter/${PROJECT_NAME}/postgres_password"), encoding="utf-8")
-        built = render_template(template.read_text(encoding="utf-8"), policy_cases.VALUES)
+        built = render_task_execution(owner)
         record(
             "a task execution parameter is built from PROJECT_NAME, right for the real project name only",
             check_names({**documents, TASK_EXECUTION: built}),
         )
-        real_owner = render_template(template.read_text(encoding="utf-8"), real_values, names_now)
+        real_owner = render_task_execution(owner, names_now, real_values)
         results[-1]["identical_with_the_real_project_name"] = not difference(
             "exec", statement_resources({TASK_EXECUTION: real_owner}, INJECT), expected_grants(names_now)[INJECT]
         )
@@ -383,8 +412,18 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         template.write_text(plant(original_owner, "parameter${REDIS_PASSWORD_NAME}", "parameter/healthcare_hai_prediction/redis_password"), encoding="utf-8")
         record("a task execution parameter is written out in the template (right today)", check_name_source(owner_directory=owner))
         template.write_text(plant(original_owner, "parameter${REDIS_PASSWORD_NAME}", "parameter/healthcare_hai_prediction/redis_passwd"), encoding="utf-8")
-        built = render_template(template.read_text(encoding="utf-8"), policy_cases.VALUES)
+        built = render_task_execution(owner)
         record("a task execution parameter is written out in the template and has drifted", check_names({**documents, TASK_EXECUTION: built}))
+        template.write_text(
+            plant(
+                original_owner,
+                'parameter${POLARIS_ROOT_SECRET_NAME}"',
+                'parameter${POLARIS_ROOT_SECRET_NAME}",\n        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${GRAFANA_ADMIN_PASSWORD_NAME}"',
+            ),
+            encoding="utf-8",
+        )
+        record("the Grafana password is back in the base task execution template", check_monitoring_gate(owner))
+        template.write_text(original_owner, encoding="utf-8")
         widened = root / "role_policies"
         shutil.copytree(ROLE_DIRECTORY, widened)
         writer = widened / "writer.json"

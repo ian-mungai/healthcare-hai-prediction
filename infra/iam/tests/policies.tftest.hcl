@@ -84,6 +84,12 @@ override_resource {
   }
 }
 
+override_resource {
+  target          = aws_iam_role.task_execution
+  override_during = plan
+  values          = { id = "example_project_task_execution_dev" }
+}
+
 variables {
   aws_profile         = "example_project_dev"
   environment         = "dev"
@@ -537,11 +543,11 @@ run "platform_roles" {
         Effect = "Allow"
         Action = "ssm:GetParameters"
         Resource = [
-          for name in ["postgres_password", "airflow_db_password", "marquez_db_password", "airflow_fernet_key", "airflow_jwt_secret", "airflow_api_secret_key", "redis_password", "polaris_root_secret", "grafana_admin_password"] :
+          for name in ["postgres_password", "airflow_db_password", "marquez_db_password", "airflow_fernet_key", "airflow_jwt_secret", "airflow_api_secret_key", "redis_password", "polaris_root_secret"] :
           "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/${name}"
         ]
       } &&
-      length(one([for statement in jsondecode(aws_iam_role_policy.task_execution.policy).Statement : statement.Resource if statement.Sid == "InjectNamedParameters"])) == 9 &&
+      length(one([for statement in jsondecode(aws_iam_role_policy.task_execution.policy).Statement : statement.Resource if statement.Sid == "InjectNamedParameters"])) == 8 &&
       !anytrue([for statement in jsondecode(aws_iam_role_policy.task_execution.policy).Statement : anytrue([for resource in flatten([statement.Resource]) : strcontains(resource, "parameter") && (strcontains(resource, "*") || strcontains(resource, "?"))])]) &&
       !strcontains(aws_iam_role_policy.task_execution.policy, "secretsmanager") && !strcontains(aws_iam_role_policy.task_execution.policy, "kms:") &&
       !anytrue([for role_policy in [aws_iam_role_policy.ecs_host, aws_iam_role_policy.polaris_task, aws_iam_role_policy.snapshots] : strcontains(role_policy.policy, "ssm:GetParameter") || strcontains(role_policy.policy, "secretsmanager")]) &&
@@ -812,10 +818,10 @@ run "project_secret_names" {
       for name in [
         "postgres_password", "polaris_root_secret", "polaris_reader_client_id", "polaris_reader_client_secret", "polaris_gold_client_id",
         "polaris_gold_client_secret", "polaris_silver_client_id", "polaris_silver_client_secret", "airflow_db_password", "airflow_fernet_key",
-        "airflow_jwt_secret", "airflow_api_secret_key", "marquez_db_password", "redis_password", "mlflow_db_password", "mlflow_admin_password", "grafana_admin_password",
+        "airflow_jwt_secret", "airflow_api_secret_key", "marquez_db_password", "redis_password", "mlflow_db_password", "mlflow_admin_password",
       ] : "/healthcare_hai_prediction/${name}"
     ]
-    error_message = "The managed parameters are exactly the 16 project parameters under /healthcare_hai_prediction/, none of them the Airflow administrator password."
+    error_message = "While monitoring is off the managed parameters are exactly the 16 project parameters under /healthcare_hai_prediction/, none of them the Airflow administrator password or the Grafana password."
   }
 
   assert {
@@ -1343,4 +1349,55 @@ run "reject_alert_above_one_hundred_percent" {
   }
 
   expect_failures = [var.budget_alert_percentages]
+}
+
+# Monitoring is off by default in every stack. While it is off the IAM stack must not change: no Grafana parameter in the task execution policy
+# and none in the managed parameter inventory.
+run "monitoring_off_leaves_the_iam_stack_unchanged" {
+  command = plan
+
+  assert {
+    condition = (
+      !var.monitoring_enabled &&
+      length(aws_iam_role_policy.task_execution_monitoring) == 0 &&
+      !strcontains(aws_iam_role_policy.task_execution.policy, "grafana") &&
+      !contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/grafana_admin_password") &&
+      length(output.project_secret_names.managed_parameters) == 16
+    )
+    error_message = "With monitoring off, the task execution policy and the managed parameter inventory hold no Grafana password."
+  }
+}
+
+run "monitoring_on_adds_only_the_grafana_parameter" {
+  command = plan
+
+  variables {
+    monitoring_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role_policy.task_execution_monitoring) == 1 &&
+      aws_iam_role_policy.task_execution_monitoring[0].role == "example_project_task_execution_dev" &&
+      jsondecode(aws_iam_role_policy.task_execution_monitoring[0].policy) == {
+        Version = "2012-10-17"
+        Statement = [{
+          Sid      = "InjectGrafanaAdminPassword"
+          Effect   = "Allow"
+          Action   = "ssm:GetParameters"
+          Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/grafana_admin_password"]
+        }]
+      }
+    )
+    error_message = "With monitoring on, the execution role gains a separate policy that injects the one Grafana parameter and nothing else."
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_iam_role_policy.task_execution.policy, "grafana") &&
+      length(output.project_secret_names.managed_parameters) == 17 &&
+      contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/grafana_admin_password")
+    )
+    error_message = "The base task execution policy is the same in both states. The inventory gains the Grafana name only while monitoring is on."
+  }
 }
