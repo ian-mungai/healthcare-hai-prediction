@@ -51,6 +51,7 @@ DIGEST = "ab" * 32
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
 JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote"})
 BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
+BRONZE_RUN_2 = "20261030T090000Z-b1b1b1b1"
 BRONZE_FAMILIES = JOB_FAMILIES | {"bronze"}
 INVENTORY = "cd" * 32
 
@@ -78,7 +79,8 @@ class Rig:
         self.signed = signed
         self.ecs, self.logs, self.s3 = FakeEcs(), FakeLogs(), FakeS3()
         self.s3.objects[f"lakehouse/run_stage/{RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
-        self.s3.objects[f"lakehouse/run_stage/{BRONZE_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
+        for bronze_run in (BRONZE_RUN, BRONZE_RUN_2):
+            self.s3.objects[f"lakehouse/run_stage/{bronze_run}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         for run in (SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN):
             self.s3.objects[f"lakehouse/run_stage/{run}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         self.clock = [1_800_000_000.0]
@@ -762,14 +764,12 @@ def logs_hide_the_token() -> None:
         require("step done" in text and SESSION_KEY not in text and "[redacted]" in text, f"the log tail is wrong: {text!r}")
 
 
-def stage_bronze_request(current: Rig, document: object) -> None:
-    current.s3.objects[f"lakehouse/run_stage/{BRONZE_RUN}/inputs/bronze_request.json"] = (
-        document if isinstance(document, bytes) else json.dumps(document).encode()
-    )
+def stage_bronze_request(current: Rig, document: object, run: str = BRONZE_RUN) -> None:
+    current.s3.objects[f"lakehouse/run_stage/{run}/inputs/bronze_request.json"] = document if isinstance(document, bytes) else json.dumps(document).encode()
 
 
-def bronze_request(attempt: int = 1) -> SubmissionRequest:
-    return SubmissionRequest("bronze_load", BRONZE_RUN, "real", attempt, "ingestion_dag", "bronze_load", "manual__test", None, None, None)
+def bronze_request(attempt: int = 1, run: str = BRONZE_RUN) -> SubmissionRequest:
+    return SubmissionRequest("bronze_load", run, "real", attempt, "ingestion_dag", "bronze_load", "manual__test", None, None, None)
 
 
 def bronze_variables(current: Rig) -> dict[str, dict[str, str]]:
@@ -796,8 +796,8 @@ def bronze_job_gets_its_checked_dispatch_values() -> None:
         for container in ("pin", "load", "check"):
             require(all(values[container][name] == value for name, value in dispatch.items()), f"{container}: {values[container]}")
         require(values["load"]["POLARIS_URI"] == "http://10.0.0.5:8181/api/catalog" and "POLARIS_URI" not in values["check"], str(values["load"]))
-        stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True, "inventory_sha256": INVENTORY})
-        wait_for(current, current.client.submit(bronze_request(2)))
+        stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True, "inventory_sha256": INVENTORY}, BRONZE_RUN_2)
+        wait_for(current, current.client.submit(bronze_request(1, BRONZE_RUN_2)))
         second = [arguments for name, arguments in current.ecs.calls if name == "run_task"][1]
         later = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in second["overrides"]["containerOverrides"]}
         require(later["load"]["BRONZE_TARGET"] == "qualify" and later["load"]["BRONZE_DRY_RUN"] == "1", str(later["load"]))
@@ -932,6 +932,55 @@ def bronze_containers_share_one_absolute_deadline() -> None:
         )
 
 
+def refused_text(action: Callable[[], object]) -> str:
+    try:
+        action()
+    except SubmissionRefused as error:
+        return str(error)
+    raise AssertionError("expected SubmissionRefused")
+
+
+def bronze_later_attempts_are_bound_to_the_first_checked_request() -> None:
+    pair, _ = table_pair()
+    first = {"tables": pair, "target": "qualify", "dry_run": True, "inventory_sha256": INVENTORY}
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, first)
+        wait_for(current, current.client.submit(bronze_request()))
+        stage_bronze_request(current, {**first, "target": "real", "dry_run": False})
+        text = refused_text(lambda: current.client.submit(bronze_request(2)))
+        require("request" in text and "start a new run ID" in text, text)
+        require(current.ecs.count("run_task") == 1, "a changed request started a second task")
+        lines = (current.folder / "state" / f"{BRONZE_RUN}.jsonl").read_text().splitlines()
+        require(all(json.loads(line)["attempt"] == 1 for line in lines), "a refused attempt left a ledger line")
+        stage_bronze_request(current, first)
+        require(
+            wait_for(current, current.client.submit(bronze_request(2))).state == State.SUCCEEDED and current.ecs.count("run_task") == 2,
+            "the unchanged request must start attempt 2",
+        )
+
+
+def bronze_later_attempts_are_bound_to_the_first_inventory() -> None:
+    pair, _ = table_pair()
+    first = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, first)
+        current.ecs.plan = {"load": 1}
+        require(wait_for(current, current.client.submit(bronze_request())).state == State.FAILED, "the first attempt must fail")
+        stage_bronze_request(current, {**first, "inventory_sha256": "ef" * 32})
+        text = refused_text(lambda: current.client.submit(bronze_request(2)))
+        require("inventory" in text and "start a new run ID" in text, text)
+        require(current.ecs.count("run_task") == 1, "a changed inventory started a second task")
+
+
+def bronze_binding_is_per_run() -> None:
+    pair, _ = table_pair()
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
+        stage_bronze_request(current, {"tables": pair[:1], "target": "qualify", "dry_run": True, "inventory_sha256": "ef" * 32}, BRONZE_RUN_2)
+        wait_for(current, current.client.submit(bronze_request()))
+        require(wait_for(current, current.client.submit(bronze_request(1, BRONZE_RUN_2))).state == State.SUCCEEDED, "another run ID has its own request")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "task_runs_through_the_broker": task_runs_through_the_broker,
     "repeated_submit_one_task": repeated_submit_one_task,
@@ -984,4 +1033,7 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_request_is_read_once_and_bound_to_the_task": bronze_request_is_read_once_and_bound_to_the_task,
     "bronze_retry_after_a_throttled_start_keeps_the_checked_request": bronze_retry_after_a_throttled_start_keeps_the_checked_request,
     "bronze_containers_share_one_absolute_deadline": bronze_containers_share_one_absolute_deadline,
+    "bronze_later_attempts_are_bound_to_the_first_checked_request": bronze_later_attempts_are_bound_to_the_first_checked_request,
+    "bronze_later_attempts_are_bound_to_the_first_inventory": bronze_later_attempts_are_bound_to_the_first_inventory,
+    "bronze_binding_is_per_run": bronze_binding_is_per_run,
 }

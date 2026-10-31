@@ -296,6 +296,21 @@ class EcsBroker:
             self.require_promotion_approval(request)
         return job
 
+    def require_bound(self, request: SubmissionRequest, job: str, fixed: Mapping[str, str]) -> None:
+        """Every attempt of a run uses the request and the source inventory its first attempt had checked. A changed one needs a new run ID."""
+        if "BRONZE_REQUEST_SHA256" not in fixed:
+            return
+        first = next((line for line in self.ledger.read(request.run_id) if line["event"] == "intent" and line.get("job") == job and "dispatch" in line), None)
+        if first is None:
+            return
+        bound = first["dispatch"]
+        for name, label in (("BRONZE_INVENTORY_SHA256", "inventory"), ("BRONZE_REQUEST_SHA256", "request")):
+            if bound.get(name) != fixed[name]:
+                raise SubmissionRefused(
+                    f"run {request.run_id} is bound to the {label} of its first attempt ({bound.get(name, '')[:12]}), "
+                    f"but the staged {label} is {fixed[name][:12]}: start a new run ID for a changed {label}"
+                )
+
     def dispatch_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
         """The values fixed once for a submission: the checked bronze request, read once, and the absolute deadline of the task."""
         names = {name for variables in self.jobs[job]["containers"].values() for name in variables}
@@ -460,6 +475,8 @@ class EcsBroker:
             lines = self.ledger.submissions(request.run_id).get(request.submission_id)
             if lines is None:
                 fixed = self.dispatch_values(request, job) if job else {}
+                if job:
+                    self.require_bound(request, job, fixed)
                 self.append(
                     {
                         "event": "intent",

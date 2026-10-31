@@ -111,7 +111,7 @@ The `bronze` job writes one new source capture into bronze. It is one Fargate ta
 
 Two values change from run to run, the tables and the target. Both come at dispatch from a file the run stages beside its code archive. Both are checked twice. The broker reads `bronze_request.json` before it starts the task. It refuses a table outside the table map, a repeated table, a target other than `real` or `qualify`, a qualification run that spans two collections and any key beyond the three below. The broker reads the file once, persists the checked values and their digest with the intent and passes them to every container and every retry. The `pin` phase reads the staged file again and refuses it when its digest differs from the one the broker checked, so a file replaced after the check cannot change the run. A request marked as a dry run cannot run live. The `pin` phase also checks the same values against the table map of the unpacked code. The `load` and `check` phases refuse values that differ from the pin.
 
-The request also names the digest of a source inventory. The inventory lists the manifest versions and object versions the run may read. The `load` phase reads only those versions, in the dry run and in the real loader. A capture that arrives after the inventory was built is therefore not part of the run. Every attempt of the run loads the same objects. A different capture needs a new run ID with a new inventory.
+The request also names the digest of a source inventory. The inventory lists the manifest versions and object versions the run may read. The `load` phase reads only those versions, in the dry run and in the real loader. A capture that arrives after the inventory was built is therefore not part of the run. Every attempt of the run loads the same objects. A different capture needs a new run ID with a new inventory. All `load` imports (`boto3`, `pdfplumber`, `openpyxl`, `xlrd`, `pyreadstat` and Spark) are installed in the Spark image. The bronze driver E2E checks this against the image requirements.
 
 ```json
 {"tables": ["<TABLE_A>", "<TABLE_B>"], "target": "qualify", "dry_run": true, "inventory_sha256": "<SHA256_OF_THE_INVENTORY>"}
@@ -148,7 +148,7 @@ Apply the bronze job in this order. Each apply is the owner's.
    curl -s -H "Authorization: Bearer $BROKER_TOKEN" -d '{"request_version": 2, "template": "bronze_load", "run_id": "<RUN_ID>", "mode": "real", "attempt": 1, "dag_id": "manual_bronze", "task_id": "bronze_load", "dag_run_id": "manual__<RUN_ID>"}' http://127.0.0.1:18790/v1/submit
    ```
 
-   Poll `/v1/status` with `{"submission_id": "<RUN_ID>:bronze_load:real:1"}` until it is `succeeded` or `failed`. A second submit of the same run and attempt returns the same handle. A new attempt number starts a new task that repeats the same rows.
+   Poll `/v1/status` with `{"submission_id": "<RUN_ID>:bronze_load:real:1"}` until it is `succeeded` or `failed`. A second submit of the same run and attempt returns the same handle. A new attempt number starts a new task that repeats the same rows. Every attempt of a run must use the request and the inventory that its first attempt had checked. The broker refuses a changed one by name and tells the owner to start a new run ID. It keeps this binding in its ledger on the host volume, so a task started by hand outside the broker is not bound.
 
 When a `real` run passes, the `check` log line prints the command that starts the chain by hand:
 

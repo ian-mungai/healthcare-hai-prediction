@@ -11,6 +11,7 @@ case can prove what a run wrote, and where.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import io
@@ -497,6 +498,57 @@ def case_the_owner_stages_an_inventory_the_pin_accepts(case: Case) -> None:
     require(case.phase("load", target="qualify", staged=True) == 0 and '"objects":2' in case.out.replace(" ", ""), case.err + case.out[-300:])
 
 
+ROOT = Path(__file__).resolve().parents[2]
+IMAGE = ROOT / "services/lakehouse/spark"
+LOCAL_PACKAGES = ("scripts", "orchestration", "services", "features", "config")
+
+
+def third_party_imports(module: str) -> dict[str, set[str]]:
+    """Every third-party package that the module and the repository modules it imports can import, with their importers (static, lazy imports included)."""
+    seen: set[str] = set()
+    found: dict[str, set[str]] = {}
+
+    def source(name: str) -> Path | None:
+        base = ROOT / name.replace(".", "/")
+        return base.with_suffix(".py") if base.with_suffix(".py").exists() else (base / "__init__.py" if (base / "__init__.py").exists() else None)
+
+    def walk(name: str) -> None:
+        path = source(name)
+        if name in seen or path is None:
+            return
+        seen.add(name)
+        for node in ast.walk(ast.parse(path.read_text())):
+            names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else []
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            for imported in names:
+                top = imported.split(".")[0]
+                if top in LOCAL_PACKAGES:
+                    walk(imported)
+                elif top not in sys.stdlib_module_names:
+                    found.setdefault(top, set()).add(name)
+
+    walk(module)
+    return found
+
+
+def image_packages(requirements: str) -> set[str]:
+    """The distributions that the Spark image installs, plus pyspark, which the image puts on PYTHONPATH from the Spark distribution."""
+    pinned = {line.split("==")[0].strip().lower().replace("-", "_") for line in requirements.splitlines() if "==" in line and not line.startswith((" ", "#"))}
+    return pinned | {"pyspark"}
+
+
+def case_the_spark_image_has_every_package_the_driver_imports(case: Case) -> None:
+    needed = third_party_imports("scripts.lakehouse.bronze_run")
+    require({"boto3", "pdfplumber", "openpyxl", "xlrd", "pyreadstat", "pyspark"} <= set(needed), sorted(needed))
+    requirements = (IMAGE / "requirements.txt").read_text()
+    require("/opt/spark/python" in (IMAGE / "Dockerfile").read_text(), "the image must put pyspark on PYTHONPATH")
+    missing = sorted(set(needed) - image_packages(requirements))
+    require(not missing, f"the Spark image does not install {missing}")
+    without = "\n".join(line for line in requirements.splitlines() if not line.startswith("pdfplumber=="))
+    require(sorted(set(needed) - image_packages(without)) == ["pdfplumber"], "a requirements file without pdfplumber must be caught")
+
+
 CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
@@ -522,6 +574,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a dry request cannot run live": case_a_dry_request_cannot_run_live,
     "qualification metadata is scoped to the selected tables": case_qualification_metadata_is_scoped_to_the_selected_tables,
     "the owner stages an inventory that the pin accepts": case_the_owner_stages_an_inventory_the_pin_accepts,
+    "the Spark image installs every package the driver imports": case_the_spark_image_has_every_package_the_driver_imports,
 }
 
 
