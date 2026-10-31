@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -25,6 +26,8 @@ from urllib.parse import urlsplit
 
 from scripts.orchestration.sdk_standins import Scenario, WorkerStandin
 from scripts.process_group import process_snapshot
+
+ERROR_TEXT_LIMIT = 4000  # the cases are synthetic, so an error text holds no secret; the limit only bounds the report
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATHS = (
@@ -166,9 +169,11 @@ def source_checks(root: Path = ROOT) -> dict[str, bool]:
 class NativeCleanupUnconfirmed(RuntimeError):
     """Stop the native queue and retain its owned files after an unresolved cleanup."""
 
-    def __init__(self, registry: Path, cleanup: dict[str, Any]) -> None:
+    def __init__(self, registry: Path, cleanup: dict[str, Any], during: BaseException | None = None) -> None:
         super().__init__("native_worker_cleanup_unconfirmed")
-        self.record = {"registry": str(registry), "cleanup": cleanup}
+        self.record: dict[str, Any] = {"registry": str(registry), "cleanup": cleanup}
+        if during is not None:  # the error of the case body, which the cleanup error would otherwise hide
+            self.record["during"] = {"error_type": type(during).__name__, "message": str(during)[:ERROR_TEXT_LIMIT]}
 
 
 @contextlib.contextmanager
@@ -179,9 +184,10 @@ def _owned_api(config: Any, registry: Path) -> Iterator[Any]:
     try:
         yield api
     finally:
+        during = sys.exc_info()[1]
         cleanup = api.close(deadline=time.monotonic() + 10)
         if not cleanup["confirmed"]:
-            raise NativeCleanupUnconfirmed(registry, cleanup)
+            raise NativeCleanupUnconfirmed(registry, cleanup, during)
 
 
 def _request_fixture(root: Path, operation: str) -> dict[str, Any]:
@@ -1066,7 +1072,15 @@ def main() -> int:
         except NativeCleanupUnconfirmed as error:
             rows.append({"case": "cleanup_unconfirmed", "checks": {"confirmed": False}, "evidence": error.record})
         except (OSError, ValueError, RuntimeError, TimeoutError, EOFError, KeyError, TypeError, KeyboardInterrupt) as error:
-            rows.append({"case": "native_case_error", "checks": {"completed": False}, "error_type": type(error).__name__})
+            rows.append(
+                {
+                    "case": "native_case_error",
+                    "checks": {"completed": False},
+                    "error_type": type(error).__name__,
+                    "message": str(error)[:ERROR_TEXT_LIMIT],
+                    "traceback": traceback.format_exc()[-ERROR_TEXT_LIMIT:],
+                }
+            )
     rows.append(
         {"case": "frozen_sources", "checks": {"unchanged": hashes == {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in sources}}}
     )
