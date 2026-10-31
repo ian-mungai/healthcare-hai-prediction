@@ -1284,6 +1284,8 @@
     "scripts/acquisition/tests/test_history_redirects.py",
     "scripts/acquisition/tests/test_history_routes.py",
     "scripts/acquisition/tests/test_mapped_archives.py",
+    "scripts/acquisition/tests/test_mmd_mirror.py",
+    "scripts/acquisition/tests/test_mmd_mirror_proof.py",
     "scripts/acquisition/tests/test_offline_e2e.py",
     "scripts/acquisition/tests/test_plan_archive_members.py",
     "scripts/acquisition/tests/test_plan_remaining.py",

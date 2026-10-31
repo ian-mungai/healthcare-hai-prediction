@@ -24,7 +24,8 @@ import urllib.error
 import urllib.parse
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -79,6 +80,7 @@ class Run:
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
     keyed_lane: bool = False
+    carried_modes: frozenset[str] | None = None
     lane_approval: Path | None = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
@@ -931,7 +933,7 @@ TASK_ENVIRONMENT = (
 )
 
 
-def lane_of(unit: dict) -> str:
+def lane_of(unit: dict, carried: frozenset[str] | None = None) -> str:
     """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
     mode = handler_mode(unit)
     if mode in SECRET_MODES:
@@ -940,9 +942,16 @@ def lane_of(unit: dict) -> str:
         return "needs_person"
     if mode in PRIVATE_COLLECTORS:
         return "needs_owner_decision_private"
-    if mode == "mmd_api":
-        return "needs_local_data"
-    return TASK if mode in {"file", "il_directory"} else "unclassified"
+    if mode not in {"file", "il_directory", "mmd_api"}:
+        return "unclassified"
+    return TASK if carried is None or mode in carried else "needs_local_data"
+
+
+def run_carried(run: Run) -> frozenset[str] | None:
+    """The modes the run's mirror serves. A run with no mirror serves every task mode, and an older mirror without the list carries only files and pages."""
+    if run.stored_root is None:
+        return None
+    return run.carried_modes or frozenset({"file", "il_directory"})
 
 
 ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {
@@ -1071,9 +1080,38 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
     return fields | {"outcome": "exact_match" if same else "changed_needs_review", "excluded_parts": sorted(excluded)}
 
 
+@contextmanager
+def working_folder(run: Run) -> Iterator[Path]:
+    """Run in the code root with the stored mirror's data folder linked in as ``data``.
+
+    The MMD collector opens plans and references by relative path and resolves legacy registry versions from the code root. In a task the code
+    root has no data folder, so the link stands in for it while the unit runs, and it is removed afterwards. Without a mirror nothing changes.
+    """
+    if run.stored_root is None:
+        yield Path.cwd()
+        return
+    data = run.stored_root / "data"
+    if not data.is_dir():
+        raise CaptureError("The stored mirror has no data folder, so it cannot serve a collector that reads stored files by relative path.")
+    link = run.base / "data"
+    if link.exists() or link.is_symlink():
+        raise CaptureError("The code root already has a data folder, so the stored mirror is not linked over it.")
+    link.symlink_to(data)
+    before = Path.cwd()
+    os.chdir(run.base)
+    try:
+        yield run.base
+    finally:
+        os.chdir(before)
+        link.unlink()
+
+
 def handle(unit: dict, run: Run) -> dict:
     adapters = ADAPTERS if run.adapters is None else run.adapters
     mode = handler_mode(unit)
+    if mode == "mmd_api" and run.stored_root is not None:
+        with working_folder(run):
+            return collector_unit(unit, run, adapters[mode])
     if mode in adapters:
         return collector_unit(unit, run, adapters[mode])
     if unit["disposition"] == "approved_manual":
@@ -1181,7 +1219,7 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         # Checked again for every unit at dispatch time, against the accepted controls only (failure mode 59).
         if not in_reviewed_scope(run, source):
             continue
-        lane = lane_of(unit)
+        lane = lane_of(unit, run_carried(run))
         if run.keyed_lane:
             if lane != KEYED:
                 continue
@@ -1326,6 +1364,7 @@ def run_from(
         route=files,
         materialize=mirror.materialize if mirror else None,
         stored_root=mirror.root if mirror else None,
+        carried_modes=mirror.carried if mirror else None,
         keyed_lane=bool(getattr(args, "keyed_lane", False)),
         lane_approval=getattr(args, "lane_approval", None),
     )

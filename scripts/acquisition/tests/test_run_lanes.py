@@ -16,8 +16,8 @@ from tests.support import check
 KINDS = {
     "file": ("file", "direct_download", [], "task"),
     "page": ("il_directory", "direct_download", [], "task"),
-    "mmd": ("mmd_api", "api", [], "needs_local_data"),
-    "mmd_moved": ("file", "api", ["browser_export_moved_to_api"], "needs_local_data"),
+    "mmd": ("mmd_api", "api", [], "task"),
+    "mmd_moved": ("file", "api", ["browser_export_moved_to_api"], "task"),
     "bls": ("bls_api_v2", "api", [], "keyed_mac_lane"),
     "census": ("census_acs_api", "api", [], "keyed_mac_lane"),
     "census_detailed": ("census_acs_detailed", "api", [], "keyed_mac_lane"),
@@ -88,10 +88,11 @@ def dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **run_fields: Any)
 def test_the_task_attempts_only_the_units_its_mirror_can_serve_and_lists_the_rest_by_reason(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
     seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror")
-    served = sorted(unit_id for unit_id, lane in LANES.items() if lane == "task")
+    mmd = {"mmd__2", "mmd_moved__3"}
+    served = sorted(unit_id for unit_id, lane in LANES.items() if lane == "task" and unit_id not in mmd)
     check(sorted(seen) == served, f"the task attempted {sorted(seen)}")
     for lane in ("needs_local_data", "needs_person", "needs_owner_decision_private", "keyed_mac_lane"):
-        expected = sorted(unit_id for unit_id, found in LANES.items() if found == lane)
+        expected = sorted(unit_id for unit_id, found in LANES.items() if found == lane or (lane == "needs_local_data" and unit_id in mmd))
         check(sorted(summary["not_attempted"][lane]) == expected, f"{lane} units are listed: {summary.get('not_attempted')}")
 
 
@@ -217,7 +218,7 @@ def test_an_approved_lane_attempts_only_the_keyed_units_and_the_task_never_the_s
     check(sorted(seen) == keyed, f"the lane attempted {sorted(seen)}")
     check(summary.get("needs_secret") is None, "the lane does not list its own units as blocked")
     (tmp_path / "task").mkdir()
-    task_seen, _ = dispatch(monkeypatch, tmp_path / "task", stored_root=tmp_path / "mirror")
+    task_seen, _ = dispatch(monkeypatch, tmp_path / "task", stored_root=tmp_path / "mirror", carried_modes=frozenset({"file", "il_directory", "mmd_api"}))
     check(not set(task_seen) & set(seen), "no unit runs in both lanes")
 
 
