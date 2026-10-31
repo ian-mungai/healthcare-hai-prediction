@@ -21,7 +21,7 @@ provider "aws" {
 # secret is a Parameter Store SecureString, and the Airflow administrator password is read only.
 locals {
   shared_secret_names = [var.census_secret_name, var.bls_secret_name, var.hud_secret_name, var.jev_secret_name]
-  managed_parameter_names = [
+  managed_parameter_names = concat([
     var.postgres_password_name,
     var.polaris_root_secret_name,
     var.polaris_reader_client_id_name,
@@ -38,7 +38,6 @@ locals {
     var.redis_password_name,
     var.mlflow_db_password_name,
     var.mlflow_admin_password_name,
-    var.grafana_admin_password_name,
-  ]
+  ], var.monitoring_enabled ? [var.grafana_admin_password_name] : [])
   read_parameter_names = concat([var.airflow_admin_secret_name], local.managed_parameter_names)
 }

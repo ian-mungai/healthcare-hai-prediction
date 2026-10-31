@@ -544,3 +544,10 @@ variable "aws_polaris_gold_client_secret_name" {
     error_message = "Use the dedicated aws_polaris_gold_client_secret parameter path with at most 15 underscore-compatible parts and 512 characters."
   }
 }
+
+variable "monitoring_enabled" {
+  description = "Prepare the monitoring permissions: the task execution role may inject the Grafana administrator password and the managed parameter inventory names it. Keep false until monitoring is enabled in the platform and services stacks. While false the IAM stack carries no monitoring permission."
+  type        = bool
+  default     = false
+  nullable    = false
+}
