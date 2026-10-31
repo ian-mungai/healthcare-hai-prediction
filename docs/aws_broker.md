@@ -76,12 +76,7 @@ Each of the `silver`, `gold` and `features` jobs is one Fargate task. The first 
 
 The publish phase runs the publish acceptance checks and exits non-zero on any failure. Before the commit, every table's row count and content fingerprint must equal its candidate snapshot. The candidates must also be exactly the contract's tables. After the commit, the commit record must name every candidate snapshot ID and follow the backup that followed the reconcile. The `publish_runs` row is the last catalog write of the publish step. The upload and feast phases refuse a run whose records fail these checks. A run ID is used once: the pin phase writes `state/pinned.json` under the run prefix only if it does not exist, so a second pin of the same run ID fails by name before it writes anything shared. An interrupted run restarts under a new run ID after the owner has checked the abandoned catalog branch. A dry run takes no run ID and leaves no state. Before any catalog write it also lists the versions of the input prefix again and compares them with the listing taken at the pin: bronze for silver, silver for gold and gold for features. Any added, replaced or deleted version stops the publish. A prefix too large to list within the bound is refused. Silver must pin exactly the tables of `config/lakehouse/bronze_tables.json`. Gold must pin exactly the tables of the silver publish contract. That is a contract check and not a comparison with the silver `publish_runs` row, so the owner compares that row by hand at the first gold run.
 
-Apply the layer jobs in this order. Each apply is the owner's.
-
-1. `infra/iam` (administrator profile): set `job_writer_layers_prepared = true` and `job_layer_runs_prepared = true`, then plan and apply. The roles read only their input layer and may list the object versions of that one prefix. Silver and gold put objects under `lakehouse/layer_runs/<layer>/` only. Features reads and writes the one Feast registry object and reads the Redis password parameter.
-2. Put each layer's catalog client pair in the secret store, as for the writer roles.
-3. `infra/jobs`: set `layer_jobs_enabled = true` and `layer_jobs = ["silver"]` first, with the image digests, the role ARNs from the `job_roles` output, `writer_parameter_names` and the jobs log group. Add `gold` and `features` after the silver publish passes. For features, set `layer_feast_redis_host`. The output `layer_run_tasks` lists the variables of each container.
-4. Add the family to `broker_job_families` in `infra/iam` and apply, then add it to `broker_jobs` in `infra/services`.
+The owner runs silver first and adds gold and features after the silver publish passes. The numbered list under "Silver first run" is the whole sequence from clean defaults.
 
 ### Dry run
 
@@ -106,6 +101,84 @@ Gold needs the committed silver run as its input run and features needs the comm
 ```
 
 Pass `--overrides file://overrides.json` to the run-task call. For a real run, leave out `--dry-run`.
+
+## Silver first run
+
+Nothing in this list has run against AWS. Each apply is the owner's. Show the plan first and apply exactly that plan. The list starts from the state that `docs/infrastructure_controls.md` and `docs/aws_control_plane.md` describe: the storage, IAM, platform and services stacks are applied, the host runs, the catalog `hai_lakehouse` exists and the bronze tables are registered in it.
+
+1. Read the platform values once. The jobs file and the run-task command below need the cluster name, the project tag and the jobs log group name:
+
+   ```sh
+   terraform -chdir=infra/platform output -json cluster_name project_tag log_group_names
+   ```
+
+2. `infra/iam` (administrator profile): set `job_writer_layers_prepared`, `job_layer_runs_prepared` and `job_endpoints_enabled` to `true` in `config/aws/iam_preparation.json`. The third flag creates the private endpoints for ECR, the log service, Parameter Store and S3 and their HTTPS rules. Without it the silver task has no way to pull its image. Then plan and apply:
+
+   ```sh
+   bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE> plan -out <PLAN>
+   bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE> apply <PLAN>
+   ```
+
+   The plan must add the roles `job_write_silver_task`, `job_write_gold_task` and `job_write_features_task`, the layer run grants and the endpoints. It must change nothing else. After the apply read the outputs and stop if `endpoints_enabled` is not `true`:
+
+   ```sh
+   terraform -chdir=infra/iam output -json job_network
+   terraform -chdir=infra/iam output -json job_roles
+   terraform -chdir=infra/iam output -json job_writer_layer_contract
+   ```
+
+   Keep the `subnet_id` and the `lakehouse` security group of `job_network`, the ARNs of `execution` and `write_silver_task` in `job_roles` and the two silver names in `job_writer_layer_contract`.
+3. Policy scripts (administrator profile): run `manage_policies plan`. When it shows a change, run `manage_policies apply` with the typed confirmation. The project user's policy must pass `job_execution` and `job_write_silver_task`, start tagged tasks in the project cluster and read log events.
+4. Catalog identities (project profile): create the reader and the silver writer, approve the namespace `silver` for the writer and read back the stored pair names:
+
+   ```sh
+   .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader --instance <HOST_INSTANCE_ID>
+   .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity silver --instance <HOST_INSTANCE_ID> --namespace-approval <APPROVAL_ID>
+   .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check
+   ```
+
+   The check must report both `aws_polaris_reader` parameters and both `aws_polaris_silver` parameters with a type and a version.
+5. Images (project profile): the repositories `spark`, `analytics` and `quality` exist by default. Build and push the three images with `push_images plan --only spark analytics quality`, run the printed commands and record the pushed digests. Each image reference is `<ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/<PROJECT_NAME>_<IMAGE>_<ENVIRONMENT>@sha256:<DIGEST>`.
+6. `infra/jobs` (project profile): write a reviewed file `jobs_silver.json` outside Git and bind it to its digest. It holds `layer_jobs_enabled` set to `true`, `layer_jobs` set to `["silver"]`, the three references from step 5 in `images`, the ARNs `execution` and `write_silver_task` of the `job_roles` output from step 2 in `job_role_arns`, the two silver names of the `job_writer_layer_contract` output from step 2 in `writer_parameter_names` under `write_silver_task` and the jobs group of the platform output log_group_names from step 1 in `log_group_name`:
+
+   ```json
+   {"schema_version": 1, "root": "jobs", "variables": {"layer_jobs_enabled": true, "layer_jobs": ["silver"], "images": {"analytics": "<REF>", "quality": "<REF>", "spark": "<REF>"},
+    "job_role_arns": {"execution": "<ARN>", "write_silver_task": "<ARN>"}, "writer_parameter_names": {"write_silver_task": ["<ID_NAME>", "<SECRET_NAME>"]}, "log_group_name": "<JOBS_GROUP>"}}
+   ```
+
+   ```sh
+   shasum -a 256 jobs_silver.json
+   bash scripts/infrastructure/terraform.sh --jobs --preparation-inputs jobs_silver.json --preparation-sha256 <SHA256> plan -out <PLAN>
+   bash scripts/infrastructure/terraform.sh --jobs --preparation-inputs jobs_silver.json --preparation-sha256 <SHA256> apply <PLAN>
+   ```
+
+   The plan must register one task definition, `<PROJECT_NAME>_<ENVIRONMENT>_job_silver` and nothing else. After the apply, `terraform -chdir=infra/jobs output -json layer_run_tasks` must list `silver` with the network `lakehouse` and no public address.
+7. Stage the code under a new run ID. The archive comes from `scripts.lakehouse.code_archive`, which adds the verified dbt packages. Use a new run ID for every run that is not the dry run of the same code. Read "Apply order" step 6 for the rebuild of the package archive on a fresh clone:
+
+   ```sh
+   .venv/bin/python -m scripts.lakehouse.code_archive build --output /tmp/code_<RUN_ID>
+   aws s3 cp /tmp/code_<RUN_ID>/code.tar.gz s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/code.tar.gz --profile <PROJECT_PROFILE>
+   aws s3 cp /tmp/code_<RUN_ID>/code.sha256 s3://<DATA_BUCKET>/lakehouse/run_stage/<RUN_ID>/inputs/code.sha256 --profile <PROJECT_PROFILE>
+   ```
+
+8. Dry run (project profile). Write the overrides as in "Dry run" with `--dry-run`, then start the task in the private subnet with the `lakehouse` group of step 2. The explicit `Project` tag is required, because IAM checks it on the RunTask request:
+
+   ```sh
+   aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --task-definition <PROJECT_NAME>_<ENVIRONMENT>_job_silver \
+     --capacity-provider-strategy capacityProvider=FARGATE,weight=1 --propagate-tags TASK_DEFINITION --enable-ecs-managed-tags --tags key=Project,value=<PROJECT_TAG> \
+     --network-configuration 'awsvpcConfiguration={subnets=[<SUBNET_ID>],securityGroups=[<LAKEHOUSE_SECURITY_GROUP>],assignPublicIp=DISABLED}' \
+     --overrides file://overrides.json --query '{taskArn:tasks[0].taskArn,failures:failures}'
+   ```
+
+   Continue only when `failures` is empty. Follow the task with `aws ecs describe-tasks --cluster <CLUSTER_NAME> --tasks <TASK_ARN>` until it stops. If RunTask rejects a repeated tag key, run it again without `--propagate-tags`.
+9. Read the plan from the log events of the publish container. The line that starts with `DRY_RUN_PLAN` holds it. A line that starts with `UNKNOWN` or `CATALOG` means the dry run could not read that catalog state:
+
+   ```sh
+   aws logs filter-log-events --profile <PROJECT_PROFILE> --region <REGION> --log-group-name <JOBS_GROUP> --log-stream-name-prefix silver/publish/ --filter-pattern DRY_RUN_PLAN
+   ```
+
+10. Real run: write the overrides again without `--dry-run`, start the task as in step 8 and read the `silver/upload` and `silver/publish` streams. Record the run ID and the silver snapshot IDs for the signed record in "Sign the first publishes".
+11. Gold and features come after the silver publish passes. Repeat steps 6 to 10 with `layer_jobs` extended by the layer, its role in `job_role_arns`, its pair in `writer_parameter_names` and the committed silver run in `--input-run`. Features also needs `layer_feast_redis_host`, the feature store image in `train_images` and the host Redis address. Add each family to `broker_job_families` in `infra/iam` and to `broker_jobs` in `infra/services` only when the broker should start it.
 
 ## Bronze job
 

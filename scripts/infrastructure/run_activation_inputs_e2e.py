@@ -54,15 +54,47 @@ IMAGE = f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_%s_dev@sha25
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/example_project_%s_dev"
 RESOURCES = {"cpu": 1024, "memory": 4096, "ephemeral_storage_gib": 21}
 FAMILIES = ["serve", "train"]
+# The platform defaults of infra/platform/variables.tf, which a case below compares with the file, and the additions the owner steps make to them.
+PLATFORM_DEFAULT_REPOSITORIES = [
+    "airflow",
+    "analytics",
+    "egress_proxy",
+    "marquez",
+    "marquez_web",
+    "polaris",
+    "polaris_admin",
+    "postgres",
+    "quality",
+    "redis",
+    "spark",
+]
+PLATFORM_DEFAULT_LOG_GROUPS = ["airflow", "jobs", "marquez", "polaris", "postgres", "redis"]
+PLATFORM_ADDED_REPOSITORIES = [
+    "drift",
+    "feature_store",
+    "mlflow",
+    "openmetadata_database",
+    "openmetadata_ingestion",
+    "openmetadata_search",
+    "openmetadata_server",
+    "training",
+]
+PLATFORM_REPOSITORIES = sorted([*PLATFORM_DEFAULT_REPOSITORIES, *PLATFORM_ADDED_REPOSITORIES])
+PLATFORM_LOG_GROUPS = sorted([*PLATFORM_DEFAULT_LOG_GROUPS, "mlflow"])
 
 
 class Row(NamedTuple):
-    """One activation input: the stack that declares it, a reviewed value and a value of the wrong type."""
+    """One activation input: the stack that declares it, a reviewed value and a value of the wrong type.
+
+    A row with a default also gets the saved-plan cases. Each value in refuse is well typed and the contract must still refuse it.
+    """
 
     stack: str
     name: str
     good: Any
     bad: Any
+    default: Any = None
+    refuse: tuple[Any, ...] = ()
 
 
 def flags(stack: str, *names: str) -> list[Row]:
@@ -91,6 +123,22 @@ ROWS: list[Row] = [
     Row("iam", "model_api_manifest_prefix", "serving/deployments", "serving/deployments/"),
     Row("iam", "broker_job_families", FAMILIES, "serve"),
     *flags("platform", "monitoring_enabled", "serving_enabled"),
+    Row(
+        "platform",
+        "ecr_repositories",
+        PLATFORM_REPOSITORIES,
+        "mlflow",
+        PLATFORM_DEFAULT_REPOSITORIES,
+        (["mlflow"], [*PLATFORM_DEFAULT_REPOSITORIES, "unreviewed_image"], PLATFORM_REPOSITORIES[1:]),
+    ),
+    Row(
+        "platform",
+        "log_groups",
+        PLATFORM_LOG_GROUPS,
+        "mlflow",
+        PLATFORM_DEFAULT_LOG_GROUPS,
+        (["mlflow"], [*PLATFORM_DEFAULT_LOG_GROUPS, "unreviewed_group"], PLATFORM_LOG_GROUPS[1:]),
+    ),
     *flags("services", "model_api_enabled", "streamlit_enabled", "marquez_enabled", "mlflow_enabled", "broker_enabled", "monitoring_enabled"),
     Row("services", "model_api_task_role_arn", ROLE % "model_api_task", "arn:aws:iam::1:role/x"),
     Row("services", "streamlit_task_role_arn", ROLE % "streamlit_task", "arn:aws:iam::1:role/x"),
@@ -135,6 +183,16 @@ ROWS: list[Row] = [
         "openmetadata_enabled",
     ),
     Row("jobs", "layer_jobs", ["silver", "gold"], "silver"),
+    Row("jobs", "images", {name: IMAGE % name for name in ("analytics", "quality", "spark")}, {"spark": "latest"}),
+    Row("jobs", "train_images", {name: IMAGE % name for name in ("training", "feature_store")}, {"training": "latest"}),
+    Row("jobs", "job_role_arns", {"execution": ROLE % "job_execution", "write_silver_task": ROLE % "job_write_silver_task"}, {"write_silver_task": "x"}),
+    Row(
+        "jobs",
+        "writer_parameter_names",
+        {"write_silver_task": ["/example_project/aws_polaris_silver_client_id", "/example_project/aws_polaris_silver_client_secret"]},
+        {"write_silver_task": ["/example_project/aws_polaris_silver_client_id"]},
+    ),
+    Row("jobs", "log_group_name", "example_project_jobs_dev", 5),
     Row("jobs", "layer_feast_redis_host", "10.0.1.20", 5),
     Row("jobs", "layer_resources", RESOURCES, {"cpu": 1}),
     Row("jobs", "drift_images", {name: IMAGE % name for name in ("training", "feature_store", "drift")}, {"drift": "latest"}),
@@ -183,6 +241,18 @@ def variables_of(stack_directory: str) -> dict[str, str]:
     return found
 
 
+def added_names(text: str) -> list[str]:
+    """The backticked names that a sentence about repositories or log groups adds: the ones after "plus" or after "add"."""
+    names: list[str] = []
+    for sentence in re.split(r"(?<=[.:])\s+", text):
+        if not re.search(r"ecr_repositories|ECR repositories|log_groups|log groups", sentence):
+            continue
+        found = re.search(r"\bplus\b(.*)", sentence) or re.search(r"\badd(?:s|ed)?\b(.*)", sentence, re.I)
+        if found:
+            names += re.findall(r"`([a-z][a-z0-9_]+)`", found.group(1))
+    return names
+
+
 def completeness() -> dict[str, bool]:
     """Every boolean input and every input an owner step sets has a row or a stated reason to have none."""
     covered = {(row.stack, row.name) for row in ROWS}
@@ -191,6 +261,28 @@ def completeness() -> dict[str, bool]:
     for stack, names in declared.items():
         missing = sorted(name for name, kind in names.items() if kind == "bool" and (stack, name) not in covered and name not in EXEMPT)
         checks[f"every boolean input of {stack} has a row ({missing})"] = not missing
+    platform = (ROOT / "infra/platform/variables.tf").read_text()
+    for variable, expected in (("ecr_repositories", PLATFORM_DEFAULT_REPOSITORIES), ("log_groups", PLATFORM_DEFAULT_LOG_GROUPS)):
+        block = re.search(rf'variable "{variable}" \{{.*?default\s*=\s*\[(.*?)\]', platform, re.S)
+        found = re.findall(r'"([a-z0-9_]+)"', block.group(1)) if block else []
+        checks[f"the committed {variable} default equals the one the platform contract keeps ({found})"] = found == expected
+    schema = json.loads((ROOT / "data_contracts/infrastructure/platform_preparation.schema.json").read_text())["properties"]["variables"]["properties"]
+    checks["the platform contract allows exactly the listed repositories and log groups"] = (
+        schema.get("ecr_repositories", {}).get("items", {}).get("enum") == PLATFORM_REPOSITORIES
+        and schema.get("log_groups", {}).get("items", {}).get("enum") == PLATFORM_LOG_GROUPS
+    )
+    # The monitoring and serving flags add their own repositories and log group, and the teardown guard is named in the same lines.
+    flagged = {"prometheus", "grafana", "statsd_exporter", "monitoring", "model_api", "streamlit", "allow_destructive_teardown"}
+    allowed = {*PLATFORM_REPOSITORIES, *PLATFORM_LOG_GROUPS, *flagged, "ecr_repositories", "log_groups"}
+    stray: list[str] = []
+    for path in sorted((ROOT / "docs").glob("*.md")):
+        stray += [f"{path.name}: {name}" for name in added_names(path.read_text()) if name not in allowed]
+    checks[f"every repository or log group that an owner step adds is allowed ({stray})"] = not stray
+    for sentence in ("Add `unreviewed_image` to the ECR repositories.", "`ecr_repositories` is the 11 default names plus `redis` and `unreviewed_image`."):
+        checks[f"a planted addition is found by the document scan ({sentence})"] = "unreviewed_image" in added_names(sentence)
+    checks["names of a reviewed file that is only described are not read as additions"] = not added_names(
+        "Write a file with `schema_version` 1, `root` `platform` and the variable `ecr_repositories` set to the defaults."
+    )
     everything = {name for names in declared.values() for name in names}
     walked: set[str] = set()
     for path in sorted((ROOT / "docs").glob("*.md")):
@@ -326,6 +418,10 @@ def row_cases(workspace: Workspace, row: Row) -> dict[str, bool]:
     workspace.clear(stack)
     unknown = workspace.run(stack, {f"{name}_unreviewed": row.good})
     checks[f"{label}: an unreviewed name is refused and nothing is written"] = unknown.returncode == 2 and workspace.written(stack) is None
+    for index, value in enumerate(row.refuse):
+        workspace.clear(stack)
+        stray = workspace.run(stack, {name: value})
+        checks[f"{label}: a constrained value {index} is refused and nothing is written"] = stray.returncode == 2 and workspace.written(stack) is None
     workspace.clear(stack)
     default = workspace.run(stack, None)
     checks[f"{label}: a default render leaves it out"] = default.returncode == 0 and name not in (workspace.written(stack) or {})
@@ -333,19 +429,20 @@ def row_cases(workspace: Workspace, row: Row) -> dict[str, bool]:
 
 
 def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str, bool]:
-    """The saved-plan check of one boolean row: a plan with the reviewed value passes, and the same plan without the reviewed file is refused."""
+    """The saved-plan check of one row: a plan with the reviewed value passes, and the same plan without the reviewed file is refused."""
     stack, name = row.stack, row.name
     label = f"{stack} {name} plan"
-    off = {sibling.name: False for sibling in siblings if isinstance(sibling.good, bool)}
+    off = {
+        sibling.name: (False if isinstance(sibling.good, bool) else sibling.default)
+        for sibling in siblings
+        if isinstance(sibling.good, bool) or sibling.default is not None
+    }
     checks: dict[str, bool] = {}
     workspace.clear(stack)
-    workspace.run(stack, {name: True})
-    rendered = workspace.written(stack) or {}
-    extra = {"admin_profile": ADMIN} if stack == "iam" else {}
+    workspace.run(stack, {name: row.good})
+    rendered = dict(workspace.written(stack) or {})
+    extra: dict[str, Any] = {}
     if stack == "iam":
-        rendered = {**json.loads(workspace.default_iam), name: True}
-        base = json.loads((workspace.root / "infra/iam/preparation.auto.tfvars.json").read_text()) if (workspace.root / OUTPUTS[stack]).is_file() else rendered
-        rendered = {**base}
         deployment = {
             "aws_profile": "example_project_dev",
             "aws_region": "us-west-2",
@@ -355,15 +452,14 @@ def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str,
             "project_name": "example_project",
         }
         rendered = {**deployment, **rendered}
-    else:
-        rendered = dict(rendered)
-        if stack == "services":
-            rendered["image_digests"] = {}
+        extra = {"admin_profile": ADMIN}
+    elif stack == "services":
+        rendered["image_digests"] = {}
     workspace.plan.write_text(json.dumps(plan_document(rendered, off, extra)))
-    good = workspace.run(stack, {name: True}, "--check-plan", str(workspace.plan))
+    good = workspace.run(stack, {name: row.good}, "--check-plan", str(workspace.plan))
     checks[f"{label}: a plan that carries the reviewed value is accepted"] = good.returncode == 0
     without = {key: value for key, value in rendered.items() if key != name}
-    workspace.plan.write_text(json.dumps(plan_document({**without}, off, {name: True, **extra})))
+    workspace.plan.write_text(json.dumps(plan_document(without, off, {name: row.good, **extra})))
     refused = workspace.run(stack, None if stack != "iam" else {}, "--check-plan", str(workspace.plan))
     checks[f"{label}: a plan that enables it without the reviewed file is refused"] = refused.returncode == 2
     return checks
@@ -392,6 +488,69 @@ def wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
+def silver_sequence(workspace: Workspace) -> dict[str, bool]:
+    """The silver first run in docs/aws_broker.md, step by step.
+
+    The step that sets an input names every flag it needs. The order is the order in which the stacks depend on each other. The reviewed files the steps
+    describe pass the real renderers.
+    """
+    text = (ROOT / "docs/aws_broker.md").read_text()
+    found = re.search(r"^## Silver first run\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+    section = found.group(1) if found else ""
+    steps = re.split(r"(?m)^(?=\d+\. )", section)
+    steps = [step for step in steps if re.match(r"\d+\. ", step)]
+    numbers = [int(step.split(".", 1)[0]) for step in steps]
+    checks: dict[str, bool] = {"the section exists with one numbered list": bool(found) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 8}
+
+    def index(*needles: str) -> int:
+        return next((position for position, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
+
+    iam = index("job_writer_layers_prepared", "job_layer_runs_prepared", "job_endpoints_enabled")
+    checks["one IAM step sets the two layer flags and the endpoints flag together"] = iam >= 0
+    checks["the IAM step is checked against the job_network output before any task starts"] = (
+        iam >= 0 and "endpoints_enabled" in steps[iam] and "job_network" in steps[iam]
+    )
+    order = [
+        ("the IAM step", iam),
+        ("the catalog identities", index("aws_catalog_setup", "--identity silver")),
+        ("the images", index("push_images")),
+        ("the jobs file", index("--jobs", "--preparation-sha256", "layer_jobs")),
+        ("the code staging", index("code_archive")),
+        ("the dry run", index("run-task", "--tags key=Project", "--dry-run")),
+        ("the plan in the logs", index("DRY_RUN_PLAN")),
+    ]
+    positions = [position for _, position in order]
+    checks[f"the steps come in the order the stacks depend on each other ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(
+        positions
+    )
+    jobs = index("--jobs", "--preparation-sha256", "layer_jobs")
+    checks["the jobs step takes its roles, pair names and log group from the outputs of the earlier steps"] = jobs >= 0 and all(
+        word in steps[jobs] for word in ("job_roles", "job_writer_layer_contract", "log_group_names", "images")
+    )
+    variables = {name for names in (variables_of(directory) for directory in STACKS.values()) for name in names}
+    named = {name for name in re.findall(r"`([a-z][a-z0-9_]+)`", section) if name in variables}
+    rows = {row.name for row in ROWS}
+    checks[f"every input the list names has a row ({sorted(named - rows)})"] = named <= rows
+    iam_flags = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True}
+    workspace.clear("iam")
+    accepted = workspace.run("iam", iam_flags)
+    checks["the IAM file of the step renders"] = accepted.returncode == 0 and all((workspace.written("iam") or {}).get(name) is True for name in iam_flags)
+    silver = {
+        "layer_jobs_enabled": True,
+        "layer_jobs": ["silver"],
+        "images": {name: IMAGE % name for name in ("analytics", "quality", "spark")},
+        "job_role_arns": {"execution": ROLE % "job_execution", "write_silver_task": ROLE % "job_write_silver_task"},
+        "writer_parameter_names": {
+            "write_silver_task": ["/healthcare_hai_prediction/aws_polaris_silver_client_id", "/healthcare_hai_prediction/aws_polaris_silver_client_secret"]
+        },
+        "log_group_name": "example_project_jobs_dev",
+    }
+    workspace.clear("jobs")
+    accepted = workspace.run("jobs", silver)
+    checks["the jobs file of the step renders"] = accepted.returncode == 0 and (workspace.written("jobs") or {}).get("layer_jobs") == ["silver"]
+    return checks
+
+
 def run(output: Path) -> dict[str, dict[str, bool]]:
     results: dict[str, dict[str, bool]] = {"completeness": completeness()}
     with tempfile.TemporaryDirectory(prefix="activation_inputs_") as folder:
@@ -402,11 +561,12 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["rows"] = rows
         plans: dict[str, bool] = {}
         for row in ROWS:
-            if isinstance(row.good, bool):
+            if isinstance(row.good, bool) or row.default is not None:
                 plans |= plan_cases(workspace, row, [item for item in ROWS if item.stack == row.stack])
         results["plans"] = plans
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
+        results["silver"] = silver_sequence(workspace)
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     return results

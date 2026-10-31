@@ -23,6 +23,8 @@ PREPARATION_SCHEMAS = {
     "services": REPO_ROOT / "data_contracts/infrastructure/services_preparation.schema.json",
 }
 TERRAFORM_SECONDS = 120
+# Inputs that Terraform declares as sets: its saved plan lists their elements sorted, so the rendered list is sorted too.
+SET_INPUTS = frozenset({"ecr_repositories", "log_groups"})
 PLATFORM_KEYS = ("aws_profile", "aws_region", "environment", "expected_account_id", "project_name")
 SERVICES_PLATFORM_KEYS = (
     "project_tag",
@@ -106,7 +108,10 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
     schema = json.loads(PREPARATION_SCHEMAS[stack].read_text(encoding="utf-8"))
     if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
         raise ConfigurationError(f"The preparation contract is invalid for the {stack} root. No Terraform action was run.")
-    return dict(document["variables"])
+    values = dict(document["variables"])
+    for name in SET_INPUTS & values.keys():
+        values[name] = sorted(values[name])
+    return values
 
 
 def services_preparation(path: Path | None, sha256: str | None) -> dict[str, Any]:
