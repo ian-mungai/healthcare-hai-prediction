@@ -161,6 +161,7 @@ def pin(job: Job, archive: Path, code_sha256: str) -> None:
     inventory = bronze_pin.read_inventory(inventory_raw)
     if inventory["tables"] != sorted(job.tables):
         raise StepError("the staged inventory covers other tables than the dispatch")
+    bronze_pin.require_objects(inventory)
     job.folder.mkdir(parents=True, exist_ok=True)
     (job.folder / INVENTORY_FILE).write_bytes(inventory_raw)
     record = {"run_id": job.run, "code_sha256": code_sha256, "git_revision": revision, "tables": list(job.tables), "target": job.target}
@@ -176,6 +177,7 @@ def stage_inputs(code: Path, bucket: str, tables: str, target: str, dry_run: boo
     config = table_map(code)
     names = check_dispatch(tables, target, collections_of(config))
     inventory = bronze_pin.build_inventory(owner_storage(), bucket, config, list(names), bronze.load_retired(code / bronze.RETIRED))
+    bronze_pin.require_objects(inventory)
     raw = bronze_pin.inventory_bytes(inventory)
     digest = hashlib.sha256(raw).hexdigest()
     request = json.dumps({"tables": list(names), "target": target, "dry_run": dry_run, "inventory_sha256": digest}, sort_keys=True).encode()
@@ -191,7 +193,9 @@ def pinned_inventory(job: Job) -> dict[str, Any]:
     raw = (job.folder / INVENTORY_FILE).read_bytes()
     if hashlib.sha256(raw).hexdigest() != recorded(job)["inventory_sha256"]:
         raise StepError("the pinned inventory changed after the pin phase")
-    return bronze_pin.read_inventory(raw)
+    inventory = bronze_pin.read_inventory(raw)
+    bronze_pin.require_objects(inventory)
+    return inventory
 
 
 def plan_load(job: Job) -> dict[str, Any]:

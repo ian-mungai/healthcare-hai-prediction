@@ -36,6 +36,7 @@ TABLES = [
     {"table": "alpha_data", "collection": "org_a/set_one", "format": "csv", "dataset_ids": ["alpha"]},
     {"table": "beta_data", "collection": "org_a/set_one", "format": "csv", "dataset_ids": ["beta"]},
     {"table": "gamma_data", "collection": "org_b/set_two", "format": "csv", "dataset_ids": ["gamma"]},
+    {"table": "empty_data", "collection": "org_c/set_three", "format": "csv", "dataset_ids": ["empty"]},
 ]
 CATALOG: list[Path] = []
 DEFECTS: set[str] = set()
@@ -549,6 +550,32 @@ def case_the_spark_image_has_every_package_the_driver_imports(case: Case) -> Non
     require(sorted(set(needed) - image_packages(without)) == ["pdfplumber"], "a requirements file without pdfplumber must be caught")
 
 
+def case_a_selected_table_without_objects_is_refused(case: Case) -> None:
+    for label, extra in (("dry", ["--dry-run"]), ("real", [])):
+        case.err = ""
+        code = case.phase("pin", label=label, tables="alpha_data,empty_data", extra=extra)
+        require(code != 0 and "empty_data" in case.err and "no objects" in case.err, f"{label}: {case.err}")
+        require("alpha_data" not in case.err, f"{label}: only the empty table is named: {case.err}")
+    require(case.phase("load", tables="alpha_data,empty_data") != 0, "a load without a pin is refused")
+    require(writes() == [] and LOADS == [], "nothing runs")
+
+
+def case_a_raw_only_capture_is_refused_by_name(case: Case) -> None:
+    store(case.storage, "raw/org_c/set_three", "empty", "snap_raw", b"id,value\n1,r\n")
+    require(case.phase("pin", tables="empty_data", extra=["--dry-run"]) != 0 and "empty_data" in case.err and "no objects" in case.err, case.err)
+    require(writes() == [] and LOADS == [], "nothing runs")
+
+
+def case_the_owner_cannot_stage_an_inventory_with_an_empty_table(case: Case) -> None:
+    out = case.root / "staged_empty"
+    arguments = ["inventory", "--run", RUN, "--code", str(case.root / "src"), "--bucket", BUCKET, "--tables", "alpha_data,empty_data", "--target", "real"]
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        code = bronze_run.main([*arguments, "--out", str(out)])
+    require(code != 0 and "empty_data" in err.getvalue() and "no objects" in err.getvalue(), err.getvalue())
+    require(not (out / "bronze_request.json").exists(), "no request is written for an empty table")
+
+
 CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
@@ -575,6 +602,9 @@ CASES: dict[str, Callable[[Case], None]] = {
     "qualification metadata is scoped to the selected tables": case_qualification_metadata_is_scoped_to_the_selected_tables,
     "the owner stages an inventory that the pin accepts": case_the_owner_stages_an_inventory_the_pin_accepts,
     "the Spark image installs every package the driver imports": case_the_spark_image_has_every_package_the_driver_imports,
+    "a selected table without objects is refused by name in dry and real runs": case_a_selected_table_without_objects_is_refused,
+    "a raw-only capture gives no objects and is refused by name": case_a_raw_only_capture_is_refused_by_name,
+    "the owner cannot stage an inventory with an empty table": case_the_owner_cannot_stage_an_inventory_with_an_empty_table,
 }
 
 

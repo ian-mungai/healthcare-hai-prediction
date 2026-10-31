@@ -45,6 +45,14 @@ def read_inventory(raw: bytes) -> dict[str, Any]:
     return inventory
 
 
+def require_objects(inventory: dict[str, Any]) -> None:
+    """Every selected table needs at least one object, so an empty or unreadable source fails by name instead of passing an empty plan."""
+    present = {row[0] for row in inventory["objects"]}
+    empty = sorted(set(inventory["tables"]) - present)
+    if empty:
+        raise BronzeError(f"{empty[0]}: the source inventory has no objects for this table ({len(empty)} such tables), so there is nothing to load")
+
+
 class Recorder:
     """Wraps a storage during discovery and keeps what it served."""
 
