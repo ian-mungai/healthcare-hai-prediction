@@ -42,8 +42,8 @@ DEADLINE_ATTEMPTS = 3
 # Written into the Python start-up of the fixture's checker process only, so the case can tell a hook stopped before the checker began from one stopped after.
 CHECKER_START_HOOK = (
     "import os, sys\n"
-    "if 'scripts.quality.container_mounts' in getattr(sys, 'orig_argv', ()) and os.environ.get('HAI_CHECKER_MARKER'):\n"
-    "    open(os.environ['HAI_CHECKER_MARKER'], 'w').close()\n"
+    "if 'scripts.quality.container_mounts' in getattr(sys, 'orig_argv', ()):\n"
+    "    open(os.path.join(os.getcwd(), '.checker_started'), 'w').close()\n"
 )
 PYTHON = ROOT / ".venv/bin/python"
 
@@ -619,7 +619,7 @@ def run_case_once(case: Case, source: dict[str, str], workspace: Path, deadline:
     start_folder.mkdir(exist_ok=True)
     (start_folder / "sitecustomize.py").write_text(CHECKER_START_HOOK, encoding="utf-8")
     marker = folder / ".checker_started"
-    environment = environment | {"PYTHONPATH": str(start_folder), "HAI_CHECKER_MARKER": str(marker)}
+    environment = environment | {"PYTHONPATH": str(start_folder)}
     arguments = ["-m", "pre_commit", "run", "container-mounts", "--all-files", "--verbose"]
     result = bounded(str(PYTHON), arguments, folder, environment, deadline, case.seconds)
     output = result.stdout + result.stderr
