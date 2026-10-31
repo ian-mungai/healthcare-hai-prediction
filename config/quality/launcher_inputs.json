@@ -67,7 +67,7 @@
       "text": "infra",
       "why": "the text is the -chdir argument of a terraform CLI call (terraform show of a saved plan); the suite starts no terraform",
       "lines": [
-        "selected = {\"storage\": (REPO_ROOT / \"infra\", storage), \"iam\": (REPO_ROOT / \"infra\" / \"iam\", iam)}"
+        "selected = {\"storage\": (REPO_ROOT / \"infra\", storage_inputs), \"iam\": (REPO_ROOT / \"infra\" / \"iam\", iam)}"
       ]
     },
     {
@@ -75,7 +75,7 @@
       "text": "infra/iam",
       "why": "the text is the -chdir argument of a terraform CLI call (terraform show of a saved plan); the suite starts no terraform",
       "lines": [
-        "selected = {\"storage\": (REPO_ROOT / \"infra\", storage), \"iam\": (REPO_ROOT / \"infra\" / \"iam\", iam)}"
+        "selected = {\"storage\": (REPO_ROOT / \"infra\", storage_inputs), \"iam\": (REPO_ROOT / \"infra\" / \"iam\", iam)}"
       ]
     }
   ],
