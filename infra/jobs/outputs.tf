@@ -76,6 +76,12 @@ output "publisher_dispatch_contracts" {
       network            = "publisher"
       assign_public_ip   = "ENABLED"
       capture_root       = "raw/"
+      # Dispatch overrides and reads logs from the one container, which carries the definition's name.
+      container           = name
+      log_container       = name
+      deadline_variable   = "HAI_DEADLINE_UTC"
+      hosts_file          = "/workspace/inputs/publisher_hosts.json"
+      hosts_approval_file = "/workspace/inputs/hosts_approval.json"
     }
   }
 }

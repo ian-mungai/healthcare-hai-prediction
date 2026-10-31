@@ -22,7 +22,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.raw_root import READ_ROOTS, strip_root
+from scripts.acquisition.raw_root import read_roots, strip_root
 from scripts.lakehouse.bronze import RETIRED, BronzeError
 from scripts.lakehouse.catalog import deployment
 
@@ -47,7 +47,7 @@ def build(client: Any, bucket: str, collections: Iterable[str], verified: dict[t
     for collection in collections:
         live: set[tuple[str, str]] = set()
         marked: set[str] = set()
-        for root in READ_ROOTS:
+        for root in read_roots():
             for page in client.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=f"{root}{collection}/"):
                 live.update((version["Key"], version["VersionId"]) for version in page.get("Versions", []))
                 marked.update(marker["Key"] for marker in page.get("DeleteMarkers", []))

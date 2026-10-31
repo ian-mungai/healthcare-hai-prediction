@@ -41,6 +41,9 @@ PUBLISHER_CONTRACT = {
     "network": "publisher",
     "assign_public_ip": "ENABLED",
     "capture_root": "raw/",
+    "deadline_variable": "HAI_DEADLINE_UTC",
+    "hosts_file": "/workspace/inputs/publisher_hosts.json",
+    "hosts_approval_file": "/workspace/inputs/hosts_approval.json",
 }
 ENTRY_POINT = ["/opt/hai/deadline_run", "python", "-I", "/opt/hai/bootstrap/run.py"]
 
@@ -194,7 +197,11 @@ def publisher_dispatch(jobs: dict[str, Any], selected: set[str]) -> dict[str, An
     if not chosen and "publisher_dispatch_contracts" not in jobs:
         return {}
     contracts = _output(jobs, "publisher_dispatch_contracts")
-    if not isinstance(contracts, dict) or set(contracts) != chosen or any(contract != PUBLISHER_CONTRACT for contract in contracts.values()):
+    if (
+        not isinstance(contracts, dict)
+        or set(contracts) != chosen
+        or any(contract != PUBLISHER_CONTRACT | {"container": name, "log_container": name} for name, contract in contracts.items())
+    ):
         raise TargetError("Invalid publisher dispatch contract.")
     return contracts
 

@@ -160,16 +160,19 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
   }
 }
 
-run "publisher_role_and_network_are_exported_only_when_enabled" {
+run "publisher_exports_are_absent_by_default" {
   command = plan
 
   assert {
-    condition     = !contains(keys(output.job_roles), "publisher_task") && output.publisher_network == null && toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
-    error_message = "By default no publisher role or network is exported and the private job network is unchanged."
+    condition = (
+      !contains(keys(output.job_roles), "publisher_task") && output.publisher_role == null && output.publisher_network == null &&
+      output.publisher_project_delta == null && toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
+    )
+    error_message = "By default no publisher role, network or grant is exported and the private job network is unchanged."
   }
 }
 
-run "publisher_role_and_network_export_for_the_jobs_root" {
+run "publisher_exports_leave_the_target_role_set_untouched" {
   command = plan
 
   variables {
@@ -178,11 +181,37 @@ run "publisher_role_and_network_export_for_the_jobs_root" {
 
   assert {
     condition = (
-      output.job_roles["publisher_task"].name == "example_project_job_publisher_task_dev" &&
-      output.publisher_network.assign_public_ip == "ENABLED" &&
+      !contains(keys(output.job_roles), "publisher_task") &&
+      toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"]) &&
       toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
     )
-    error_message = "The jobs root must receive the publisher role and its own network group, and the private job groups must stay as they were."
+    error_message = "Enabling the publisher must not add a key to job_roles or job_network, which the closed target schema reads."
+  }
+
+  assert {
+    condition = (
+      output.publisher_role.name == "example_project_job_publisher_task_dev" &&
+      output.publisher_network.assign_public_ip == "ENABLED"
+    )
+    error_message = "The publisher role and network must come out of their own outputs for the jobs root."
+  }
+}
+
+run "publisher_pass_role_grant_names_only_the_publisher_role" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+  }
+
+  assert {
+    condition = (
+      output.publisher_project_delta.Statement[0].Action == ["iam:PassRole"] &&
+      output.publisher_project_delta.Statement[0].Resource == "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev" &&
+      output.publisher_project_delta.Statement[0].Condition.StringEquals["iam:PassedToService"] == "ecs-tasks.amazonaws.com" &&
+      length(output.publisher_project_delta.Statement) == 1
+    )
+    error_message = "The project user may pass only the publisher task role, only to ECS tasks."
   }
 }
 
@@ -202,5 +231,42 @@ run "publisher_logs_and_image_pull_come_from_the_execution_role" {
       !strcontains(aws_iam_role_policy.job_publisher[0].policy, "ssm:")
     )
     error_message = "Logs and image pull belong to the shared execution role. The publisher task role must hold none of them."
+  }
+}
+
+run "bronze_contract_states_the_read_roots_that_match_the_grants" {
+  command = plan
+
+  variables {
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = jsonencode(output.bronze_writer_contract.read_roots) == jsonencode([""]) && length(output.bronze_writer_contract.read_environment) == 0
+    error_message = "With the raw grant off the contract must state the root only and set no read environment."
+  }
+}
+
+run "bronze_contract_sets_the_raw_read_environment_with_the_grant" {
+  command = plan
+
+  variables {
+    source_raw_root_enabled         = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = jsonencode(output.bronze_writer_contract.read_roots) == jsonencode(["", "raw/"]) && jsonencode(output.bronze_writer_contract.read_environment) == jsonencode({ HAI_READ_RAW_ROOT = "true" })
+    error_message = "With the raw grant on the contract must state both roots and tell dispatch to set the raw read variable."
   }
 }

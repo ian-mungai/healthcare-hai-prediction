@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.acquisition.raw_root import READ_ROOTS, strip_root
+from scripts.acquisition.raw_root import read_roots, strip_root
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
 
@@ -239,12 +239,12 @@ def select(table: dict[str, Any], dataset_id: str, file_name: str, snapshot_id: 
     return re.search(table["member_pattern"], file_name) is not None
 
 
-def source_roots(collection: str, roots: tuple[str, ...] = READ_ROOTS) -> tuple[str, ...]:
+def source_roots(collection: str, roots: tuple[str, ...] | None = None) -> tuple[str, ...]:
     """The key prefixes under which a collection's captures are read, one for each read root.
 
     Every listing of a collection's manifests asks this function. A document is read beside its manifest, under the same root.
     """
-    return tuple(f"{root}{collection}/" for root in roots)
+    return tuple(f"{root}{collection}/" for root in (read_roots() if roots is None else roots))
 
 
 def single_document(storage: Storage, bucket: str, collection: str, manifest_key: str, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -394,7 +394,7 @@ def discover(
     canonical_keys: dict[tuple[str, str], str] | None = None,
     canonical_observations: dict[tuple[str, str], str] | None = None,
     published_observations: set[str] | None = None,
-    roots: tuple[str, ...] = READ_ROOTS,
+    roots: tuple[str, ...] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """List the chosen tables' inputs from the S3 manifests under each read root; return them with the unselected data objects.
 
@@ -408,6 +408,7 @@ def discover(
             raise BronzeError("discovery requires typed retirement evidence, not a checksum mapping")
         retired = RetiredObjects()
     published_observations = published_observations or set()
+    roots = read_roots() if roots is None else roots
     tables = {table["table"]: table for table in config["tables"]}
     chosen = [tables[name] for name in names]
     by_collection: dict[str, list[dict[str, Any]]] = {}
@@ -424,6 +425,8 @@ def discover(
             for manifest_key, manifest_version in storage.list_keys(bucket, f"{root}manifests/")
             if manifest_key.endswith("/manifest.json")
         }
+        if not stored_manifests:
+            raise BronzeError(f"{collection}: no manifest under the read roots {list(roots)}; a missing manifest is never an empty collection")
         skipped = superseded(stored_manifests)
         for (manifest_key, manifest_version), raw in stored_manifests.items():
             replacement = skipped.get((manifest_key, manifest_version))

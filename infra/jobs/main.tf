@@ -32,6 +32,11 @@ locals {
     spark_write_features = { class = "lakehouse_write", image = "spark", role = "write_features_task", layer = "features" }
     spark_write_bronze   = { class = "lakehouse_write", image = "spark", role = "write_bronze_task", layer = "bronze" }
   }
+  publisher_environment = [
+    { name = "HAI_CAPTURE_ROOT", value = "raw/" },
+    { name = "HAI_APPROVED_HOSTS", value = "/workspace/inputs/publisher_hosts.json" },
+    { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" }
+  ]
   publisher_specs = {
     publisher_fetch = { class = "publisher", image = "analytics", role = "publisher_task" }
   }
@@ -85,7 +90,7 @@ locals {
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },
         { name = "AWS_EC2_METADATA_DISABLED", value = "true" },
         { name = "DATA_BUCKET_NAME", value = var.data_bucket_name }
-      ], spec.class == "publisher" ? [{ name = "HAI_CAPTURE_ROOT", value = "raw/" }] : [])
+      ], spec.class == "publisher" ? local.publisher_environment : [])
       secrets = spec.class == "lakehouse_write" ? lookup(local.writer_parameters, spec.role, []) : (spec.class == "lakehouse_read" ? local.reader_parameters : [])
       mountPoints = [
         { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },

@@ -69,8 +69,8 @@ run "default_registers_no_publisher_class" {
 run "publisher_definition_has_its_own_role_no_secrets_and_the_raw_root" {
   command = plan
   variables {
-    jobs_enabled        = true
-    enabled_definitions = ["publisher_fetch"]
+    jobs_enabled           = true
+    enabled_definitions    = ["publisher_fetch"]
     writer_parameter_names = {}
   }
   assert {
@@ -87,33 +87,58 @@ run "publisher_definition_has_its_own_role_no_secrets_and_the_raw_root" {
   }
 }
 
-run "publisher_contract_states_public_ip_and_capacity" {
+run "publisher_contract_states_public_ip_capacity_and_the_dispatch_bindings" {
   command = plan
   variables {
-    jobs_enabled        = true
-    enabled_definitions = ["publisher_fetch"]
+    jobs_enabled           = true
+    enabled_definitions    = ["publisher_fetch"]
     writer_parameter_names = {}
   }
   assert {
     condition = output.publisher_dispatch_contracts == {
       publisher_fetch = {
-        job_class          = "publisher"
-        task_role_key      = "publisher_task"
-        capacity_providers = ["FARGATE"]
-        network            = "publisher"
-        assign_public_ip   = "ENABLED"
-        capture_root       = "raw/"
+        job_class           = "publisher"
+        task_role_key       = "publisher_task"
+        capacity_providers  = ["FARGATE"]
+        network             = "publisher"
+        assign_public_ip    = "ENABLED"
+        capture_root        = "raw/"
+        container           = "publisher_fetch"
+        log_container       = "publisher_fetch"
+        deadline_variable   = "HAI_DEADLINE_UTC"
+        hosts_file          = "/workspace/inputs/publisher_hosts.json"
+        hosts_approval_file = "/workspace/inputs/hosts_approval.json"
       }
     }
-    error_message = "The publisher contract must name its class, role, on-demand capacity, own network group, the public IP the no-NAT network needs and the raw root."
+    error_message = "The publisher contract must name its class, role, on-demand capacity, own network group, the public IP the no-NAT network needs, the raw root, the container to override and read logs from, the deadline variable and the staged hosts files."
+  }
+}
+
+run "publisher_container_matches_its_contract_and_enforces_the_hosts_files_itself" {
+  command = plan
+  variables {
+    jobs_enabled           = true
+    enabled_definitions    = ["publisher_fetch"]
+    writer_parameter_names = {}
+  }
+  assert {
+    condition = (
+      length(jsondecode(output.container_definitions["publisher_fetch"])) == 1 &&
+      jsondecode(output.container_definitions["publisher_fetch"])[0].name == output.publisher_dispatch_contracts["publisher_fetch"].container &&
+      jsondecode(output.container_definitions["publisher_fetch"])[0].logConfiguration.options["awslogs-stream-prefix"] == output.publisher_dispatch_contracts["publisher_fetch"].log_container &&
+      contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "HAI_APPROVED_HOSTS", value = "/workspace/inputs/publisher_hosts.json" }) &&
+      contains(jsondecode(output.container_definitions["publisher_fetch"])[0].environment, { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" }) &&
+      jsondecode(output.container_definitions["publisher_fetch"])[0].entryPoint[0] == "/opt/hai/deadline_run"
+    )
+    error_message = "The one container must carry the contract's name, send logs under it, set both hosts file paths itself so the downloader fails closed, and start through the deadline entry point."
   }
 }
 
 run "publisher_definition_needs_its_task_role" {
   command = plan
   variables {
-    jobs_enabled        = true
-    enabled_definitions = ["publisher_fetch"]
+    jobs_enabled           = true
+    enabled_definitions    = ["publisher_fetch"]
     writer_parameter_names = {}
     job_role_arns = {
       execution = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"

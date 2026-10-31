@@ -12,6 +12,11 @@ CONTRACT = {
     "network": "publisher",
     "assign_public_ip": "ENABLED",
     "capture_root": "raw/",
+    "container": "publisher_fetch",
+    "log_container": "publisher_fetch",
+    "deadline_variable": "HAI_DEADLINE_UTC",
+    "hosts_file": "/workspace/inputs/publisher_hosts.json",
+    "hosts_approval_file": "/workspace/inputs/hosts_approval.json",
 }
 
 
@@ -37,6 +42,11 @@ def test_no_selection_needs_no_contract() -> None:
         {"task_role_key": "read_task"},
         {"job_class": "lakehouse_write"},
         {"extra": "field"},
+        {"container": "drift"},
+        {"log_container": "other"},
+        {"deadline_variable": "DEADLINE"},
+        {"hosts_file": "/workspace/other/hosts.json"},
+        {"hosts_approval_file": ""},
     ],
 )
 def test_any_other_publisher_contract_is_refused(change: dict) -> None:
