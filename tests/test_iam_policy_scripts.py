@@ -237,14 +237,19 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
     documents = render_policy.load_documents(values)
     declared = render_policy.terraform_names()
     check(
-        statement_resources(documents, "ssm", "ReadProjectParameters") == [prefix + name for name in declared["READ_PARAMETER_NAME"]],
-        "the read set must be the variable defaults",
+        statement_resources(documents, "ssm", "ManageProjectParameters") == [prefix + name for name in declared["MANAGED_PARAMETER_NAME"]],
+        "the read and write set must be the managed variable defaults, each name once",
     )
     check(
-        statement_resources(documents, "ssm", "WriteManagedProjectParameters") == [prefix + name for name in declared["MANAGED_PARAMETER_NAME"]],
-        "the write set must be the managed variable defaults",
+        statement_resources(documents, "ssm", "ReadAirflowAdminParameter") == [prefix + str(declared["AIRFLOW_ADMIN_SECRET_NAME"])],
+        "the read only set must be the Airflow administrator password default",
     )
-    check(len(declared["READ_PARAMETER_NAME"]) == 18 and len(declared["MANAGED_PARAMETER_NAME"]) == 17, "18 parameters are read and 17 are written")
+    check(
+        {*statement_resources(documents, "ssm", "ManageProjectParameters"), *statement_resources(documents, "ssm", "ReadAirflowAdminParameter")}
+        == {prefix + name for name in declared["READ_PARAMETER_NAME"]},
+        "the two statements together must name exactly the parameters that are read",
+    )
+    check(len(declared["READ_PARAMETER_NAME"]) == 22 and len(declared["MANAGED_PARAMETER_NAME"]) == 21, "22 parameters are read and 21 are written")
     check(
         "/healthcare_hai_prediction/airflow_admin" in declared["READ_PARAMETER_NAME"]
         and "/healthcare_hai_prediction/airflow_admin" not in declared["MANAGED_PARAMETER_NAME"],
@@ -275,10 +280,9 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
         f"arn:aws:iam::{ACCOUNT}:role/only_role" in statement_resources(documents, "sts", "AssumeLakehouseRolesOnly"),
         "an injected single name must replace the role default",
     )
-    check(statement_resources(documents, "ssm", "ReadProjectParameters") == [prefix + "/only_folder/read"], "an injected read name must replace the defaults")
     check(
-        statement_resources(documents, "ssm", "WriteManagedProjectParameters") == [prefix + "/only_folder/write"],
-        "an injected write name must replace the defaults",
+        statement_resources(documents, "ssm", "ManageProjectParameters") == [prefix + "/only_folder/write"],
+        "an injected managed name must replace the defaults",
     )
     check(
         statement_resources(documents, "secretsmanager", "ReadSharedApiKeys") == [f"arn:aws:secretsmanager:eu-west-1:{ACCOUNT}:secret:only_key-??????"],

@@ -285,3 +285,37 @@ run "the_page_role_holds_no_policy" {
     error_message = "The read policy belongs to the model API role and not to the page role."
   }
 }
+
+run "the_four_owner_parameters_are_managed_only_while_the_model_api_is_prepared" {
+  command = plan
+
+  assert {
+    condition = (
+      !contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/model_api_key_hashes") &&
+      !contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/streamlit_model_api_key")
+    )
+    error_message = "Without model_api_prepared the managed inventory names none of the serving parameters."
+  }
+}
+
+run "the_four_owner_parameters_join_the_managed_inventory" {
+  command = plan
+
+  variables {
+    model_api_prepared        = true
+    model_api_registry_key    = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix = "serving/deployments"
+  }
+
+  assert {
+    condition = (
+      length(output.project_secret_names.managed_parameters) == 20 &&
+      alltrue([
+        for name in ["model_api_key_hashes", "model_api_mlflow_user", "model_api_mlflow_credential", "streamlit_model_api_key"] :
+        contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/${name}") && contains(output.project_secret_names.read_parameters, "/healthcare_hai_prediction/${name}")
+      ]) &&
+      !contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/aws_polaris_serving_client_id")
+    )
+    error_message = "The four owner-set serving parameters are read and put by the project user while the model API is prepared. The serving pair stays with the catalog setup."
+  }
+}

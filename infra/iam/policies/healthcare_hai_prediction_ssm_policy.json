@@ -2,23 +2,24 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadProjectParameters",
+      "Sid": "ManageProjectParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:PutParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MANAGED_PARAMETER_NAME}"
+      ]
+    },
+    {
+      "Sid": "ReadAirflowAdminParameter",
       "Effect": "Allow",
       "Action": [
         "ssm:GetParameter"
       ],
       "Resource": [
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${READ_PARAMETER_NAME}"
-      ]
-    },
-    {
-      "Sid": "WriteManagedProjectParameters",
-      "Effect": "Allow",
-      "Action": [
-        "ssm:PutParameter"
-      ],
-      "Resource": [
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MANAGED_PARAMETER_NAME}"
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_ADMIN_SECRET_NAME}"
       ]
     },
     {
