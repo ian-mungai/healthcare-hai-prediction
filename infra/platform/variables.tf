@@ -102,6 +102,12 @@ variable "monitoring_enabled" {
   default     = false
 }
 
+variable "serving_enabled" {
+  description = "Add the ECR repositories of the model API and the page. False leaves them out."
+  type        = bool
+  default     = false
+}
+
 variable "ecr_keep_images" {
   description = "Number of most recent images each repository keeps."
   type        = number
