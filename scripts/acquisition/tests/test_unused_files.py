@@ -73,41 +73,6 @@ def standard(folder: Path) -> Case:
     return case
 
 
-class Client:
-    """S3 stand-in: delete-objects without a version id adds a delete marker and removes nothing."""
-
-    def __init__(self, versions: dict[str, str], bucket: str = BUCKET) -> None:
-        self.configuration = {"data_bucket_name": bucket}
-        self.versions = dict(versions)
-        self.markers: dict[str, str] = {}
-        self.deletes: list[list[str]] = []
-
-    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
-        if operation == "get-bucket-versioning":
-            return {"Status": "Enabled"}
-        if operation == "list-object-versions":
-            return {
-                "Versions": [{"Key": name, "VersionId": version, "IsLatest": name not in self.markers} for name, version in self.versions.items()],
-                "DeleteMarkers": [{"Key": name, "VersionId": marker, "IsLatest": True} for name, marker in self.markers.items()],
-            }
-        check(operation == "delete-objects" and arguments is not None, "only delete-objects is allowed")
-        if arguments is None:
-            raise ValueError("Missing deletion arguments")
-        request = json.loads(Path(arguments[1].removeprefix("file://")).read_text())
-        check(all(set(item) == {"Key"} for item in request["Objects"]), "a version id would delete permanently")
-        self.deletes.append([item["Key"] for item in request["Objects"]])
-        for item in request["Objects"]:
-            self.markers[item["Key"]] = f"m-{len(self.markers)}"
-        return {"Deleted": [{"Key": item["Key"], "DeleteMarker": True, "DeleteMarkerVersionId": self.markers[item["Key"]]} for item in request["Objects"]]}
-
-
-def approve(out: Path) -> list[str]:
-    plan = json.loads((out / "removal_plan.json").read_text())
-    approval = out.parent / "approval.json"
-    approval.write_text(json.dumps({"plan_sha256": plan["plan_sha256"], "approved_by": "owner"}))
-    return ["apply", "--plan", str(out / "removal_plan.json"), "--approval", str(approval), "--output", str(out)]
-
-
 def report(out: Path) -> dict:
     return json.loads((out / "unused_report.json").read_text())
 
@@ -126,7 +91,7 @@ def test_report_names_each_unused_file_with_a_reason(tmp_path: Path) -> None:
 def test_the_plan_binds_the_bucket_and_each_immutable_version(tmp_path: Path) -> None:
     case = standard(tmp_path)
     plan = json.loads((case.plan() / "removal_plan.json").read_text())
-    check(plan["bucket"] == BUCKET and plan["executed"] is False and plan["permanent_version_deletion"] is False, "bucket and dry state")
+    check(plan["bucket"] == BUCKET and plan["removal"] == "by hand by the owner", "bucket and the hand removal")
     check([item["snapshot_id"] for item in plan["items"]] == ["S1__4", "S1__7"], "planned snapshots")
     check(all(item["version_id"] == version_of(item["s3_key"]) for item in plan["items"]), "each item names its immutable version")
 
@@ -190,65 +155,44 @@ def test_rerun_with_same_inputs_changes_nothing_and_changed_inputs_are_refused(t
         case.plan()
 
 
-def versions_of(out: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
+def test_there_is_no_automatic_removal_in_the_module_or_on_its_command_line(tmp_path: Path) -> None:
+    check(not hasattr(unused_files, "apply") and not hasattr(unused_files, "approved_plan"), "the module has no apply step")
+    out = standard(tmp_path).plan()
+    with pytest.raises(SystemExit):
+        unused_files.main(["apply", "--plan", str(out / "removal_plan.json"), "--output", str(out)])
+    source = Path(unused_files.__file__).read_text(encoding="utf-8")
+    check("delete-objects" not in source and "delete_marker" not in source.lower() and "AwsCli" not in source, "the module calls no S3 operation")
+
+
+def test_the_plan_states_that_the_owner_removes_the_keys_by_hand(tmp_path: Path) -> None:
+    plan = json.loads((standard(tmp_path).plan() / "removal_plan.json").read_text())
+    check(plan["removal"] == "by hand by the owner" and "method" not in plan and "executed" not in plan, "the plan names no automatic method")
+
+
+def test_the_confirmation_template_lists_every_planned_key_for_the_owner_to_sign(tmp_path: Path) -> None:
+    out = standard(tmp_path).plan()
+    template = tmp_path / "confirmation.json"
+    unused_files.main(["confirmation-template", "--plan", str(out / "removal_plan.json"), "--output", str(template)])
     plan = json.loads((out / "removal_plan.json").read_text())
-    return {item["s3_key"]: item["version_id"] for item in plan["items"]} | (extra or {})
+    document = json.loads(template.read_text())
+    check(
+        document["plan_sha256"] == plan["plan_sha256"] and document["bucket"] == BUCKET and document["confirmed_by"] is None,
+        "it names the plan, the bucket and no confirmer",
+    )
+    check(document["keys"] == sorted(item["s3_key"] for item in plan["items"]), "it lists each planned key once, sorted")
+    before = template.read_bytes()
+    unused_files.main(["confirmation-template", "--plan", str(out / "removal_plan.json"), "--output", str(template)])
+    check(template.read_bytes() == before, "a second run changes nothing")
 
 
-def test_apply_needs_the_owner_approval_of_this_exact_plan(tmp_path: Path) -> None:
+def test_the_confirmation_template_refuses_a_plan_changed_after_it_was_written(tmp_path: Path) -> None:
     out = standard(tmp_path).plan()
-    client = Client(versions_of(out))
-    plan_file = str(out / "removal_plan.json")
+    document = json.loads((out / "removal_plan.json").read_text())
+    document["items"] = document["items"][:1]
+    (out / "removal_plan.json").write_text(json.dumps(document))
     with pytest.raises(SystemExit):
-        unused_files.main(["apply", "--plan", plan_file, "--approval", str(tmp_path / "missing.json"), "--output", str(out)], client=client)
-    wrong = tmp_path / "approval.json"
-    wrong.write_text(json.dumps({"plan_sha256": "0" * 64, "approved_by": "owner"}))
-    with pytest.raises(SystemExit):
-        unused_files.main(["apply", "--plan", plan_file, "--approval", str(wrong), "--output", str(out)], client=client)
-    check(client.deletes == [], "no marker without approval")
-
-
-def test_apply_writes_delete_markers_once_and_a_retry_has_no_second_effect(tmp_path: Path) -> None:
-    out = standard(tmp_path).plan()
-    kept = "raw/pub/coll/datasets/kept.csv"
-    client = Client(versions_of(out, {kept: "v-kept"}))
-    arguments = approve(out)
-    unused_files.main(arguments, client=client)
-    check(len(client.deletes) == 1 and kept not in client.markers, "one batch, kept key untouched")
-    record = json.loads((out / "removal_record.json").read_text())
-    check(record["bucket"] == BUCKET and {item["s3_key"] for item in record["items"]} == set(versions_of(out)), "the record covers every planned key")
-    check(all(item["delete_marker_version_id"] and item["version_id"] for item in record["items"]), "each item names its version and its marker")
-    unused_files.main(arguments, client=client)
-    check(len(client.deletes) == 1, "a retry adds no marker")
-
-
-def test_apply_refuses_another_bucket(tmp_path: Path) -> None:
-    out = standard(tmp_path).plan()
-    client = Client(versions_of(out), bucket="another-bucket")
-    with pytest.raises(SystemExit):
-        unused_files.main(approve(out), client=client)
-    check(client.deletes == [], "no marker in another bucket")
-
-
-def test_apply_refuses_a_key_whose_current_version_changed(tmp_path: Path) -> None:
-    out = standard(tmp_path).plan()
-    versions = versions_of(out)
-    changed = sorted(versions)[0]
-    versions[changed] = "v-replaced"
-    client = Client(versions)
-    with pytest.raises(SystemExit):
-        unused_files.main(approve(out), client=client)
-    check(client.deletes == [], "no marker when any planned version is not the current one")
-
-
-def test_apply_refuses_a_key_with_no_version(tmp_path: Path) -> None:
-    out = standard(tmp_path).plan()
-    versions = versions_of(out)
-    del versions[sorted(versions)[0]]
-    client = Client(versions)
-    with pytest.raises(SystemExit):
-        unused_files.main(approve(out), client=client)
-    check(client.deletes == [], "no marker when a planned key is missing")
+        unused_files.main(["confirmation-template", "--plan", str(out / "removal_plan.json"), "--output", str(tmp_path / "confirmation.json")])
+    check(not (tmp_path / "confirmation.json").exists(), "no template for an edited plan")
 
 
 def test_a_copies_row_and_an_inventory_row_that_disagree_about_the_bytes_are_refused_before_a_plan_exists(tmp_path: Path) -> None:

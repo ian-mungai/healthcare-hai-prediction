@@ -84,8 +84,8 @@ def test_the_person_lane_needs_the_same_gate_and_the_raw_root(monkeypatch: pytes
     run, _, files = lane_files(tmp_path, LANE)
     refused(monkeypatch, run, "raw/")
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    files.record.unlink()
-    refused(monkeypatch, run, "removal record")
+    files.confirmation.unlink()
+    refused(monkeypatch, run, "removal confirmation")
 
 
 def test_an_approved_person_lane_passes_both_gates_and_stops_at_the_next_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

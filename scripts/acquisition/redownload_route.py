@@ -17,7 +17,7 @@ from pathlib import Path
 from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, hosts_digest
-from scripts.acquisition.unused_files import approved_plan
+from scripts.acquisition.unused_files import read_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
 # These collectors read an API key from the secret store. The AWS task holds no secret, so only the owner's Mac lane may run them.
@@ -31,11 +31,10 @@ LANE_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the units of th
 
 @dataclass(frozen=True)
 class RouteFiles:
-    """The records run 3 needs on the AWS route: the approved removal plan, its record and the approved hosts file."""
+    """The records run 3 needs on the AWS route: the removal plan, the owner's confirmation that every planned key was removed and the hosts file."""
 
     plan: Path
-    approval: Path
-    record: Path
+    confirmation: Path
     hosts: Path
     hosts_approval: Path
 
@@ -92,28 +91,37 @@ def lane_problems(queue_path: Path, approval_path: Path, lane: str = LANE_NAME) 
     return []
 
 
-def record_problems(record_path: Path, removal: dict | None) -> list[str]:
-    """Return why the removal record does not prove that every planned file got its delete marker."""
-    if not record_path.is_file():
-        return ["the removal record is missing, so removal has not run"]
-    if removal is None:
-        return []
+def confirmation_problems(confirmation_path: Path, removal: dict) -> list[str]:
+    """Return why the owner's confirmation does not show that every planned key was removed by hand."""
+    if not confirmation_path.is_file():
+        return ["the removal confirmation is missing, so the planned removal is not confirmed"]
     try:
-        record = json.loads(record_path.read_text(encoding="utf-8"))
-        if record.get("plan_sha256") != removal["plan_sha256"]:
-            return ["the removal record belongs to another plan"]
-        if record.get("bucket") != removal["bucket"]:
-            return ["the removal record names another bucket than the plan"]
-        planned = {item["s3_key"]: item["version_id"] for item in removal["items"]}
-        recorded = [(item["s3_key"], item["version_id"], item["delete_marker_version_id"]) for item in record["items"]]
+        document = json.loads(confirmation_path.read_text(encoding="utf-8"))
+        keys = document["keys"]
+        if document["plan_sha256"] != removal["plan_sha256"]:
+            return ["the removal confirmation belongs to another plan"]
+        if document["bucket"] != removal["bucket"]:
+            return ["the removal confirmation names another bucket than the plan"]
+        if not (isinstance(keys, list) and all(isinstance(key, str) for key in keys)):
+            return ["the removal confirmation is unusable: its keys are not a list of names"]
+        confirmer, kind = document["confirmed_by"], document["kind"]
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        return [f"the removal record is unusable: {error}"]
-    complete = (
-        len(recorded) == len({key for key, _, _ in recorded})
-        and {key: version for key, version, _ in recorded} == planned
-        and all(isinstance(marker, str) and marker for _, _, marker in recorded)
-    )
-    return [] if complete else ["the removal record does not show one delete marker for every planned file"]
+        return [f"the removal confirmation is unusable: {error}"]
+    problems: list[str] = []
+    if kind != "unused_file_removal_confirmation":
+        problems.append("the removal confirmation is unusable: it is not a removal confirmation")
+    if not (isinstance(confirmer, str) and confirmer.strip()):
+        problems.append("the removal confirmation has no confirming person")
+    if len(keys) != len(set(keys)):
+        problems.append("the removal confirmation repeats a key")
+    planned = {item["s3_key"] for item in removal["items"]}
+    missing = sorted(planned - set(keys))
+    extra = sorted(set(keys) - planned)
+    if missing:
+        problems.append(f"the removal confirmation does not confirm {len(missing)} planned key{'s' if len(missing) != 1 else ''}, such as {missing[0]}")
+    if extra:
+        problems.append(f"the removal confirmation names {len(extra)} keys the plan does not hold, such as {extra[0]}")
+    return problems
 
 
 def queue_hosts(queue: dict) -> set[str]:
@@ -159,7 +167,7 @@ def host_problems(queue_body: bytes, hosts_path: Path, approval_path: Path) -> l
     return problems
 
 
-def check(queue_path: Path, plan_path: Path, approval_path: Path, record_path: Path, root: str, hosts_path: Path, hosts_approval_path: Path) -> list[str]:
+def check(queue_path: Path, plan_path: Path, confirmation_path: Path, root: str, hosts_path: Path, hosts_approval_path: Path) -> list[str]:
     """Return every reason run 3 cannot start yet; an empty list means the route is ready."""
     problems: list[str] = []
     if root != RAW_ROOT:
@@ -170,12 +178,11 @@ def check(queue_path: Path, plan_path: Path, approval_path: Path, record_path: P
         problems.append("the queue differs from its lock")
     removed: set[str] = set()
     try:
-        removal = approved_plan(plan_path, approval_path)
+        removal = read_plan(plan_path)
         removed = {item["snapshot_id"] for item in removal["items"]}
-    except (CaptureError, OSError, KeyError, ValueError) as error:
-        problems.append(f"the approved removal plan is not usable: {error}")
-        removal = None
-    problems.extend(record_problems(record_path, removal))
+        problems.extend(confirmation_problems(confirmation_path, removal))
+    except (CaptureError, OSError, KeyError, ValueError, TypeError) as error:
+        problems.append(f"the removal plan is not usable: {error}")
     problems.extend(host_problems(queue_body, hosts_path, hosts_approval_path))
     for unit in json.loads(queue_body)["queue"]:
         if unit["snapshot_id"] in removed and unit["disposition"] in ACTIVE:
@@ -194,7 +201,7 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
     templating.add_argument("--output", required=True, type=Path)
     templating.add_argument("--lane", choices=[LANE_NAME, PERSON_LANE], default=LANE_NAME)
     checking = commands.add_parser("check")
-    for name in ("queue", "plan", "approval", "record", "hosts", "hosts-approval"):
+    for name in ("queue", "plan", "confirmation", "hosts", "hosts-approval"):
         checking.add_argument(f"--{name}", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -206,7 +213,7 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
             document = write_lane_template(args.queue, args.output, args.lane)
             sys.stdout.write(json.dumps({"units": document["units"], "approved_by": None}) + "\n")
             return
-        found = check(args.queue, args.plan, args.approval, args.record, capture_root() if root is None else root, args.hosts, args.hosts_approval)
+        found = check(args.queue, args.plan, args.confirmation, capture_root() if root is None else root, args.hosts, args.hosts_approval)
     except (OSError, KeyError, ValueError) as error:
         parser.error(str(error))
     if found:

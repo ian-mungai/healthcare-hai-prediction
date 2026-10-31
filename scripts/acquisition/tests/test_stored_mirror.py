@@ -231,8 +231,8 @@ def test_without_a_mirror_a_changed_file_is_still_reported_but_not_compared(tmp_
 def namespace(stored: Stored, **extra: Any) -> Any:
     import argparse
 
-    values = {"queue": stored.queue, "state_root": None, "manual_folder": None, "removal_plan": None, "removal_approval": None}
-    values |= {"removal_record": None, "hosts": None, "hosts_approval": None} | extra
+    values = {"queue": stored.queue, "state_root": None, "manual_folder": None, "removal_plan": None, "removal_confirmation": None}
+    values |= {"hosts": None, "hosts_approval": None} | extra
     return argparse.Namespace(**values)
 
 

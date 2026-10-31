@@ -100,3 +100,6 @@ airflow tests/orchestration/fixtures/combined_dag.py -- step and catalog_up stay
 python dags/drift_monitoring_dag.py -- dag_runtime is the live runtime module the DAG imports; the change removed only a test helper function of the same name -- expires 2026-11-30
 config scripts/orchestration/run_features_pipeline_light.py -- the check requires the retired gold_maintenance_dag to stay gone from the pipeline graph -- expires 2026-11-30
 config scripts/orchestration/run_publish_contracts.py -- the check requires the retired gold_maintenance_dag to stay undeclared -- expires 2026-11-30
+flag orchestration/training_render.py -- the promotion job's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent
+flag scripts/lakehouse/layer_acceptance.py -- the layer acceptance report's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent
+flag config/aws/owner_command_lists.json -- the owner command lists call the layer acceptance report's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent

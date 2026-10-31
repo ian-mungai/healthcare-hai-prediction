@@ -1,10 +1,9 @@
-"""Name the downloaded source files no table or model uses, and plan their removal for the owner to approve.
+"""Name the downloaded source files no table or model uses, and list them for the owner to remove by hand.
 
-``plan`` is read-only and the default: it reads bronze's copies list, a complete inventory of the stored objects with their immutable versions and an
-optional list of files to keep, then writes a report and a removal plan. Only acquisition payload keys can be planned. A key any kept file uses, and any
-file a table lists, stays. ``apply`` runs only with an approval file that names the plan's SHA-256, for the plan's own bucket, and only while every
-planned key is still at its planned version. It writes delete markers, never deletes a version, and records each marker so a person can restore a file by
-removing its marker. A retry skips keys that already carry a marker.
+``plan`` is read-only: it reads bronze's copies list, a complete inventory of the stored objects with their immutable versions and an optional list
+of files to keep, then writes a report and a removal plan. Only acquisition payload keys can be planned. A key any kept file uses, and any file a
+table lists, stays. Nothing here changes S3. The owner removes the planned keys by hand, and ``confirmation-template`` writes the record the owner signs
+once that is done. The run 3 route gate refuses to start unless that record names the plan's hash and every planned key.
 """
 
 from __future__ import annotations
@@ -19,13 +18,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
+from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
 
 COPY_COLUMNS = ("source_id", "snapshot_id", "s3_key", "sha256", "loaded", "retired", "tables")
 INVENTORY_COLUMNS = ("source_id", "snapshot_id", "s3_key", "s3_version_id", "sha256")
 PAYLOAD_KEY = re.compile(r"^(?:raw/)?[a-z0-9_]+/[a-z0-9_]+/datasets/")
-BATCH_LIMIT = 1000
 
 
 def read_table(path: Path, columns: tuple[str, ...], name: str) -> list[dict[str, str]]:
@@ -124,9 +122,7 @@ def build_plan(classified: dict[str, Any], bucket: str, inputs_sha256: str) -> d
         "bucket": bucket,
         "inputs_sha256": inputs_sha256,
         "items": items,
-        "method": "s3_delete_marker",
-        "permanent_version_deletion": False,
-        "executed": False,
+        "removal": "by hand by the owner",
     }
     return {**body, "plan_sha256": hashlib.sha256(encoded_json(body)).hexdigest()}
 
@@ -141,72 +137,34 @@ def plan(copies_path: Path, keep_path: Path | None, output: Path, inventory_path
     return {"kept": len(classified["kept"]), "unused": len(removal["items"]), "already_retired": len(classified["already_retired"]), "deleted": 0}
 
 
-def approved_plan(plan_path: Path, approval_path: Path) -> dict[str, Any]:
+def read_plan(plan_path: Path) -> dict[str, Any]:
+    """Read a removal plan and refuse one that was changed after it was written."""
     removal = json.loads(plan_path.read_text(encoding="utf-8"))
     body = {key: value for key, value in removal.items() if key != "plan_sha256"}
     if hashlib.sha256(encoded_json(body)).hexdigest() != removal["plan_sha256"]:
         raise CaptureError("The removal plan was changed after it was written.")
-    if not approval_path.is_file():
-        raise CaptureError("Removal needs the owner's approval file for this plan.")
-    approval = json.loads(approval_path.read_text(encoding="utf-8"))
-    if approval.get("plan_sha256") != removal["plan_sha256"] or not approval.get("approved_by"):
-        raise CaptureError("The approval does not name this plan's SHA-256.")
     return removal
 
 
-def apply(client: Any, plan_path: Path, approval_path: Path, output: Path) -> dict[str, Any]:
-    removal = approved_plan(plan_path, approval_path)
-    if client.configuration.get("data_bucket_name") != removal["bucket"]:
-        raise CaptureError("The plan names another bucket than the client's.")
-    if client.call("s3api", "get-bucket-versioning").get("Status") != "Enabled":
-        raise CaptureError("Recoverable removal requires enabled versioning.")
-    listing = client.call("s3api", "list-object-versions")
-    if listing.get("IsTruncated"):
-        raise CaptureError("A complete version listing is required before removal.")
-    current = {item["Key"]: item["VersionId"] for item in listing.get("Versions", []) if item.get("IsLatest")}
-    older: dict[str, set[str]] = {}
-    for item in listing.get("Versions", []):
-        older.setdefault(item["Key"], set()).add(item["VersionId"])
-    marked = {item["Key"]: item["VersionId"] for item in listing.get("DeleteMarkers", []) if item.get("IsLatest")}
-    pending: list[str] = []
-    for item in removal["items"]:
-        name, version = item["s3_key"], item["version_id"]
-        if name in marked and version in older.get(name, set()):
-            continue
-        if current.get(name) != version:
-            raise CaptureError(f"{name} is not at its planned version, so nothing was removed. Review a new plan.")
-        pending.append(name)
-    pending.sort()
-    for number, start in enumerate(range(0, len(pending), BATCH_LIMIT)):
-        batch = pending[start : start + BATCH_LIMIT]
-        request = output / f"delete_request_{number}.json"
-        request.parent.mkdir(parents=True, exist_ok=True)
-        request.write_bytes(encoded_json({"Objects": [{"Key": name} for name in batch], "Quiet": False}))
-        result = client.call("s3api", "delete-objects", ["--delete", "file://" + str(request.resolve()), "--checksum-algorithm", "SHA256"])
-        if result.get("Errors") or {item["Key"] for item in result.get("Deleted", [])} != set(batch):
-            raise CaptureError("Removal is incomplete. List the versions again before any retry. Keys with a marker are skipped.")
-        if any(item.get("DeleteMarker") is not True or not item.get("DeleteMarkerVersionId") for item in result["Deleted"]):
-            raise CaptureError("Removal did not confirm a delete marker for every key.")
-        marked.update({item["Key"]: item["DeleteMarkerVersionId"] for item in result["Deleted"]})
-    record = {
+def confirmation_template(removal: dict[str, Any]) -> dict[str, Any]:
+    """The record the owner signs after removing every planned key by hand. It names the plan, the bucket and each key."""
+    return {
+        "kind": "unused_file_removal_confirmation",
         "plan_sha256": removal["plan_sha256"],
         "bucket": removal["bucket"],
-        "items": [
-            {
-                "s3_key": item["s3_key"],
-                "version_id": item["version_id"],
-                "delete_marker_version_id": marked[item["s3_key"]],
-                "restore": "delete this marker version",
-            }
-            for item in sorted(removal["items"], key=lambda entry: entry["s3_key"])
-        ],
+        "keys": sorted({item["s3_key"] for item in removal["items"]}),
+        "confirmed_by": None,
     }
-    write_once(output / "removal_record.json", encoded_json(record))
-    return {"markers": len(removal["items"]), "newly_deleted": len(pending)}
 
 
-def main(argv: Sequence[str] | None = None, client: Any = None) -> None:
-    parser = argparse.ArgumentParser(description="Report unused downloaded files and apply an owner-approved removal plan.")
+def write_confirmation_template(plan_path: Path, output: Path) -> dict[str, Any]:
+    document = confirmation_template(read_plan(plan_path))
+    write_once(output, encoded_json(document))
+    return document
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Report unused downloaded files and write the confirmation the owner signs after removing them by hand.")
     commands = parser.add_subparsers(dest="command", required=True)
     planning = commands.add_parser("plan")
     planning.add_argument("--copies", required=True, type=Path)
@@ -214,23 +172,15 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> None:
     planning.add_argument("--inventory", required=True, type=Path, help="CSV of every stored object: source_id, snapshot_id, s3_key, s3_version_id, sha256")
     planning.add_argument("--bucket", required=True)
     planning.add_argument("--output", required=True, type=Path)
-    applying = commands.add_parser("apply")
-    applying.add_argument("--plan", required=True, type=Path)
-    applying.add_argument("--approval", required=True, type=Path)
-    applying.add_argument("--output", required=True, type=Path)
+    confirming = commands.add_parser("confirmation-template")
+    confirming.add_argument("--plan", required=True, type=Path)
+    confirming.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
             summary = plan(args.copies, args.keep, args.output, args.inventory, args.bucket)
         else:
-            approved_plan(args.plan, args.approval)
-            if client is None:
-                from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
-
-                settings, _ = load_configuration(REPO_ROOT / ".env")
-                verify_project_identity(settings)
-                client = AwsCli(settings)
-            summary = apply(client, args.plan, args.approval, args.output)
+            summary = {"keys": len(write_confirmation_template(args.plan, args.output)["keys"]), "confirmed_by": None}
     except (CaptureError, ValueError, OSError, KeyError, TypeError) as error:
         parser.error(str(error))
     sys.stdout.write(json.dumps(summary, indent=2) + "\n")

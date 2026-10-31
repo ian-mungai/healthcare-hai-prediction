@@ -315,7 +315,7 @@ def route_gate(run: Run) -> None:
     files = run.route
     if files is None:
         raise RegistryError("Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
-    problems = route.check(run.queue_path, files.plan, files.approval, files.record, capture_root(), files.hosts, files.hosts_approval)
+    problems = route.check(run.queue_path, files.plan, files.confirmation, capture_root(), files.hosts, files.hosts_approval)
     require(not problems, "Run 3 route gate: " + "; ".join(problems))
     if run.keyed_lane or run.person_lane:
         lane = route.lane_problems(
@@ -1463,7 +1463,7 @@ def run_from(
 ) -> Run:
     """The run for the command line. A task whose environment names a stored mirror reads stored payloads from S3, after its identity check."""
     state_root = args.state_root or default_state_root(args.queue)
-    paths = [args.removal_plan, args.removal_approval, args.removal_record, args.hosts, args.hosts_approval]
+    paths = [args.removal_plan, args.removal_confirmation, args.hosts, args.hosts_approval]
     files = route.RouteFiles(*paths) if all(paths) else None
     mirror = stored_mirror.from_environment(environment, factory) if environment.get(stored_mirror.MIRROR_VARIABLE) else None
     return Run(
@@ -1495,7 +1495,7 @@ def main() -> None:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--resume-source")
     parser.add_argument("--decision")
-    for name in ("removal-plan", "removal-approval", "removal-record", "hosts", "hosts-approval"):
+    for name in ("removal-plan", "removal-confirmation", "hosts", "hosts-approval"):
         parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
     parser.add_argument("--state-parent", type=Path, help="a writable folder outside the code tree that holds the state root, for the AWS task")
     parser.add_argument("--keyed-lane", action="store_true", help="run only the units that need an API key, on the owner's Mac")

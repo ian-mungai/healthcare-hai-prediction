@@ -130,7 +130,7 @@ def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes
     hosts.unlink()
     route.derive_hosts(queue, hosts)
     paths["hosts_approval"].write_text(json.dumps({"hosts_sha256": json.loads(hosts.read_text())["hosts_sha256"], "approved_by": "owner"}))
-    files = route.RouteFiles(paths["plan"], paths["approval"], paths["record"], hosts, paths["hosts_approval"])
+    files = route.RouteFiles(paths["plan"], paths["confirmation"], hosts, paths["hosts_approval"])
     approval = folder / "lane_approval.json"
     route.write_lane_template(queue, approval, template_lane)
     document = json.loads(approval.read_text())
@@ -215,8 +215,8 @@ def test_the_lane_needs_the_same_gate_and_the_raw_root(monkeypatch: pytest.Monke
     run, _, files = lane_files(tmp_path)
     refused(monkeypatch, run, "raw/")
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    files.record.unlink()
-    refused(monkeypatch, run, "removal record")
+    files.confirmation.unlink()
+    refused(monkeypatch, run, "removal confirmation")
 
 
 def test_an_approved_lane_attempts_only_the_keyed_units_and_the_task_never_the_same_ones(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
