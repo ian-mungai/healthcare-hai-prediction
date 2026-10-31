@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -32,6 +33,9 @@ PIPELINE = "orchestration/pipeline_render.py"
 TRAINING = "orchestration/training_render.py"
 JOB = "scripts/training/job.py"
 EXTRACT = "scripts/features/training_extract.py"
+TERRAFORM_GROUP = "scripts/ci/groups/terraform_checks.sh"
+# Where the Terraform stacks read repository files from above their own folder: the jobs root has the repository path, the others walk up two folders.
+STACK_FILE_READS = (r"\$\{path\.module\}/\.\./\.\./([A-Za-z0-9_./-]+)", r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)")
 RUN_SECONDS = 720
 PYTHON = ROOT / ".venv/bin/python"
 
@@ -507,6 +511,22 @@ def scenarios(source: dict[str, str]) -> list[Case]:
     return cases
 
 
+def group_stack_files() -> list[str]:
+    """The repository files the terraform_checks group copies beside every stack it checks."""
+    found = re.search(r"for config_read_by_stacks in ([^;]+); do", (ROOT / TERRAFORM_GROUP).read_text(encoding="utf-8"))
+    return found.group(1).split() if found else []
+
+
+def stack_read_files() -> set[str]:
+    """Every repository file below the repository root that a stack or a stack test reads above its folder."""
+    names: set[str] = set()
+    for pattern in ("*.tf", "*.tftest.hcl"):
+        for path in (ROOT / "infra").rglob(pattern):
+            for expression in STACK_FILE_READS:
+                names.update(name for name in re.findall(expression, path.read_text(encoding="utf-8")) if (ROOT / name).is_file())
+    return names
+
+
 def remaining(deadline: float, cap: float) -> float:
     seconds = min(cap, deadline - time.monotonic())
     if seconds <= 0:
@@ -527,14 +547,7 @@ def snapshot(deadline: float) -> dict[str, str]:
             files[name] = (ROOT / path).read_text(encoding="utf-8")
     files[".pre-commit-config.yaml"] = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     # The CI group selector reads the launcher input list; the terraform_checks body copies the other files into every stack it checks.
-    for name in (
-        "config/quality/ci_groups.json",
-        "config/quality/launcher_inputs.json",
-        "config/lakehouse/bronze_tables.json",
-        "config/lakehouse/aws_bronze_grants.json",
-        "config/orchestration/ecs_broker_jobs.json",
-        "config/lakehouse/athena_mirror.json",
-    ):
+    for name in ("config/quality/ci_groups.json", "config/quality/launcher_inputs.json", *group_stack_files()):
         files[name] = (ROOT / name).read_text(encoding="utf-8")
     files[".gitignore"] = ".venv/\n.cache/\n"
     return files
@@ -623,12 +636,14 @@ def ci_case(source: dict[str, str], workspace: Path, deadline: float, name: str 
     output = result.stdout + result.stderr
     commands = ("-m scripts.quality.container_mounts", "-m scripts.quality.run_container_mounts_e2e")
     dispatched = {command: output.count(command) == 1 for command in commands}
+    unlisted = sorted(stack_read_files() - set(group_stack_files()))
     return {
         "name": name,
-        "passed": result.returncode == 0 and all(selected.values()) and all(dispatched.values()),
+        "passed": result.returncode == 0 and all(selected.values()) and all(dispatched.values()) and not unlisted,
         "observed_exit": result.returncode,
         "path_selection": selected,
         "dispatched_once": dispatched,
+        "stack_files_not_copied_by_the_group": unlisted,
         "output": output,
         "limits": "Real dispatcher and group bodies, with a timing wrapper that records leaf commands instead of running them.",
     }
