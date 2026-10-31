@@ -47,6 +47,8 @@ SIGNAL_FUNCTIONS = frozenset({"kill", "killpg", "signal_group", "signal_owned", 
 SLOW_MODES = ("delay_headers", "drip_headers", "hang_body", "drip_body")
 # Calls a deadline case may make before it reports that the request never reached the stand-in, each with twice the budget of the one before.
 DEADLINE_ATTEMPTS = 4
+# The largest budget of a repeated call: the stand-in stalls for 15 s, so a longer budget could outlast the stall it must cut off.
+DEADLINE_BUDGET_CAP_S = 10.0
 # Seconds the stand-in may take to see the client close, which a busy machine delays; the wait ends at once when the close is seen.
 PEER_CLOSE_WAIT_S = 5.0
 
@@ -288,8 +290,21 @@ def _deadline_attempt(folder: Path, operation: str, mode: str, budget_s: float) 
 
 
 def _request_never_arrived(row: dict[str, Any]) -> bool:
-    """Return True when the deadline ran out before the request reached the stand-in, so no response stage was exercised and the call proves nothing."""
-    return row["reply_error"] is not None and row["reply_error"].get("kind") == "deadline" and not any(event["kind"] == "request" for event in row["events"])
+    """Return True only when the start was late and nothing else failed.
+
+    The call used its whole budget and ended with a deadline error before the request reached the stand-in, and every other check holds: the call
+    returned inside its absolute bound, its group is gone and its shutdown is confirmed. Any other failure is a defect of the code under test, not a late
+    start, so it is never excused.
+    """
+    error = row["reply_error"]
+    excused = {"request_reached_http", "peer_closed"}
+    return (
+        error is not None
+        and error.get("kind") == "deadline"
+        and not any(event["kind"] == "request" for event in row["events"])
+        and row["elapsed_s"] >= row["budget_s"] - 0.05
+        and all(ok for name, ok in row["checks"].items() if name not in excused)
+    )
 
 
 def deadline_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -297,8 +312,9 @@ def deadline_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, 
 
     The first budget is a 0.8 second stall window plus triple the slowest unfaulted call measured so far. A one-shot worker starts inside each call,
     so a machine that got busier after that measurement can use the whole budget before the request reaches the stand-in. Such a call never reached a
-    response stage and says nothing about the deadline, so it is repeated with twice the budget, up to `DEADLINE_ATTEMPTS` calls. Every other result
-    stands, and the row names the budgets that were used up.
+    response stage and says nothing about the deadline, so it is repeated with twice the budget, up to `DEADLINE_ATTEMPTS` calls and never past
+    `DEADLINE_BUDGET_CAP_S`. A call is repeated only when `_request_never_arrived` holds, so a call that took longer than its bound, or left a process
+    or a partial file behind, fails at once. The row names the budgets that were used up.
     """
     results: list[dict[str, Any]] = []
     startup_s = 0.0
@@ -308,7 +324,7 @@ def deadline_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, 
             budget_s = 0.8 + 3 * startup_s
             missed: list[float] = []
             row = _deadline_attempt(folder, operation, mode, budget_s)
-            while _request_never_arrived(row) and len(missed) + 1 < DEADLINE_ATTEMPTS:
+            while _request_never_arrived(row) and len(missed) + 1 < DEADLINE_ATTEMPTS and budget_s * 2 <= DEADLINE_BUDGET_CAP_S:
                 missed.append(budget_s)
                 budget_s *= 2
                 row = _deadline_attempt(folder, operation, mode, budget_s)
