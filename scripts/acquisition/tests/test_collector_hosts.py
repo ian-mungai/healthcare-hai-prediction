@@ -98,3 +98,17 @@ def test_no_collector_opens_a_publisher_connection_except_through_the_transport(
         if "http.client.HTTPSConnection(" in path.read_text(encoding="utf-8") or "urllib.request.urlopen(" in path.read_text(encoding="utf-8"):
             offenders.append(path.name)
     check(offenders == [], f"live requests must use transport.https_connection or transport.download: {offenders}")
+
+
+def test_a_stand_in_connection_class_is_used_below_the_host_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class Standin:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.args = args
+
+    monkeypatch.setattr(transport.http.client, "HTTPSConnection", Standin)
+    monkeypatch.delenv(transport.APPROVED_HOSTS_VARIABLE, raising=False)
+    monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
+    check(isinstance(transport.https_connection("data.example.gov", timeout=5), Standin), "the stand-in class receives the connection")
+    hosts(monkeypatch, tmp_path, ["other.example.gov"])
+    with pytest.raises(transport.CaptureError, match="approved hosts"):
+        transport.https_connection("data.example.gov", timeout=5)

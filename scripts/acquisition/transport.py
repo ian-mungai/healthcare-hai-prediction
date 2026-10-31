@@ -155,7 +155,10 @@ def public_addresses(host: str, port: int) -> list[str]:
     return addresses
 
 
-class PublicHTTPSConnection(http.client.HTTPSConnection):
+REAL_HTTPS_CONNECTION = http.client.HTTPSConnection
+
+
+class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
     """Connect only to a validated public address and keep the approved name for the TLS check."""
 
     def connect(self) -> None:
@@ -179,9 +182,14 @@ class ReviewedTransport:
         self.handlers = handlers
 
 
-def https_connection(netloc: str, timeout: float) -> PublicHTTPSConnection:
-    """Return the connection every live collector uses. The host must be on the approved hosts file."""
+def https_connection(netloc: str, timeout: float) -> Any:
+    """Return the connection every live collector uses. The host must be on the approved hosts file.
+
+    A test may replace ``http.client.HTTPSConnection`` with a stand-in. It is used below the host check, which always runs first.
+    """
     require_approved(f"https://{netloc}/")
+    if http.client.HTTPSConnection is not REAL_HTTPS_CONNECTION:
+        return http.client.HTTPSConnection(netloc, timeout=timeout)
     return PublicHTTPSConnection(netloc, timeout=timeout)
 
 
