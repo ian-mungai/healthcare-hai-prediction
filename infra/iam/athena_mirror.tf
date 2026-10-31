@@ -7,7 +7,7 @@ locals {
   athena_results_path  = "${local.athena_mirror_config.workgroup.results_prefix}*"
   athena_workgroup_arn = "arn:aws:athena:${var.aws_region}:${var.expected_account_id}:workgroup/${local.athena_mirror_config.workgroup.name}"
   athena_table_arns    = { for layer, spec in local.athena_layers : layer => "${local.athena_account_arn}:table/${spec.database}/*" }
-  # The reader reads the folders of the 70 tables that the gold publish contract names, and nothing else of the namespace: not publish_runs, not a table
+  # The reader reads the folders of the tables that the gold publish contract names, and nothing else of the namespace: not publish_runs, not a table
   # that is not in the contract and not a folder that only starts with a table name. Each pattern ends at the directory boundary, <table>/*. If Polaris
   # puts another name on a table folder, the live query is denied and the owner binds the real folder, not every suffix.
   athena_contract_tables = sort(keys(jsondecode(file("${path.module}/../../data_contracts/lakehouse/gold_contract.json")).publish.tables))

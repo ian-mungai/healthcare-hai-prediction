@@ -184,7 +184,7 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
 
   assert {
     condition = (
-      length(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) == 70 &&
+      length(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) == length(keys(jsondecode(file("${path.module}/../../data_contracts/lakehouse/gold_contract.json")).publish.tables)) &&
       alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : alltrue([for r in s.Resource : can(regex("^arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/[a-z_]+/[*]$", r))]) if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]) &&
       contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state/*") &&
       !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*") &&
@@ -192,7 +192,7 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the 70 published contract tables, never publish_runs or the whole namespace. Writes reach only the results prefix and nothing deletes."
+    error_message = "Data reads reach only the published contract tables, one folder each, never publish_runs or the whole namespace. Writes reach only the results prefix and nothing deletes."
   }
 }
 
