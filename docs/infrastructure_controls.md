@@ -243,8 +243,11 @@ The following rules describe the host and its network:
   which needs `ec2:GetConsoleOutput` to read. The configuration E2E
   runs every boot case with a console file and requires the same lines in the
   log and on the console, each with the prefix, in order. It also boots with a
-  console that is a directory and with one that is a named pipe nobody reads,
-  and plants eight defects (final lines not flushed, copy left running, no
+  console that is a directory and with one that is a named pipe nobody reads.
+  A copy that ends one second after the script is not a leftover, because the
+  kernel finishes a stopped process after the script has exited. The check polls
+  for up to 10 seconds and reports a copy that is still running after that. The
+  E2E also plants eight defects (final lines not flushed, copy left running, no
   prefix, AWS output on the console, a token in the log, an unbounded wait, a
   success line after a failure and no step markers). Each must be reported.
 - At boot the host finds its Elastic IP and data volume by tag, associates the

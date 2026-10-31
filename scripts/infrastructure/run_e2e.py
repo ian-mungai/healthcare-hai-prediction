@@ -186,6 +186,8 @@ BOOT_STUBS = {
 }
 # The longest a boot may take to end when the console never accepts a write: the script's own wait for the copy plus the other steps.
 CONSOLE_FLUSH_LIMIT = 10
+# How long after the boot script exited its console copy may still be listed: the kernel ends a process after the KILL that was sent to it.
+CONSOLE_EXIT_GRACE = 10.0
 STALL = "exec /bin/sleep 45"
 STALL_IGNORING_TERM = "trap '' TERM; exec /bin/sleep 45"
 # Stateful stand-ins, in Python, for the commands whose effect later steps read back. They keep their state in
@@ -1729,7 +1731,25 @@ def boot_host(
     return root, environment, step, result
 
 
-def console_copy_problems(root: Path, returncode: int | None, duration: float, message: str | None, flush_limit: float) -> list[str]:
+def copy_process_running(pid: int, grace_seconds: float) -> bool:
+    """Return True when the process is still running ``grace_seconds`` after the boot script exited.
+
+    The script sends KILL to a copy stuck on the console and exits at once, so the kernel finishes the copy after the script, and a copy that
+    has ended stays listed as a zombie until its new parent collects it. Neither is a leftover: poll until the process is gone or a zombie.
+    """
+    deadline = time.monotonic() + grace_seconds
+    while True:
+        state = run_command("ps", ["-o", "stat=", "-p", str(pid)], timeout=30).stdout.strip()
+        if not state or state.startswith("Z"):
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.05)
+
+
+def console_copy_problems(
+    root: Path, returncode: int | None, duration: float, message: str | None, flush_limit: float, exit_grace: float = CONSOLE_EXIT_GRACE
+) -> list[str]:
     """Compare what the boot script wrote to the log with what reached the console; return one sentence per difference.
 
     A boot with a console that cannot be read passes ``flush_limit`` only; every other boot passes the whole comparison.
@@ -1741,11 +1761,7 @@ def console_copy_problems(root: Path, returncode: int | None, duration: float, m
     if copy_process is None:
         problems.append("the log does not name the console copy process")
     else:
-        try:
-            os.kill(int(copy_process.group(1)), 0)
-        except ProcessLookupError:
-            pass
-        else:
+        if copy_process_running(int(copy_process.group(1)), exit_grace):
             problems.append("the console copy process was still running after the script exited")
             os.kill(int(copy_process.group(1)), signal.SIGKILL)
     if duration >= flush_limit:
@@ -1783,10 +1799,23 @@ def console_copy_problems(root: Path, returncode: int | None, duration: float, m
     return problems
 
 
+def kill_the_copy_late(template: str) -> str:
+    """Plant a copy that ends one second after the boot script has exited, as a KILL does when the kernel is slow to finish it."""
+    short = replace_once(template, "console_flush_seconds=4", "console_flush_seconds=1")
+    return replace_once(
+        short, '      kill -KILL "$copy_pid" 2>/dev/null || :\n      break', '      { sleep 1; kill -KILL "$copy_pid"; } 2>/dev/null &\n      break'
+    )
+
+
 def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_timeout: str) -> None:
     """A console that cannot be opened or never accepts a write must not stop or hold the boot; each planted defect must be reported."""
-    for name, console in (("boot_console_not_writable", "directory"), ("boot_console_blocks", "fifo")):
-        root, _, step, result = boot_host(evidence, bash, name, template, {}, {}, gnu_timeout, console)
+    for name, console, change in (
+        ("boot_console_not_writable", "directory", None),
+        ("boot_console_blocks", "fifo", None),
+        # The kernel finishes a KILL after the signal is sent, so on a loaded machine the copy can end well after the script: that is not a leftover.
+        ("boot_console_copy_ends_after_the_script", "fifo", kill_the_copy_late),
+    ):
+        root, _, step, result = boot_host(evidence, bash, name, template if change is None else change(template), {}, {}, gnu_timeout, console)
         problems = console_copy_problems(root, result.returncode, step["duration_seconds"], None, CONSOLE_FLUSH_LIMIT)
         step["console_problems"] = problems
         evidence.check(step, "boot_succeeded", result.returncode == 0)
@@ -1859,7 +1888,9 @@ def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_tim
     for name, (expected, change, console, stub_overrides, case_environment) in planted.items():
         root, _, step, result = boot_host(evidence, bash, name, change(template), stub_overrides, case_environment, gnu_timeout, console)
         stalled = "Mounting the data volume did not finish within 120 seconds." if "mount" in stub_overrides else None
-        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT)
+        # A copy that is planted to run forever needs one second, not the whole grace, to be told from one that is still ending.
+        grace = 1.0 if name == "boot_with_console_copy_left_running" else CONSOLE_EXIT_GRACE
+        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT, grace)
         step["console_problems"] = problems
         evidence.check(step, "planted_console_defect_is_reported", any(expected in problem for problem in problems))
 
