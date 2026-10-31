@@ -1736,21 +1736,36 @@ class ProcessInspectionError(Exception):
     """The state of a process could not be read, which is not the same as the process being gone."""
 
 
-def process_state(pid: int) -> str | None:
-    """Return the state letters of the process, or None when its absence is confirmed by the signal check; raise when it cannot be told either way."""
+def process_gone(pid: int) -> bool:
+    """Return True when a signal to the process finds no such process; a process of another user still counts as present."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return None
+        return True
     except PermissionError:
-        pass
+        return False
+    return False
+
+
+def process_state(pid: int) -> str | None:
+    """Return the state letters of the process, or None when its absence is confirmed; raise when it cannot be told either way.
+
+    A process can exit between the first signal check and the ``ps`` query, so every unsuccessful query is followed by a second signal check, and the
+    error is raised only while the process is still present.
+    """
+    if process_gone(pid):
+        return None
     try:
         result = run_command("ps", ["-o", "stat=", "-p", str(pid)], timeout=30)
     except (OSError, TimeoutExpired) as error:
+        if process_gone(pid):
+            return None
         raise ProcessInspectionError(f"ps did not run: {type(error).__name__}") from None
     state = result.stdout.strip()
     if result.returncode == 0 and state:
         return state
+    if process_gone(pid):
+        return None
     detail = result.stderr.strip() or f"exit status {result.returncode} with no output"
     raise ProcessInspectionError(f"ps cannot read process {pid} and the signal check still finds it: {detail}")
 
