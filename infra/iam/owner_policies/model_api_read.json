@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadFeastRegistry",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${REGISTRY_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ReadDeploymentRecords",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${MANIFEST_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListDeploymentPrefix",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": ["${BUCKET_ARN}"],
+      "Condition": {"StringLike": {"s3:prefix": ${MANIFEST_LIST_PREFIXES}}}
+    }
+  ]
+}
