@@ -991,6 +991,61 @@ def every_fetch_container_names_its_code_run() -> None:
     require(not missing, f"the fetch container of these jobs has no CODE_RUN_ID: {missing}")
 
 
+def bronze_cancelled_first_attempt_still_binds_its_run() -> None:
+    """A cancelled attempt ends with a cancelled line, and the intent line before it still holds the checked values, so a replaced request is refused."""
+    pair, _ = table_pair()
+    first = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, first)
+        current.ecs.hold = True
+        handle = current.client.submit(bronze_request())
+        require(current.client.cancel(handle).state == State.CANCELLED, "the first attempt was not cancelled")
+        require(next(iter(current.ecs.tasks.values()))["lastStatus"] == "STOPPED", "the cancel left the task running")
+        intent = json.loads((current.folder / "state" / f"{BRONZE_RUN}.jsonl").read_text().splitlines()[0])
+        require(intent["event"] == "intent" and intent["dispatch"]["BRONZE_REQUEST_SHA256"], f"the first intent lost its checked values: {intent}")
+        stage_bronze_request(current, {**first, "inventory_sha256": "ef" * 32})
+        text = refused_text(lambda: current.client.submit(bronze_request(2)))
+        require("inventory" in text and "start a new run ID" in text, text)
+        require(current.ecs.count("run_task") == 1, "a replaced inventory started a second task after a cancel")
+        stage_bronze_request(current, first)
+        current.ecs.hold = False
+        require(
+            wait_for(current, current.client.submit(bronze_request(2))).state == State.SUCCEEDED, "the unchanged request must start attempt 2 after the stop"
+        )
+
+
+def bronze_unresolved_start_keeps_its_binding_and_its_stop() -> None:
+    """ECS accepted RunTask and the reply was lost. The intent holds the checked values, cancel finds and stops the task, and the run stays bound."""
+    pair, _ = table_pair()
+    first = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, first)
+        current.ecs.hold = True
+        current.ecs.lose_reply_once = True
+        asked = bronze_request()
+        raises(BrokerUnavailable, partial(current.client.submit, asked))
+        require(
+            current.client.cancel(Handle(asked.submission_id, asked.container_name)).state == State.CANCELLED, "the cancel did not end the unresolved start"
+        )
+        require(next(iter(current.ecs.tasks.values()))["lastStatus"] == "STOPPED", "the unresolved task was not stopped")
+        stage_bronze_request(current, {**first, "target": "qualify", "dry_run": True})
+        text = refused_text(lambda: current.client.submit(bronze_request(2)))
+        require("request" in text and "start a new run ID" in text, text)
+        require(current.ecs.count("run_task") == 1, "a replaced request started a second task beside the lost one")
+
+
+def bronze_retry_waits_for_the_stop_of_the_first_task() -> None:
+    """The binding does not skip the stop check: attempt 2 with the unchanged request is refused while the first task still runs."""
+    pair, _ = table_pair()
+    first = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    with rig(BRONZE_FAMILIES) as current:
+        stage_bronze_request(current, first)
+        current.ecs.hold = True
+        current.client.submit(bronze_request())
+        raises(SubmissionRefused, partial(current.client.submit, bronze_request(2)))
+        require(current.ecs.count("run_task") == 1, "a retry started beside a running task")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "task_runs_through_the_broker": task_runs_through_the_broker,
     "repeated_submit_one_task": repeated_submit_one_task,
@@ -1047,4 +1102,7 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_later_attempts_are_bound_to_the_first_inventory": bronze_later_attempts_are_bound_to_the_first_inventory,
     "bronze_binding_is_per_run": bronze_binding_is_per_run,
     "every_fetch_container_names_its_code_run": every_fetch_container_names_its_code_run,
+    "bronze_cancelled_first_attempt_still_binds_its_run": bronze_cancelled_first_attempt_still_binds_its_run,
+    "bronze_unresolved_start_keeps_its_binding_and_its_stop": bronze_unresolved_start_keeps_its_binding_and_its_stop,
+    "bronze_retry_waits_for_the_stop_of_the_first_task": bronze_retry_waits_for_the_stop_of_the_first_task,
 }
