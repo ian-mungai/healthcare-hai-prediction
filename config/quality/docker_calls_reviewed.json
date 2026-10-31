@@ -327,7 +327,7 @@
         "scripts/lakehouse/cutover_route.py": "sha256:c61da0d4b6585c2f6358b0e58ec2aaf235b4a4966fda74ca2125c24e69032299",
         "scripts/lakehouse/mac_route_probe.py": "sha256:32233ee8f47f7fa2933c3b6a9c11e3d86c8619666bb509b6120a3ac421d08b52",
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
-        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:e2638d0e9b634a1828f62d7ccbae152f7abd756fd1ba1d20af68c9a3141dabf2",
+        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:17c2671f748b729688fa72f3f330287ee3537b4976301373c9d7ce4d95c4fb32",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
         "scripts/lakehouse/run_launcher_e2e.py": "sha256:0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
