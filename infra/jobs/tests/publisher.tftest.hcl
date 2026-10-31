@@ -61,8 +61,8 @@ run "default_registers_no_publisher_class" {
     cloud_limits           = null
   }
   assert {
-    condition     = output.container_definitions == {} && output.publisher_dispatch_contracts == {}
-    error_message = "Disabled defaults must register no publisher definition and export no publisher contract."
+    condition     = output.container_definitions == {} && output.publisher_dispatch_contracts == null
+    error_message = "Disabled defaults must register no publisher definition and add no publisher output."
   }
 }
 

@@ -100,7 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         body = args.queue.read_bytes()
         queue_sha256 = hashlib.sha256(body).hexdigest()
-        units = unit_classification.personal_units((args.classification or unit_classification.classification_path(args.queue)).read_bytes(), queue_sha256)
+        units = unit_classification.personal_units((args.classification or unit_classification.classification_path(args.queue)).read_bytes(), body)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return fail(*BAD_INPUT)
     results: dict[str, dict[str, Any]] = {identity: read_unit(args.folder / identity) for identity in units}

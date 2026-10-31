@@ -76,7 +76,7 @@ def test_every_adapter_mode_is_classified() -> None:
     for mode in harness.ADAPTERS:
         unit = make_unit("file", 0) | {"mode": mode, "disposition": "api"}
         lane = harness.lane_of(unit, {"file__0": "non_personal"})
-        check((lane == "unclassified") == (mode in COLLECTORS_OF_PERSONAL_ORIGINALS), f"{mode} has lane {lane}")
+        check((lane == "private_local") == (mode in COLLECTORS_OF_PERSONAL_ORIGINALS), f"{mode} has lane {lane}")
 
 
 def dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **run_fields: Any) -> tuple[list[str], dict]:

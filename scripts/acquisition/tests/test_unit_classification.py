@@ -63,7 +63,7 @@ def test_a_proposal_alone_makes_no_unit_runnable(tmp_path: Path) -> None:
     document = classification.propose(body)
     path = tmp_path / "unit_classification.json"
     path.write_bytes(json.dumps(document).encode())
-    check(dict(classification.reviewed(path.read_bytes(), classification.hashlib.sha256(body).hexdigest())) == {}, "no unit is reviewed")
+    check(dict(classification.reviewed(path.read_bytes(), body)) == {}, "no unit is reviewed")
 
 
 def test_the_owner_review_and_the_seal_make_units_runnable_and_change_nothing_else(tmp_path: Path) -> None:
@@ -76,11 +76,11 @@ def test_the_owner_review_and_the_seal_make_units_runnable_and_change_nothing_el
     document["reviewed_by"] = "the owner"
     path.write_text(json.dumps(document))
     with pytest.raises(RegistryError, match="digest"):
-        classification.reviewed(path.read_bytes(), classification.hashlib.sha256(queue.read_bytes()).hexdigest())
+        classification.reviewed(path.read_bytes(), queue.read_bytes())
     classification.main(["seal", "--file", str(path)])
     sealed = json.loads(path.read_text())
     check(sealed["units"] == document["units"] and sealed["reviewed_by"] == "the owner", "the seal changed no entry")
-    held = classification.reviewed(path.read_bytes(), classification.hashlib.sha256(queue.read_bytes()).hexdigest())
+    held = classification.reviewed(path.read_bytes(), queue.read_bytes())
     check(dict(held) == {"PLAIN__1": "non_personal", "FLAGGED__2": "personal"}, f"only the reviewed units count: {dict(held)}")
 
 
@@ -90,13 +90,13 @@ def test_reviewed_entries_without_a_named_reviewer_are_refused(tmp_path: Path) -
     document["units"]["PLAIN__1"]["status"] = "reviewed"
     document["classification_sha256"] = classification.body_digest(document)
     with pytest.raises(RegistryError, match="reviewer"):
-        classification.reviewed(json.dumps(document).encode(), classification.hashlib.sha256(queue.read_bytes()).hexdigest())
+        classification.reviewed(json.dumps(document).encode(), queue.read_bytes())
 
 
 def test_a_classification_made_for_another_queue_is_refused(tmp_path: Path) -> None:
     document = classification.propose(queue_in(tmp_path).read_bytes())
     with pytest.raises(RegistryError, match="another queue"):
-        classification.reviewed(json.dumps(document).encode(), "0" * 64)
+        classification.reviewed(json.dumps(document).encode(), b'{"queue": []}')
 
 
 def test_the_command_reports_counts_by_status_class_and_source_and_a_second_run_changes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -109,3 +109,27 @@ def test_the_command_reports_counts_by_status_class_and_source_and_a_second_run_
     before = (tmp_path / "unit_classification.json").read_bytes()
     classification.main(["propose", "--queue", str(queue)])
     check((tmp_path / "unit_classification.json").read_bytes() == before, "the same proposal changes nothing")
+
+
+def sealed_with(tmp_path: Path, key: str) -> tuple[bytes, bytes]:
+    queue = queue_in(tmp_path)
+    document = classification.propose(queue.read_bytes())
+    document["units"][key] = {"classification": "personal", "status": "proposed", "source": "synthetic"}
+    document["classification_sha256"] = classification.body_digest(document)
+    return json.dumps(document).encode(), queue.read_bytes()
+
+
+@pytest.mark.parametrize("key", ["../Jane Q. Example.csv", "SKIPPED__6", "NOT__IN_QUEUE"])
+def test_a_classification_naming_a_unit_that_is_not_an_active_queue_unit_is_refused(tmp_path: Path, key: str) -> None:
+    body, queue_body = sealed_with(tmp_path, key)
+    with pytest.raises(RegistryError, match="outside the queue"):
+        classification.reviewed(body, queue_body)
+    with pytest.raises(RegistryError, match="outside the queue"):
+        classification.personal_units(body, queue_body)
+
+
+def test_an_unsafe_active_unit_id_is_refused_before_any_path_is_built(tmp_path: Path) -> None:
+    queue = tmp_path / "queue.json"
+    queue.write_text(json.dumps({"queue": [unit("../Jane Q. Example")]}))
+    with pytest.raises(RegistryError, match="unsafe"):
+        classification.propose(queue.read_bytes())

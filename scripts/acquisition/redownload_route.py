@@ -46,7 +46,7 @@ def lane_template(queue_body: bytes, classification_body: bytes, lane: str = LAN
     from scripts.acquisition import redownload
 
     queue_sha256 = hashlib.sha256(queue_body).hexdigest()
-    classes = unit_classification.reviewed(classification_body, queue_sha256)
+    classes = unit_classification.reviewed(classification_body, queue_body)
     lanes = [redownload.lane_of(unit, classes) for unit in json.loads(queue_body)["queue"] if unit["disposition"] in ACTIVE]
     bound = {"queue_sha256": queue_sha256, "classification_sha256": hashlib.sha256(classification_body).hexdigest()}
     if lane == PERSON_LANE:
@@ -173,7 +173,7 @@ def classification_problems(queue_body: bytes, path: Path) -> list[str]:
     if not path.is_file():
         return [f"the queue has no {unit_classification.NAME}, so no unit has a reviewed classification"]
     try:
-        unit_classification.reviewed(path.read_bytes(), hashlib.sha256(queue_body).hexdigest())
+        unit_classification.reviewed(path.read_bytes(), queue_body)
     except (OSError, RegistryError) as error:
         return [str(error)]
     return []

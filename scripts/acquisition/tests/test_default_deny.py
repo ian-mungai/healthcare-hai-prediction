@@ -20,7 +20,9 @@ from scripts.acquisition import run_redownload_controls_e2e as control_cases
 from scripts.acquisition import run_redownload_e2e as fixtures
 from scripts.acquisition import transport, unit_classification
 from scripts.acquisition.s3_store import encoded_json
+from scripts.acquisition.tests import held
 from scripts.acquisition.tests import test_redownload_route as route_cases
+from scripts.acquisition.tests.test_run_lanes import make_unit
 from tests.support import check
 
 NAME = "Jane Q. Example"
@@ -284,3 +286,30 @@ def test_the_removed_private_machinery_is_gone() -> None:
         check(not hasattr(harness, name) and name not in harness.Run.__dataclass_fields__, f"{name} is gone")
     removed = "scripts.acquisition." + "private_" + "worker"
     check(importlib.util.find_spec(removed) is None, "the worker module is gone")
+
+
+PRIVATE_MODES = ["cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"]
+
+
+@pytest.mark.parametrize("disposition", ["direct_download", "approved_manual", "api"])
+@pytest.mark.parametrize("mode", PRIVATE_MODES)
+def test_a_private_collector_mode_has_no_lane_even_when_reviewed_non_personal(mode: str, disposition: str) -> None:
+    unit = make_unit("file", 0) | {"mode": mode, "disposition": disposition}
+    check(harness.lane_of(unit, {unit["snapshot_id"]: "non_personal"}) == "private_local", f"{mode} as {disposition} is kept out of every lane")
+
+
+@pytest.mark.parametrize("fields", [{}, {"person_lane": True}, {"stored_root": "mirror"}, {"keyed_lane": True}], ids=["local", "person", "task", "keyed"])
+def test_a_private_collector_unit_reviewed_non_personal_is_never_dispatched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fields: dict) -> None:
+    monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
+    units = [
+        make_unit("file", n) | {"snapshot_id": f"P__{n}", "source_id": f"P{n}", "mode": mode, "disposition": "approved_manual" if n % 2 else "direct_download"}
+        for n, mode in enumerate(PRIVATE_MODES)
+    ]
+    monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail(f"{unit['snapshot_id']} was dispatched"))
+    monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
+    fields = {key: tmp_path / value if isinstance(value, str) else value for key, value in fields.items()}
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, **fields)
+    held.hold(run, units)
+    run.state_root.mkdir()
+    summary = harness.execute_locked(run, False, True, None, None, None)
+    check(sorted(summary["not_attempted"]["private_local"]) == ["P__0", "P__1", "P__2"], f"all three are named: {summary.get('not_attempted')}")

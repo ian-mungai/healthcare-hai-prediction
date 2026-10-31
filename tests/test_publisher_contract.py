@@ -22,7 +22,7 @@ CONTRACT = {
 }
 
 
-def jobs(contracts: dict) -> dict:
+def jobs(contracts: dict | None) -> dict:
     return {"publisher_dispatch_contracts": {"sensitive": False, "type": ["object", {}], "value": contracts}}
 
 
@@ -32,6 +32,12 @@ def test_the_exact_publisher_contract_is_accepted() -> None:
 
 def test_no_selection_needs_no_contract() -> None:
     check(renderer.publisher_dispatch({}, set()) == {}, "unselected class is not read")
+
+
+def test_a_null_publisher_output_means_no_selection() -> None:
+    check(renderer.publisher_dispatch(jobs(None), set()) == {}, "a disabled publisher exports no contract")
+    with pytest.raises(renderer.TargetError):
+        renderer.publisher_dispatch(jobs(None), {"publisher_fetch"})
 
 
 @pytest.mark.parametrize(

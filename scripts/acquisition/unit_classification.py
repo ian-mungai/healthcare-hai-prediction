@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -31,6 +32,8 @@ PERSONAL_FLAG = "original_contains_personal_details"
 PERSONAL_COLLECTORS = frozenset({"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"})
 # The CMS hospitals archives hold a table of named state contacts (privacy review finding F2).
 CONTACT_TABLE_SOURCES = frozenset({"main-hai-pdc"})
+# A unit ID becomes a folder name in the owner's script, so it may hold no separator and may not start with a dot.
+SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 NO_MARKER = "no_personal_marker_in_queue_flags_collector_mode_or_contact_table_sources"
 
 
@@ -54,19 +57,29 @@ def proposal_source(unit: Mapping[str, Any]) -> tuple[str, str]:
     return NON_PERSONAL, NO_MARKER
 
 
+def active_ids(queue_body: bytes) -> set[str]:
+    """The IDs of the active units. An ID that is not a safe folder name refuses the queue, and the message never repeats it."""
+    found = {unit["snapshot_id"] for unit in json.loads(queue_body)["queue"] if unit["disposition"] in ACTIVE}
+    if not all(isinstance(identity, str) and SAFE_ID.fullmatch(identity) for identity in found):
+        raise RegistryError("The queue holds an active unit ID that is unsafe as a folder name")
+    return found
+
+
 def propose(queue_body: bytes) -> dict[str, Any]:
     """Draft the classification of every active unit from the queue metadata alone. Every entry is ``proposed``, never ``reviewed``."""
+    active = active_ids(queue_body)
     units: dict[str, dict[str, str]] = {}
     for unit in json.loads(queue_body)["queue"]:
-        if unit["disposition"] in ACTIVE:
+        if unit["snapshot_id"] in active:
             classification, source = proposal_source(unit)
             units[unit["snapshot_id"]] = {"classification": classification, "status": PROPOSED, "source": source}
     document: dict[str, Any] = {"kind": KIND, "queue_sha256": hashlib.sha256(queue_body).hexdigest(), "reviewed_by": None, "units": units}
     return {**document, "classification_sha256": body_digest(document)}
 
 
-def read_document(body: bytes, queue_sha256: str) -> dict[str, Any]:
-    """Return the classification only if it is whole and belongs to this queue. Any other state refuses the run."""
+def read_document(body: bytes, queue_body: bytes) -> dict[str, Any]:
+    """Return the classification only if it is whole, belongs to this queue and names only this queue's active units. Any other state refuses the run."""
+    queue_sha256 = hashlib.sha256(queue_body).hexdigest()
     try:
         document = json.loads(body)
         units, reviewer = document["units"], document["reviewed_by"]
@@ -81,12 +94,15 @@ def read_document(body: bytes, queue_sha256: str) -> dict[str, Any]:
         raise RegistryError("The unit classification belongs to another queue")
     if changed:
         raise RegistryError("The unit classification differs from its digest; the owner seals it after a review")
+    outside = set(units) - active_ids(queue_body)
+    if outside:
+        raise RegistryError(f"The unit classification names {len(outside)} units outside the queue's active units")
     return document
 
 
-def reviewed(body: bytes, queue_sha256: str) -> Mapping[str, str]:
+def reviewed(body: bytes, queue_body: bytes) -> Mapping[str, str]:
     """The units the owner reviewed, mapped to their classification. A unit absent from the map has no reviewed classification and does not run."""
-    document = read_document(body, queue_sha256)
+    document = read_document(body, queue_body)
     found: dict[str, str] = {}
     for identity, entry in document["units"].items():
         if isinstance(entry, dict) and entry.get("status") == REVIEWED and entry.get("classification") in (NON_PERSONAL, PERSONAL):
@@ -96,9 +112,9 @@ def reviewed(body: bytes, queue_sha256: str) -> Mapping[str, str]:
     return MappingProxyType(found)
 
 
-def personal_units(body: bytes, queue_sha256: str) -> list[str]:
-    """Every unit classified as personal, reviewed or only proposed. The owner's local script reads bytes for these and never for another unit."""
-    return sorted(identity for identity, entry in read_document(body, queue_sha256)["units"].items() if entry.get("classification") == PERSONAL)
+def personal_units(body: bytes, queue_body: bytes) -> list[str]:
+    """Every active queue unit classified as personal, reviewed or only proposed. The owner's local script reads bytes for these and never for another unit."""
+    return sorted(identity for identity, entry in read_document(body, queue_body)["units"].items() if entry.get("classification") == PERSONAL)
 
 
 def counts(document: Mapping[str, Any]) -> dict[str, Any]:

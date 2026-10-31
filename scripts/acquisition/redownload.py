@@ -121,7 +121,7 @@ class Accepted:
     @classmethod
     def build(cls, queue_body: bytes, classification_body: bytes | None) -> Accepted:
         """Accept a queue and its classification. A classification that is malformed, unsealed or made for another queue is refused here."""
-        classes = unit_classification.reviewed(classification_body, digest(queue_body)) if classification_body is not None else {}
+        classes = unit_classification.reviewed(classification_body, queue_body) if classification_body is not None else {}
         return cls(queue_body, classification_body, classes)
 
     @property
@@ -1014,6 +1014,9 @@ def lane_of(unit: dict, classes: Mapping[str, str]) -> str:
 
     ``classes`` holds the units the owner reviewed, as ``unit_classification.reviewed`` returns them. A queue flag or a collector mode decides nothing here.
     """
+    # The collectors of originals that name people get no lane whatever an entry says, so a review mistake cannot send one to a person lane or a local run.
+    if unit["mode"] in unit_classification.PERSONAL_COLLECTORS or handler_mode(unit) in unit_classification.PERSONAL_COLLECTORS:
+        return PRIVATE
     classification = classes.get(unit["snapshot_id"])
     if classification == unit_classification.PERSONAL:
         return PRIVATE

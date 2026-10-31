@@ -196,7 +196,8 @@ def publisher_dispatch(jobs: dict[str, Any], selected: set[str]) -> dict[str, An
     its own network, a public IP, on-demand capacity and the raw root.
     """
     chosen = selected & PUBLISHER_DEFINITIONS.keys()
-    if not chosen and "publisher_dispatch_contracts" not in jobs:
+    exported = jobs.get("publisher_dispatch_contracts")
+    if not chosen and (exported is None or (isinstance(exported, dict) and exported.get("value") is None)):
         return {}
     contracts = _output(jobs, "publisher_dispatch_contracts")
     if (

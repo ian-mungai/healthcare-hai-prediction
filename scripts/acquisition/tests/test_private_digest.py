@@ -8,7 +8,7 @@ import stat
 import sys
 from pathlib import Path
 
-from scripts.acquisition import private_digest
+from scripts.acquisition import private_digest, unit_classification
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.tests.held import classification_body
 from scripts.process import CompletedProcess
@@ -193,3 +193,16 @@ def test_a_proposed_personal_unit_is_read_and_a_unit_not_listed_as_personal_neve
     queue, folder, output = setup(tmp_path)
     run(queue, folder, output)
     check(set(json.loads((output / "digests.json").read_text())["units"]) == {"OWNERS__1", "FLAG__2"}, "the proposed and the reviewed personal unit are read")
+
+
+def test_a_sealed_extra_key_outside_the_queue_reads_nothing_and_leaves_no_name(tmp_path: Path) -> None:
+    queue, folder, output = setup(tmp_path)
+    (tmp_path / f"{NAMES[0]}.csv").write_bytes(NAMES[0].encode())
+    path = queue.with_name("unit_classification.json")
+    document = json.loads(path.read_text())
+    document["units"][f"../{NAMES[0]}.csv"] = {"classification": "personal", "status": "proposed", "source": "synthetic"}
+    path.write_text(json.dumps(document))
+    unit_classification.seal(path)
+    done = run(queue, folder, output)
+    fixed_failure(done, 4)
+    check(not (output / "digests.json").exists(), "nothing was written")
