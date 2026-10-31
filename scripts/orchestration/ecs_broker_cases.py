@@ -34,6 +34,7 @@ from scripts.orchestration.ecs_broker import (
     load_jobs,
     s3_digest_reader,
     s3_object_reader,
+    serving_request_reader,
 )
 from scripts.orchestration.ecs_broker_fake import FakeEcs, FakeLogs, FakeS3, client_error
 
@@ -105,6 +106,7 @@ class Rig:
             approvals,
             lambda: self.clock[0],
             bronze_request=bronze_request_reader(self.s3, "example-bucket", collections_of_table_map()),
+            serving_request=serving_request_reader(self.s3, "example-bucket"),
         )
 
     def close(self) -> None:
@@ -594,6 +596,7 @@ def each_family_runs_in_its_approved_network() -> None:
         "features": "lakehouse",
         "drift": "training",
         "promote": "training",
+        "serve": "training",
         "metadata": "lakehouse",
         "bronze": "lakehouse",
     }
@@ -985,12 +988,6 @@ def bronze_binding_is_per_run() -> None:
         require(wait_for(current, current.client.submit(bronze_request(1, BRONZE_RUN_2))).state == State.SUCCEEDED, "another run ID has its own request")
 
 
-def every_fetch_container_names_its_code_run() -> None:
-    """The fetch script of every job reads the staged code under CODE_RUN_ID. A table row whose fetch container lacks it starts a task that cannot fetch."""
-    missing = [name for name, job in load_jobs(ROOT)["jobs"].items() if "fetch" in job["containers"] and "CODE_RUN_ID" not in job["containers"]["fetch"]]
-    require(not missing, f"the fetch container of these jobs has no CODE_RUN_ID: {missing}")
-
-
 def bronze_cancelled_first_attempt_still_binds_its_run() -> None:
     """A cancelled attempt ends with a cancelled line, and the intent line before it still holds the checked values, so a replaced request is refused."""
     pair, _ = table_pair()
@@ -1044,6 +1041,89 @@ def bronze_retry_waits_for_the_stop_of_the_first_task() -> None:
         current.client.submit(bronze_request())
         raises(SubmissionRefused, partial(current.client.submit, bronze_request(2)))
         require(current.ecs.count("run_task") == 1, "a retry started beside a running task")
+
+
+def every_fetch_container_names_its_code_run() -> None:
+    """The fetch script of every job reads the staged code under CODE_RUN_ID. A table row whose fetch container lacks it starts a task that cannot fetch."""
+    missing = [name for name, job in load_jobs(ROOT)["jobs"].items() if "fetch" in job["containers"] and "CODE_RUN_ID" not in job["containers"]["fetch"]]
+    require(not missing, f"the fetch container of these jobs has no CODE_RUN_ID: {missing}")
+
+
+SERVE_RUN = "20261030T120000Z-5e5e5e5e"
+SERVE_FAMILIES = JOB_FAMILIES | {"serve"}
+SERVING_REQUEST = {"hai_type": "HAI_1", "candidate_version": "3", "percent": 10, "deploy_mode": "canary"}
+
+
+def stage_serving_request(current: Rig, document: object, run: str = SERVE_RUN) -> None:
+    current.s3.objects[f"lakehouse/run_stage/{run}/inputs/serving_request.json"] = document if isinstance(document, bytes) else json.dumps(document).encode()
+
+
+def serve_request(attempt: int = 1, run: str = SERVE_RUN, template: str = "serve_deploy") -> SubmissionRequest:
+    return SubmissionRequest(template, run, "real", attempt, "serving_deploy_dag", template, "manual__test", None, None, None)
+
+
+def serving_dag_step_reaches_the_serve_job() -> None:
+    """The step the serving DAG sends is ``serve_deploy``. The real selector maps it to the serve job, whose containers are the ones the task has."""
+    params = {"run_id": SERVE_RUN, "mode": "real"}
+    with rig(SERVE_FAMILIES) as current, dag_runtime(current, "serving_deploy_dag", params) as run_step:
+        current.s3.objects[f"lakehouse/run_stage/{SERVE_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
+        stage_serving_request(current, SERVING_REQUEST)
+        for control in ("acquire_run", "snapshot_serving"):
+            require(run_step(control) == "succeeded" and not current.ecs.calls, f"the control step {control} reached the cloud")
+        require(run_step("serve_deploy") == "succeeded", "the serving DAG step did not pass")
+        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
+        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
+        require(sent["taskDefinition"] == "example_dev_job_serve" and list(values) == ["fetch", "serve"], f"the serve step overrides {list(values)}")
+        require(values["fetch"] == {"RUN_ID": SERVE_RUN, "CODE_RUN_ID": SERVE_RUN, "CODE_SHA256": DIGEST}, f"fetch variables are wrong: {values['fetch']}")
+        require(json.loads(values["serve"]["SERVING_REQUEST"]) == SERVING_REQUEST, "the checked request did not reach the serve container")
+        require(values["serve"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", f"the serve container has no MLflow address: {values['serve']}")
+        networks = sent["networkConfiguration"]["awsvpcConfiguration"]["securityGroups"]
+        require(networks == ["sg-0train"], f"the serve job ran in {networks}, not in the training network")
+        require(len(current.ecs.tasks) == 1, "the serve step started more than one task")
+        for gate in ("serving_final_gate_accepted", "release_accepted", "catalog_release"):
+            require(run_step(gate) == "succeeded", f"the control step {gate} failed")
+        require(len(current.ecs.tasks) == 1, "a control step of the serving DAG started a task")
+
+
+def serve_job_is_off_unless_enabled() -> None:
+    with rig() as current:
+        stage_serving_request(current, SERVING_REQUEST)
+        text = refused_text(lambda: current.client.submit(serve_request()))
+        require("not enabled" in text, text)
+        require(not current.ecs.calls, "a disabled serve job reached the cloud")
+
+
+def serve_refuses_a_bad_or_missing_request() -> None:
+    with rig(SERVE_FAMILIES) as current:
+        current.s3.objects[f"lakehouse/run_stage/{SERVE_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
+        raises(BrokerUnavailable, partial(current.client.submit, serve_request()))
+        for bad in (
+            {**SERVING_REQUEST, "percent": 90},
+            {**SERVING_REQUEST, "extra": 1},
+            {**SERVING_REQUEST, "deploy_mode": "promote"},
+            {"hai_type": "HAI_1", "candidate_version": "3", "percent": 10},
+            b"not json",
+            b"[]",
+            b"x" * 5000,
+        ):
+            stage_serving_request(current, bad)
+            raises(SubmissionRefused, partial(current.client.submit, serve_request()))
+        require(not current.ecs.calls, "a refused request reached the cloud")
+
+
+def serve_later_attempts_are_bound_to_the_first_request() -> None:
+    with rig(SERVE_FAMILIES) as current:
+        current.s3.objects[f"lakehouse/run_stage/{SERVE_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
+        stage_serving_request(current, SERVING_REQUEST)
+        current.ecs.plan = {"serve": 1}
+        require(wait_for(current, current.client.submit(serve_request())).state == State.FAILED, "the first attempt must fail")
+        current.ecs.plan = {}
+        stage_serving_request(current, {**SERVING_REQUEST, "candidate_version": "4"})
+        text = refused_text(lambda: current.client.submit(serve_request(2)))
+        require("request" in text and "start a new run ID" in text, text)
+        require(current.ecs.count("run_task") == 1, "a replaced serving request started a second task")
+        stage_serving_request(current, SERVING_REQUEST)
+        require(wait_for(current, current.client.submit(serve_request(2))).state == State.SUCCEEDED, "the unchanged request must start attempt 2")
 
 
 CASES: dict[str, Callable[[], None]] = {
@@ -1101,8 +1181,12 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_later_attempts_are_bound_to_the_first_checked_request": bronze_later_attempts_are_bound_to_the_first_checked_request,
     "bronze_later_attempts_are_bound_to_the_first_inventory": bronze_later_attempts_are_bound_to_the_first_inventory,
     "bronze_binding_is_per_run": bronze_binding_is_per_run,
-    "every_fetch_container_names_its_code_run": every_fetch_container_names_its_code_run,
     "bronze_cancelled_first_attempt_still_binds_its_run": bronze_cancelled_first_attempt_still_binds_its_run,
     "bronze_unresolved_start_keeps_its_binding_and_its_stop": bronze_unresolved_start_keeps_its_binding_and_its_stop,
     "bronze_retry_waits_for_the_stop_of_the_first_task": bronze_retry_waits_for_the_stop_of_the_first_task,
+    "every_fetch_container_names_its_code_run": every_fetch_container_names_its_code_run,
+    "serving_dag_step_reaches_the_serve_job": serving_dag_step_reaches_the_serve_job,
+    "serve_job_is_off_unless_enabled": serve_job_is_off_unless_enabled,
+    "serve_refuses_a_bad_or_missing_request": serve_refuses_a_bad_or_missing_request,
+    "serve_later_attempts_are_bound_to_the_first_request": serve_later_attempts_are_bound_to_the_first_request,
 }

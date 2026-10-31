@@ -36,6 +36,7 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 from jsonschema import Draft202012Validator
 
+from orchestration import serving_contract
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable, client_config
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.training_approvals import PROMOTION_KEYS
@@ -57,6 +58,10 @@ SUBMISSION = re.compile(
 )
 DIGEST = re.compile(r"[a-f0-9]{64}")
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
+SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
+# The checked values a run keeps from its first attempt, with the word the refusal uses for each.
+BOUND_VALUES = (("BRONZE_INVENTORY_SHA256", "inventory"), ("BRONZE_REQUEST_SHA256", "request"), ("SERVING_REQUEST_SHA256", "request"))
+SERVING_REQUEST_BYTES = 4096
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 GATE = "@gate"
@@ -198,6 +203,38 @@ def derived_run_id(parent_run: str, layer: str) -> str:
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
 
 
+def serving_request_reader(s3: S3Reader, bucket: str) -> Callable[[str], dict[str, str]]:
+    """Read and check the run's staged ``serving_request.json`` and return the values of the serve container.
+
+    The file is the closed record of ``orchestration.serving_contract``: the HAI type, the mode, the candidate version and the percent. A file that is not
+    staged yet is retryable, a file that fails a check is refused. The container receives the checked request and never reads the bucket for it.
+    """
+
+    def read(run_id: str) -> dict[str, str]:
+        try:
+            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/{serving_contract.REQUEST_FILE}")["Body"].read(
+                SERVING_REQUEST_BYTES + 1
+            )
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
+                raise TaskUnavailable("serving_request_not_staged") from None
+            raise TaskUnavailable("serving_request_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("serving_request_unreadable") from None
+        if len(body) > SERVING_REQUEST_BYTES:
+            raise TaskRefused("serving_request_too_large")
+        try:
+            document = json.loads(body)
+            if not isinstance(document, dict):
+                raise ValueError("the request is not an object")
+            checked = serving_contract.parameters_for("serving_deploy_dag", document)
+        except ValueError as error:
+            raise TaskRefused(f"serving_request_refused: {error}") from None
+        return {"SERVING_REQUEST": json.dumps(checked, sort_keys=True, separators=(",", ":")), "SERVING_REQUEST_SHA256": hashlib.sha256(body).hexdigest()}
+
+    return read
+
+
 def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
     """Read the record of the signed first publishes from a Parameter Store value, or None while the parameter does not exist."""
 
@@ -249,6 +286,7 @@ class EcsBroker:
         approval_reader: Callable[[str], str | None],
         clock: Callable[[], float],
         bronze_request: Callable[[str], dict[str, str]] | None = None,
+        serving_request: Callable[[str], dict[str, str]] | None = None,
     ) -> None:
         self.ledger = Ledger(state, "ecs_ledger_line.schema.json")
         self.requests = schema_validator("submission_request.schema.json")
@@ -261,6 +299,7 @@ class EcsBroker:
         self.approval_reader = approval_reader
         self.clock = clock
         self.bronze_request = bronze_request
+        self.serving_request = serving_request
         self.secrets: set[str] = set()
 
     def redact(self, text: str) -> str:
@@ -298,13 +337,14 @@ class EcsBroker:
 
     def require_bound(self, request: SubmissionRequest, job: str, fixed: Mapping[str, str]) -> None:
         """Every attempt of a run uses the request and the source inventory its first attempt had checked. A changed one needs a new run ID."""
-        if "BRONZE_REQUEST_SHA256" not in fixed:
+        bound_names = [(name, label) for name, label in BOUND_VALUES if name in fixed]
+        if not bound_names:
             return
         first = next((line for line in self.ledger.read(request.run_id) if line["event"] == "intent" and line.get("job") == job and "dispatch" in line), None)
         if first is None:
             return
         bound = first["dispatch"]
-        for name, label in (("BRONZE_INVENTORY_SHA256", "inventory"), ("BRONZE_REQUEST_SHA256", "request")):
+        for name, label in bound_names:
             if bound.get(name) != fixed[name]:
                 raise SubmissionRefused(
                     f"run {request.run_id} is bound to the {label} of its first attempt ({bound.get(name, '')[:12]}), "
@@ -320,6 +360,15 @@ class EcsBroker:
                 raise SubmissionRefused("bronze_request_not_configured")
             try:
                 values |= self.bronze_request(request.run_id)
+            except TaskUnavailable as error:
+                raise Unavailable(str(error)) from None
+            except TaskRefused as error:
+                raise SubmissionRefused(str(error)) from None
+        if self.jobs[job].get("needs_serving_request"):
+            if self.serving_request is None:
+                raise SubmissionRefused("serving_request_not_configured")
+            try:
+                values |= self.serving_request(request.run_id)
             except TaskUnavailable as error:
                 raise Unavailable(str(error)) from None
             except TaskRefused as error:
@@ -416,7 +465,7 @@ class EcsBroker:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: input_run or "latest",
-            **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, DEADLINE_VARIABLE)},
+            **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, DEADLINE_VARIABLE)},
         }
         return {name: values[name]() for name in names}
 
@@ -878,6 +927,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     approvals = s3_object_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), "promotion_approval.json")
     collections = {entry["table"]: entry["collection"] for entry in json.loads((root / TABLE_MAP_FILE).read_text())["tables"]}
     bronze_request = bronze_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), collections)
+    serving_request = serving_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
     broker = EcsBroker(
         Path(env.get("BROKER_STATE", "/var/lib/hai/broker")),
         jobs,
@@ -888,6 +938,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
         approvals,
         lambda: datetime.now(UTC).timestamp(),
         bronze_request,
+        serving_request,
     )
     listener = Listener(broker, "127.0.0.1", int(env.get("BROKER_PORT", "18790")), token)
     stopping = threading.Event()
