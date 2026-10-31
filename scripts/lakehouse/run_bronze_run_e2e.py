@@ -185,7 +185,7 @@ class Case:
             inventory = {"version": 1, "tables": [], "manifests": [], "objects": [], "documents": []}
         raw = bronze_pin.inventory_bytes(inventory)
         STAGED["bronze_inventory.json"] = raw
-        request = {"tables": names, "target": target, "dry_run": dry, "inventory_sha256": hashlib.sha256(raw).hexdigest()}
+        request: dict[str, Any] = {"tables": names, "target": target, "dry_run": dry, "inventory_sha256": hashlib.sha256(raw).hexdigest()}
         STAGED["bronze_request.json"] = json.dumps(request).encode()
         return hashlib.sha256(STAGED["bronze_request.json"]).hexdigest(), request["inventory_sha256"]
 
@@ -215,8 +215,9 @@ class Case:
         key = (tables or environment.get("BRONZE_TABLES", ""), target or environment.get("BRONZE_TARGET", ""), dry)
         if not staged and (self.shas is None or (phase == "pin" and self.key != key)):
             self.shas = self.stage(*key)
+        request_sha, inventory_sha = self.shas or ("", "")
         arguments = [phase, "--run", RUN, "--work", str(self.work(label)), "--code-sha256", digest or self.digest, "--bucket", BUCKET]
-        arguments += ["--tables", tables, "--target", target, "--request-sha256", self.shas[0], "--inventory-sha256", self.shas[1], *extra]
+        arguments += ["--tables", tables, "--target", target, "--request-sha256", request_sha, "--inventory-sha256", inventory_sha, *extra]
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), mock.patch.dict(os.environ, environment):
             try:
