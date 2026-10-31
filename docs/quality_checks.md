@@ -398,7 +398,7 @@ It requires the checker and sample runner commands exactly once. `--mutants` pla
 Evidence is `data/e2e/container_mounts/<UTC>/report.json`. It includes source hashes, fixture changes, exact hook commands, expected diagnostics and observed exit codes.
 The runner checks that its source snapshot stays unchanged and removes its temporary repositories.
 Each hook runs under the repository's process-group deadline entry point, with a 30-second command deadline.
-A hook that the deadline stops before the case could judge it is run again with twice the seconds, up to three runs in all. This covers a stop nobody planted and a planted stop whose hook never reached its wait. The record names the runs and the seconds of the last one.
+A hook that the deadline stops before its checker began is run again with twice the seconds, up to three runs in all. The fixture's Python start-up writes a marker when the checker process begins. A stop after that marker is a result that fails the case at once. The record names the runs, the seconds of the last one and whether the checker started.
 The 720-second run deadline includes setup and reserves 70 seconds for process-group cleanup.
 An unconfirmed cleanup stops the run and retains its workspace. A case labeled `harness` verifies the deadline entry point and its process-group cleanup.
 
