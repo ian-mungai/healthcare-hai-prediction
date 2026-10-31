@@ -80,6 +80,7 @@ class Run:
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
     keyed_lane: bool = False
+    person_lane: bool = False
     carried_modes: frozenset[str] | None = None
     lane_approval: Path | None = None
     sleep: Callable = time.sleep
@@ -274,17 +275,22 @@ def route_gate(run: Run) -> None:
     """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
         return
-    if run.keyed_lane:
+    if run.keyed_lane and run.person_lane:
+        raise RegistryError("Only one lane runs at a time")
+    if run.keyed_lane or run.person_lane:
+        kept = "the keys stay off AWS" if run.keyed_lane else "the originals stay off AWS"
         if run.stored_root is not None or any(name in os.environ for name in TASK_ENVIRONMENT):
-            raise RegistryError("The keyed lane runs on the owner's Mac only, so the keys stay off AWS")
-        require(json.loads(run.queue_path.read_bytes()).get("run") == 3, "The keyed lane belongs to run 3")
+            raise RegistryError(f"A Mac lane runs on the owner's Mac only, so {kept}")
+        require(json.loads(run.queue_path.read_bytes()).get("run") == 3, "A Mac lane belongs to run 3")
     files = run.route
     if files is None:
         raise RegistryError("Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
     problems = route.check(run.queue_path, files.plan, files.approval, files.record, capture_root(), files.hosts, files.hosts_approval)
     require(not problems, "Run 3 route gate: " + "; ".join(problems))
-    if run.keyed_lane:
-        lane = route.lane_problems(run.queue_path, run.lane_approval or run.queue_path.with_name("lane_approval.json"))
+    if run.keyed_lane or run.person_lane:
+        lane = route.lane_problems(
+            run.queue_path, run.lane_approval or run.queue_path.with_name("lane_approval.json"), route.PERSON_LANE if run.person_lane else route.LANE_NAME
+        )
         require(not lane, "Run 3 lane approval: " + "; ".join(lane))
     # The downloader reads the hosts file and its approval from these paths, so it enforces exactly what the gate checked.
     os.environ[APPROVED_HOSTS_VARIABLE] = str(files.hosts)
@@ -933,6 +939,57 @@ TASK_ENVIRONMENT = (
 )
 
 
+PRIVATE_OUTCOMES = frozenset({"exact_match", "changed_needs_review", "blocked", "unavailable"})
+PRIVATE_REASONS = frozenset({"collector_validation_failed", "byte_budget_exhausted", "attempt_or_disk_budget_exhausted", "unrecognised_failure"})
+DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def is_count(value: object) -> bool:
+    return type(value) is int
+
+
+def is_digest(value: object) -> bool:
+    return isinstance(value, str) and DIGEST.fullmatch(value) is not None
+
+
+def is_outcome(value: object) -> bool:
+    return value in PRIVATE_OUTCOMES
+
+
+def is_reason(value: object) -> bool:
+    return isinstance(value, str) and (value in PRIVATE_REASONS or known_failure(value) == value)
+
+
+def is_category(value: object) -> bool:
+    return value in {category for _kind, category in ERROR_CATEGORIES} | {"other"}
+
+
+PRIVATE_CHECKS: dict[str, Callable[[object], bool]] = {
+    "outcome": is_outcome,
+    "attempts": is_count,
+    "fresh_bytes": is_count,
+    "stored_sha256": is_digest,
+    "fresh_sha256": is_digest,
+    "reason": is_reason,
+    "error_category": is_category,
+}
+PRIVATE_COUNTS = {"differing_data_files": "differing_file_count", "excluded_parts": "excluded_part_count"}
+
+
+def private_safe(fields: dict) -> dict:
+    """Keep only digests, sizes, counts and fixed codes of a unit whose original names people. Anything else is counted and dropped."""
+    safe: dict[str, Any] = {}
+    withheld = 0
+    for key, value in fields.items():
+        if key in PRIVATE_CHECKS and PRIVATE_CHECKS[key](value):
+            safe[key] = value
+        elif key in PRIVATE_COUNTS and isinstance(value, list):
+            safe[PRIVATE_COUNTS[key]] = len(value)
+        else:
+            withheld += 1
+    return safe | {"withheld_fields": withheld} if withheld else safe
+
+
 def lane_of(unit: dict, carried: frozenset[str] | None = None) -> str:
     """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
     mode = handler_mode(unit)
@@ -1223,12 +1280,18 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         if run.keyed_lane:
             if lane != KEYED:
                 continue
+        elif run.person_lane:
+            if lane not in route.PERSON_CLASSES:
+                continue
         elif run.stored_root is not None:
             if lane != TASK:
                 summary.setdefault("not_attempted", {}).setdefault(lane, []).append(identity)
                 continue
         elif on_raw_route() and lane == KEYED:
             summary.setdefault("needs_secret", []).append(identity)
+            continue
+        elif on_raw_route() and lane in route.PERSON_CLASSES:
+            summary.setdefault("not_attempted", {}).setdefault(lane, []).append(identity)
             continue
         pilot_id = pilots[(source, unit["route"], unit["mode"])]
         if identity != pilot_id:
@@ -1239,11 +1302,22 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
             break
         require(used_bytes(run) + unit["bytes"] <= run.byte_cap, "Byte cap would be exceeded")
         require(shutil.disk_usage(run.state_root).free > 2 * unit["bytes"] + 2**30, "Not enough free disk space for the next unit")
+        private = lane == "needs_owner_decision_private"
         try:
             boundary = controls.Boundary(run.state_root, run.base, identity, run.byte_cap, used=used_bytes(run))
             try:
                 with controls.active(boundary):
                     fields = handle(unit, run)
+                    if private:
+                        fields = private_safe(fields)
+            except (Pause, Pending, controls.BudgetExceeded):
+                raise
+            except Exception as error:
+                if not private:
+                    raise
+                # An original names people, so an error message could carry one. Only its category is kept.
+                record_diagnostic(run, identity, error)
+                fields = {"attempts": 1, "outcome": "blocked", "reason": "collector_validation_failed", "error_category": error_category(error)}
             finally:
                 run.cache["budget_used"] = boundary.used
         except Pending:
@@ -1366,6 +1440,7 @@ def run_from(
         stored_root=mirror.root if mirror else None,
         carried_modes=mirror.carried if mirror else None,
         keyed_lane=bool(getattr(args, "keyed_lane", False)),
+        person_lane=bool(getattr(args, "person_lane", False)),
         lane_approval=getattr(args, "lane_approval", None),
     )
 
@@ -1387,6 +1462,7 @@ def main() -> None:
     for name in ("removal-plan", "removal-approval", "removal-record", "hosts", "hosts-approval"):
         parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
     parser.add_argument("--keyed-lane", action="store_true", help="run only the units that need an API key, on the owner's Mac")
+    parser.add_argument("--person-lane", action="store_true", help="run only the browser saves and the originals that name people, on the owner's Mac")
     parser.add_argument("--lane-approval", type=Path, help="the owner's approval of the keyed lane")
     args = parser.parse_args()
     run = run_from(args, os.environ)

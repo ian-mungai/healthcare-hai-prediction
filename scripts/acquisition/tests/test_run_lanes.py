@@ -110,9 +110,9 @@ def test_a_unit_with_no_lane_is_never_attempted_by_the_task(monkeypatch: pytest.
     check(summary["not_attempted"]["unclassified"] == ["new__0"], "the unknown mode is listed")
 
 
-def lane_files(tmp_path: Path, **changes: Any) -> tuple[harness.Run, Path, route.RouteFiles]:
+def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes: Any) -> tuple[harness.Run, Path, route.RouteFiles]:
     folder = tmp_path / "route"
-    folder.mkdir()
+    folder.mkdir(parents=True)
     units = []
     for unit in UNITS:
         receipt = tmp_path / "base" / unit["receipt"]
@@ -132,11 +132,19 @@ def lane_files(tmp_path: Path, **changes: Any) -> tuple[harness.Run, Path, route
     paths["hosts_approval"].write_text(json.dumps({"hosts_sha256": json.loads(hosts.read_text())["hosts_sha256"], "approved_by": "owner"}))
     files = route.RouteFiles(paths["plan"], paths["approval"], paths["record"], hosts, paths["hosts_approval"])
     approval = folder / "lane_approval.json"
-    route.write_lane_template(queue, approval)
+    route.write_lane_template(queue, approval, template_lane)
     document = json.loads(approval.read_text())
     document["approved_by"] = "owner"
     approval.write_text(json.dumps({**document, **changes}))
-    run = harness.Run(queue_path=queue, state_root=tmp_path / "run", base=tmp_path / "base", route=files, keyed_lane=True, lane_approval=approval)
+    run = harness.Run(
+        queue_path=queue,
+        state_root=tmp_path / "run",
+        base=tmp_path / "base",
+        route=files,
+        keyed_lane=template_lane == "mac_keyed_units",
+        person_lane=template_lane == "mac_person_units",
+        lane_approval=approval,
+    )
     return run, approval, files
 
 

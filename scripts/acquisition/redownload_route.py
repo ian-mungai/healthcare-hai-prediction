@@ -23,6 +23,9 @@ ACTIVE = ("api", "direct_download", "approved_manual")
 # These collectors read an API key from the secret store. The AWS task holds no secret, so only the owner's Mac lane may run them.
 SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
 LANE_NAME = "mac_keyed_units"
+PERSON_LANE = "mac_person_units"
+PERSON_CLASSES = frozenset({"needs_person", "needs_owner_decision_private"})
+PERSON_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the browser saves and the originals that name people, by owner decision 120"
 LANE_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the units of the listed modes only"
 
 
@@ -37,31 +40,46 @@ class RouteFiles:
     hosts_approval: Path
 
 
-def lane_template(queue_body: bytes) -> dict:
-    """The approval the owner reviews and signs for the Mac lane: the queue, the keyed modes and how many units that is."""
+def lane_template(queue_body: bytes, lane: str = LANE_NAME) -> dict:
+    """The approval the owner reviews and signs for a Mac lane: the queue, what the lane takes and how many units that is."""
+    from scripts.acquisition import redownload
+
     queue = json.loads(queue_body)["queue"]
+    active = [unit for unit in queue if unit["disposition"] in ACTIVE]
+    queue_sha256 = hashlib.sha256(queue_body).hexdigest()
+    if lane == PERSON_LANE:
+        return {
+            "lane": PERSON_LANE,
+            "departs_from": PERSON_DEPARTURE,
+            "queue_sha256": queue_sha256,
+            "classes": sorted(PERSON_CLASSES),
+            "units": sum(1 for unit in active if redownload.lane_of(unit) in PERSON_CLASSES),
+            "originals_stay_local": True,
+            "records": "digests, sizes and counts only",
+            "approved_by": None,
+        }
     return {
         "lane": LANE_NAME,
         "departs_from": LANE_DEPARTURE,
-        "queue_sha256": hashlib.sha256(queue_body).hexdigest(),
+        "queue_sha256": queue_sha256,
         "modes": sorted(SECRET_MODES),
-        "units": sum(1 for unit in queue if unit["disposition"] in ACTIVE and unit["mode"] in SECRET_MODES),
+        "units": sum(1 for unit in active if unit["mode"] in SECRET_MODES),
         "keys_stay_off_aws": True,
         "approved_by": None,
     }
 
 
-def write_lane_template(queue_path: Path, output: Path) -> dict:
-    document = lane_template(queue_path.read_bytes())
+def write_lane_template(queue_path: Path, output: Path, lane: str = LANE_NAME) -> dict:
+    document = lane_template(queue_path.read_bytes(), lane)
     write_once(output, encoded_json(document))
     return document
 
 
-def lane_problems(queue_path: Path, approval_path: Path) -> list[str]:
+def lane_problems(queue_path: Path, approval_path: Path, lane: str = LANE_NAME) -> list[str]:
     """Return why the Mac lane may not start. Only an approval that names this lane, queue, modes and unit count lets it."""
     try:
         approval = json.loads(approval_path.read_text(encoding="utf-8"))
-        expected = lane_template(queue_path.read_bytes())
+        expected = lane_template(queue_path.read_bytes(), lane)
     except (OSError, ValueError, KeyError, TypeError) as error:
         return [f"the lane approval is missing or unreadable: {error}"]
     if not isinstance(approval, dict):
@@ -174,6 +192,7 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
     templating = commands.add_parser("lane-template")
     templating.add_argument("--queue", required=True, type=Path)
     templating.add_argument("--output", required=True, type=Path)
+    templating.add_argument("--lane", choices=[LANE_NAME, PERSON_LANE], default=LANE_NAME)
     checking = commands.add_parser("check")
     for name in ("queue", "plan", "approval", "record", "hosts", "hosts-approval"):
         checking.add_argument(f"--{name}", required=True, type=Path)
@@ -184,7 +203,7 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
             sys.stdout.write(json.dumps({"hosts": len(document["hosts"]), "hosts_sha256": document["hosts_sha256"]}) + "\n")
             return
         if args.command == "lane-template":
-            document = write_lane_template(args.queue, args.output)
+            document = write_lane_template(args.queue, args.output, args.lane)
             sys.stdout.write(json.dumps({"units": document["units"], "approved_by": None}) + "\n")
             return
         found = check(args.queue, args.plan, args.approval, args.record, capture_root() if root is None else root, args.hosts, args.hosts_approval)
