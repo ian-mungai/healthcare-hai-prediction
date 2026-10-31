@@ -625,7 +625,16 @@ PREPARATION_PLANTS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
     ),
     "bool_check_removed": (
         [("if not isinstance(document[name], bool):", "if document[name] is None:")],
-        ["string_bool", "int_bool", "endpoints_string_bool", "training_string_bool", "athena_string_bool", "athena_int_bool"],
+        [
+            "string_bool",
+            "int_bool",
+            "endpoints_string_bool",
+            "training_string_bool",
+            "monitoring_string_bool",
+            "monitoring_int_bool",
+            "athena_string_bool",
+            "athena_int_bool",
+        ],
     ),
     "pattern_check_removed": ([("(collection and not COLLECTION_PATTERN.fullmatch(collection))", "False")], ["collection_pattern", "collection_extra_part"]),
     "membership_check_removed": ([("if collection and collection not in mapped_collections(tables):", "if False:")], ["unmapped_collection"]),
@@ -712,6 +721,8 @@ def preparation_rejections() -> list[tuple[str, str | None, str, str | None, str
         ("endpoints_string_bool", text(job_endpoints_enabled="true"), "job_endpoints_enabled to true or false", None),
         ("training_string_bool", text(training_prepared="true"), "training_prepared to true or false", None),
         ("null_bool", text(bronze_writer_prepared=None), "bronze_writer_prepared to true or false", None),
+        ("monitoring_string_bool", text(monitoring_enabled="true"), "monitoring_enabled to true or false", None),
+        ("monitoring_int_bool", text(monitoring_enabled=1), "monitoring_enabled to true or false", None),
         ("athena_string_bool", text(athena_mirror_prepared="true"), "athena_mirror_prepared to true or false", None),
         ("athena_int_bool", text(athena_mirror_prepared=1), "athena_mirror_prepared to true or false", None),
         ("owner_user_not_string", text(athena_owner_user=5), "athena_owner_user to empty or one IAM user name", None),
@@ -832,6 +843,8 @@ def run_preparation_cases(evidence: Evidence, sources: dict[str, bytes], rendere
     evidence.check(step, "storage_render_ignores_the_file", ok)
     step, ok = render_written(evidence, sources, "prep")
     evidence.check(step, "prepared_file_rendered_exactly", ok)
+    step, ok = render_written(evidence, sources, "prep_monitoring", monitoring_enabled=True)
+    evidence.check(step, "file_with_the_monitoring_flag_rendered_exactly", ok)
     step, ok = render_written(evidence, sources, "prep_athena", athena_mirror_prepared=True)
     evidence.check(step, "file_with_the_athena_flag_rendered_exactly", ok)
     step, ok = render_written(evidence, sources, "prep_athena_owner", athena_mirror_prepared=True, athena_owner_user="example_owner")
@@ -910,6 +923,7 @@ def run_preparation_plan_cases(evidence: Evidence, sources: dict[str, bytes], re
         "training_prepared": {**prepared, "training_prepared": True},
         "bronze_qualification_collection": {**prepared, "bronze_qualification_collection": collections[1]},
         "bronze_live_locations": {**prepared, "bronze_live_locations": {}},
+        "monitoring_enabled": {**prepared, "monitoring_enabled": True},
         "athena_mirror_prepared": {**prepared, "athena_mirror_prepared": True},
         "athena_owner_user": {**prepared, "athena_owner_user": "example_owner"},
     }
