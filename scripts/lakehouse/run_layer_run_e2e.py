@@ -14,6 +14,7 @@ import argparse
 import ast
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -830,6 +831,85 @@ def case_phase_that_outlives_the_deadline_is_stopped(case: Case) -> None:
     require(len(UPLOADS) <= uploads + 1, "the upload went on after the deadline")
 
 
+def real_driver() -> Any:
+    """The driver module with its real ``run_module``. The other cases run with a stand-in for it, so this loads its own copy of the module."""
+    spec = importlib.util.spec_from_file_location("layer_run_real", layer_run.__file__)
+    if spec is None or spec.loader is None:
+        raise AssertionError("the driver module cannot be loaded again")
+    real = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(sys.modules, {"layer_run_real": real}):  # dataclasses look their module up here while the class bodies run
+        spec.loader.exec_module(real)
+    return real
+
+
+def write_slow_phase(code: Path) -> None:
+    """A module that starts children the way the Spark session of a publish step does: one in its process group and one in a session of its own."""
+    code.mkdir(parents=True)
+    (code / "slow_phase.py").write_text(
+        "import os, subprocess, sys, time\n"
+        "sleeper = [sys.executable, '-c', 'import time; time.sleep(120)']\n"
+        "child = subprocess.Popen(sleeper)\n"
+        "separate = subprocess.Popen(sleeper, start_new_session=True)\n"
+        "open(sys.argv[1], 'w').write(f'{os.getpid()} {child.pid} {separate.pid}')\n"
+        "time.sleep(120)\n"
+    )
+
+
+def survivors_of(pids: Path) -> list[int]:
+    """The processes named in the file that still run; they are stopped so that a failing case leaves nothing behind."""
+    survivors = []
+    for pid in (int(item) for item in pids.read_text().split()):
+        try:
+            os.kill(pid, 0)
+            survivors.append(pid)
+        except ProcessLookupError:
+            pass
+    for pid in survivors:
+        os.kill(pid, 9)
+    return survivors
+
+
+def case_deadline_leaves_no_descendant_of_the_phase_module(case: Case) -> None:
+    """The real path: ``run_module`` starts a module that starts its own children. When the task deadline passes during the phase, the module and everything
+    it started must be gone before the driver reports the failure."""
+    work = case.root / "deadline_work"
+    write_slow_phase(work / "code")
+    pids = work / "pids.txt"
+    real = real_driver()
+    job = real.Job("silver", SILVER_RUN, "real", work / "code")
+    started = time.monotonic()
+    with mock.patch.object(real, "task_seconds_left", lambda job: 5.0):
+        try:
+            with real.task_deadline(job):
+                real.run_module(job, "slow_phase", [pids])
+            raise AssertionError("the phase outlived its deadline without an error")
+        except real.StepError as error:
+            require("deadline" in str(error), str(error))
+    require(time.monotonic() - started < 25, "the driver waited for the module after the deadline")
+    survivors = survivors_of(pids)
+    require(not survivors, f"processes of the phase survived the deadline: {survivors}")
+
+
+def case_step_timeout_leaves_no_descendant_of_the_phase_module(case: Case) -> None:
+    """The step limit is the other way a module stops. The module is killed first there, so its children would be orphans that the driver can no longer
+    find: the whole tree must go down at the limit, and the error names the module."""
+    work = case.root / "step_work"
+    write_slow_phase(work / "code")
+    pids = work / "pids.txt"
+    real = real_driver()
+    job = real.Job("silver", SILVER_RUN, "real", work / "code")
+    started = time.monotonic()
+    with mock.patch.object(real, "STEP_SECONDS", 3):
+        try:
+            real.run_module(job, "slow_phase", [pids])
+            raise AssertionError("the module outlived its step limit without an error")
+        except real.StepError as error:
+            require("slow_phase ran longer than 3 seconds" in str(error), str(error))
+    require(time.monotonic() - started < 40, "the driver waited for the module after the step limit")
+    survivors = survivors_of(pids)
+    require(not survivors, f"processes of the module survived the step limit: {survivors}")
+
+
 def case_export_names_foreign_table(case: Case) -> None:
     DEFECTS.add("foreign_table")
     for phase in ("pin", "build", "validate", "verify"):
@@ -921,6 +1001,8 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a stored backup that differs from its record stops before the commit": case_stored_backup_differs_from_its_record,
     "a task past its deadline stops at the next phase": case_expired_task_deadline_stops_the_next_phase,
     "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
+    "a phase that passes the task deadline leaves no process behind": case_deadline_leaves_no_descendant_of_the_phase_module,
+    "a module that passes the step limit leaves no process behind": case_step_timeout_leaves_no_descendant_of_the_phase_module,
     "an export with a table outside the contract is refused": case_export_names_foreign_table,
     "dry run writes nothing and prints one plan": case_dry_run_writes_nothing,
     "a dry run with unreadable catalog state fails after printing the plan": case_dry_run_with_unreadable_catalog_state_fails,

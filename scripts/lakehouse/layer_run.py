@@ -27,7 +27,7 @@ the workspace of the same task.
 
 The whole task has a deadline, the one the broker table gives the job, counted from the start time the init container writes to
 ``<work>/task_started``. A hand-started task has no broker to stop it, so every phase runs under what is left of that deadline and fails by name when
-it passes.
+it passes. The driver then stops the phase module and every process that module started, so nothing goes on writing while the task shuts down.
 
 With ``--dry-run`` or ``LAYER_DRY_RUN=1`` the phases up to ``export`` run as usual, because they write only the task's own working folder. ``publish``
 then reads the catalog without writing, prints and saves the plan of the real publish, ``upload`` uploads nothing and ``feast`` does nothing. The
@@ -36,6 +36,7 @@ first dry phase marks the run folder, so a later phase without the flag stays dr
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -44,6 +45,7 @@ import shutil
 import signal
 import sys
 import tarfile
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -62,6 +64,7 @@ PHASES = {
     "features": ("pin", "build", "validate", "export", "publish", "feast"),
 }
 STEP_SECONDS = 4 * 3600
+STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
 UPLOAD_PREFIX = "lakehouse/layer_runs"
 JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job, as the broker enforces it
@@ -116,12 +119,68 @@ class Job:
         return ["--local-warehouse", str(self.local)] if self.local else []
 
 
+def descendants(root: int) -> list[int]:
+    """Every process started, directly or not, by ``root``. A killed module leaves its own children behind, such as the Spark JVM of a publish step."""
+    parents: dict[int, int] = {}
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if entry.name.isdigit():
+                try:
+                    parents[int(entry.name)] = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+                except (OSError, ValueError, IndexError):
+                    continue
+    else:
+        listing = run_command("ps", ["-A", "-o", "pid=,ppid="], timeout=10).stdout
+        parents = {int(pid): int(parent) for pid, parent in (line.split() for line in listing.splitlines() if line.strip())}
+    found, frontier = [], [root]
+    while frontier:
+        parent = frontier.pop()
+        for pid, owner in parents.items():
+            if owner == parent and pid not in found:
+                found.append(pid)
+                frontier.append(pid)
+    return found
+
+
+def kill_descendants() -> None:
+    """Stop everything the driver started: after a deadline nothing of the phase may go on writing while the container shuts down."""
+    for pid in descendants(os.getpid()):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
+
+
 def run_module(job: Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str] | None = None) -> None:
-    """Run ``python -m module`` in the code folder; a nonzero exit or a deadline names the module."""
+    """Run ``python -m module`` in the code folder; a nonzero exit or a step limit names the module.
+
+    The limit is enforced here and not by the process runner, because the runner kills only the module: its children would then belong to no process the
+    driver can find. A timer stops the whole tree at the limit, while the module still links it. The runner's own limit is a later backstop.
+    """
+    expired = threading.Event()
+
+    def stop_tree() -> None:
+        expired.set()
+        kill_descendants()
+
+    watchdog = threading.Timer(STEP_SECONDS, stop_tree)
+    watchdog.daemon = True
+    watchdog.start()
     try:
-        done = run_command(sys.executable, ["-m", module, *map(str, arguments)], cwd=job.code, env={**os.environ, **(environment or {})}, timeout=STEP_SECONDS)
+        done = run_command(
+            sys.executable,
+            ["-m", module, *map(str, arguments)],
+            cwd=job.code,
+            env={**os.environ, **(environment or {})},
+            timeout=STEP_SECONDS + STEP_GRACE_SECONDS,
+        )
     except TimeoutExpired:
+        expired.set()
         raise StepError(f"{module} ran longer than {STEP_SECONDS} seconds") from None
+    finally:
+        watchdog.cancel()
+        kill_descendants()
+    if expired.is_set():
+        raise StepError(f"{module} ran longer than {STEP_SECONDS} seconds")
     sys.stdout.write(done.stdout)
     sys.stderr.write(done.stderr)
     if done.returncode:
@@ -147,6 +206,7 @@ def task_deadline(job: Job) -> Iterator[None]:
         raise StepError("the task deadline has passed")
 
     def expire(signum: int, frame: Any) -> None:
+        kill_descendants()
         raise StepError("the task deadline passed during the phase")
 
     previous = signal.signal(signal.SIGALRM, expire)
