@@ -100,6 +100,8 @@ def main() -> int:
                     # The typed error of a failed reply and what the stand-in saw name the cause of a failed check; they hold no payload or secret.
                     "reply_error": reply.get("error"),
                     "elapsed_s": round(time.monotonic() - started, 3),
+                    # Status and one fixed reason word of every stop the supervisor made; a copy baked into an older image keeps no list.
+                    "stops": getattr(supervisor, "stops", []),
                     "stand_in_events": [
                         {"kind": event.kind, "connection": event.connection, "elapsed_s": round(event.elapsed_s, 3)} for event in standin.events
                     ],
