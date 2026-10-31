@@ -791,7 +791,11 @@ def bronze_job_gets_its_checked_dispatch_values() -> None:
             sent["taskDefinition"] == "example_dev_job_bronze" and list(values) == ["fetch", "pin", "load", "check"],
             f"wrong definition or containers: {list(values)}",
         )
-        require(values["fetch"] == {"RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST, "HAI_DEADLINE_UTC": values["fetch"]["HAI_DEADLINE_UTC"]}, str(values["fetch"]))
+        require(
+            values["fetch"]
+            == {"RUN_ID": BRONZE_RUN, "CODE_RUN_ID": BRONZE_RUN, "CODE_SHA256": DIGEST, "HAI_DEADLINE_UTC": values["fetch"]["HAI_DEADLINE_UTC"]},
+            str(values["fetch"]),
+        )
         dispatch = {"BRONZE_TABLES": ",".join(pair), "BRONZE_TARGET": "real", "BRONZE_DRY_RUN": ""}
         for container in ("pin", "load", "check"):
             require(all(values[container][name] == value for name, value in dispatch.items()), f"{container}: {values[container]}")
@@ -981,6 +985,12 @@ def bronze_binding_is_per_run() -> None:
         require(wait_for(current, current.client.submit(bronze_request(1, BRONZE_RUN_2))).state == State.SUCCEEDED, "another run ID has its own request")
 
 
+def every_fetch_container_names_its_code_run() -> None:
+    """The fetch script of every job reads the staged code under CODE_RUN_ID. A table row whose fetch container lacks it starts a task that cannot fetch."""
+    missing = [name for name, job in load_jobs(ROOT)["jobs"].items() if "fetch" in job["containers"] and "CODE_RUN_ID" not in job["containers"]["fetch"]]
+    require(not missing, f"the fetch container of these jobs has no CODE_RUN_ID: {missing}")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "task_runs_through_the_broker": task_runs_through_the_broker,
     "repeated_submit_one_task": repeated_submit_one_task,
@@ -1036,4 +1046,5 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_later_attempts_are_bound_to_the_first_checked_request": bronze_later_attempts_are_bound_to_the_first_checked_request,
     "bronze_later_attempts_are_bound_to_the_first_inventory": bronze_later_attempts_are_bound_to_the_first_inventory,
     "bronze_binding_is_per_run": bronze_binding_is_per_run,
+    "every_fetch_container_names_its_code_run": every_fetch_container_names_its_code_run,
 }
