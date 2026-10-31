@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure.iam_preflight_policies import INFRA, OFFLINE_VALUES, TABLE, load_table
+from scripts.infrastructure.iam_preflight_policies import EVIDENCE_SOURCES, INFRA, OFFLINE_VALUES, TABLE, load_table
 from scripts.infrastructure.render_project_config import REPO_ROOT
 from scripts.process import run_command
 
@@ -92,6 +92,23 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
     env_file = root / "project.env"
     env_file.write_text(ENV_TEXT, encoding="utf-8")
 
+    def table_without(file: str) -> Path:
+        table = json.loads(TABLE.read_text(encoding="utf-8"))
+        table["checks"] = [row for row in table["checks"] if not row["resource"].endswith("/" + file)]
+        path = root / f"table_without_{len(list(root.glob('table_without_*')))}.json"
+        path.write_text(json.dumps(table), encoding="utf-8")
+        return path
+
+    def lakehouse_copy(edits: list[tuple[str, str, str]]) -> Path:
+        """The publish code and layer_acceptance in a scratch folder with planted edits, for the evidence coverage check."""
+        folder = root / f"lakehouse_{len(list(root.glob('lakehouse_*')))}"
+        folder.mkdir()
+        for name in EVIDENCE_SOURCES:
+            shutil.copy(REPO_ROOT / "scripts" / "lakehouse" / name, folder / name)
+        for name, old, new in edits:
+            plant(folder, name, old, new)
+        return folder
+
     def planted(edits: list[tuple[str, str, str]]) -> Path:
         infra = root / f"infra_{len(list(root.glob('infra_*')))}"
         shutil.copytree(INFRA, infra, ignore=shutil.ignore_patterns(".terraform*", "tests"))
@@ -102,8 +119,8 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
     def live_run(infra: Path = INFRA, mode: str = "ok", extra: list[str] | None = None, env_path: Path = env_file) -> Callable[[], Run]:
         return lambda: execute(root, LIVE_MODULE, ["--env-file", str(env_path), *(extra or [])], environment_for(root, infra, mode))
 
-    def offline_run(infra: Path) -> Callable[[], Run]:
-        return lambda: execute(root, OFFLINE_MODULE, ["--infra", str(infra)], environment_for(root, infra, "ok"))
+    def offline_run(infra: Path, extra: list[str] | None = None) -> Callable[[], Run]:
+        return lambda: execute(root, OFFLINE_MODULE, ["--infra", str(infra), *(extra or [])], environment_for(root, infra, "ok"))
 
     def expect(run: Run, code: int, **counts: int) -> list[str]:
         failed = [f"exit {run.code}, expected {code}"] if run.code != code else []
@@ -190,8 +207,67 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             f'      "Resource": "{group}:log-stream:*"\n    }},\n    {{\n      "Sid": "WriteJobLogs",',
         )
     ]
+    run_files = (
+        "layer_run.json",
+        "pins.json",
+        "build_receipt.json",
+        "silver_snapshot.json",
+        "state/pinned.json",
+        "target/run_results.json",
+        "quality_silver/result.json",
+        "publish/candidates.json",
+        "publish/reconcile.json",
+        "publish/backup.json",
+        "publish/commit.json",
+        "publish/consumer_result.json",
+        "publish/export/manifest.json",
+    )
+    key = "arn:aws:s3:::*/lakehouse/layer_runs/silver/*/"
+
+    def deny(file: str, action: str, where: str) -> list[tuple[str, str, str]]:
+        """A policy that denies the one action on the one run file, planted before the statement that grants it."""
+        sid = {
+            "owner_policies/job_writer_layer_upload.json": "LayerRunObjects",
+            "policies/healthcare_hai_prediction_s3_policy.json": "InspectApprovedAcquisitionBucket",
+        }[where]
+        return [
+            (
+                where,
+                f'"Sid": "{sid}",',
+                f'"Sid": "DenyOneFile",\n      "Effect": "Deny",\n      "Action": ["{action}"],\n      "Resource": "{key}{file}"\n'
+                f'    }},\n    {{\n      "Sid": "{sid}",',
+            )
+        ]
+
+    def denied_file(role: str, action: str, file: str) -> Callable[[Run], list[str]]:
+        """One FAIL line names the role, the action and the file, and it is the only failure."""
+
+        def check(run: Run) -> list[str]:
+            named = any(
+                line.startswith(f"FAIL {role} {action} ") and f"/lakehouse/layer_runs/silver/example_run/{file}:" in line for line in run.out.splitlines()
+            )
+            return expect(run, 1, FAIL=1) + ([] if named else [f"{role} {action} on {file} not named"])
+
+        return check
+
+    def run_file_cases() -> list[tuple[str, str, Callable[[], Run], Callable[[Run], list[str]]]]:
+        found = []
+        for file in run_files:
+            for role, action, where in (
+                ("write_silver", "s3:PutObject", "owner_policies/job_writer_layer_upload.json"),
+                ("project_user", "s3:GetObject", "policies/healthcare_hai_prediction_s3_policy.json"),
+            ):
+                found.append(
+                    (
+                        f"live silver scope names {role} {action.split(':')[1]} of {file}",
+                        f"{action} on {file} is denied",
+                        live_run(planted(deny(file, action, where)), extra=silver_scope),
+                        denied_file(role, action, file),
+                    )
+                )
+        return found
+
     containers = ("init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload")
-    evidence = ("layer_run.json", "pins.json", "publish/candidates.json", "publish/reconcile.json", "publish/backup.json", "publish/commit.json")
     silver_scope = ["--scope", "silver"]
 
     def failed(run: Run, *words: str) -> list[str]:
@@ -341,13 +417,10 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             "uploads under publish are denied",
             live_run(planted(deny_publish_uploads), extra=silver_scope),
             lambda r: (
-                expect(r, 1, FAIL=5)
+                expect(r, 1, FAIL=len([name for name in run_files if name.startswith("publish/")]))
                 + failed(
                     r,
-                    *(
-                        f"layer_runs/silver/example_run/publish/{name}"
-                        for name in ("candidates.json", "reconcile.json", "backup.json", "commit.json", "export/manifest.json")
-                    ),
+                    *(f"layer_runs/silver/example_run/{name}" for name in run_files if name.startswith("publish/")),
                 )
             ),
         ),
@@ -361,10 +434,7 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             "live silver scope names each denied evidence read",
             "the project user may not read the uploaded run records",
             live_run(planted(deny_evidence_reads), extra=silver_scope),
-            lambda r: (
-                expect(r, 1, FAIL=len(evidence) + 2)
-                + failed(r, *(f"layer_runs/silver/example_run/{name}" for name in (*evidence, "publish/export/manifest.json", "silver_snapshot.json")))
-            ),
+            lambda r: expect(r, 1, FAIL=len(run_files)) + failed(r, *(f"layer_runs/silver/example_run/{name}" for name in run_files)),
         ),
         (
             "live silver scope names each denied code upload",
@@ -377,6 +447,60 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             "a second statement also grants the log streams, so a mutant on one grant leaves the row passing",
             offline_run(planted(logs_granted_twice)),
             lambda r: expect(r, 1) + ([] if "but the row declares one grant" in r.out and "WriteAnyLogs" in r.out else ["double grant not named"]),
+        ),
+        *run_file_cases(),
+        (
+            "offline evidence rows missing for consumer_result",
+            "the table has neither the writer row nor the owner row of publish/consumer_result.json",
+            offline_run(INFRA, ["--table", str(table_without("publish/consumer_result.json"))]),
+            lambda r: (
+                expect(r, 1)
+                + (
+                    []
+                    if "write_silver s3:PutObject" in r.out and "project_user s3:GetObject" in r.out and "publish/consumer_result.json" in r.out
+                    else ["rows not named"]
+                )
+            ),
+        ),
+        (
+            "offline layer_acceptance reads a file without rows",
+            "layer_acceptance lists publish/new_record.json, which has no writer and no owner row",
+            offline_run(
+                INFRA,
+                [
+                    "--lakehouse",
+                    str(
+                        lakehouse_copy(
+                            [
+                                (
+                                    "layer_acceptance.py",
+                                    '    "publish/consumer_result.json",\n',
+                                    '    "publish/consumer_result.json",\n    "publish/new_record.json",\n',
+                                )
+                            ]
+                        )
+                    ),
+                ],
+            ),
+            lambda r: (
+                expect(r, 1) + ([] if r.out.count("publish/new_record.json") >= 3 and "no writer" in r.out else ["new file not named with its missing rows"])
+            ),
+        ),
+        (
+            "offline publish code names a file nobody classified",
+            "layer_run.py names extra_record.json, which the case does not classify",
+            offline_run(
+                INFRA,
+                [
+                    "--lakehouse",
+                    str(
+                        lakehouse_copy(
+                            [("layer_run.py", 'STAGE_PREFIX = "lakehouse/run_stage"', 'STAGE_PREFIX = "lakehouse/run_stage"\nEXTRA = "extra_record.json"')]
+                        )
+                    ),
+                ],
+            ),
+            lambda r: expect(r, 1) + ([] if "extra_record.json" in r.out and "not classified" in r.out else ["unclassified file not named"]),
         ),
         (
             "live unknown scope",
