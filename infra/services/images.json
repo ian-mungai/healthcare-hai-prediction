@@ -180,6 +180,24 @@
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack",
       "runs_as": "ECS service on the host when monitoring_enabled is true"
+    },
+    "model_api": {
+      "kind": "build",
+      "context": ".",
+      "dockerfile": "services/model_api/Dockerfile",
+      "local_tag": "hai-model-api:1",
+      "tag": "1-arm64",
+      "arm64": "base pin lists linux/arm64; the lock needs the owner's compile on the training lock, and the linux/arm64 build has not been run yet",
+      "runs_as": "ECS service on the host when model_api_enabled is true"
+    },
+    "streamlit": {
+      "kind": "build",
+      "context": ".",
+      "dockerfile": "services/streamlit/Dockerfile",
+      "local_tag": "hai-streamlit:1",
+      "tag": "1-arm64",
+      "arm64": "base pin lists linux/arm64; the lock needs the owner's compile, and the linux/arm64 build has not been run yet",
+      "runs_as": "ECS service on the host when streamlit_enabled is true"
     }
   }
 }
