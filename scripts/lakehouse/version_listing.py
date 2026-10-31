@@ -15,7 +15,8 @@ Entry = tuple[str, str, str, str, int]
 
 def canonical_digest(prefix: str, entries: Iterable[Entry]) -> dict[str, Any]:
     """The prefix, the number of entries and the SHA-256 of the sorted lines of each key, key after key. The entries are read once and never held whole."""
-    digest, count, current, group = hashlib.sha256(), 0, "", []
+    digest, count, current = hashlib.sha256(), 0, ""
+    group: list[str] = []
     for kind, key, version, etag, size in entries:
         if key < current:
             raise ValueError("the listing is not in key order")
