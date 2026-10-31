@@ -1,11 +1,11 @@
-"""The owner's AWS catalog setup: create or verify the AWS catalog and report the twelve AWS Polaris pair parameters, under the project profile only.
+"""The owner's AWS catalog setup: create or verify the AWS catalog and report the fourteen AWS Polaris pair parameters, under the project profile only.
 
 Run from the repository root at a terminal:
 
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup inspect --instance <HOST_INSTANCE_ID>
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold|features --instance <HOST_INSTANCE_ID>
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold|features|serving --instance <HOST_INSTANCE_ID>
         [--namespace-approval <APPROVAL_ID>]
 
 The AWS catalog is reached only through ``orchestration.catalog_transport.CatalogTransport``: the Session Manager tunnel to the host's private
@@ -16,14 +16,15 @@ mode is ``already present`` and one that differs is refused, never changed.
 
 The tool refuses to start unless the configured profile resolves to the project user. The Polaris root credential is read from Parameter
 Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only. ``check`` reports each of the
-twelve AWS Polaris pair parameters by exact name with its type and version, never a value: it reads without decryption and drops the encrypted
+fourteen AWS Polaris pair parameters by exact name with its type and version, never a value: it reads without decryption and drops the encrypted
 value unread, and it never reads the root secret. ``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
 catalog and each identity's roles and grants and changes nothing.
 
 ``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
 identity (``bronze_writer.grant_plan`` for ``bronze`` and ``e2e``, which also gets the table grants on ``silver_e2e``, ``gold_e2e`` and
-``features_e2e``; ``polaris_writer.grants`` on ``silver``, ``gold`` or ``features`` only; the Mac reader privileges for ``reader``). Every namespace a grant
-names must exist. An absent one is created only under ``--namespace-approval``, which the tool records once for that identity and its exact
+``features_e2e``; ``polaris_writer.grants`` on ``silver``, ``gold``, ``features`` or ``serving`` only; the Mac reader privileges for ``reader``).
+Every namespace a grant names must exist. An absent one is created only under ``--namespace-approval``, which the tool records once for that
+identity and its exact
 namespace set before it creates anything; for ``bronze`` and ``e2e`` the approval also grants ``NAMESPACE_CREATE`` (phase ``active``). After the
 grants the tool lists the catalog role's grants and compares them with the plan; any extra, missing or duplicate grant stops it before the
 catalog role is assigned (P7). The issued pair goes from the Polaris reply straight to Parameter Store (``principal_credentials``), so a
@@ -64,7 +65,7 @@ from scripts.lakehouse.catalog_journal import durable_directory, private_directo
 CATALOG = "hai_lakehouse"
 MAC_POLARIS_PORT = 8181
 REPO_ROOT = Path(__file__).resolve().parents[2]
-IDENTITIES = ("reader", "e2e", "bronze", "silver", "gold", "features")
+IDENTITIES = ("reader", "e2e", "bronze", "silver", "gold", "features", "serving")
 WRITER_VARIABLES = "job_writer_variables.tf"
 OAUTH_PATH = "/api/catalog/v1/oauth/tokens"
 CATALOG_PATH = f"/api/management/v1/catalogs/{CATALOG}"
@@ -88,6 +89,7 @@ PRINCIPALS = {
     "silver": "silver_writer",
     "gold": "gold_writer",
     "features": "features_writer",
+    "serving": "serving_writer",
 }
 
 Clock = Callable[[], float]
@@ -120,7 +122,7 @@ def check_deadline(deadline: float, clock: Clock = time.monotonic) -> float:
 def pair_names(variables: Path) -> dict[str, tuple[str, str]]:
     """The client ID and secret parameter names of each AWS identity, from the variable defaults in ``infra/iam/variables.tf`` (P12).
 
-    The twelve names must be distinct, each must end in its own ``aws_polaris_<identity>_client_id`` or ``_client_secret`` leaf and none may be a
+    The fourteen names must be distinct, each must end in its own ``aws_polaris_<identity>_client_id`` or ``_client_secret`` leaf and none may be a
     managed Mac name (``polaris_silver_*``, ``polaris_gold_*`` and the others), so a Mac and an AWS writer can never share a pair.
     """
     names = secret_store.variable_names(variables)
@@ -136,7 +138,7 @@ def pair_names(variables: Path) -> dict[str, tuple[str, str]]:
         pairs[identity] = (found[0], found[1])
     flat = [name for pair in pairs.values() for name in pair]
     if len(set(flat)) != len(flat) or set(flat) & {*secret_store.MANAGED, *secret_store.READ_ONLY}:
-        raise SetupError("parameters", "the AWS Polaris pair names must be twelve distinct names outside the managed Mac names")
+        raise SetupError("parameters", "the AWS Polaris pair names must be fourteen distinct names outside the managed Mac names")
     return pairs
 
 
@@ -182,7 +184,7 @@ def refuse_pending_write(mark: Path, role: str) -> None:
 
 
 class PairVault(secret_store.SecretStore):
-    """Parameter Store through the project profile: writes only the twelve AWS Polaris pair names and reads those and the Polaris root secret."""
+    """Parameter Store through the project profile: writes only the fourteen AWS Polaris pair names and reads those and the Polaris root secret."""
 
     def __init__(self, parameters: Any, deadline: float | None = None, clock: Clock = time.monotonic, pending: Path | None = None) -> None:
         super().__init__(parameters)
@@ -245,7 +247,7 @@ class PairVault(secret_store.SecretStore):
 
     @staticmethod
     def check(name: str, write: bool = False) -> None:
-        """Refuse any name outside the twelve pair names for a write, and outside those and the root secret for a read, before a request."""
+        """Refuse any name outside the fourteen pair names for a write, and outside those and the root secret for a read, before a request."""
         allowed = writable_names() if write else writable_names() | {secret_store.POLARIS_ROOT_SECRET}
         if name not in allowed:
             raise secret_store.SecretStoreError(f"{name} is not an AWS Polaris pair name this setup may {'write' if write else 'read'}")
@@ -517,7 +519,7 @@ def step_catalog(services: Services, instance: str, seconds: float, clock: Clock
 
 
 def step_check(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Report the twelve pair parameters by exact name, metadata only: nothing is decrypted, not even the root secret, and nothing is changed."""
+    """Report the fourteen pair parameters by exact name, metadata only: nothing is decrypted, not even the root secret, and nothing is changed."""
     deadline = clock() + seconds
     vault = services.vault()
     parameters = []
