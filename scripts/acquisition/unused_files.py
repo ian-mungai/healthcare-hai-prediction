@@ -63,6 +63,11 @@ def classify(copies: list[dict[str, str]], inventory: list[dict[str, str]], keep
     absent = sorted({row["s3_key"] for row in copies if row["retired"] != "true"} - objects.keys())
     if absent:
         raise CaptureError(f"The inventory does not cover {len(absent)} files the copies list names, such as {absent[0]}. It is incomplete.")
+    conflicts = sorted(row["s3_key"] for row in copies if row["retired"] != "true" and objects[row["s3_key"]]["sha256"] != row["sha256"])
+    if conflicts:
+        raise CaptureError(
+            f"The copies list and the inventory disagree about the bytes of {len(conflicts)} files, such as {conflicts[0]}. Fix the exports first."
+        )
     loaded_digests = {row["sha256"] for row in copies if row["loaded"] == "true"}
     rows: list[dict[str, str]] = [dict(row) for row in copies]
     named = {row["s3_key"] for row in copies}

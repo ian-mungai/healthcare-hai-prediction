@@ -303,7 +303,10 @@ def test_units_that_need_an_api_key_are_reported_blocked_on_the_raw_route_and_ne
     run = harness.Run(queue_path=queue, state_root=stored.base / "run", base=stored.base)
     run.cache["queue"] = keyed
     summary = harness.execute_locked(run, False, True, None, None, None)
-    check(attempts == [] and sorted(summary["needs_secret"]) == sorted(unit["snapshot_id"] for unit in keyed), "key units are listed and not attempted")
+    check(
+        attempts == [] and sorted(summary["not_attempted"]["keyed_mac_lane"]) == sorted(unit["snapshot_id"] for unit in keyed),
+        "key units are listed and not attempted",
+    )
 
 
 def test_the_root_layout_still_attempts_key_units(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -318,7 +321,7 @@ def test_the_root_layout_still_attempts_key_units(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     monkeypatch.setattr(harness, "acknowledged", lambda run: set())
     summary = harness.execute_locked(run, False, True, None, None, None)
-    check("needs_secret" not in summary, "the layout without the raw root applies no secret rule")
+    check("not_attempted" not in summary, "the layout without the raw root applies no placement rule")
 
 
 def test_the_controls_and_receipt_paths_resolve_through_the_mirror_root(tmp_path: Path) -> None:

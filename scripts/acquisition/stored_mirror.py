@@ -22,7 +22,6 @@ from typing import Any
 
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, write_once
-from scripts.acquisition.source_registry import RegistryError, registry_version_paths
 from scripts.acquisition.transport import CaptureError
 
 ACTIVE = ("api", "direct_download", "approved_manual")
@@ -75,49 +74,6 @@ def copy_run_records(queue_path: Path, base: Path, mirror: Path) -> None:
         copy_once(base / TEMPLATE, mirror / TEMPLATE)
 
 
-def mmd_files(base: Path) -> list[str]:
-    """Every stored file the MMD API collector opens by working folder path, checked against the authorized plan digests."""
-    from scripts.acquisition import collect_mmd_api, mmd_api_contract
-
-    found = {str(collect_mmd_api.TEMPLATE)}
-    for digest, path in mmd_api_contract.PLANS.items():
-        plan_file = base / current(str(path))
-        if not plan_file.is_file():
-            raise CaptureError(f"The MMD plan {path} is missing, so the mirror cannot carry the MMD units.")
-        raw = plan_file.read_bytes()
-        if sha256_of(raw) != digest:
-            raise CaptureError("The MMD plan differs from its authorized digest.")
-        plan = json.loads(raw)
-        report_path = base / current(plan["comparison_report"])
-        if not report_path.is_file() or sha256_of(report_path.read_bytes()) != plan["comparison_report_sha256"]:
-            raise CaptureError("The MMD comparison report is missing or differs from the plan's digest.")
-        found.update({current(str(path)), current(plan["comparison_report"])})
-        for reference in plan["references"].values():
-            found.add(current(reference["path"]))
-            expected = reference["sha256"]
-            if not (base / current(reference["path"])).is_file() or sha256_of((base / current(reference["path"])).read_bytes()) != expected:
-                raise CaptureError(f"The MMD reference {reference['path']} is missing or differs from the plan's digest.")
-        try:
-            versions = registry_version_paths(plan["registry_sha256"])
-        except RegistryError as error:
-            if "Unknown or ambiguous registry fingerprint" not in str(error):
-                raise
-            versions = {}
-        for version_file in versions.values():
-            if not version_file.is_relative_to(base):
-                raise CaptureError("A legacy registry version file lies outside the repository folder.")
-            found.add(str(version_file.relative_to(base)))
-        for year in json.loads(report_path.read_bytes())["years"]:
-            original = base / current(year["original_path"])
-            if not original.is_file() or sha256_of(original.read_bytes()) != year["original_sha256"]:
-                raise CaptureError(f"The MMD original {year['original_path']} is missing or differs from the report's digest.")
-            found.add(current(year["original_path"]))
-    missing = sorted(name for name in found if not (base / name).is_file())
-    if missing:
-        raise CaptureError(f"The MMD file {missing[0]} is missing.")
-    return sorted(found)
-
-
 def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, bucket: str) -> dict[str, int]:
     """Write the mirror folder, its index and its manifest under ``output``. A second build with the same inputs changes nothing."""
     queue = json.loads(queue_path.read_text(encoding="utf-8"))["queue"]
@@ -127,15 +83,6 @@ def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, buck
         by_digest.setdefault(row["sha256"], []).append(row)
     mirror = output / "mirror"
     copy_run_records(queue_path, base, mirror)
-    carries = ["file", "il_directory"]
-    if any(
-        unit["mode"] == "mmd_api" or any(flag.startswith("browser_export_moved_to_api") for flag in unit["flags"])
-        for unit in queue
-        if unit["disposition"] in ACTIVE
-    ):
-        for relative in mmd_files(base):
-            copy_once(base / relative, mirror / relative)
-        carries.append("mmd_api")
     objects: dict[str, dict[str, Any]] = {}
     unavailable: list[str] = []
     units = 0
@@ -166,7 +113,7 @@ def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, buck
                 "byte_count": artifact["byte_count"],
             }
         units += 1
-    index = {"bucket": bucket, "carries": sorted(carries), "objects": dict(sorted(objects.items())), "unavailable": sorted(set(unavailable))}
+    index = {"bucket": bucket, "objects": dict(sorted(objects.items())), "unavailable": sorted(set(unavailable))}
     write_once(output / "stored_index.json", encoded_json(index))
     files = [
         {"path": path.relative_to(mirror).as_posix(), "sha256": sha256_of(path.read_bytes()), "bytes": path.stat().st_size}
@@ -184,7 +131,6 @@ class Mirror:
     def __init__(self, root: Path, index: dict[str, Any], client: Any) -> None:
         self.root = root.resolve()
         self.objects: dict[str, dict[str, Any]] = index["objects"]
-        self.carried: frozenset[str] = frozenset(index.get("carries", ()))
         self.client = client
 
     def materialize(self, path: Path) -> bool:

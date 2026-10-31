@@ -249,3 +249,20 @@ def test_apply_refuses_a_key_with_no_version(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         unused_files.main(approve(out), client=client)
     check(client.deletes == [], "no marker when a planned key is missing")
+
+
+def test_a_copies_row_and_an_inventory_row_that_disagree_about_the_bytes_are_refused_before_a_plan_exists(tmp_path: Path) -> None:
+    case = standard(tmp_path)
+    for row in case.copies:
+        if row[1] == "S1__4":
+            row[3] = LOADED
+    with pytest.raises(SystemExit):
+        case.plan()
+    check(not (tmp_path / "out" / "removal_plan.json").exists(), "a contradictory input produces no plan")
+
+
+def test_every_planned_target_carries_the_hash_of_its_inventory_record(tmp_path: Path) -> None:
+    case = standard(tmp_path)
+    plan = json.loads((case.plan() / "removal_plan.json").read_text())
+    stored = {row[2]: row[4] for row in case.inventory}
+    check(all(item["sha256"] == stored[item["s3_key"]] for item in plan["items"]), "plan hashes come from the inventory records")

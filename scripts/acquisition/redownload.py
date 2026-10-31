@@ -24,8 +24,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -79,9 +78,9 @@ class Run:
     route: route.RouteFiles | None = None
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
+    state_parent: Path | None = None
     keyed_lane: bool = False
     person_lane: bool = False
-    carried_modes: frozenset[str] | None = None
     lane_approval: Path | None = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
@@ -221,7 +220,7 @@ def preview_scope(run: Run) -> list[str] | None:
 
 def root_label(run: Run) -> str:
     """The state root as the frozen controls record it."""
-    return str(run.state_root.absolute().relative_to(run.base if run.base == REPO_ROOT else run.base.parent))
+    return str(run.state_root.absolute().relative_to(run.state_parent or (run.base if run.base == REPO_ROOT else run.base.parent)))
 
 
 def default_state_root(queue_path: Path) -> Path:
@@ -271,6 +270,34 @@ def ensure_stored(path: Path, run: Run) -> None:
         run.materialize(path)
 
 
+def resolve_context(number: int | None, *, keyed: bool, person: bool, mirror: bool) -> str:
+    """Decide the one execution context of a run, before any gate or early return. Run 3 has exactly four: the task, or one of the Mac lanes."""
+    if keyed and person:
+        raise RegistryError("Only one lane runs at a time")
+    if (keyed or person) and number != 3:
+        raise RegistryError("A lane belongs to run 3")
+    if keyed or person:
+        if mirror:
+            raise RegistryError(f"A Mac lane runs on the owner's Mac only, so {'the keys' if keyed else 'the originals'} stay off AWS")
+        return route.LANE_NAME if keyed else route.PERSON_LANE
+    if number != 3:
+        return "local"
+    if not mirror:
+        raise RegistryError("Run 3 needs a lane or the task mirror")
+    return "task"
+
+
+def may_attempt(run: Run, lane: str) -> bool:
+    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only."""
+    if run.keyed_lane:
+        return lane == KEYED
+    if run.person_lane:
+        return lane in route.PERSON_CLASSES
+    if run.stored_root is not None:
+        return lane == TASK
+    return not (on_raw_route() and (lane == KEYED or lane in route.PERSON_CLASSES))
+
+
 def route_gate(run: Run) -> None:
     """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
@@ -314,7 +341,7 @@ def verify_input(path: Path, run: Run) -> None:
 def validate_root(run: Run) -> None:
     """Enforce a fresh owned subtree and reject symlink traversal or overlap with historical captures."""
     root = run.state_root.absolute()
-    approved = run.base / "data/redownload_checks" if run.base == REPO_ROOT else run.base.parent
+    approved = run.state_parent or (run.base / "data/redownload_checks" if run.base == REPO_ROOT else run.base.parent)
     require(root.is_relative_to(approved.absolute()) and root != approved.absolute(), "State root outside approved redownload subtree")
     controls.validate_path(root, approved)
     for unit in load_queue(run):
@@ -990,7 +1017,7 @@ def private_safe(fields: dict) -> dict:
     return safe | {"withheld_fields": withheld} if withheld else safe
 
 
-def lane_of(unit: dict, carried: frozenset[str] | None = None) -> str:
+def lane_of(unit: dict) -> str:
     """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
     mode = handler_mode(unit)
     if mode in SECRET_MODES:
@@ -999,16 +1026,9 @@ def lane_of(unit: dict, carried: frozenset[str] | None = None) -> str:
         return "needs_person"
     if mode in PRIVATE_COLLECTORS:
         return "needs_owner_decision_private"
-    if mode not in {"file", "il_directory", "mmd_api"}:
-        return "unclassified"
-    return TASK if carried is None or mode in carried else "needs_local_data"
-
-
-def run_carried(run: Run) -> frozenset[str] | None:
-    """The modes the run's mirror serves. A run with no mirror serves every task mode, and an older mirror without the list carries only files and pages."""
-    if run.stored_root is None:
-        return None
-    return run.carried_modes or frozenset({"file", "il_directory"})
+    if mode == "mmd_api":
+        return "needs_local_data"
+    return TASK if mode in {"file", "il_directory"} else "unclassified"
 
 
 ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {
@@ -1137,38 +1157,9 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
     return fields | {"outcome": "exact_match" if same else "changed_needs_review", "excluded_parts": sorted(excluded)}
 
 
-@contextmanager
-def working_folder(run: Run) -> Iterator[Path]:
-    """Run in the code root with the stored mirror's data folder linked in as ``data``.
-
-    The MMD collector opens plans and references by relative path and resolves legacy registry versions from the code root. In a task the code
-    root has no data folder, so the link stands in for it while the unit runs, and it is removed afterwards. Without a mirror nothing changes.
-    """
-    if run.stored_root is None:
-        yield Path.cwd()
-        return
-    data = run.stored_root / "data"
-    if not data.is_dir():
-        raise CaptureError("The stored mirror has no data folder, so it cannot serve a collector that reads stored files by relative path.")
-    link = run.base / "data"
-    if link.exists() or link.is_symlink():
-        raise CaptureError("The code root already has a data folder, so the stored mirror is not linked over it.")
-    link.symlink_to(data)
-    before = Path.cwd()
-    os.chdir(run.base)
-    try:
-        yield run.base
-    finally:
-        os.chdir(before)
-        link.unlink()
-
-
 def handle(unit: dict, run: Run) -> dict:
     adapters = ADAPTERS if run.adapters is None else run.adapters
     mode = handler_mode(unit)
-    if mode == "mmd_api" and run.stored_root is not None:
-        with working_folder(run):
-            return collector_unit(unit, run, adapters[mode])
     if mode in adapters:
         return collector_unit(unit, run, adapters[mode])
     if unit["disposition"] == "approved_manual":
@@ -1235,6 +1226,7 @@ def execute(
         require_readable_root(run)
         return execute_locked(run, pilot, False, selected_sources(preview_scope(run), sources), max_units, log)
     validate_root(run)
+    resolve_context(json.loads(run.queue_path.read_bytes()).get("run"), keyed=run.keyed_lane, person=run.person_lane, mirror=run.stored_root is not None)
     route_gate(run)
     run.cache["controls_sha256"] = review_gate(run)
     # The scope comes only from the controls the gate just accepted, never from a separate file read (failure mode 56).
@@ -1256,44 +1248,37 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
     """Dispatch under one root lock, honoring persisted source pauses and every transport budget."""
     queue = load_queue(run)
     active = [unit for unit in queue if unit["disposition"] in ACTIVE]
-    pilots: dict[tuple, str] = {}
+    selected, listed = [], {}
     for unit in active:
-        pilots.setdefault((unit["source_id"], unit["route"], unit["mode"]), unit["snapshot_id"])
+        lane = lane_of(unit)
+        if may_attempt(run, lane):
+            selected.append(unit)
+        else:
+            listed.setdefault(lane, []).append(unit["snapshot_id"])
+    pilots: dict[tuple, str] = {}
+    for unit in selected:
+        pilots.setdefault((unit["source_id"], unit["route"], handler_mode(unit)), unit["snapshot_id"])
     summary: dict[str, Any] = {"pilot": pilot, "active_units": len(active), "attempted": 0, "outcomes": {}, "paused": [], "pending_manual": 0}
+    if listed:
+        summary["not_attempted"] = listed
     if not allow_network:
         done = {path.stem for path in (run.state_root / "outcomes").glob("*.json")} if run.state_root.exists() else set()
-        chosen = [unit for unit in active if sources is None or unit["source_id"] in sources]
+        chosen = [unit for unit in selected if sources is None or unit["source_id"] in sources]
         reviewed_scope = run_records(run)[0].is_file()
         return summary | {"planned": sum(unit["snapshot_id"] not in done for unit in chosen), "scope_reviewed": reviewed_scope}
     reviewed, stopped, paused = acknowledged(run), stopped_sources(run), paused_sources(run)
     applicable = [identity for (source, _route, _mode), identity in pilots.items() if (sources is None or source in sources) and in_reviewed_scope(run, source)]
     stage_ready = all((item := outcome(run, identity)) is not None and (item["outcome"] == "exact_match" or identity in reviewed) for identity in applicable)
     summary["pilot_stage_pending"] = not stage_ready
-    for unit in active:
+    for unit in selected:
         source, identity = unit["source_id"], unit["snapshot_id"]
         if outcome(run, identity) is not None or source in stopped or source in paused or (sources is not None and source not in sources):
             continue
         # Checked again for every unit at dispatch time, against the accepted controls only (failure mode 59).
         if not in_reviewed_scope(run, source):
             continue
-        lane = lane_of(unit, run_carried(run))
-        if run.keyed_lane:
-            if lane != KEYED:
-                continue
-        elif run.person_lane:
-            if lane not in route.PERSON_CLASSES:
-                continue
-        elif run.stored_root is not None:
-            if lane != TASK:
-                summary.setdefault("not_attempted", {}).setdefault(lane, []).append(identity)
-                continue
-        elif on_raw_route() and lane == KEYED:
-            summary.setdefault("needs_secret", []).append(identity)
-            continue
-        elif on_raw_route() and lane in route.PERSON_CLASSES:
-            summary.setdefault("not_attempted", {}).setdefault(lane, []).append(identity)
-            continue
-        pilot_id = pilots[(source, unit["route"], unit["mode"])]
+        lane = lane_of(unit)
+        pilot_id = pilots[(source, unit["route"], handler_mode(unit))]
         if identity != pilot_id:
             first = outcome(run, pilot_id)
             if pilot or not stage_ready or first is None or (first["outcome"] != "exact_match" and pilot_id not in reviewed):
@@ -1433,12 +1418,12 @@ def run_from(
     return Run(
         queue_path=args.queue,
         state_root=state_root,
+        state_parent=getattr(args, "state_parent", None),
         base=base,
         manual_folder=args.manual_folder,
         route=files,
         materialize=mirror.materialize if mirror else None,
         stored_root=mirror.root if mirror else None,
-        carried_modes=mirror.carried if mirror else None,
         keyed_lane=bool(getattr(args, "keyed_lane", False)),
         person_lane=bool(getattr(args, "person_lane", False)),
         lane_approval=getattr(args, "lane_approval", None),
@@ -1461,6 +1446,7 @@ def main() -> None:
     parser.add_argument("--decision")
     for name in ("removal-plan", "removal-approval", "removal-record", "hosts", "hosts-approval"):
         parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
+    parser.add_argument("--state-parent", type=Path, help="a writable folder outside the code tree that holds the state root, for the AWS task")
     parser.add_argument("--keyed-lane", action="store_true", help="run only the units that need an API key, on the owner's Mac")
     parser.add_argument("--person-lane", action="store_true", help="run only the browser saves and the originals that name people, on the owner's Mac")
     parser.add_argument("--lane-approval", type=Path, help="the owner's approval of the keyed lane")

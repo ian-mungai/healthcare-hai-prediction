@@ -171,7 +171,9 @@ def execution_run(folder: Path, number: int, files: route.RouteFiles | None = No
     body = json.dumps({"run": number, "queue": []}).encode()
     queue.write_bytes(body)
     queue.with_name("queue.lock.json").write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest(), "entries": 0}))
-    return redownload.Run(queue_path=queue, state_root=folder / "run", base=folder / "base", route=files)
+    return redownload.Run(
+        queue_path=queue, state_root=folder / "run", base=folder / "base", route=files, stored_root=folder / "mirror" if number == 3 else None
+    )
 
 
 def test_executing_run_3_without_route_files_is_refused_before_the_review_gate(tmp_path: Path) -> None:
