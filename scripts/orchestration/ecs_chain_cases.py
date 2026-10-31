@@ -353,7 +353,7 @@ def broker_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
         raise AssertionError("the broker table has no metadata job")
     require(document["steps"].get("metadata_run") == "metadata", "the step metadata_run does not name the metadata job")
     require(job.get("chain") is True, "the catalog job may start before the first publishes are signed")
-    require(job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"]}, f"wrong containers: {job['containers']}")
+    require(job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"], "ingest_dbt": ["RUN_ID"]}, f"wrong containers: {job['containers']}")
     terraform = (ROOT / "infra/jobs/openmetadata.tf").read_text()
     default = re.search(r'variable "openmetadata_lifetime_seconds".*?default\s*=\s*([0-9]+)', terraform, re.S)
     require(default is not None and job["deadline_seconds"] == int(default.group(1)) + 900, "the broker deadline is not the task lifetime plus 900 seconds")
