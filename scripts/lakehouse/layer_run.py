@@ -757,7 +757,11 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     elif phase == "feast" and job.dry_run:
         sys.stdout.write(json.dumps({"dry_run": True, "feast": "not applied"}) + "\n")
     elif phase == "publish" and job.dry_run:
-        plan_publish(job)
+        plan = plan_publish(job)
+        if plan["unknown"] or plan["catalog_error"]:
+            # The plan is printed and saved first, so the owner sees which state is unknown. A dry run that could not read it proves nothing.
+            error = plan["catalog_error"] or "none"
+            raise StepError(f"the dry run has unknown catalog state ({len(plan['unknown'])} tables, catalog error: {error}): the plan above is incomplete")
     elif phase == "upload":
         sys.stdout.write(json.dumps({"uploaded": upload(job, args.bucket, s3_client())}) + "\n")
     elif phase == "publish":

@@ -35,6 +35,7 @@ from scripts.lakehouse import code_archive, layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
 from scripts.process import run_command
 
+DRY_PLAN_PREFIX = layer_run.PLAN_PREFIX
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 SILVER_RUN = "20261030T010203Z-0a1b2c3d"
 GOLD_RUN = "20261030T020304Z-1b2c3d4e"
@@ -400,6 +401,8 @@ def commit(job: Job, publish: Path, namespace: str) -> None:
 
 def plan_state(job: Job, arguments: Sequence[str | Path]) -> None:
     """Stand-in for the read-only catalog module: it reads the model and the export and writes nothing to the catalog."""
+    if "plan_unreadable" in DEFECTS:
+        fail("scripts.lakehouse.publish_plan")
     namespace, plan = contract(job.layer, job.mode)
     tables_now = model("tables.json", {})
     runs = model("publish_runs.json", [])
@@ -851,6 +854,18 @@ def case_dry_run_writes_nothing(case: Case) -> None:
     require(case.phase("gold", "publish") == 0 and len(writes()) == before, "a later phase of a dry task stays dry")
 
 
+def case_dry_run_with_unreadable_catalog_state_fails(case: Case) -> None:
+    """The plan still prints, with UNKNOWN lines, but a dry run that could not read the catalog proves nothing and must not end well."""
+    DEFECTS.add("plan_unreadable")
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase, extra=["--dry-run"]) == 0, case.err)
+    case.out = ""
+    require(case.phase("silver", "publish", extra=["--dry-run"]) != 0, "a dry publish with unknown catalog state ended well")
+    require("UNKNOWN" in case.out and "CATALOG" in case.out and DRY_PLAN_PREFIX in case.out, "the plan was not printed with its unknown lines")
+    require("unknown catalog state" in case.err, case.err)
+    require(not writes(), "the dry run wrote to the shared catalog")
+
+
 def case_dry_run_features_skips_feast(case: Case) -> None:
     require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
     before = len(writes())
@@ -908,6 +923,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
     "an export with a table outside the contract is refused": case_export_names_foreign_table,
     "dry run writes nothing and prints one plan": case_dry_run_writes_nothing,
+    "a dry run with unreadable catalog state fails after printing the plan": case_dry_run_with_unreadable_catalog_state_fails,
     "dry run of features skips Feast": case_dry_run_features_skips_feast,
     "dry run marks an already committed run as blocked": case_dry_run_flags_a_committed_run,
     "LAYER_DRY_RUN=1 starts a dry run": case_dry_run_from_the_environment,
