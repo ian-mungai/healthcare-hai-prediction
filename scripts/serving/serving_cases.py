@@ -30,6 +30,7 @@ from unittest import mock
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
+from scripts.infrastructure import push_images
 from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -662,6 +663,27 @@ def case_deploy_job(c: Checker) -> None:
         code, out, err = run_deploy_job(fresh, registry, RUN_3, {"MODEL_API_MANIFEST_URI": environment["MODEL_API_MANIFEST_URI"]}, ["--request", str(path)])
         c.check("a request file still works", code == 0 and json.loads(out or "{}").get("status") == "written")
     c.check("no run moved the production alias", registry.alias_writes == 0)
+
+
+def case_images(c: Checker) -> None:
+    """The image list names the model API and page images, builds each from its own Dockerfile with the repository as context, and the platform stack
+    gets their repositories behind one flag."""
+    config = push_images.load_config()
+    c.check("the image list is valid", push_images.check(config) == [])
+    urls = {name: f"111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_{name}_dev" for name in config["images"]}
+    for name in ("model_api", "streamlit"):
+        entry = config["images"].get(name, {})
+        c.check(f"{name} is a build with its Dockerfile named", entry.get("kind") == "build" and entry.get("dockerfile") == f"services/{name}/Dockerfile")
+        c.check(f"{name} runs only behind its flag", f"{name}_enabled" in str(entry.get("runs_as", "")))
+        lines = push_images.plan(config, urls, "example_profile", "us-west-2", [name]) if name in config["images"] else []
+        c.check(
+            f"the plan builds {name} from the repository root with its Dockerfile",
+            any(line.startswith("docker build") and f"-f services/{name}/Dockerfile ." in line for line in lines),
+        )
+    platform = (ROOT / "infra/platform/main.tf").read_text()
+    c.check(
+        "the platform stack adds both repositories only behind serving_enabled", "var.serving_enabled" in platform and '"model_api", "streamlit"' in platform
+    )
 
 
 def canary_deploy(w: World, percent: int) -> deploy.Outcome:
@@ -1472,6 +1494,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),
+    "images_and_repositories": (case_images, "deploy aws"),
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),

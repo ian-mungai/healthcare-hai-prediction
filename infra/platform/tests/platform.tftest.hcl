@@ -158,6 +158,32 @@ run "monitoring_flag_adds_its_foundation" {
   }
 }
 
+# The flag adds only the model API and page repositories, so a false flag leaves the stack as it was.
+run "serving_flag_adds_its_repositories" {
+  command = plan
+
+  variables {
+    serving_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(setintersection(toset(["model_api", "streamlit"]), toset(keys(aws_ecr_repository.image)))) == 2 &&
+      length(aws_ecr_repository.image) == 13 && length(aws_cloudwatch_log_group.platform) == 6
+    )
+    error_message = "The serving flag adds two repositories and nothing else."
+  }
+}
+
+run "serving_repositories_are_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(aws_ecr_repository.image), "model_api") && !contains(keys(aws_ecr_repository.image), "streamlit")
+    error_message = "Without the flag the platform stack has no model API or page repository."
+  }
+}
+
 run "cluster_capacity" {
   command = plan
 

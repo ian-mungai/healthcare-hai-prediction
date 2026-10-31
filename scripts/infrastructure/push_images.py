@@ -55,9 +55,9 @@ def load_config(path: Path = CONFIG) -> dict[str, Any]:
     return config
 
 
-def dockerfile_problems(context: Path, root: Path) -> list[str]:
-    """Problems with the Dockerfile of a build context: it must exist and pin every base image by digest."""
-    dockerfile = context / "Dockerfile"
+def dockerfile_problems(context: Path, root: Path, name: str = "Dockerfile") -> list[str]:
+    """Problems with the Dockerfile of a build context: it must exist and pin every base image by digest. ``name`` is its path inside the context."""
+    dockerfile = context / name
     if not dockerfile.is_file():
         return [f"{dockerfile.relative_to(root)} does not exist"]
     problems: list[str] = []
@@ -122,7 +122,11 @@ def check(config: dict[str, Any], root: Path = ROOT) -> list[str]:
                 problems.append(f"{name}: source differs from the pin in the local stack")
         if image.get("kind") == "build":
             context = root / str(image.get("context", ""))
-            problems.extend(dockerfile_problems(context, root) if context.is_dir() else [f"{name}: build context {image.get('context')} does not exist"])
+            problems.extend(
+                dockerfile_problems(context, root, str(image.get("dockerfile", "Dockerfile")))
+                if context.is_dir()
+                else [f"{name}: build context {image.get('context')} does not exist"]
+            )
             for build_name, path in dict(image.get("build_contexts", {})).items():
                 if not (root / str(path)).is_dir():
                     problems.append(f"{name}: build context {build_name} points to {path}, which does not exist")
@@ -203,7 +207,8 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
     else:
         local = str(image["local_tag"])
         contexts = " ".join(f"--build-context {key}={path}" for key, path in sorted(dict(image.get("build_contexts", {})).items()))
-        lines.append(f"docker build --platform {PLATFORM} --tag {local} {contexts} {image['context']}".replace("  ", " "))
+        dockerfile = f"-f {str(Path(str(image['context'])) / str(image['dockerfile']))} " if "dockerfile" in image else ""
+        lines.append(f"docker build --platform {PLATFORM} --tag {local} {dockerfile}{contexts} {image['context']}".replace("  ", " "))
         tag = ""
     lines.append(f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {local}   # must print {PLATFORM}")
     if tag:
