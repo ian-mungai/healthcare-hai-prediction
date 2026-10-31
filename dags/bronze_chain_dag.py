@@ -11,8 +11,14 @@ exists is skipped, so a retry of one bronze snapshot starts nothing new. A faile
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import http.client
+import json
 import logging
+import os
+import time
 from datetime import timedelta
 
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
@@ -21,6 +27,7 @@ from airflow.sdk import DAG, Param, get_current_context, task
 from orchestration.dag_runtime import run_step
 
 LOG = logging.getLogger(__name__)
+TRIGGER_TIMEOUT_SECONDS = 10
 RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
 CHAIN = (
     ("silver", "silver_transform_dag", None),
@@ -47,6 +54,42 @@ def chain_run(layer: str, bronze_run: str) -> str:
         if name == layer:
             return run
     raise ValueError(f"{layer} is not in the chain")
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def create_dag_run(dag_id: str, dag_run_id_value: str, conf: dict[str, str]) -> bool:
+    """Create a manual DAG run through the Airflow 3 REST API on the loopback port. Return True when it was created and False when it already existed.
+
+    The token is signed with the session's JWT secret as the host client does, and the call ends after ``TRIGGER_TIMEOUT_SECONDS``. Any other answer raises.
+    """
+    secret = os.environ.get("AIRFLOW__API_AUTH__JWT_SECRET", "")
+    if not secret:
+        raise RuntimeError("the Airflow JWT secret is not in the task environment")
+    now = int(time.time())
+    header = _b64(json.dumps({"alg": "HS512", "typ": "JWT"}, separators=(",", ":")).encode())
+    claims = _b64(
+        json.dumps(
+            {"sub": "admin", "role": "ADMIN", "teams": [], "aud": "apache-airflow", "iat": now, "nbf": now - 5, "exp": now + 120}, separators=(",", ":")
+        ).encode()
+    )
+    signature = _b64(hmac.new(secret.encode(), f"{header}.{claims}".encode(), hashlib.sha512).digest())
+    connection = http.client.HTTPConnection("127.0.0.1", int(os.environ.get("AIRFLOW_API_PORT", "8080")), timeout=TRIGGER_TIMEOUT_SECONDS)
+    try:
+        body = json.dumps({"dag_run_id": dag_run_id_value, "conf": conf, "logical_date": None})
+        connection.request(
+            "POST", f"/api/v2/dags/{dag_id}/dagRuns", body, {"Authorization": f"Bearer {header}.{claims}.{signature}", "Content-Type": "application/json"}
+        )
+        status = connection.getresponse().status
+    finally:
+        connection.close()
+    if status == 409:
+        return False
+    if status not in (200, 201):
+        raise RuntimeError(f"the Airflow API answered {status} to the trigger of {dag_id}")
+    return True
 
 
 def metadata_run_id(bronze_run: str) -> str:
@@ -109,27 +152,18 @@ with DAG(
         previous = current
 
     # The catalog start is the last step and nothing waits for it. It runs only after the drift layer succeeded, so an upstream failure still fails the chain.
-    # Its own errors (a missing or paused catalog DAG, a refused trigger) are logged and returned and never raised, so the chain result does not depend on the
-    # catalog. A retried bronze run names the same DAG run, which is skipped.
+    # It creates the catalog DAG run through the Airflow REST API with a bounded call. A trigger operator reports success by raising an exception, which this
+    # handler would swallow. An error of its own (a missing or paused catalog DAG, a refused request, no answer in time) is logged at error level and returned
+    # in the task result, never raised, so the chain result does not depend on the catalog. A retried bronze run names the same DAG run, which counts as done.
     @task(task_id="start_metadata", retries=0)
     def start_metadata() -> str:
-        context = get_current_context()
-        params = context["params"]
+        params = get_current_context()["params"]
         run = metadata_run_id(params["run_id"])
         try:
-            TriggerDagRunOperator(
-                task_id="trigger_metadata_ingest",
-                trigger_dag_id="metadata_ingest_dag",
-                trigger_run_id=dag_run_id("metadata_ingest_dag", run),
-                conf={"run_id": run, "mode": params["mode"]},
-                wait_for_completion=False,
-                skip_when_already_exists=True,
-                reset_dag_run=False,
-                retries=0,
-            ).execute(context)
+            created = create_dag_run("metadata_ingest_dag", dag_run_id("metadata_ingest_dag", run), {"run_id": run, "mode": params["mode"]})
         except Exception as error:
-            LOG.error("the catalog start for %s failed: %s", run, type(error).__name__)
-            return f"catalog start failed: {type(error).__name__}"
-        return f"catalog start requested: {run}"
+            LOG.error("the catalog start for %s failed: %s: %s", run, type(error).__name__, error)
+            return f"catalog start failed: {type(error).__name__}: {error}"
+        return f"catalog start requested: {run} ({'created' if created else 'already exists'})"
 
     previous >> start_metadata().operator

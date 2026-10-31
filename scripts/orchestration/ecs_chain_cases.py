@@ -6,12 +6,21 @@ with the DAG's own macros, so the run IDs and settings a trigger would send are 
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
+import logging
+import os
 import re
 import runpy
+import socket
 import sys
+import threading
+import time
 from collections.abc import Callable
 from datetime import timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -224,35 +233,117 @@ def metadata_start_follows_drift_and_never_blocks_the_chain() -> None:
     require(
         run == str(loaded["metadata_run_id"](BRONZE)) and run != str(loaded["metadata_run_id"](OTHER_BRONZE)), "the catalog run id is not stable per bronze run"
     )
-    built: list[dict[str, Any]] = []
-    failing = {"on": False}
 
-    class Trigger:
-        def __init__(self, **built_settings: Any) -> None:
-            built.append(built_settings)
 
-        def execute(self, context: dict[str, Any]) -> None:
-            if failing["on"]:
-                raise RuntimeError("the trigger API refused the request")
+class Airflow:
+    """A loopback stand-in for the Airflow 3 REST API that records each request and answers with a configured status."""
 
-    patched = {"TriggerDagRunOperator": Trigger, "get_current_context": lambda: {"params": {"run_id": BRONZE, "mode": "real"}}}
-    with mock.patch.dict(node.function.__globals__, patched):
-        started = node.function()
-        first = dict(built[0])
-        failing["on"] = True
-        failed = node.function()
+    def __init__(self, status: int = 200, delay: float = 0.0) -> None:
+        self.requests: list[dict[str, Any]] = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                outer.requests.append({"path": self.path, "authorization": self.headers.get("Authorization", ""), "body": body})
+                time.sleep(delay)
+                data = b"{}"
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except OSError:
+                    return
+
+            def log_message(self, *_: Any) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self) -> Airflow:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+    @property
+    def port(self) -> int:
+        return int(self.server.server_address[1])
+
+
+SIGNING = "synthetic-signing-value"
+
+
+def start_metadata(port: int, limit: float | None = None) -> tuple[str, list[str], float]:
+    """Run the catalog start task function against the stand-in API and return its result, the error log lines it wrote and the seconds it took."""
+    loaded = load_dag()
+    node = {item.task_id: item for item in loaded["operators"]}["start_metadata"]
+    lines: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            lines.append(record.getMessage())
+
+    handler = Capture(level=logging.ERROR)
+    logging.getLogger().addHandler(handler)
+    patched: dict[str, Any] = {"get_current_context": lambda: {"params": {"run_id": BRONZE, "mode": "real"}}}
+    if limit is not None:
+        patched["TRIGGER_TIMEOUT_SECONDS"] = limit
+    environment = {"AIRFLOW_API_PORT": str(port), "AIRFLOW__API_AUTH__JWT_SECRET": SIGNING}
+    started = time.monotonic()
+    try:
+        with mock.patch.dict(node.function.__globals__, patched), mock.patch.dict(os.environ, environment):
+            result = node.function()
+    finally:
+        logging.getLogger().removeHandler(handler)
+    return result, lines, time.monotonic() - started
+
+
+def metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token() -> None:
+    run = str(load_dag()["metadata_run_id"](BRONZE))
+    with Airflow() as api:
+        result, lines, _ = start_metadata(api.port)
+    require(len(api.requests) == 1, f"the start must make one trigger request, made {len(api.requests)}")
+    request = api.requests[0]
+    require(request["path"] == "/api/v2/dags/metadata_ingest_dag/dagRuns", f"wrong trigger path: {request['path']}")
     require(
-        first.get("trigger_dag_id") == "metadata_ingest_dag" and first.get("wait_for_completion") is False,
-        f"the catalog start must trigger metadata_ingest_dag without waiting: {first}",
+        request["body"].get("dag_run_id") == f"chain__metadata_ingest_dag__{run}" and request["body"].get("conf") == {"run_id": run, "mode": "real"},
+        f"wrong trigger body: {request['body']}",
     )
-    require(first.get("skip_when_already_exists") is True and first.get("reset_dag_run") is False, "a retried bronze run may restart the catalog start")
-    require(first.get("trigger_run_id") == f"chain__metadata_ingest_dag__{run}", f"wrong catalog DAG run ID: {first.get('trigger_run_id')}")
-    require(first.get("conf") == {"run_id": run, "mode": "real"}, f"catalog settings: {first.get('conf')}")
-    require(isinstance(started, str) and run in started, f"the start result does not name the run: {started}")
-    require(
-        isinstance(failed, str) and "failed" in failed,
-        "a trigger error must be recorded in the result and not raised, so the chain result does not depend on the catalog",
-    )
+    header, claims, signature = request["authorization"].removeprefix("Bearer ").split(".")
+    expected = base64.urlsafe_b64encode(hmac.new(SIGNING.encode(), f"{header}.{claims}".encode(), hashlib.sha512).digest()).rstrip(b"=").decode()
+    require(signature == expected, "the token is not signed with the Airflow JWT secret")
+    payload = json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))
+    require(payload.get("aud") == "apache-airflow" and payload.get("exp", 0) > time.time(), f"wrong token claims: {payload}")
+    require("requested" in result and run in result and not lines, f"a trigger that worked must say so and log no error: {result} {lines}")
+
+
+def metadata_start_treats_an_existing_run_as_done() -> None:
+    with Airflow(status=409) as api:
+        result, lines, _ = start_metadata(api.port)
+    require("already" in result and "failed" not in result and not lines, f"a retried bronze run names the DAG run that exists: {result} {lines}")
+
+
+def metadata_start_records_a_failed_trigger_in_the_log_and_the_result() -> None:
+    for label, status, delay, limit in (("refused", 500, 0.0, None), ("missing", 404, 0.0, None), ("hung", 200, 4.0, 1.0)):
+        with Airflow(status=status, delay=delay) as api:
+            result, lines, took = start_metadata(api.port, limit)
+        require(result.startswith("catalog start failed"), f"{label}: the result must say the start failed: {result}")
+        require(any("catalog start" in line for line in lines), f"{label}: the failure must reach the task log: {lines}")
+        require(took < 3.5, f"{label}: the trigger call must end within its bound, took {took:.1f} seconds")
+    unused = socket.socket()
+    unused.bind(("127.0.0.1", 0))
+    port = unused.getsockname()[1]
+    unused.close()
+    result, lines, _ = start_metadata(port)
+    require(result.startswith("catalog start failed") and bool(lines), f"an unreachable API must be recorded the same way: {result} {lines}")
 
 
 def broker_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
@@ -279,5 +370,8 @@ CASES: dict[str, Callable[[], None]] = {
     "waits_have_explicit_deadlines": waits_have_explicit_deadlines,
     "named_child_dags_exist_and_accept_the_settings": named_child_dags_exist_and_accept_the_settings,
     "metadata_start_follows_drift_and_never_blocks_the_chain": metadata_start_follows_drift_and_never_blocks_the_chain,
+    "metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token": metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token,
+    "metadata_start_treats_an_existing_run_as_done": metadata_start_treats_an_existing_run_as_done,
+    "metadata_start_records_a_failed_trigger_in_the_log_and_the_result": metadata_start_records_a_failed_trigger_in_the_log_and_the_result,
     "broker_table_runs_the_catalog_step_as_a_bounded_chain_job": broker_table_runs_the_catalog_step_as_a_bounded_chain_job,
 }
