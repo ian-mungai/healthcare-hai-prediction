@@ -102,3 +102,22 @@ def test_the_publisher_dependencies_are_declared_for_a_hash_locked_install() -> 
         "--require-hashes" in dockerfile and "requirements.publisher.txt" in dockerfile and "PUBLISHER_DEPENDENCIES" in dockerfile,
         "the install is hash locked and optional",
     )
+
+
+def environment_names_the_task_definition_sets() -> set[str]:
+    text = (ROOT / "infra/jobs/main.tf").read_text(encoding="utf-8")
+    return set(re.findall(r'name\s*=\s*"([A-Z][A-Z0-9_]+)"', text))
+
+
+def test_every_variable_the_task_code_reads_is_set_by_the_task_definition() -> None:
+    from scripts.acquisition import collection_layout, raw_root, stored_mirror, transport
+
+    needed = {
+        transport.APPROVED_HOSTS_VARIABLE,
+        transport.APPROVED_HOSTS_APPROVAL_VARIABLE,
+        collection_layout.CAPTURE_ROOT_VARIABLE,
+        *stored_mirror.REQUIRED_ENVIRONMENT,
+    }
+    missing = sorted(needed - environment_names_the_task_definition_sets())
+    check(missing == [], f"the task definition does not set {missing}")
+    check(raw_root.READ_RAW_VARIABLE not in environment_names_the_task_definition_sets(), "the publisher task reads no bronze root variable")

@@ -100,7 +100,7 @@
         "scripts/acquisition/s3_store.py": "sha256:919ddcff2c681c3010db3853b5ab4c40f85857c60eead08d09487677078501c5",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
-        "scripts/acquisition/stored_mirror.py": "sha256:f809e03d1e96d0fa5569f7612156413f2e98d45c9228cbb209a3984ac4853c1e",
+        "scripts/acquisition/stored_mirror.py": "sha256:21a999213bcf4e448ee6b865bcaf1b264fae4a0d2a42aa9cd918bf105574f335",
         "scripts/acquisition/transport.py": "sha256:841a88575ed287442571716e73af8e01d3daf652b1169539114e869899cffad9",
         "scripts/acquisition/wonder_export_contract.py": "sha256:68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9",
         "scripts/infrastructure/render_project_config.py": "sha256:44c6e37f5b5d07e8daae01c19fe14a2d0cfc86118ac87103be08a6750f6e297b"
@@ -132,7 +132,7 @@
         "scripts/acquisition/s3_store.py": "sha256:919ddcff2c681c3010db3853b5ab4c40f85857c60eead08d09487677078501c5",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
-        "scripts/acquisition/stored_mirror.py": "sha256:f809e03d1e96d0fa5569f7612156413f2e98d45c9228cbb209a3984ac4853c1e",
+        "scripts/acquisition/stored_mirror.py": "sha256:21a999213bcf4e448ee6b865bcaf1b264fae4a0d2a42aa9cd918bf105574f335",
         "scripts/acquisition/transport.py": "sha256:841a88575ed287442571716e73af8e01d3daf652b1169539114e869899cffad9",
         "scripts/acquisition/wonder_export_contract.py": "sha256:68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9",
         "scripts/infrastructure/render_project_config.py": "sha256:44c6e37f5b5d07e8daae01c19fe14a2d0cfc86118ac87103be08a6750f6e297b"

@@ -177,7 +177,12 @@ def require_task_identity(sts: Any, account: str, role_name: str) -> None:
 def default_client(service: str, region: str) -> Any:
     import boto3
 
-    return boto3.client(service, region_name=region)
+    session = boto3.session.Session(region_name=region)
+    if service == "sts":
+        return session.client("sts")
+    if service == "s3":
+        return session.client("s3")
+    raise CaptureError(f"The task makes no {service} client.")
 
 
 def from_environment(environment: Mapping[str, str], factory: Callable[[str, str], Any] = default_client) -> Mirror:

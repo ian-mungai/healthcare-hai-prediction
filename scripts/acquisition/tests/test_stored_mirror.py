@@ -280,6 +280,14 @@ def test_a_task_running_as_another_identity_gets_no_run(tmp_path: Path) -> None:
         harness.run_from(namespace(stored), environment_for(built), lambda service, region: Sts())
 
 
+def recording_handle(attempts: list[str]) -> Any:
+    def handle(unit: dict, run: Any) -> dict:
+        attempts.append(unit["snapshot_id"])
+        return {"outcome": "exact_match"}
+
+    return handle
+
+
 def key_unit(stored: Stored, mode: str, snapshot: str) -> dict:
     return stored.unit | {"snapshot_id": snapshot, "mode": mode, "source_id": mode.upper(), "route": "api"}
 
@@ -288,7 +296,7 @@ def test_units_that_need_an_api_key_are_reported_blocked_on_the_raw_route_and_ne
     stored = Stored(tmp_path / "src")
     keyed = [key_unit(stored, mode, f"K{n}") for n, mode in enumerate(sorted(harness.SECRET_MODES))]
     attempts: list[str] = []
-    monkeypatch.setattr(harness, "handle", lambda unit, run: attempts.append(unit["snapshot_id"]) or {"outcome": "exact_match"})
+    monkeypatch.setattr(harness, "handle", recording_handle(attempts))
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
     queue = stored.base / "keyed.json"
     queue.write_text(json.dumps({"run": 2, "queue": keyed}))
@@ -302,7 +310,7 @@ def test_the_root_layout_still_attempts_key_units(monkeypatch: pytest.MonkeyPatc
     stored = Stored(tmp_path / "src")
     keyed = [key_unit(stored, "bls_api_v2", "K1")]
     attempts: list[str] = []
-    monkeypatch.setattr(harness, "handle", lambda unit, run: attempts.append(unit["snapshot_id"]) or {"outcome": "exact_match"})
+    monkeypatch.setattr(harness, "handle", recording_handle(attempts))
     monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
     run = harness.Run(queue_path=stored.queue, state_root=stored.base / "run", base=stored.base)
     run.cache["queue"] = keyed
