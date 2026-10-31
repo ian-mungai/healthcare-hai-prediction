@@ -104,7 +104,7 @@ run "promote_secret_and_variables" {
   assert {
     condition = (
       [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[2].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "MLFLOW_TRACKING_URI"] &&
-      [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[1].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_SHA256"] &&
+      [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[1].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"] &&
       !anytrue([for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions) : anytrue([for entry in item.environment : strcontains(entry.name, "POLARIS")])])
     )
     error_message = "The broker fills exactly the variables the table names for each container, and the task needs no catalog address."

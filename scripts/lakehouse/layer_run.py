@@ -97,6 +97,11 @@ class Job:
     local: Path | None = None
     dry_run: bool = False
     input_run: str = ""
+    code_run: str = ""  # the run whose staged code the task fetched: a chain layer fetches the bronze run's code, not code staged under its own run ID
+
+    @property
+    def staged_run(self) -> str:
+        return self.code_run
 
     @property
     def folder(self) -> Path:
@@ -259,7 +264,7 @@ def check_input_objects(job: Job, bucket: str, client: Any) -> None:
     recorded = identity(job).get("input_objects")
     if not recorded:
         raise StepError("the pin phase recorded no versions of the staged input objects")
-    if staged_objects(client, bucket, job.run) != recorded:
+    if staged_objects(client, bucket, job.staged_run) != recorded:
         raise StepError("a staged input object changed after the pin phase")
 
 
@@ -288,7 +293,14 @@ def bundle(job: Job, archive: Path, code_sha256: str, evidence: dict[str, Any] |
     shutil.rmtree(snapshot, ignore_errors=True)
     for name, source in (("project", "dbt"), ("packages", "dbt_packages")):
         shutil.copytree(job.code / source, snapshot / name)
-    record: dict[str, Any] = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "code_sha256": code_sha256, "git_revision": revision}
+    record: dict[str, Any] = {
+        "run_id": job.run,
+        "layer": job.layer,
+        "mode": job.mode,
+        "code_run": job.staged_run,
+        "code_sha256": code_sha256,
+        "git_revision": revision,
+    }
     record["source_sha256"] = provenance.tree_digest(snapshot)
     record |= evidence or {}
     (job.folder / "layer_run.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
@@ -298,6 +310,13 @@ def check_input_run(job: Job) -> None:
     """Gold and features pin a committed run of the layer below, which the caller must name. Checked before the run ID is claimed."""
     if job.layer != "silver" and not RUN_ID.fullmatch(job.input_run):
         raise StepError(f"the {job.layer} pin needs the input run ID (INPUT_RUN_ID or --input-run)")
+
+
+def check_code_run(job: Job) -> None:
+    """Every phase after the pin must name the code run that the pin recorded: a container that dropped the variable or got another one is refused."""
+    recorded = identity(job).get("code_run")
+    if recorded != job.code_run:
+        raise StepError(f"CODE_RUN_ID {job.code_run!r} differs from the code run {recorded!r} that the pin recorded")
 
 
 def check_archive(archive: Path, code_sha256: str) -> None:
@@ -728,7 +747,7 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
             if not job.dry_run:
                 claim_run(job, args.bucket, client)
             evidence = {
-                "input_objects": staged_objects(client, args.bucket, job.run),
+                "input_objects": staged_objects(client, args.bucket, job.staged_run),
                 "input_listing": input_listing(client, args.bucket, input_prefix(job)),
             }
         bundle(job, args.archive or args.work / "code.tar.gz", args.code_sha256, evidence)
@@ -758,6 +777,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--local-warehouse", type=Path)
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--code-sha256", default=os.environ.get("CODE_SHA256", ""))
+    parser.add_argument(
+        "--code-run-id",
+        default=os.environ.get("CODE_RUN_ID", ""),
+        help="the run whose staged code the task fetched; required, the run itself for a standalone run",
+    )
     parser.add_argument("--bucket", default=os.environ.get("DATA_BUCKET_NAME", ""))
     parser.add_argument(
         "--dry-run", action="store_true", help=f"publish: print and save the plan and write nothing; upload and feast do nothing (also set by {DRY_ENV}=1)"
@@ -767,7 +791,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"{args.phase} is not a phase of {args.layer}")
     if not RUN_ID.fullmatch(args.run):
         parser.error("the run ID must look like 20261030T010203Z-0a1b2c3d")
-    job = Job(args.layer, args.run, args.mode, args.work / "code", args.local_warehouse, input_run=args.input_run)
+    job = Job(args.layer, args.run, args.mode, args.work / "code", args.local_warehouse, input_run=args.input_run, code_run=args.code_run_id)
     dry = args.dry_run or os.environ.get(DRY_ENV, "") in ("1", "true", "yes")
     try:
         if args.phase == "pin":  # a new pin starts a new task
@@ -779,7 +803,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             job = replace(job, dry_run=True)
         if args.phase in ("publish", "upload") and not args.bucket and args.mode == "real" and not dry:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
+        if not args.code_run_id or not RUN_ID.fullmatch(args.code_run_id):
+            raise StepError("CODE_RUN_ID is not set to a run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)")
         with task_deadline(job):
+            if args.phase != "pin":
+                check_code_run(job)
             dispatch(job, args.phase, args)
     except (StepError, PipelineError, PublishError, provenance.ProvenanceError, OSError, ValueError, KeyError, tarfile.TarError) as error:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")

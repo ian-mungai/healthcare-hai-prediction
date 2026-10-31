@@ -38,7 +38,7 @@ from jsonschema import Draft202012Validator
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable, client_config
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.training_approvals import PROMOTION_KEYS
-from orchestration.training_contract import JOB_LANES, parameters_for
+from orchestration.training_contract import JOB_LANES, parameters_for, training_run_id
 from scripts.orchestration.ledger import Ledger, schema_validator
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
@@ -321,6 +321,7 @@ class EcsBroker:
 
         values = {
             "RUN_ID": lambda: request.run_id,
+            "CODE_RUN_ID": lambda: self.digest_run(request.run_id),
             "CODE_SHA256": code_digest,
             "TRAINING_PARAMETERS": lambda: json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":")),
             "POLARIS_URI": lambda: self.settings.polaris_uri,
@@ -338,21 +339,29 @@ class EcsBroker:
             record = json.loads(self.chain_file(run_id).read_text())
         except (OSError, ValueError):
             return run_id
-        return str(record["bronze_run"])
+        return str(record.get("code_run") or record["bronze_run"])
 
     def record_chain(self, bronze_run: str) -> None:
-        """Name the bronze run in a record for each layer run that derives from it, so the layers read the bronze run's staged digest."""
-        folder = self.ledger.folder / "chains"
-        folder.mkdir(parents=True, exist_ok=True)
+        """Name the bronze run in a record for each layer run that derives from it, so the layers fetch the bronze run's staged code and read its digest."""
         run = bronze_run
         for layer in CHAIN_LAYERS:
             run = derived_run_id(run, layer)
-            target, text = self.chain_file(run), json.dumps({"bronze_run": bronze_run}) + "\n"
-            if target.exists() and target.read_text() == text:
-                continue
-            temporary = target.with_suffix(".tmp")
-            temporary.write_text(text)
-            os.replace(temporary, target)
+            self.bind_code_run(run, bronze_run, "bronze_run")
+        self.bind_code_run(training_run_id(run), bronze_run, "bronze_run")  # the drift run is the last layer: the training it triggers uses the same code
+
+    def bind_code_run(self, run: str, code_run: str, field: str = "code_run") -> None:
+        """Bind a run to the run whose staged code it uses, once. A later request to bind another code run is refused, so the code of a run cannot change."""
+        folder = self.ledger.folder / "chains"
+        folder.mkdir(parents=True, exist_ok=True)
+        target, text = self.chain_file(run), json.dumps({field: code_run}) + "\n"
+        if target.exists():
+            bound = json.loads(target.read_text())
+            if str(bound.get("code_run") or bound.get("bronze_run")) != code_run:
+                raise SubmissionRefused(f"run {run} is already bound to the code of another run")
+            return
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(text)
+        os.replace(temporary, target)
 
     def append(self, line: dict[str, Any]) -> dict[str, Any]:
         return self.ledger.append(line)
@@ -368,6 +377,10 @@ class EcsBroker:
         job = self.job_of(request)
         if self.steps[request.template] == GATE:
             self.record_chain(request.run_id)
+        if request.template == "drift_run":
+            self.bind_code_run(
+                training_run_id(request.run_id), self.digest_run(request.run_id)
+            )  # the training that a drift run triggers uses the drift run's code
         with self.ledger.locked(request.run_id):
             lines = self.ledger.submissions(request.run_id).get(request.submission_id)
             if lines is None:

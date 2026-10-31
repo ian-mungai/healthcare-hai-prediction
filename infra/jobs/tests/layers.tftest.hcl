@@ -189,7 +189,7 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
-      strcontains(jsondecode(output.layer_container_definitions[layer])[1].command[0], "CODE_SHA256") && strcontains(jsondecode(output.layer_container_definitions[layer])[1].command[0], "run_stage/") &&
+      strcontains(jsondecode(output.layer_container_definitions[layer])[1].command[0], "CODE_SHA256") && strcontains(jsondecode(output.layer_container_definitions[layer])[1].command[0], "CODE_RUN_ID") && !strcontains(jsondecode(output.layer_container_definitions[layer])[1].command[0], "environ[\"RUN_ID\"]") && strcontains(jsondecode(output.layer_container_definitions[layer])[1].command[0], "run_stage/") &&
       jsondecode(output.layer_container_definitions[layer])[1].image == var.images.spark
     )])
     error_message = "The fetch step downloads the staged archive of the run, checks it against CODE_SHA256 and unpacks it."
@@ -316,8 +316,8 @@ run "run_task_contract" {
       output.layer_run_tasks["gold"].task_definition == "example_project_dev_job_gold" && output.layer_run_tasks["gold"].task_role_key == "write_gold_task" &&
       output.layer_run_tasks["gold"].assign_public_ip == "DISABLED" && output.layer_run_tasks["gold"].capacity_providers == ["FARGATE"] &&
       output.layer_run_tasks["gold"].network == "lakehouse" && output.layer_run_tasks["gold"].propagate_tags == "TASK_DEFINITION" &&
-      output.layer_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
-      output.layer_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "POLARIS_URI"]
+      output.layer_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
+      output.layer_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
     )
     error_message = "The output names the on-demand private placement, the layer's role key and the variables each container needs."
   }

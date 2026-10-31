@@ -36,7 +36,7 @@ locals {
   promote_phase = "cd /workspace/code && python -m scripts.training.aws_run promote --run \"$RUN_ID\""
   promote_steps = [
     { name = "init", script = "chown 10001:10001 /workspace /tmp", secrets = [], variables = [] },
-    { name = "fetch", script = "python -I /opt/hai/fetch_code.py", secrets = [], variables = ["RUN_ID", "CODE_SHA256"] },
+    { name = "fetch", script = "python -I /opt/hai/fetch_code.py", secrets = [], variables = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"] },
     {
       name      = "promote"
       script    = local.promote_phase

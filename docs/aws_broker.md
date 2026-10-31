@@ -37,7 +37,7 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 
 4. `infra/services`: set `broker_enabled = true` and set `broker_task_role_arn` to the ARN in the `broker_roles` output. Set `broker_jobs` to the job subnet, the job security groups, the jobs log group, the data bucket, the private address of the host and the families. `security_group_ids` holds one group per network class: `lakehouse` is the group of the same name in the `job_network` output of `infra/iam`. The group `training` is `security_group_id` of the `training_network` output. The silver, gold and features jobs run in `lakehouse`, which reaches the catalog and Redis. The train, promote and drift jobs run in `training`, which also reaches MLflow. The broker gives each task only the group of its own class. Each family you enable needs its class here. Then run the host preparation task again. It creates the broker state folder on the data volume.
 5. Check that the broker service reached a `COMPLETED` deployment, as for the other services.
-6. For each run, stage the code and add the digest beside it. Build the archive with `scripts.lakehouse.code_archive`, not with `git archive` alone: the builder adds the verified dbt packages from the pinned local package archive (on a fresh clone, rebuild that archive first with `python -m scripts.lakehouse.dbt_package_archive fetch`), because the task has no network to install them. The same revision and packages always give the same bytes. The digest file is the code digest that the broker passes to the task. The pin refuses an archive without the packages before it claims the run ID. A chain needs this once, under the bronze run ID. The chain gate names that run for the four layer runs, so each layer reads the bronze run's digest:
+6. For each run, stage the code and add the digest beside it. Build the archive with `scripts.lakehouse.code_archive`, not with `git archive` alone: the builder adds the verified dbt packages from the pinned local package archive (on a fresh clone, rebuild that archive first with `python -m scripts.lakehouse.dbt_package_archive fetch`), because the task has no network to install them. The same revision and packages always give the same bytes. The digest file is the code digest that the broker passes to the task. The pin refuses an archive without the packages before it claims the run ID. A chain needs this once, under the bronze run ID. The chain gate names that run for the four layer runs and for the training that the drift run triggers. Each of them fetches the bronze run's code and reads its digest. The broker tells the task which run holds the code in the variable `CODE_RUN_ID`. A drift run that someone starts by hand has its own staged code. The training it triggers fetches that code:
 
    ```sh
    .venv/bin/python -m scripts.lakehouse.code_archive build --output /tmp/code_<RUN_ID>
@@ -85,12 +85,23 @@ A dry run runs the phases up to export for real, because they write only the tas
 
 Set the override `LAYER_DRY_RUN=1` on every container of a hand-started task. The first dry phase marks the run folder, so a later phase without the override stays dry.
 
+Write the overrides with `scripts.orchestration.job_overrides`. It reads the containers and the empty variables of the job from the broker table and refuses by name when a value is missing, so a task never starts with a variable empty. `--code-run` is the run whose staged code the task fetches: the approved run ID itself for a standalone run, the bronze run ID for a chain child. Silver:
+
 ```sh
-OVERRIDES=$(for n in fetch pin build validate verify export publish upload; do jq -n --arg n "$n" --arg r "$RUN_ID" --arg c "$CODE_SHA256" --arg p "$POLARIS_URI" \
-  '{name:$n,environment:[{name:"RUN_ID",value:$r},{name:"CODE_SHA256",value:$c},{name:"POLARIS_URI",value:$p},{name:"LAYER_DRY_RUN",value:"1"}]}'; done | jq -s '{containerOverrides:.}')
+.venv/bin/python -m scripts.orchestration.job_overrides --job silver --run <RUN_ID> --code-run <CODE_RUN_ID> --code-sha256 <CODE_SHA256> \
+  --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --dry-run > overrides.json
 ```
 
-Use the containers of the job instead of this silver list. Pass `--overrides "$OVERRIDES"` to the run-task call.
+Gold needs the committed silver run as its input run and features needs the committed gold run:
+
+```sh
+.venv/bin/python -m scripts.orchestration.job_overrides --job gold --run <RUN_ID> --code-run <CODE_RUN_ID> --code-sha256 <CODE_SHA256> \
+  --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --input-run <SILVER_RUN_ID> --dry-run > overrides.json
+.venv/bin/python -m scripts.orchestration.job_overrides --job features --run <RUN_ID> --code-run <CODE_RUN_ID> --code-sha256 <CODE_SHA256> \
+  --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --input-run <GOLD_RUN_ID> --dry-run > overrides.json
+```
+
+Pass `--overrides file://overrides.json` to the run-task call. For a real run, leave out `--dry-run`.
 
 ## Sign the first publishes
 

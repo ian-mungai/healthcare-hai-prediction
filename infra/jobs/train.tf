@@ -80,7 +80,7 @@ variable "train_resources" {
 
 locals {
   train_run_variables = {
-    fetch   = ["RUN_ID", "CODE_SHA256"]
+    fetch   = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
     prepare = ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS"]
     extract = ["RUN_ID", "POLARIS_URI"]
     train   = ["RUN_ID", "MLFLOW_TRACKING_URI"]

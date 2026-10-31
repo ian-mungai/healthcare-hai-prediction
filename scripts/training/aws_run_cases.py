@@ -399,6 +399,9 @@ class FakeObjects:
         Path(Filename).write_bytes(self.source.read_bytes())
 
 
+DERIVED_RUN = "20261030T000000Z-0d371ed1"
+
+
 def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN, tools: Path | None = None) -> tuple[int, str]:
     """Run the fetch script in this process against the stand-in client and return its exit code and standard error."""
     spec = importlib.util.spec_from_file_location("fetch_code", FETCH)
@@ -407,7 +410,8 @@ def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN, tools: 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     err = io.StringIO()
-    with environment(CODE_SHA256=sha, RUN_ID=run), contextlib.redirect_stderr(err):
+    # RUN_ID is the run's own ID and differs from the code run on purpose: the archive is read from the code run's prefix.
+    with environment(CODE_SHA256=sha, CODE_RUN_ID=run, RUN_ID=DERIVED_RUN), contextlib.redirect_stderr(err):
         return int(module.main(objects, work, tools or work / "no_tools")), err.getvalue()
 
 

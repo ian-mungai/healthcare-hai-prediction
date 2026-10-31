@@ -1,7 +1,9 @@
 """Download the code archive of one training run, check its SHA-256 and unpack it once (first container of the AWS training task).
 
 The image carries this file at /opt/hai/fetch_code.py because the task has no other code before this step. It needs only the standard library and boto3.
-RUN_ID, CODE_SHA256 and DATA_BUCKET_NAME come from the task environment. The archive is lakehouse/run_stage/<RUN_ID>/inputs/code.tar.gz.
+CODE_RUN_ID, CODE_SHA256 and DATA_BUCKET_NAME come from the task environment. The archive is lakehouse/run_stage/<CODE_RUN_ID>/inputs/code.tar.gz.
+The code run is the run whose code was staged. A run that derives from another (a layer of a chain or the training that a drift run triggers)
+fetches the code of that run.
 A rerun on the same workspace finds the archive with the right hash and the unpacked folder, and does nothing.
 The job looks for DVC at <code>/.tools/dvc/bin/dvc, so this step links that folder to the image's own DVC environment at /opt/dvc. The link lies outside the
 declared code roots and does not change the code digest.
@@ -57,7 +59,7 @@ def link_tools(code: Path, tools: Path) -> None:
 
 def fetch(client: Any, work: Path, tools: Path) -> None:
     """Make work/code.tar.gz match CODE_SHA256 and work/code hold its content."""
-    run, expected, bucket = setting("RUN_ID", RUN_ID), setting("CODE_SHA256", SHA256), setting("DATA_BUCKET_NAME", BUCKET)
+    run, expected, bucket = setting("CODE_RUN_ID", RUN_ID), setting("CODE_SHA256", SHA256), setting("DATA_BUCKET_NAME", BUCKET)
     archive, code = work / "code.tar.gz", work / "code"
     if archive.is_file() and sha256_of(archive) == expected and code.is_dir():
         link_tools(code, tools)

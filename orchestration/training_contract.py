@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from typing import Any
 
 DAGS = ("training_dag", "model_promotion_dag")
 RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
+
+
+def training_run_id(drift_run: str) -> str:
+    """The training run's ID, derived from the drift run's so that a retried decision names the same run. The broker derives the same ID to bind its code."""
+    return f"{drift_run[:16]}-{hashlib.sha256(f'training:{drift_run}'.encode()).hexdigest()[:8]}"
+
+
 HAI_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
 OFFLINE_ACTIONS = ("guard", "fit", "mediation", "hac_validate", "smoke")
 WRITER_ACTIONS = ("log_run", "promotion_check", "promote")

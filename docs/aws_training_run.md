@@ -77,15 +77,12 @@ Run the same command with `services/mlflow/compile_lock.sh`. Review the version 
      --overrides file://overrides.json --query '{taskArn:tasks[0].taskArn,failures:failures}'
    ```
 
-   `overrides.json` fills the empty variables, one block per container. The `train_run_task` output of the jobs stack lists them:
+   Write `overrides.json` from the broker job table, which names every container and the empty variables that each one needs. The tool refuses by name when a value is missing. `--code-run` is the run whose staged code the task fetches, which is the run itself for a standalone run:
 
-   ```json
-   {"containerOverrides": [
-     {"name": "fetch", "environment": [{"name": "RUN_ID", "value": "<RUN_ID>"}, {"name": "CODE_SHA256", "value": "<SHA256>"}]},
-     {"name": "prepare", "environment": [{"name": "RUN_ID", "value": "<RUN_ID>"}, {"name": "CODE_SHA256", "value": "<SHA256>"}, {"name": "TRAINING_PARAMETERS", "value": "<PARAMETERS_JSON_AS_A_STRING>"}]},
-     {"name": "extract", "environment": [{"name": "RUN_ID", "value": "<RUN_ID>"}, {"name": "POLARIS_URI", "value": "http://<HOST_PRIVATE_IP>:8181/api/catalog"}]},
-     {"name": "train", "environment": [{"name": "RUN_ID", "value": "<RUN_ID>"}, {"name": "MLFLOW_TRACKING_URI", "value": "http://<HOST_PRIVATE_IP>:5100"}]}
-   ]}
+   ```sh
+   .venv/bin/python -m scripts.orchestration.job_overrides --job train --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <SHA256> \
+     --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --mlflow-uri http://<HOST_PRIVATE_IP>:5100 \
+     --training-parameters '<PARAMETERS_JSON_AS_A_STRING>' > overrides.json
    ```
 
 5. Watch the log group `<project>_jobs_<environment>`. Each finished step prints one JSON line. A failure prints one JSON line that names the step. Stop a task that must not continue with `aws ecs stop-task`.
