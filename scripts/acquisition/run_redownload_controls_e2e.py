@@ -533,7 +533,7 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         harness.execute(run)
         second_queue = run.queue_path.parent / "second" / "queue.json"
         second_queue.parent.mkdir()
-        for name in ("queue.json", "queue.lock.json", "scope.json"):
+        for name in ("queue.json", "queue.lock.json", "scope.json", "unit_classification.json"):
             second_queue.with_name(name).write_bytes(run.queue_path.with_name(name).read_bytes())
         second = harness.Run(second_queue, run.base / "data/redownload_checks/second_run", base=run.base, opener=run.opener, sleep=lambda _n: None)
         approve_fixture(second)
@@ -558,7 +558,7 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         harness.execute(run)
         second_queue = run.queue_path.parent / "second" / "queue.json"
         second_queue.parent.mkdir()
-        for name in ("queue.json", "queue.lock.json", "scope.json"):
+        for name in ("queue.json", "queue.lock.json", "scope.json", "unit_classification.json"):
             second_queue.with_name(name).write_bytes(run.queue_path.with_name(name).read_bytes())
         second = harness.Run(second_queue, run.base / "data/redownload_checks/second_run", base=run.base)
         if frozen:

@@ -12,6 +12,7 @@ import pytest
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import stored_mirror
 from scripts.acquisition.run_redownload_e2e import Web
+from scripts.acquisition.tests.held import hold
 from scripts.acquisition.transport import CaptureError
 from tests.support import check
 
@@ -298,10 +299,8 @@ def test_units_that_need_an_api_key_are_reported_blocked_on_the_raw_route_and_ne
     attempts: list[str] = []
     monkeypatch.setattr(harness, "handle", recording_handle(attempts))
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    queue = stored.base / "keyed.json"
-    queue.write_text(json.dumps({"run": 2, "queue": keyed}))
-    run = harness.Run(queue_path=queue, state_root=stored.base / "run", base=stored.base)
-    run.cache["queue"] = keyed
+    run = harness.Run(queue_path=stored.base / "keyed.json", state_root=stored.base / "run", base=stored.base)
+    hold(run, keyed)
     summary = harness.execute_locked(run, False, True, None, None, None)
     check(
         attempts == [] and sorted(summary["not_attempted"]["keyed_mac_lane"]) == sorted(unit["snapshot_id"] for unit in keyed),
@@ -316,7 +315,7 @@ def test_the_root_layout_still_attempts_key_units(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(harness, "handle", recording_handle(attempts))
     monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
     run = harness.Run(queue_path=stored.queue, state_root=stored.base / "run", base=stored.base)
-    run.cache["queue"] = keyed
+    hold(run, keyed)
     run.state_root.mkdir(parents=True)
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     monkeypatch.setattr(harness, "acknowledged", lambda run: set())
@@ -341,13 +340,14 @@ def test_the_mirror_carries_the_queue_its_controls_and_every_frozen_input(tmp_pa
     document = json.loads(stored.queue.read_text())
     document["inputs_sha256"] = {"stored/frozen_input.json": sha(b'{"plan": 1}'), "notes.md": "0" * 64}
     stored.queue.write_text(json.dumps(document))
-    for name in ("queue.lock.json", "controls.json", "independent_review.json", "scope.json"):
+    for name in ("queue.lock.json", "controls.json", "independent_review.json", "scope.json", "unit_classification.json"):
         (stored.base / name).write_text(json.dumps({"name": name}))
     built = stored.build(tmp_path / "out")
     mirror = built["mirror"]
     present = {path.relative_to(mirror).as_posix() for path in mirror.rglob("*") if path.is_file()}
     check(
-        {"queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json", "stored/frozen_input.json"} <= present,
+        {"queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json", "unit_classification.json", "stored/frozen_input.json"}
+        <= present,
         f"mirror files {present}",
     )
     check("notes.md" not in present, "mutable status documents are not carried")

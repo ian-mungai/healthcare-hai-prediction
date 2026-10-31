@@ -8,7 +8,7 @@ import pytest
 
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import redownload_route as route
-from scripts.acquisition.tests.test_run_lanes import LANES, UNITS, dispatch, lane_files, refused
+from scripts.acquisition.tests.test_run_lanes import LANES, UNITS, classify, dispatch, lane_files, refused
 from tests.support import check
 
 LANE = "mac_person_units"
@@ -22,6 +22,7 @@ def test_the_person_template_names_the_lane_the_class_and_the_unit_count(tmp_pat
     folder.mkdir()
     queue = folder / "queue.json"
     queue.write_text(json.dumps({"run": 3, "queue": UNITS}))
+    classify(folder, queue.read_bytes())
     document = route.write_lane_template(queue, folder / "template.json", LANE)
     check(document["lane"] == LANE and document["approved_by"] is None, "the template names the lane and no approver")
     check(document["classes"] == sorted(PERSON_CLASSES) and document["units"] == len(PERSON_IDS), "the template names the classes and the unit count")
@@ -63,7 +64,7 @@ def test_the_person_lane_refuses_without_an_approval_file_inside_a_task_and_with
     task, _, _ = lane_files(tmp_path / "b", LANE)
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/example")
     refused(monkeypatch, task, "stay off AWS")
-    task.stored_root = tmp_path / "mirror"
+    task.stored_root = task.base
     monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
     refused(monkeypatch, task, "stay off AWS")
     both, _, _ = lane_files(tmp_path / "c", LANE)

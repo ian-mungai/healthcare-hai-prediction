@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition import unit_classification
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
@@ -52,11 +53,14 @@ def copy_once(source: Path, target: Path) -> None:
     write_once(target, source.read_bytes())
 
 
-QUEUE_RECORDS = ("queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json")
+QUEUE_RECORDS = ("queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json", unit_classification.NAME)
 
 
 def copy_run_records(queue_path: Path, base: Path, mirror: Path) -> None:
-    """Carry the queue, its lock, its frozen controls and review, its scope and every frozen input, checked against the queue's digests."""
+    """Carry the queue, its lock, its frozen controls and review, its scope, its unit classification and every frozen input.
+
+    The frozen inputs are checked against the queue's digests.
+    """
     folder = queue_path.parent
     for name in QUEUE_RECORDS:
         if (folder / name).is_file() and folder.is_relative_to(base):

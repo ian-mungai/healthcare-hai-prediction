@@ -9,6 +9,7 @@ import pytest
 from scripts.acquisition import redownload, unused_files
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition.s3_store import encoded_json
+from scripts.acquisition.tests.held import classification_body
 from tests.support import check
 
 
@@ -22,6 +23,7 @@ def write_state(folder: Path, units: list[dict], removed: list[str]) -> dict[str
     queue.write_bytes(body)
     lock = folder / "queue.lock.json"
     lock.write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest()}))
+    folder.joinpath("unit_classification.json").write_bytes(classification_body(body, units))
     plan_body = {
         "kind": "unused_file_removal_plan",
         "bucket": "example-bucket",
@@ -192,6 +194,7 @@ def execution_run(folder: Path, number: int, files: route.RouteFiles | None = No
     body = json.dumps({"run": number, "queue": []}).encode()
     queue.write_bytes(body)
     queue.with_name("queue.lock.json").write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest(), "entries": 0}))
+    queue.with_name("unit_classification.json").write_bytes(classification_body(body, []))
     return redownload.Run(
         queue_path=queue, state_root=folder / "run", base=folder / "base", route=files, stored_root=folder / "mirror" if number == 3 else None
     )

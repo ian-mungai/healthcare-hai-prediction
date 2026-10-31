@@ -33,7 +33,7 @@ from xml.etree import ElementTree
 
 from defusedxml import ElementTree as SafeElementTree
 
-from scripts.acquisition import bls_api_transport, data_paths, stored_mirror
+from scripts.acquisition import bls_api_transport, data_paths, stored_mirror, unit_classification
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
@@ -107,20 +107,75 @@ def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+@dataclass(frozen=True)
+class Accepted:
+    """The queue and the unit classification a run accepted, held as the bytes that were checked.
+
+    Every read of the queue parses these bytes again, so no caller can change what the run dispatches, and nothing on disk can change it after acceptance.
+    """
+
+    queue_body: bytes
+    classification_body: bytes | None
+    classes: Mapping[str, str]
+
+    @classmethod
+    def build(cls, queue_body: bytes, classification_body: bytes | None) -> Accepted:
+        """Accept a queue and its classification. A classification that is malformed, unsealed or made for another queue is refused here."""
+        classes = unit_classification.reviewed(classification_body, digest(queue_body)) if classification_body is not None else {}
+        return cls(queue_body, classification_body, classes)
+
+    @property
+    def queue_sha256(self) -> str:
+        return digest(self.queue_body)
+
+    @property
+    def classification_sha256(self) -> str | None:
+        return None if self.classification_body is None else digest(self.classification_body)
+
+    def units(self) -> list[dict]:
+        return json.loads(self.queue_body)["queue"]
+
+
+def accept(run: Run) -> Accepted:
+    """Read the queue, its lock, every active receipt and the classification once, and return what the run accepts."""
+    body = run.queue_path.read_bytes()
+    lock = read_json(run.queue_path.with_name(run.queue_path.stem + ".lock.json"))
+    require(digest(body) == lock["queue_sha256"], "Queue differs from its lock")
+    queue = json.loads(body)["queue"]
+    require(len(queue) == lock["entries"] and len({unit["snapshot_id"] for unit in queue}) == len(queue), "Queue entries differ from its lock")
+    for unit in queue:
+        if unit["disposition"] in ACTIVE:
+            require(digest((receipt_file(unit, run)).read_bytes()) == unit["receipt_sha256"], "Receipt changed since the queue was frozen")
+    path = unit_classification.classification_path(run.queue_path)
+    return Accepted.build(body, path.read_bytes() if path.is_file() else None)
+
+
+def accepted(run: Run) -> Accepted:
+    if "accepted" not in run.cache:
+        run.cache["accepted"] = accept(run)
+    return run.cache["accepted"]
+
+
+def begin(run: Run) -> Accepted:
+    """Start of an execution: accept the files as they are now, never as an earlier call in this process saw them, and need a classification."""
+    run.cache["accepted"] = accept(run)
+    require(
+        run.cache["accepted"].classification_body is not None, f"The queue has no {unit_classification.NAME}; no unit may run without a reviewed classification"
+    )
+    return run.cache["accepted"]
+
+
+def revalidate(run: Run) -> None:
+    """Refuse to go on if the queue or the classification on disk is no longer what the run accepted."""
+    held = accepted(run)
+    require(digest(run.queue_path.read_bytes()) == held.queue_sha256, "The queue changed after the run accepted it")
+    path = unit_classification.classification_path(run.queue_path)
+    require((path.read_bytes() if path.is_file() else None) == held.classification_body, "The unit classification changed after the run accepted it")
+
+
 def load_queue(run: Run) -> list[dict]:
-    """Return the queue only when it matches its lock and every active receipt is unchanged."""
-    if "queue" not in run.cache:
-        body = run.queue_path.read_bytes()
-        lock = read_json(run.queue_path.with_name(run.queue_path.stem + ".lock.json"))
-        require(digest(body) == lock["queue_sha256"], "Queue differs from its lock")
-        document = json.loads(body)
-        queue = document["queue"]
-        require(len(queue) == lock["entries"] and len({unit["snapshot_id"] for unit in queue}) == len(queue), "Queue entries differ from its lock")
-        for unit in queue:
-            if unit["disposition"] in ACTIVE:
-                require(digest((receipt_file(unit, run)).read_bytes()) == unit["receipt_sha256"], "Receipt changed since the queue was frozen")
-        run.cache["queue"], run.cache["queue_sha256"] = queue, lock["queue_sha256"]
-    return run.cache["queue"]
+    """Return the accepted queue: a fresh copy of the units that matched their lock and receipts when the run accepted them."""
+    return accepted(run).units()
 
 
 def runtime_controls(run: Run) -> dict:
@@ -155,7 +210,8 @@ def runtime_controls(run: Run) -> dict:
                 inputs.add(job)
     scope = run_scope(run)
     return {
-        "queue_sha256": run.cache["queue_sha256"],
+        "queue_sha256": accepted(run).queue_sha256,
+        "classification_sha256": accepted(run).classification_sha256,
         **({} if scope is None else {"scope_sources": scope}),
         "state_root": root_label(run),
         "code_sha256": {str(path.relative_to(REPO_ROOT)): digest(path.read_bytes()) for path in code_paths},
@@ -286,8 +342,8 @@ def resolve_context(number: int | None, *, keyed: bool, person: bool, mirror: bo
 
 
 def may_attempt(run: Run, lane: str) -> bool:
-    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only, and none takes a private unit."""
-    if lane == PRIVATE:
+    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only, and none takes a private or unreviewed unit."""
+    if lane in (PRIVATE, NOT_REVIEWED):
         return False
     if run.keyed_lane:
         return lane == KEYED
@@ -361,11 +417,11 @@ def started_at(run: Run) -> datetime:
         write_once(
             path,
             encoded_json(
-                {"queue_sha256": run.cache["queue_sha256"], "controls_sha256": run.cache["controls_sha256"], "started_at_utc": datetime.now(UTC).isoformat()}
+                {"queue_sha256": accepted(run).queue_sha256, "controls_sha256": run.cache["controls_sha256"], "started_at_utc": datetime.now(UTC).isoformat()}
             ),
         )
     record = read_json(path)
-    require(record["queue_sha256"] == run.cache["queue_sha256"], "State root belongs to another queue")
+    require(record["queue_sha256"] == accepted(run).queue_sha256, "State root belongs to another queue")
     require(record.get("controls_sha256") == run.cache["controls_sha256"], "State root belongs to another reviewed implementation")
     return datetime.fromisoformat(record["started_at_utc"])
 
@@ -942,7 +998,7 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
 
 # These collectors read an API key from the secret store. The publisher task holds no secret, so on the raw route they are reported, never attempted.
 SECRET_MODES = route.SECRET_MODES
-TASK, KEYED, PRIVATE = "task", "keyed_mac_lane", "private_local"
+TASK, KEYED, PRIVATE, NOT_REVIEWED = "task", "keyed_mac_lane", "private_local", "not_reviewed"
 MANUAL_MODES = frozenset({"hud_xlsx", "wonder_export", "reference_download"})
 TASK_ENVIRONMENT = (
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
@@ -952,10 +1008,17 @@ TASK_ENVIRONMENT = (
 )
 
 
-def lane_of(unit: dict) -> str:
-    """The one lane that may attempt a unit. The AWS task takes only what its mirror serves. Anything else is listed, never silently read as empty."""
-    if route.is_private_unit(unit):
+def lane_of(unit: dict, classes: Mapping[str, str]) -> str:
+    """The one lane that may attempt a unit. Only a unit with a reviewed non personal classification gets a working lane.
+    Anything else is listed, never silently read as empty.
+
+    ``classes`` holds the units the owner reviewed, as ``unit_classification.reviewed`` returns them. A queue flag or a collector mode decides nothing here.
+    """
+    classification = classes.get(unit["snapshot_id"])
+    if classification == unit_classification.PERSONAL:
         return PRIVATE
+    if classification != unit_classification.NON_PERSONAL:
+        return NOT_REVIEWED
     mode = handler_mode(unit)
     if mode in SECRET_MODES:
         return KEYED
@@ -1153,6 +1216,7 @@ def execute(
     run: Run, pilot: bool = False, allow_network: bool = True, sources: set[str] | None = None, max_units: int | None = None, log: Callable | None = None
 ) -> dict:
     """Process queue units in order; pilots are the first unit of each source, route and mode."""
+    begin(run)
     if not allow_network:
         require_readable_root(run)
         return execute_locked(run, pilot, False, selected_sources(preview_scope(run), sources), max_units, log)
@@ -1177,12 +1241,13 @@ def execute(
 
 def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozenset[str] | None, max_units: int | None, log: Callable | None) -> dict:
     """Dispatch under one root lock, honoring persisted source pauses and every transport budget."""
-    queue = load_queue(run)
-    active = [unit for unit in queue if unit["disposition"] in ACTIVE]
+    revalidate(run)
+    held = accepted(run)
+    active = [unit for unit in held.units() if unit["disposition"] in ACTIVE]
     selected: list[dict] = []
     listed: dict[str, list[str]] = {}
     for unit in active:
-        lane = lane_of(unit)
+        lane = lane_of(unit, held.classes)
         if may_attempt(run, lane):
             selected.append(unit)
         else:
@@ -1209,7 +1274,6 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         # Checked again for every unit at dispatch time, against the accepted controls only (failure mode 59).
         if not in_reviewed_scope(run, source):
             continue
-        lane = lane_of(unit)
         pilot_id = pilots[(source, unit["route"], handler_mode(unit))]
         if identity != pilot_id:
             first = outcome(run, pilot_id)
@@ -1217,6 +1281,7 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
                 continue
         if max_units is not None and summary["attempted"] >= max_units:
             break
+        revalidate(run)
         require(used_bytes(run) + unit["bytes"] <= run.byte_cap, "Byte cap would be exceeded")
         require(shutil.disk_usage(run.state_root).free > 2 * unit["bytes"] + 2**30, "Not enough free disk space for the next unit")
         try:
@@ -1269,7 +1334,7 @@ def require_run_binding(run: Run) -> None:
     require(record.get("controls_sha256") == digest(encoded_json(frozen)), "State root belongs to another run's controls")
     require(frozen.get("state_root") == root_label(run), "The chosen queue's controls bind a different state root")
     load_queue(run)
-    require(record.get("queue_sha256") == run.cache["queue_sha256"], "State root belongs to another queue")
+    require(record.get("queue_sha256") == accepted(run).queue_sha256, "State root belongs to another queue")
 
 
 def require_readable_root(run: Run) -> None:
@@ -1308,7 +1373,7 @@ def report(run: Run) -> dict:
     missing = [unit for unit in active if results[unit["snapshot_id"]] is None]
     return {
         "kind": "bounded_redownload_report",
-        "queue_sha256": run.cache["queue_sha256"],
+        "queue_sha256": accepted(run).queue_sha256,
         "active_units": len(active),
         "outcomes": dict(sorted(Counter(item["outcome"] for item in results.values() if item is not None).items())),
         "not_exact": sorted(

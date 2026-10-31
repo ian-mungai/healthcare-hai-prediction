@@ -9,6 +9,7 @@ import pytest
 
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import redownload_route as route
+from scripts.acquisition.tests.held import classification_body, hold
 from scripts.acquisition.tests.test_redownload_route import write_state
 from tests.support import check
 
@@ -26,10 +27,11 @@ KINDS = {
     "wonder": ("wonder_export", "approved_manual", [], "needs_person"),
     "reference": ("reference_download", "approved_manual", [], "needs_person"),
     "manual_file": ("file", "approved_manual", [], "needs_person"),
-    "owners": ("cms_owners_org", "direct_download", ["original_contains_personal_details"], "private_local"),
-    "hcai": ("hcai_util_workbook", "direct_download", ["original_contains_personal_details"], "private_local"),
-    "onc": ("onc_mu_hospital", "direct_download", ["original_contains_personal_details"], "private_local"),
-    "flagged_file": ("file", "direct_download", ["original_contains_personal_details:private_owner_only"], "private_local"),
+    "owners": ("cms_owners_org", "direct_download", [], "private_local"),
+    "hcai": ("hcai_util_workbook", "direct_download", [], "private_local"),
+    "onc": ("onc_mu_hospital", "direct_download", [], "private_local"),
+    "contacts_file": ("file", "direct_download", [], "private_local"),
+    "unreviewed_file": ("file", "direct_download", [], "not_reviewed"),
 }
 
 
@@ -51,21 +53,30 @@ def make_unit(name: str, index: int) -> dict:
 
 UNITS = [make_unit(name, index) for index, name in enumerate(KINDS)]
 LANES = {unit["snapshot_id"]: KINDS[unit["snapshot_id"].split("__")[0]][3] for unit in UNITS}
+# The owner's review: personal where the lane says private, nothing where the unit is unreviewed, non personal otherwise.
+CLASSES = {unit_id: ("personal" if lane == "private_local" else "non_personal") for unit_id, lane in LANES.items() if lane != "not_reviewed"}
 
 
 def test_every_kind_of_unit_in_the_queue_has_exactly_one_lane() -> None:
     for unit in UNITS:
-        check(harness.lane_of(unit) == LANES[unit["snapshot_id"]], f"{unit['snapshot_id']} lane {harness.lane_of(unit)}")
+        check(harness.lane_of(unit, CLASSES) == LANES[unit["snapshot_id"]], f"{unit['snapshot_id']} lane {harness.lane_of(unit, CLASSES)}")
 
 
 def test_an_unknown_mode_has_no_lane_to_run_in() -> None:
-    check(harness.lane_of(make_unit("file", 0) | {"mode": "new_collector"}) == "unclassified", "an unknown mode is unclassified")
+    check(
+        harness.lane_of(make_unit("file", 0) | {"mode": "new_collector"}, CLASSES | {"file__0": "non_personal"}) == "unclassified",
+        "an unknown mode is unclassified",
+    )
+
+
+COLLECTORS_OF_PERSONAL_ORIGINALS = frozenset({"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"})
 
 
 def test_every_adapter_mode_is_classified() -> None:
     for mode in harness.ADAPTERS:
         unit = make_unit("file", 0) | {"mode": mode, "disposition": "api"}
-        check(harness.lane_of(unit) != "unclassified", f"{mode} has a lane")
+        lane = harness.lane_of(unit, {"file__0": "non_personal"})
+        check((lane == "unclassified") == (mode in COLLECTORS_OF_PERSONAL_ORIGINALS), f"{mode} has lane {lane}")
 
 
 def dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **run_fields: Any) -> tuple[list[str], dict]:
@@ -77,10 +88,8 @@ def dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **run_fields: Any)
 
     monkeypatch.setattr(harness, "handle", handle)
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
-    queue = tmp_path / "queue.json"
-    queue.write_text(json.dumps({"run": 2, "queue": UNITS}))
-    run = harness.Run(queue_path=queue, state_root=tmp_path / "run", base=tmp_path, **run_fields)
-    run.cache["queue"] = UNITS
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, **run_fields)
+    hold(run, UNITS, CLASSES, [unit["snapshot_id"] for unit in UNITS if LANES[unit["snapshot_id"]] == "not_reviewed"])
     run.state_root.mkdir()
     summary = harness.execute_locked(run, False, True, None, None, None)
     return seen, summary
@@ -91,7 +100,7 @@ def test_the_task_attempts_only_the_units_its_mirror_can_serve_and_lists_the_res
     seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror")
     served = sorted(unit_id for unit_id, lane in LANES.items() if lane == "task")
     check(sorted(seen) == served, f"the task attempted {sorted(seen)}")
-    for lane in ("needs_local_data", "needs_person", "private_local", "keyed_mac_lane"):
+    for lane in ("needs_local_data", "needs_person", "private_local", "keyed_mac_lane", "not_reviewed"):
         expected = sorted(unit_id for unit_id, found in LANES.items() if found == lane)
         check(sorted(summary["not_attempted"][lane]) == expected, f"{lane} units are listed: {summary.get('not_attempted')}")
 
@@ -101,13 +110,16 @@ def test_a_unit_with_no_lane_is_never_attempted_by_the_task(monkeypatch: pytest.
     units = [make_unit("file", 0) | {"snapshot_id": "new__0", "mode": "new_collector", "source_id": "NEW"}]
     monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail("an unclassified unit was attempted"))
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
-    queue = tmp_path / "queue.json"
-    queue.write_text(json.dumps({"run": 2, "queue": units}))
-    run = harness.Run(queue_path=queue, state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path / "mirror")
-    run.cache["queue"] = units
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path / "mirror")
+    hold(run, units)
     run.state_root.mkdir()
     summary = harness.execute_locked(run, False, True, None, None, None)
     check(summary["not_attempted"]["unclassified"] == ["new__0"], "the unknown mode is listed")
+
+
+def classify(folder: Path, queue_body: bytes) -> None:
+    unreviewed = [unit["snapshot_id"] for unit in UNITS if LANES[unit["snapshot_id"]] == "not_reviewed"]
+    (folder / "unit_classification.json").write_bytes(classification_body(queue_body, UNITS, CLASSES, unreviewed))
 
 
 def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes: Any) -> tuple[harness.Run, Path, route.RouteFiles]:
@@ -126,6 +138,7 @@ def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes
     body = json.dumps(document).encode()
     queue.write_bytes(body)
     (folder / "queue.lock.json").write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest(), "entries": len(UNITS)}))
+    classify(folder, body)
     hosts = folder / "publisher_hosts.json"
     hosts.unlink()
     route.derive_hosts(queue, hosts)
@@ -165,6 +178,7 @@ def test_the_lane_template_is_not_an_approval(tmp_path: Path) -> None:
     folder = tmp_path / "route"
     folder.mkdir()
     write_state(folder, UNITS, [])
+    classify(folder, (folder / "queue.json").read_bytes())
     template = folder / "template.json"
     route.write_lane_template(folder / "queue.json", template)
     document = json.loads(template.read_text())
@@ -205,7 +219,7 @@ def test_the_lane_refuses_to_start_inside_a_task(monkeypatch: pytest.MonkeyPatch
     run, _, _ = lane_files(tmp_path)
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/example")
     refused(monkeypatch, run, "keys stay off AWS")
-    run.stored_root = tmp_path / "mirror"
+    run.stored_root = run.base
     monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
     refused(monkeypatch, run, "keys stay off AWS")
 

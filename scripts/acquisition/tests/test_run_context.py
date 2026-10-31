@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import stat
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 import pytest
 
 from scripts.acquisition import redownload as harness
+from scripts.acquisition.tests.held import hold
 from scripts.acquisition.tests.test_redownload_route import execution_run
 from scripts.acquisition.tests.test_run_lanes import lane_files, make_unit
 from tests.support import check
@@ -62,10 +62,8 @@ def second_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, units: list[dic
 
     monkeypatch.setattr(harness, "handle", handle)
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
-    queue = tmp_path / "queue.json"
-    queue.write_text(json.dumps({"run": 2, "queue": units}))
-    run = harness.Run(queue_path=queue, state_root=tmp_path / "run", base=tmp_path, **fields)
-    run.cache["queue"] = units
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, **fields)
+    hold(run, units)
     run.state_root.mkdir()
     passes, summaries = [], []
     for _ in range(2):
@@ -99,10 +97,9 @@ def test_the_task_keeps_its_state_outside_a_read_only_code_tree(tmp_path: Path) 
     (code / "scripts").mkdir(parents=True)
     (code / "scripts" / "tool.py").write_text("code")
     work.mkdir()
-    queue = tmp_path / "queue.json"
-    queue.write_text(json.dumps({"run": 3, "queue": []}))
-    run = harness.Run(queue_path=queue, state_root=work / "state", base=code, state_parent=work, stored_root=tmp_path / "mirror")
-    run.cache.update({"queue": [], "queue_sha256": "0" * 64, "controls_sha256": "1" * 64})
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=work / "state", base=code, state_parent=work, stored_root=tmp_path / "mirror")
+    hold(run, [], number=3)
+    run.cache["controls_sha256"] = "1" * 64
     for path in (code / "scripts" / "tool.py", code / "scripts", code):
         path.chmod(stat.S_IRUSR | stat.S_IXUSR if path.is_dir() else stat.S_IRUSR)
     try:
@@ -120,9 +117,7 @@ def test_the_task_keeps_its_state_outside_a_read_only_code_tree(tmp_path: Path) 
 def test_a_state_root_outside_the_workspace_is_still_refused(tmp_path: Path) -> None:
     work = tmp_path / "work"
     work.mkdir()
-    queue = tmp_path / "queue.json"
-    queue.write_text(json.dumps({"run": 3, "queue": []}))
-    run = harness.Run(queue_path=queue, state_root=tmp_path / "elsewhere", base=tmp_path / "code", state_parent=work)
-    run.cache["queue"] = []
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "elsewhere", base=tmp_path / "code", state_parent=work)
+    hold(run, [], number=3)
     with pytest.raises(ValueError, match="outside"):
         harness.validate_root(run)

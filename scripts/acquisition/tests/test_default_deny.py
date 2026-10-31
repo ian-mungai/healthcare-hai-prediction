@@ -1,4 +1,4 @@
-"""A unit whose original is flagged as naming people never runs in this tool, in any lane or context. The owner checks it locally with its own script."""
+"""A unit runs only if the queue carries its reviewed non personal classification. Anything else is refused before a byte is opened in every lane."""
 
 from __future__ import annotations
 
@@ -18,13 +18,12 @@ from scripts.acquisition import redownload as harness
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition import run_redownload_controls_e2e as control_cases
 from scripts.acquisition import run_redownload_e2e as fixtures
-from scripts.acquisition import transport
+from scripts.acquisition import transport, unit_classification
+from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.tests import test_redownload_route as route_cases
-from scripts.acquisition.tests.test_run_lanes import make_unit
 from tests.support import check
 
 NAME = "Jane Q. Example"
-FLAG = "original_contains_personal_details:private_owner_only"
 
 
 def archive(member: str, body: bytes) -> bytes:
@@ -58,14 +57,47 @@ class Replay(urllib.request.HTTPSHandler):
         return Answer(io.BytesIO(self.body), headers, request.full_url, 200)
 
 
-def flagged_run(folder: Path, number: int, context: str) -> tuple[harness.Run, dict]:
+REFUSING = {"no file", "stale queue", "edited without sealing", "no reviewer"}
+
+
+def damage_classification(queue: Path, damage: str) -> None:
+    path = queue.with_name(unit_classification.NAME)
+    if damage == "no file":
+        path.unlink()
+        return
+    document = json.loads(path.read_bytes())
+    if damage == "unknown value":
+        next(iter(document["units"].values()))["classification"] = "probably_fine"
+    elif damage == "no entry":
+        document["units"] = {}
+    elif damage == "stale queue":
+        document["queue_sha256"] = "0" * 64
+    elif damage == "edited without sealing":
+        next(iter(document["units"].values()))["source"] = "edited by hand"
+        path.write_bytes(json.dumps(document).encode())
+        return
+    elif damage == "no reviewer":
+        document["reviewed_by"] = None
+    else:
+        return
+    path.write_bytes(encoded_json({**document, "classification_sha256": unit_classification.body_digest(document)}))
+
+
+def synthetic_run(folder: Path, number: int, context: str, damage: str = "none") -> tuple[harness.Run, dict]:
     old, fresh = archive("ordinary.csv", b"a,b\n1,2\n"), archive(NAME + ".csv", b"a,b\n3,4\n")
     fixture = fixtures.Fixture(folder)
-    unit = fixture.stored("main-hai-pdc", "data.zip", old, flags=[FLAG])
+    unit = fixture.stored("main-hai-pdc", "data.zip", old)
+    if damage == "proposed":
+        fixture.unreviewed.add(unit["snapshot_id"])
+    if damage == "personal":
+        fixture.personal.add(unit["snapshot_id"])
     queue = fixture.freeze()
     document = json.loads(queue.read_bytes()) | {"run": number}
     queue.write_bytes(json.dumps(document).encode())
     queue.with_name("queue.lock.json").write_text(json.dumps({"entries": 1, "queue_sha256": harness.digest(queue.read_bytes())}))
+    fixture.classify(queue)
+    if damage not in REFUSING:
+        damage_classification(queue, damage)
     REQUESTS.clear()
     opener = transport.ReviewedTransport(urllib.request.ProxyHandler({}), Replay(fresh))
     fields: dict[str, Any] = {"opener": opener, "sleep": lambda _s: None}
@@ -98,13 +130,15 @@ def flagged_run(folder: Path, number: int, context: str) -> tuple[harness.Run, d
             document = json.loads(approval.read_text())
             approval.write_text(json.dumps(document | {"approved_by": "synthetic_owner"}))
             run.lane_approval = approval
+    if damage in REFUSING:
+        damage_classification(queue, damage)
     return run, unit
 
 
-@pytest.mark.parametrize(("number", "context"), [(2, "local"), (3, "task"), (3, "person"), (3, "keyed")])
-def test_a_flagged_file_is_never_downloaded_compared_or_recorded_in_any_context(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, number: int, context: str
-) -> None:
+CONTEXTS = [(2, "local"), (3, "task"), (3, "person"), (3, "keyed")]
+
+
+def quiet_environment(monkeypatch: pytest.MonkeyPatch, number: int) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/" if number == 3 else "")
     for name in harness.TASK_ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
@@ -113,32 +147,136 @@ def test_a_flagged_file_is_never_downloaded_compared_or_recorded_in_any_context(
             monkeypatch.setenv(name, "placeholder")
         else:
             monkeypatch.delenv(name, raising=False)
-    run, unit = flagged_run(tmp_path, number, context)
-    summary = harness.execute(run)
-    check(REQUESTS == [], f"no request was made for the flagged unit: {REQUESTS}")
+
+
+def nothing_was_opened(run: harness.Run, summary: object = None) -> None:
+    check(REQUESTS == [], f"no request was made: {REQUESTS}")
     check(not list((run.state_root / "outcomes").glob("*.json")), "no outcome was written")
     check(not (run.state_root / "private").exists() and not (run.state_root / "files").exists(), "no original or fresh file was kept in the state")
-    text = "\n".join(path.read_text(errors="replace") for path in run.state_root.rglob("*") if path.is_file())
+    text = "\n".join(path.read_text(errors="replace") for path in run.state_root.rglob("*") if path.is_file()) if run.state_root.exists() else ""
     check(NAME not in text and NAME not in json.dumps(summary), "no name reached the state or the summary")
+
+
+@pytest.mark.parametrize(("number", "context"), CONTEXTS)
+@pytest.mark.parametrize("damage", ["no file", "stale queue", "edited without sealing", "no reviewer"])
+def test_a_missing_stale_or_unsealed_classification_refuses_the_run_before_any_byte_is_opened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, number: int, context: str, damage: str
+) -> None:
+    quiet_environment(monkeypatch, number)
+    run, _unit = synthetic_run(tmp_path, number, context, damage)
+    with pytest.raises(ValueError, match="classification|independent review"):
+        harness.execute(run)
+    nothing_was_opened(run)
+
+
+@pytest.mark.parametrize(("number", "context"), CONTEXTS)
+@pytest.mark.parametrize("damage", ["proposed", "unknown value", "no entry"])
+def test_a_unit_without_a_reviewed_classification_is_named_and_never_attempted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, number: int, context: str, damage: str
+) -> None:
+    quiet_environment(monkeypatch, number)
+    run, unit = synthetic_run(tmp_path, number, context, damage)
+    summary = harness.execute(run)
+    nothing_was_opened(run, summary)
+    check(summary["not_attempted"]["not_reviewed"] == [unit["snapshot_id"]], f"the unit is named under its reason: {summary.get('not_attempted')}")
+
+
+@pytest.mark.parametrize(("number", "context"), CONTEXTS)
+def test_a_unit_reviewed_as_personal_is_named_and_never_attempted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, number: int, context: str) -> None:
+    quiet_environment(monkeypatch, number)
+    run, unit = synthetic_run(tmp_path, number, context, "personal")
+    summary = harness.execute(run)
+    nothing_was_opened(run, summary)
     check(summary["not_attempted"]["private_local"] == [unit["snapshot_id"]], f"the unit is named once under its reason: {summary.get('not_attempted')}")
 
 
-def test_the_flag_decides_the_lane_before_any_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    for kind in ("file", "page", "mmd", "bls", "hud_xlsx", "manual_file", "wonder"):
-        unit = make_unit(kind, 0) | {"flags": [FLAG]}
-        check(harness.lane_of(unit) == "private_local", f"a flagged {kind} unit is private")
-    check(harness.lane_of(make_unit("file", 0)) == "task", "an unflagged file unit is still the task's")
+def test_a_unit_with_no_privacy_flag_is_not_taken_as_non_personal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    quiet_environment(monkeypatch, 2)
+    run, unit = synthetic_run(tmp_path, 2, "local", "proposed")
+    check(unit["flags"] == [], "the unit carries no flag and its source is a known contacts table")
+    harness.execute(run)
+    nothing_was_opened(run)
 
 
-def test_a_private_collector_mode_is_private_even_without_the_flag() -> None:
-    for kind in ("owners", "hcai", "onc"):
-        check(harness.lane_of(make_unit(kind, 0) | {"flags": []}) == "private_local", f"{kind} is private by its mode")
+def test_a_reviewed_non_personal_unit_still_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    quiet_environment(monkeypatch, 2)
+    run, unit = synthetic_run(tmp_path, 2, "local")
+    summary = harness.execute(run)
+    check([unit["url"]] == REQUESTS and summary["attempted"] == 1, f"the reviewed unit was fetched once: {REQUESTS} {summary}")
+
+
+def test_a_warmed_run_refuses_a_queue_that_changed_on_disk_after_its_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    quiet_environment(monkeypatch, 2)
+    run, unit = synthetic_run(tmp_path, 2, "local")
+    check(harness.load_queue(run)[0]["flags"] == [], "the run holds the queue as reviewed")
+    document = json.loads(run.queue_path.read_bytes())
+    document["queue"][0]["flags"] = ["original_contains_personal_details:private_owner_only"]
+    body = json.dumps(document).encode()
+    run.queue_path.write_bytes(body)
+    run.queue_path.with_name("queue.lock.json").write_text(json.dumps({"entries": 1, "queue_sha256": harness.digest(body)}))
+    with pytest.raises(ValueError, match="Execution controls changed|classification"):
+        harness.execute(run)
+    nothing_was_opened(run)
+
+
+def test_a_warmed_run_refuses_a_classification_that_changed_on_disk_after_its_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    quiet_environment(monkeypatch, 2)
+    run, unit = synthetic_run(tmp_path, 2, "local")
+    harness.load_queue(run)
+    path = run.queue_path.with_name(unit_classification.NAME)
+    document = json.loads(path.read_bytes())
+    document["units"][unit["snapshot_id"]]["classification"] = unit_classification.PERSONAL
+    path.write_bytes(encoded_json({**document, "classification_sha256": unit_classification.body_digest(document)}))
+    with pytest.raises(ValueError, match="Execution controls changed"):
+        harness.execute(run)
+    nothing_was_opened(run)
+
+
+def test_a_run_that_started_holds_its_accepted_files_and_refuses_one_that_changes_before_the_next_unit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    quiet_environment(monkeypatch, 2)
+    fixture = fixtures.Fixture(tmp_path)
+    first = fixture.stored("ALPHA", "a.csv", b"a\n1\n")
+    second = fixture.stored("BETA", "b.csv", b"b\n1\n")
+    queue = fixture.freeze()
+    run = harness.Run(queue, tmp_path / "state", base=tmp_path, sleep=lambda _s: None)
+    control_cases.approve_fixture(run)
+    seen: list[str] = []
+
+    def handle(unit: dict, run: Any) -> dict:
+        seen.append(unit["snapshot_id"])
+        path = queue.with_name(unit_classification.NAME)
+        document = json.loads(path.read_bytes())
+        document["units"][second["snapshot_id"]]["classification"] = unit_classification.PERSONAL
+        path.write_bytes(encoded_json({**document, "classification_sha256": unit_classification.body_digest(document)}))
+        return {"outcome": "exact_match"}
+
+    monkeypatch.setattr(harness, "handle", handle)
+    monkeypatch.setattr(harness, "acknowledged", lambda run: set())
+    with pytest.raises(ValueError, match="changed"):
+        harness.execute(run)
+    check(seen == [first["snapshot_id"]], f"the second unit was never attempted: {seen}")
+
+
+def test_the_units_a_run_dispatches_cannot_be_changed_through_the_list_it_was_given(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    quiet_environment(monkeypatch, 2)
+    run, _unit = synthetic_run(tmp_path, 2, "local")
+    harness.load_queue(run)[0]["snapshot_id"] = "tampered"
+    check(harness.load_queue(run)[0]["snapshot_id"] != "tampered", "a caller's change never reaches the accepted queue")
 
 
 def test_no_context_may_attempt_the_private_lane(tmp_path: Path) -> None:
     for fields in ({}, {"stored_root": tmp_path}, {"keyed_lane": True}, {"person_lane": True}):
         run = harness.Run(queue_path=tmp_path / "q.json", state_root=tmp_path / "s", base=tmp_path, **fields)
         check(harness.may_attempt(run, "private_local") is False, f"{fields} may not attempt it")
+        check(harness.may_attempt(run, "not_reviewed") is False, f"{fields} may not attempt an unreviewed unit")
+
+
+def test_the_flag_no_longer_decides_a_lane() -> None:
+    source = Path(route.__file__).read_text()
+    check(
+        "is_private_unit" not in source and "PRIVATE_FLAG" not in source and "PRIVATE_COLLECTORS" not in source, "the flag rule is gone from the route module"
+    )
+    check(not hasattr(harness, "PRIVATE_FLAG"), "the harness holds no flag rule")
 
 
 def test_the_removed_private_machinery_is_gone() -> None:

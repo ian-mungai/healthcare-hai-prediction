@@ -14,15 +14,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from scripts.acquisition import unit_classification
 from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
 from scripts.acquisition.s3_store import encoded_json, write_once
+from scripts.acquisition.source_registry import RegistryError
 from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, hosts_digest
 from scripts.acquisition.unused_files import read_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
-# A unit whose stored original names people. This tool never downloads, compares or records such a unit. The owner checks it locally with private_digest.
-PRIVATE_FLAG = "original_contains_personal_details"
-PRIVATE_COLLECTORS = frozenset({"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"})
 # These collectors read an API key from the secret store. The AWS task holds no secret, so only the owner's Mac lane may run them.
 SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
 LANE_NAME = "mac_keyed_units"
@@ -42,40 +41,36 @@ class RouteFiles:
     hosts_approval: Path
 
 
-def is_private_unit(unit: dict) -> bool:
-    """True for a unit with the private-original flag or a collector that keeps such originals. Only queue metadata is read."""
-    return any(str(flag).startswith(PRIVATE_FLAG) for flag in unit.get("flags", [])) or unit.get("mode") in PRIVATE_COLLECTORS
-
-
-def lane_template(queue_body: bytes, lane: str = LANE_NAME) -> dict:
-    """The approval the owner reviews and signs for a Mac lane: the queue, what the lane takes and how many units that is."""
+def lane_template(queue_body: bytes, classification_body: bytes, lane: str = LANE_NAME) -> dict:
+    """The approval the owner reviews and signs for a Mac lane: the queue, its reviewed classification, what the lane takes and how many units that is."""
     from scripts.acquisition import redownload
 
-    queue = json.loads(queue_body)["queue"]
-    active = [unit for unit in queue if unit["disposition"] in ACTIVE]
     queue_sha256 = hashlib.sha256(queue_body).hexdigest()
+    classes = unit_classification.reviewed(classification_body, queue_sha256)
+    lanes = [redownload.lane_of(unit, classes) for unit in json.loads(queue_body)["queue"] if unit["disposition"] in ACTIVE]
+    bound = {"queue_sha256": queue_sha256, "classification_sha256": hashlib.sha256(classification_body).hexdigest()}
     if lane == PERSON_LANE:
         return {
             "lane": PERSON_LANE,
             "departs_from": PERSON_DEPARTURE,
-            "queue_sha256": queue_sha256,
+            **bound,
             "classes": sorted(PERSON_CLASSES),
-            "units": sum(1 for unit in active if redownload.lane_of(unit) in PERSON_CLASSES),
+            "units": sum(1 for found in lanes if found in PERSON_CLASSES),
             "approved_by": None,
         }
     return {
         "lane": LANE_NAME,
         "departs_from": LANE_DEPARTURE,
-        "queue_sha256": queue_sha256,
+        **bound,
         "modes": sorted(SECRET_MODES),
-        "units": sum(1 for unit in active if unit["mode"] in SECRET_MODES),
+        "units": sum(1 for found in lanes if found == redownload.KEYED),
         "keys_stay_off_aws": True,
         "approved_by": None,
     }
 
 
 def write_lane_template(queue_path: Path, output: Path, lane: str = LANE_NAME) -> dict:
-    document = lane_template(queue_path.read_bytes(), lane)
+    document = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes(), lane)
     write_once(output, encoded_json(document))
     return document
 
@@ -84,9 +79,9 @@ def lane_problems(queue_path: Path, approval_path: Path, lane: str = LANE_NAME) 
     """Return why the Mac lane may not start. Only an approval that names this lane, queue, modes and unit count lets it."""
     try:
         approval = json.loads(approval_path.read_text(encoding="utf-8"))
-        expected = lane_template(queue_path.read_bytes(), lane)
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        return [f"the lane approval is missing or unreadable: {error}"]
+        expected = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes(), lane)
+    except (OSError, ValueError, KeyError, TypeError, RegistryError) as error:
+        return [f"the lane approval or the unit classification is missing or unreadable: {error}"]
     if not isinstance(approval, dict):
         return ["the lane approval is not a record"]
     named = {key: approval.get(key) for key in expected if key != "approved_by"}
@@ -173,6 +168,17 @@ def host_problems(queue_body: bytes, hosts_path: Path, approval_path: Path) -> l
     return problems
 
 
+def classification_problems(queue_body: bytes, path: Path) -> list[str]:
+    """Return why the reviewed classification cannot govern this queue. A unit not yet reviewed is no problem here: it is named and does not run."""
+    if not path.is_file():
+        return [f"the queue has no {unit_classification.NAME}, so no unit has a reviewed classification"]
+    try:
+        unit_classification.reviewed(path.read_bytes(), hashlib.sha256(queue_body).hexdigest())
+    except (OSError, RegistryError) as error:
+        return [str(error)]
+    return []
+
+
 def check(queue_path: Path, plan_path: Path, confirmation_path: Path, root: str, hosts_path: Path, hosts_approval_path: Path) -> list[str]:
     """Return every reason run 3 cannot start yet; an empty list means the route is ready."""
     problems: list[str] = []
@@ -190,6 +196,7 @@ def check(queue_path: Path, plan_path: Path, confirmation_path: Path, root: str,
     except (CaptureError, OSError, KeyError, ValueError, TypeError) as error:
         problems.append(f"the removal plan is not usable: {error}")
     problems.extend(host_problems(queue_body, hosts_path, hosts_approval_path))
+    problems.extend(classification_problems(queue_body, unit_classification.classification_path(queue_path)))
     for unit in json.loads(queue_body)["queue"]:
         if unit["snapshot_id"] in removed and unit["disposition"] in ACTIVE:
             problems.append(f"{unit['snapshot_id']} is in the queue but the plan removes it")

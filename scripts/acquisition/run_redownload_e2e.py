@@ -19,6 +19,7 @@ from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import run_redownload_controls_e2e as control_e2e
 from scripts.acquisition import run_wonder_export_e2e as wonder_e2e
+from scripts.acquisition import unit_classification
 from scripts.acquisition import wonder_export_contract as wonder_contract
 from scripts.acquisition.build_wonder_plan import build as build_wonder_plan
 from scripts.acquisition.collect_bls_api import execute as bls_execute
@@ -80,6 +81,8 @@ class Fixture:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.entries: list[dict] = []
+        self.personal: set[str] = set()
+        self.unreviewed: set[str] = set()
 
     def stored(self, source: str, name: str, body: bytes, disposition: str = "direct_download", flags: list[str] | None = None, mode: str = "file") -> dict:
         sid = f"{source}__20260101T000000Z__{canonical_hash([source, name])[:32]}"
@@ -136,7 +139,26 @@ class Fixture:
         body = encoded_json({"kind": "bounded_redownload_queue", "entries": len(self.entries), "queue": self.entries})
         path.write_bytes(body)
         path.with_name(path.stem + ".lock.json").write_bytes(encoded_json({"queue_sha256": harness.digest(body), "entries": len(self.entries)}))
+        self.classify(path)
         return path
+
+    def classify(self, queue: Path) -> None:
+        """The owner's reviewed classification of this synthetic queue: every active unit non personal unless it was stored as personal or left unreviewed."""
+        document = {
+            "kind": unit_classification.KIND,
+            "queue_sha256": harness.digest(queue.read_bytes()),
+            "reviewed_by": "synthetic fixture owner",
+            "units": {
+                entry["snapshot_id"]: {
+                    "classification": unit_classification.PERSONAL if entry["snapshot_id"] in self.personal else unit_classification.NON_PERSONAL,
+                    "status": unit_classification.PROPOSED if entry["snapshot_id"] in self.unreviewed else unit_classification.REVIEWED,
+                    "source": "synthetic fixture",
+                }
+                for entry in self.entries
+                if entry["disposition"] in harness.ACTIVE
+            },
+        }
+        queue.with_name(unit_classification.NAME).write_bytes(encoded_json({**document, "classification_sha256": unit_classification.body_digest(document)}))
 
 
 def archive(members: dict[str, bytes], year: int, comment: bytes = b"", entry_comments: dict[str, bytes] | None = None) -> bytes:
@@ -184,7 +206,8 @@ def exercise(root: Path) -> list[dict]:
     busy_next = fixture.stored("DELTA", "next.csv", b"a,b\n1,2\n")
     flaky = fixture.stored("EPSILON", "flaky.csv", b"a,b\n7,8\n")
     failing = fixture.stored("ZETA", "failing.csv", b"a,b\n7,8\n")
-    private = fixture.stored("ETA", "people.csv", b"name\nSynthetic Person\n", flags=["original_contains_personal_details:private_owner_only"])
+    private = fixture.stored("ETA", "people.csv", b"name\nSynthetic Person\n")
+    fixture.personal.add(private["snapshot_id"])
     duplicate = fixture.stored("ALPHA", "duplicate.csv", b"x\n", disposition="superseded_duplicate")
     dropped = fixture.stored("THETA", "dropped.csv", b"x\n", disposition="dropped")
     derived = fixture.stored("ALPHA", "derived.csv", b"x\n", disposition="derived_replay_only")
