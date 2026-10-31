@@ -1,8 +1,9 @@
 """The ``serve_deploy`` job: read the owner's staged request, deploy and print the result. It runs in the training image, which holds the MLflow client
 and boto3.
 
-The request file holds the HAI type, the mode, the candidate version and the percent. The run id is the deployment id. The job reads the production
-alias and never moves it. A refusal exits with code 2 and a message that names the reason.
+The request holds the HAI type, the mode, the candidate version and the percent. The AWS task gets it checked in SERVING_REQUEST, which the broker read once
+from the staged record. A hand run may name a file with ``--request``. The run id is the deployment id. The job reads the production alias and never moves it.
+A refusal exits with code 2 and a message that names the reason.
 """
 
 from __future__ import annotations
@@ -21,10 +22,10 @@ from scripts.serving import deploy, manifests
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True)
-    parser.add_argument("--request", type=Path, required=True)
+    parser.add_argument("--request", type=Path, help="a request file; without it the request is read from SERVING_REQUEST")
     args = parser.parse_args()
     try:
-        raw = json.loads(args.request.read_text())
+        raw = json.loads(args.request.read_text() if args.request else os.environ["SERVING_REQUEST"])
         request = serving_contract.parameters_for("serving_deploy_dag", raw)
         uri = os.environ["MODEL_API_MANIFEST_URI"]
         if not uri.startswith("s3://"):
@@ -41,7 +42,7 @@ def main() -> int:
             mode=request["deploy_mode"],
             deployment_id=args.run,
         )
-    except (deploy.DeployRefused, ValueError, KeyError, OSError) as error:
+    except (deploy.DeployRefused, ValueError, KeyError, OSError, TypeError) as error:
         sys.stderr.write(f"serve_deploy refused: {error}\n")
         return 2
     sys.stdout.write(

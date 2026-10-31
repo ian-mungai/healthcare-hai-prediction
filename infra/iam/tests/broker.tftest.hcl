@@ -394,3 +394,50 @@ run "the_bronze_family_adds_its_definition_its_role_and_one_request_read" {
     error_message = "The broker reads exactly the staged bronze request key of a run, with one get action."
   }
 }
+
+run "no_serving_request_grant_without_the_serve_family" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.broker_serving_request) == 0
+    error_message = "Without the serve family the broker role holds no read grant on a staged serving request."
+  }
+}
+
+run "the_serve_family_adds_its_definition_its_role_and_one_request_read" {
+  command = plan
+
+  variables {
+    broker_job_families = ["serve", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_serve:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train:*",
+      ] &&
+      [for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_serve_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+      ]
+    )
+    error_message = "The serve family adds its own task definition and the serve role, and no other family's role."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.broker_serving_request[0].role == aws_iam_role.broker_task[0].name &&
+      jsondecode(aws_iam_role_policy.broker_serving_request[0].policy).Statement == [
+        {
+          Sid      = "ReadServingRequest"
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/serving_request.json"
+        }
+      ]
+    )
+    error_message = "The broker reads exactly the staged serving request key of a run, with one get action."
+  }
+}

@@ -12,8 +12,8 @@ variable "broker_job_families" {
   nullable    = false
 
   validation {
-    condition     = alltrue([for family in var.broker_job_families : contains(["train", "bronze", "silver", "gold", "features", "drift", "promote", "metadata"], family)]) && length(var.broker_job_families) == length(distinct(var.broker_job_families))
-    error_message = "Name distinct job families from train, bronze, silver, gold, features, drift, promote and metadata."
+    condition     = alltrue([for family in var.broker_job_families : contains(["train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata"], family)]) && length(var.broker_job_families) == length(distinct(var.broker_job_families))
+    error_message = "Name distinct job families from train, bronze, silver, gold, features, drift, promote, serve and metadata."
   }
 
   validation {
@@ -56,6 +56,7 @@ locals {
     features = "job_write_features_task"
     drift    = "job_drift_task"
     promote  = "job_train_task"
+    serve    = "job_serve_task"
     metadata = "job_openmetadata_task"
   }
   broker_families = sort(var.broker_job_families)
@@ -101,6 +102,15 @@ resource "aws_iam_role_policy" "broker_bronze_request" {
   name   = "broker_bronze_request"
   role   = aws_iam_role.broker_task[0].name
   policy = templatefile("${path.module}/owner_policies/broker_bronze_request.json", local.broker_policy_values)
+}
+
+# The staged request of a serving deployment names the HAI type, the mode, the candidate version and the percent. Only a broker that may start the serve family can read it.
+resource "aws_iam_role_policy" "broker_serving_request" {
+  count = var.broker_prepared && contains(var.broker_job_families, "serve") ? 1 : 0
+
+  name   = "broker_serving_request"
+  role   = aws_iam_role.broker_task[0].name
+  policy = templatefile("${path.module}/owner_policies/broker_serving_request.json", local.broker_policy_values)
 }
 
 # The host execution role injects the token into the broker and the scheduler. It holds this one parameter grant beside its other eight and the MLflow pair.

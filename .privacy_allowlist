@@ -51,3 +51,5 @@ email scripts/infrastructure/openmetadata_bootstrap.py -- the default administra
 email scripts/infrastructure/run_openmetadata_e2e.py -- the same OpenMetadata default administrator login in the stand-in server
 email docs/aws_openmetadata.md -- the default administrator login of OpenMetadata, a public product constant; not a person
 aws-account infra/jobs/tests/bronze.tftest.hcl -- synthetic all-ones account IDs in mocked bronze task definition tests; not the project account
+aws-account infra/iam/tests/serve.tftest.hcl -- synthetic all-ones account IDs in mocked serve IAM tests; not the project's account
+aws-account infra/jobs/tests/serve.tftest.hcl -- synthetic all-ones account IDs in serve task definition plans and refusal cases. These are not the project account.

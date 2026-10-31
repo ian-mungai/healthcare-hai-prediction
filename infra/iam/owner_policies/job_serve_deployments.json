@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadAndWriteDeploymentRecords",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${MANIFEST_PREFIX}/*"
+    },
+    {
+      "Sid": "ListDeploymentPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["${MANIFEST_PREFIX}/*"]
+        }
+      }
+    }
+  ]
+}
