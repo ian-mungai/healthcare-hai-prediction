@@ -77,3 +77,15 @@ variable "job_layer_runs_prepared" {
     error_message = "The layer run grants attach to the prepared silver, gold and features roles: set job_writer_layers_prepared as well."
   }
 }
+
+variable "job_features_image_prepared" {
+  description = "Let the shared job execution role pull the feature store image, which only the features layer job needs. It needs job_layer_runs_prepared and turns on no training grant."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.job_features_image_prepared || var.job_layer_runs_prepared
+    error_message = "The features image grant belongs to the features layer job: set job_layer_runs_prepared as well."
+  }
+}

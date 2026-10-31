@@ -50,10 +50,11 @@ The project profile runs the third.
    and every other variable must keep its committed default.
 
 **IAM preparation inputs.** The IAM stack's four preparation inputs are `bronze_writer_prepared`, `job_writer_e2e_prepared`,
-`bronze_qualification_collection` and `bronze_live_locations`. They are set only in the committed, reviewed file
-`config/aws/iam_preparation.json`, never in `.env` or on the command line. The defaults are `false`, `false`, `""` and `{}`.
-The coordinating agent changes a value after the evidence for it exists, so Git history records who prepared what and when. The renderer refuses
-a file that is not exactly those four keys, plus the optional inputs that a stack declares. The optional booleans are `false` when absent: `job_endpoints_enabled`, `training_prepared`, `athena_mirror_prepared`, `monitoring_enabled`, `broker_prepared`, `drift_prepared`, `job_writer_layers_prepared`, `job_layer_runs_prepared`, `model_api_prepared`, `model_api_prediction_writes`, `openmetadata_prepared`, `openmetadata_marquez_reachable` and `serve_prepared`. The optional texts are `athena_owner_user`, `model_api_registry_key` and `model_api_manifest_prefix`. The optional list is `broker_job_families`. The user name belongs only in the owner's local copy of the file, never in a committed one.
+`bronze_qualification_collection` and `bronze_live_locations`. They are set only in the file
+`config/aws/iam_preparation.json`, never in `.env` or on the command line. The tracked copy holds the defaults, which are `false`, `false`, `""` and `{}`.
+The owner edits the file on their machine after the evidence for a value exists and never commits the edit. The saved plan check then holds the applied
+values. A clone shows the defaults. The renderer refuses
+a file that is not exactly those four keys, plus the optional inputs that a stack declares. The optional booleans are `false` when absent: `job_endpoints_enabled`, `training_prepared`, `athena_mirror_prepared`, `monitoring_enabled`, `broker_prepared`, `drift_prepared`, `job_writer_layers_prepared`, `job_layer_runs_prepared`, `job_features_image_prepared`, `model_api_prepared`, `model_api_prediction_writes`, `openmetadata_prepared`, `openmetadata_marquez_reachable` and `serve_prepared`. The optional texts are `athena_owner_user`, `model_api_registry_key` and `model_api_manifest_prefix`. The optional list is `broker_job_families`. The user name belongs only in the owner's local copy of the file, never in a committed one.
 It also refuses a collection that is not mapped in
 `config/lakehouse/bronze_tables.json` and a location map that is neither empty nor exactly the bronze and bronze dictionary
 locations of the data bucket. It then writes the ignored `infra/iam/preparation.auto.tfvars.json`. Before an apply, the saved plan

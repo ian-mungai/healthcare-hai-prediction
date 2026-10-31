@@ -108,6 +108,7 @@ ROWS: list[Row] = [
         "broker_prepared",
         "drift_prepared",
         "job_endpoints_enabled",
+        "job_features_image_prepared",
         "job_writer_layers_prepared",
         "job_layer_runs_prepared",
         "model_api_prepared",
@@ -488,69 +489,6 @@ def wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
-def silver_sequence(workspace: Workspace) -> dict[str, bool]:
-    """The silver first run in docs/aws_broker.md, step by step.
-
-    The step that sets an input names every flag it needs. The order is the order in which the stacks depend on each other. The reviewed files the steps
-    describe pass the real renderers.
-    """
-    text = (ROOT / "docs/aws_broker.md").read_text()
-    found = re.search(r"^## Silver first run\n(.*?)(?=^## |\Z)", text, re.S | re.M)
-    section = found.group(1) if found else ""
-    steps = re.split(r"(?m)^(?=\d+\. )", section)
-    steps = [step for step in steps if re.match(r"\d+\. ", step)]
-    numbers = [int(step.split(".", 1)[0]) for step in steps]
-    checks: dict[str, bool] = {"the section exists with one numbered list": bool(found) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 8}
-
-    def index(*needles: str) -> int:
-        return next((position for position, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
-
-    iam = index("job_writer_layers_prepared", "job_layer_runs_prepared", "job_endpoints_enabled")
-    checks["one IAM step sets the two layer flags and the endpoints flag together"] = iam >= 0
-    checks["the IAM step is checked against the job_network output before any task starts"] = (
-        iam >= 0 and "endpoints_enabled" in steps[iam] and "job_network" in steps[iam]
-    )
-    order = [
-        ("the IAM step", iam),
-        ("the catalog identities", index("aws_catalog_setup", "--identity silver")),
-        ("the images", index("push_images")),
-        ("the jobs file", index("--jobs", "--preparation-sha256", "layer_jobs")),
-        ("the code staging", index("code_archive")),
-        ("the dry run", index("run-task", "--tags key=Project", "--dry-run")),
-        ("the plan in the logs", index("DRY_RUN_PLAN")),
-    ]
-    positions = [position for _, position in order]
-    checks[f"the steps come in the order the stacks depend on each other ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(
-        positions
-    )
-    jobs = index("--jobs", "--preparation-sha256", "layer_jobs")
-    checks["the jobs step takes its roles, pair names and log group from the outputs of the earlier steps"] = jobs >= 0 and all(
-        word in steps[jobs] for word in ("job_roles", "job_writer_layer_contract", "log_group_names", "images")
-    )
-    variables = {name for names in (variables_of(directory) for directory in STACKS.values()) for name in names}
-    named = {name for name in re.findall(r"`([a-z][a-z0-9_]+)`", section) if name in variables}
-    rows = {row.name for row in ROWS}
-    checks[f"every input the list names has a row ({sorted(named - rows)})"] = named <= rows
-    iam_flags = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True}
-    workspace.clear("iam")
-    accepted = workspace.run("iam", iam_flags)
-    checks["the IAM file of the step renders"] = accepted.returncode == 0 and all((workspace.written("iam") or {}).get(name) is True for name in iam_flags)
-    silver = {
-        "layer_jobs_enabled": True,
-        "layer_jobs": ["silver"],
-        "images": {name: IMAGE % name for name in ("analytics", "quality", "spark")},
-        "job_role_arns": {"execution": ROLE % "job_execution", "write_silver_task": ROLE % "job_write_silver_task"},
-        "writer_parameter_names": {
-            "write_silver_task": ["/healthcare_hai_prediction/aws_polaris_silver_client_id", "/healthcare_hai_prediction/aws_polaris_silver_client_secret"]
-        },
-        "log_group_name": "example_project_jobs_dev",
-    }
-    workspace.clear("jobs")
-    accepted = workspace.run("jobs", silver)
-    checks["the jobs file of the step renders"] = accepted.returncode == 0 and (workspace.written("jobs") or {}).get("layer_jobs") == ["silver"]
-    return checks
-
-
 def run(output: Path) -> dict[str, dict[str, bool]]:
     results: dict[str, dict[str, bool]] = {"completeness": completeness()}
     with tempfile.TemporaryDirectory(prefix="activation_inputs_") as folder:
@@ -566,7 +504,6 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["plans"] = plans
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
-        results["silver"] = silver_sequence(workspace)
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     return results

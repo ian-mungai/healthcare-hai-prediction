@@ -8,6 +8,8 @@ configuration_checks() {
   local policy_output="${POLICY_ARTIFACT_DIR:-$repo_root/data/e2e/policies/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
   timed "configuration_checks: infrastructure E2E" "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
   timed "configuration_checks: activation inputs E2E" "$python_bin" -m scripts.infrastructure.run_activation_inputs_e2e --out "$quality_output/activation_inputs"
+  timed "configuration_checks: owner list E2E" "$python_bin" -m scripts.infrastructure.run_owner_list_e2e --out "$quality_output/owner_list"
+  timed "configuration_checks: layer acceptance E2E" "$python_bin" -m scripts.lakehouse.run_layer_acceptance_e2e --out "$quality_output/layer_acceptance"
   timed "configuration_checks: policy E2E" "$python_bin" -m scripts.infrastructure.run_policy_e2e --output-directory "$policy_output"
   timed "configuration_checks: job IAM E2E" "$python_bin" -m scripts.infrastructure.run_jobs_iam_e2e --output "$quality_output/jobs_iam"
   timed "configuration_checks: broker policy cases" "$python_bin" -m scripts.infrastructure.broker_policy_cases --output "$quality_output/broker_policy"
