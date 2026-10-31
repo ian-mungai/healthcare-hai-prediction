@@ -1406,6 +1406,33 @@ def run_storage_retention_cases(evidence: Evidence, sources: dict[str, bytes]) -
         "wrapper_iam_refuses_the_option", [*wrapper, "--iam", "--mlflow-retention", "--admin-profile", ADMIN, "validate"], workspace, {"PATH": str(stand_in)}
     )
     evidence.check(step, "option_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
+    athena = "athena_retention_enabled"
+    athena_plans = {"default": plans["default"], "enabled": platform_plan(expected, {athena: False}, variables={athena: {"value": True}})}
+    athena_cases = {
+        "reject_athena_plan_without_the_option": ("enabled", [], 2, f"Saved plan input {athena} is not its committed default"),
+        "accept_athena_plan_with_the_option": ("enabled", ["--athena-retention"], 0, "Rendered private Terraform inputs"),
+        "reject_default_plan_with_the_athena_option": ("default", ["--athena-retention"], 2, "Saved plan inputs differ from .env"),
+    }
+    for name, (plan, options, returncode, message) in athena_cases.items():
+        plan_path = workspace / f"{name}.json"
+        plan_path.write_text(json.dumps(athena_plans[plan]), encoding="utf-8")
+        step, result = evidence.run(name, [*renderer, *options, "--check-plan", str(plan_path)], workspace, {"PATH": str(stand_in)})
+        evidence.check(step, "expected_outcome", result.returncode == returncode and message in result.stdout + result.stderr)
+    step, result = evidence.run("wrapper_storage_validate_athena", [*wrapper, "--athena-retention", "validate"], workspace, {"PATH": str(stand_in)})
+    evidence.check(step, "athena_inputs_render_the_flag", result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, athena: True})
+    step, result = evidence.run(
+        "wrapper_storage_validate_both", [*wrapper, "--mlflow-retention", "--athena-retention", "validate"], workspace, {"PATH": str(stand_in)}
+    )
+    evidence.check(step, "both_options_render_both_flags", result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, flag: True, athena: True})
+    step, result = evidence.run("wrapper_storage_validate_after_athena", [*wrapper, "validate"], workspace, {"PATH": str(stand_in)})
+    evidence.check(step, "the_athena_flag_does_not_persist", result.returncode == 0 and json.loads(output.read_bytes()) == expected)
+    step, result = evidence.run(
+        "wrapper_iam_refuses_the_athena_option",
+        [*wrapper, "--iam", "--athena-retention", "--admin-profile", ADMIN, "validate"],
+        workspace,
+        {"PATH": str(stand_in)},
+    )
+    evidence.check(step, "athena_option_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
 
 
 def string_values(value: Any) -> list[str]:

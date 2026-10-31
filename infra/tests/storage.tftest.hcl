@@ -106,11 +106,11 @@ run "lifecycle_cleanup_rules" {
   assert {
     condition = (
       aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 3 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_athena_results"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions"])
     )
-    error_message = "A default plan must hold exactly four enabled rules on the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions, replaced DVC versions and Athena query results. The MLflow rule stays out until mlflow_retention_enabled is set."
+    error_message = "A default plan must hold exactly three enabled rules on the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions and replaced DVC versions. The Athena results rule and the MLflow rule stay out until their flags are set."
   }
 
   assert {
@@ -148,24 +148,12 @@ run "lifecycle_cleanup_rules" {
     error_message = "Only replaced versions under dvc/ may expire, after 30 days; current DVC objects never expire and orphaned delete markers are removed."
   }
 
-  assert {
-    condition = alltrue([
-      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
-      one(rule.filter).prefix == "athena/results/" &&
-      one(rule.expiration).days == 7 &&
-      one(rule.noncurrent_version_expiration).noncurrent_days == 1 &&
-      length(rule.abort_incomplete_multipart_upload) == 0
-      if rule.id == "expire_athena_results"
-    ])
-    error_message = "Athena query results expire after seven days and their replaced versions after one day, under athena/results/ only."
-  }
-
   # Which rule can expire which key. The bucket-wide upload rule never expires anything, so it is left out: the provider computes its filter at apply.
   assert {
     condition = alltrue([
       for key, expected in {
-        "athena/results/abc.csv"                     = "expire_athena_results"
-        "athena/results/2026/10/30/abc.csv.metadata" = "expire_athena_results"
+        "athena/results/abc.csv"                     = ""
+        "athena/results/2026/10/30/abc.csv.metadata" = ""
         "athena/results_old/abc.csv"                 = ""
         "athena/other.csv"                           = ""
         "athena/"                                    = ""
@@ -181,7 +169,7 @@ run "lifecycle_cleanup_rules" {
           if rule.id != "abort_incomplete_uploads" && startswith(key, one(rule.filter).prefix)
       ]) == expected
     ])
-    error_message = "The Athena results rule reaches keys under athena/results/ only, and no other rule reaches that prefix."
+    error_message = "With no flag set, no rule reaches the athena/results/ prefix, and each other rule reaches its own prefix only."
   }
 
   assert {
@@ -207,11 +195,11 @@ run "mlflow_retention_rule_only_with_its_flag" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_athena_results", "expire_replaced_mlflow_versions"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_replaced_mlflow_versions"])
     )
-    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the four default rules."
+    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the three default rules."
   }
 
   assert {
@@ -224,6 +212,69 @@ run "mlflow_retention_rule_only_with_its_flag" {
       if rule.id == "expire_replaced_mlflow_versions"
     ])
     error_message = "Only replaced versions under mlflow/ may expire, after 30 days; current MLflow artifacts never expire and orphaned delete markers are removed."
+  }
+}
+
+# The Athena results rule is a live change to the bucket's lifecycle configuration, so it exists only when the owner turns the flag on, like the MLflow rule.
+run "athena_results_rule_only_with_its_flag" {
+  command = plan
+
+  variables {
+    athena_retention_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_athena_results"])
+    )
+    error_message = "With athena_retention_enabled the plan must add exactly the Athena results rule to the three default rules."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      one(rule.filter).prefix == "athena/results/" &&
+      one(rule.expiration).days == 7 &&
+      one(rule.noncurrent_version_expiration).noncurrent_days == 1 &&
+      length(rule.abort_incomplete_multipart_upload) == 0
+      if rule.id == "expire_athena_results"
+    ])
+    error_message = "Athena query results expire after seven days and their replaced versions after one day, under athena/results/ only."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, expected in {
+        "athena/results/abc.csv"                     = "expire_athena_results"
+        "athena/results/2026/10/30/abc.csv.metadata" = "expire_athena_results"
+        "athena/results_old/abc.csv"                 = ""
+        "athena/other.csv"                           = ""
+        "athena/"                                    = ""
+        "lakehouse/gold/dim_state/data/a.parquet"    = "expire_replaced_lakehouse_versions"
+        "dvc/ab/cdef"                                = "expire_replaced_dvc_versions"
+        "other.txt"                                  = ""
+        } : join(",", [
+          for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id
+          if rule.id != "abort_incomplete_uploads" && startswith(key, one(rule.filter).prefix)
+      ]) == expected
+    ])
+    error_message = "The Athena results rule reaches keys under athena/results/ only, and no other rule reaches that prefix."
+  }
+}
+
+run "both_retention_flags_add_both_rules" {
+  command = plan
+
+  variables {
+    athena_retention_enabled = true
+    mlflow_retention_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5
+    error_message = "Both flags add their rule beside the three default rules and nothing else."
   }
 }
 
