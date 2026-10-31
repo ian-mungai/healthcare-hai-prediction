@@ -249,7 +249,7 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
         == {prefix + name for name in declared["READ_PARAMETER_NAME"]},
         "the two statements together must name exactly the parameters that are read",
     )
-    check(len(declared["READ_PARAMETER_NAME"]) == 18 and len(declared["MANAGED_PARAMETER_NAME"]) == 17, "18 parameters are read and 17 are written")
+    check(len(declared["READ_PARAMETER_NAME"]) == 22 and len(declared["MANAGED_PARAMETER_NAME"]) == 21, "22 parameters are read and 21 are written")
     check(
         "/healthcare_hai_prediction/airflow_admin" in declared["READ_PARAMETER_NAME"]
         and "/healthcare_hai_prediction/airflow_admin" not in declared["MANAGED_PARAMETER_NAME"],

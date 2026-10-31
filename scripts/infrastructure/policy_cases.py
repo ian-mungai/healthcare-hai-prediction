@@ -77,6 +77,9 @@ PARAMETERS = (
     "marquez_db_password",
     "mlflow_admin_password",
     "mlflow_db_password",
+    "model_api_key_hashes",
+    "model_api_mlflow_credential",
+    "model_api_mlflow_user",
     "polaris_gold_client_id",
     "polaris_gold_client_secret",
     "polaris_reader_client_id",
@@ -86,6 +89,7 @@ PARAMETERS = (
     "polaris_silver_client_secret",
     "postgres_password",
     "redis_password",
+    "streamlit_model_api_key",
 )
 READ_ONLY_PARAMETERS = ("airflow_admin",)
 # The old hand-made Secrets Manager copy of the Airflow administrator password; no policy grants it since the one-time copy was done.

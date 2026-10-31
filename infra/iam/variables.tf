@@ -345,6 +345,50 @@ variable "aws_polaris_serving_client_secret_name" {
   }
 }
 
+variable "model_api_key_hashes_name" {
+  description = "Parameter Store SecureString name of the JSON object that maps each model API key identifier to the SHA-256 hash of its key. The project may read, create and put it, and the task execution role injects it into the model API while model_api_prepared is true."
+  type        = string
+  default     = "/healthcare_hai_prediction/model_api_key_hashes"
+
+  validation {
+    condition     = length(var.model_api_key_hashes_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_key_hashes_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_key_hashes_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "model_api_mlflow_user_name" {
+  description = "Parameter Store SecureString name of the MLflow user the model API loads models with. The project may read, create and put it, and the task execution role injects it into the model API while model_api_prepared is true."
+  type        = string
+  default     = "/healthcare_hai_prediction/model_api_mlflow_user"
+
+  validation {
+    condition     = length(var.model_api_mlflow_user_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_mlflow_user_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_mlflow_user_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "model_api_mlflow_credential_name" {
+  description = "Parameter Store SecureString name of the credential of the MLflow user the model API loads models with. The project may read, create and put it, and the task execution role injects it into the model API while model_api_prepared is true."
+  type        = string
+  default     = "/healthcare_hai_prediction/model_api_mlflow_credential"
+
+  validation {
+    condition     = length(var.model_api_mlflow_credential_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_mlflow_credential_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_mlflow_credential_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "streamlit_model_api_key_name" {
+  description = "Parameter Store SecureString name of the API key the page presents to the model API. The project may read, create and put it, and the task execution role injects it into the page while model_api_prepared is true."
+  type        = string
+  default     = "/healthcare_hai_prediction/streamlit_model_api_key"
+
+  validation {
+    condition     = length(var.streamlit_model_api_key_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.streamlit_model_api_key_name)) && !can(regex("^/(?i:aws|ssm)", var.streamlit_model_api_key_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "lakehouse_reader_role_name" {
   description = "IAM role name of the lakehouse reader; only the project user may assume it, and the launcher asks for a short session of it for a read job."
   type        = string

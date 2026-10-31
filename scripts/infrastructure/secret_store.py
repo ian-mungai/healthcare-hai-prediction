@@ -42,6 +42,10 @@ REDIS_PASSWORD = PREFIX + "redis_password"
 MLFLOW_DB_PASSWORD = PREFIX + "mlflow_db_password"
 MLFLOW_ADMIN_PASSWORD = PREFIX + "mlflow_admin_password"
 GRAFANA_ADMIN_PASSWORD = PREFIX + "grafana_admin_password"
+MODEL_API_KEY_HASHES = PREFIX + "model_api_key_hashes"
+MODEL_API_MLFLOW_USER = PREFIX + "model_api_mlflow_user"
+MODEL_API_MLFLOW_CREDENTIAL = PREFIX + "model_api_mlflow_credential"
+STREAMLIT_MODEL_API_KEY = PREFIX + "streamlit_model_api_key"
 MANAGED = (
     POSTGRES_PASSWORD,
     POLARIS_ROOT_SECRET,
@@ -60,13 +64,17 @@ MANAGED = (
     MLFLOW_DB_PASSWORD,
     MLFLOW_ADMIN_PASSWORD,
     GRAFANA_ADMIN_PASSWORD,
+    MODEL_API_KEY_HASHES,
+    MODEL_API_MLFLOW_USER,
+    MODEL_API_MLFLOW_CREDENTIAL,
+    STREAMLIT_MODEL_API_KEY,
 )
 READ_ONLY = (AIRFLOW_ADMIN,)
 SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name")
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
 JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
-# The twelve AWS Polaris pair names: outside the 17 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
+# The twelve AWS Polaris pair names: outside the 21 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
 AWS_POLARIS_VARIABLES = (
     *JOB_READER_VARIABLES,
     *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")),
