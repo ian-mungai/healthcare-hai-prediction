@@ -329,7 +329,7 @@
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
         "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:17c2671f748b729688fa72f3f330287ee3537b4976301373c9d7ce4d95c4fb32",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0db7c8aa8470704e410d7a8b5f311f7876b92a178f504b32acbeba612bb09985",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
@@ -403,7 +403,7 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
+      "file_sha256": "0db7c8aa8470704e410d7a8b5f311f7876b92a178f504b32acbeba612bb09985",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
         "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
@@ -446,7 +446,7 @@
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
         "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0a4b27b2acf9b8e2bce13d8416246570d8c0355fa8372ae948a3bc97a239d0f8",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0db7c8aa8470704e410d7a8b5f311f7876b92a178f504b32acbeba612bb09985",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },

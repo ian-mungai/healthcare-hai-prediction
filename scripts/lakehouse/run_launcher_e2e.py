@@ -7942,7 +7942,9 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
     fault_client.failed = set()
     fault_client.acknowledged = []
     staging.launcher_client = lambda: fault_client
-    names = ["l1a_pool_a", "l1a_pool_b"]
+    # Parallel shards share the case folder, so each fault's case keeps its own folder names.
+    fault = str(env.settings.get("pool_fault", "plain"))
+    names = [f"l1a_pool_{fault}_a", f"l1a_pool_{fault}_b"]
     jobs = [(name, tuple(staging.BASE), frozenset[str]()) for name in names]
     saved_sigint = catch_interrupt()
     gate = env.daemon.add_gate("remove", "before")  # one removal stays unresolved while the pool is interrupted
@@ -8023,7 +8025,9 @@ def staging_pool_cancel_unresolved(env: Env) -> dict[str, bool]:
     saved_sigint = catch_interrupt()
     returned = threading.Event()
     observed: dict[str, Any] = {}
-    names = ["l1a_unresolved_a", "l1a_unresolved_b"]
+    # Parallel shards share the case folder, so each fault's case keeps its own folder names.
+    fault = str(env.settings.get("pool_fault", "plain"))
+    names = [f"l1a_unresolved_{fault}_a", f"l1a_unresolved_{fault}_b"]
 
     def interrupt() -> None:
         env.wait(lambda: len([a for a in env.state()["attempts"].values() if a["phase"] == "started" and a["owner"].startswith("alloc:")]) == 2, 30)
