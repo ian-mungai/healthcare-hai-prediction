@@ -191,3 +191,64 @@ run "model_api_reading_the_prediction_table_prefix_as_a_deployment_prefix_is_ref
 
   expect_failures = [var.model_api_manifest_prefix]
 }
+
+run "execution_role_injects_the_six_serving_parameters_only_while_prepared" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.task_execution_model_api) == 0 && !strcontains(aws_iam_role_policy.task_execution.policy, "model_api") && !strcontains(aws_iam_role_policy.task_execution.policy, "streamlit")
+    error_message = "While the model API is not prepared the execution role holds no serving parameter, in the base policy or in a separate one."
+  }
+}
+
+run "execution_role_names_exactly_the_six_serving_parameters" {
+  command = plan
+
+  variables {
+    model_api_prepared        = true
+    model_api_registry_key    = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix = "serving/deployments"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.task_execution_model_api[0].name == "task_execution_model_api" &&
+      jsondecode(aws_iam_role_policy.task_execution_model_api[0].policy).Statement == [
+        {
+          Sid    = "InjectServingParameters"
+          Effect = "Allow"
+          Action = "ssm:GetParameters"
+          Resource = [
+            "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_key_hashes",
+            "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/aws_polaris_serving_client_id",
+            "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/aws_polaris_serving_client_secret",
+            "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_mlflow_user",
+            "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_mlflow_credential",
+            "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/streamlit_model_api_key",
+          ]
+        }
+      ]
+    )
+    error_message = "The execution role may inject exactly the key hashes, the serving writer pair, the MLflow pair and the page key, and read nothing else."
+  }
+
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.task_execution.policy, "serving") && !strcontains(aws_iam_role_policy.task_execution.policy, "model_api")
+    error_message = "The base execution policy stays unchanged."
+  }
+}
+
+run "serving_parameter_names_stay_under_the_project_prefix" {
+  command = plan
+
+  variables {
+    model_api_prepared               = true
+    model_api_registry_key           = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix        = "serving/deployments"
+    streamlit_model_api_key_name     = "/healthcare_hai_prediction/*"
+    model_api_mlflow_user_name       = "/healthcare_hai_prediction/model_api_mlflow_user"
+    model_api_mlflow_credential_name = "/healthcare_hai_prediction/model_api_mlflow_credential"
+  }
+
+  expect_failures = [var.streamlit_model_api_key_name]
+}

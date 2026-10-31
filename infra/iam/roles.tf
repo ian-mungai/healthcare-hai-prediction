@@ -222,6 +222,23 @@ resource "aws_iam_role_policy" "task_execution_monitoring" {
   policy = templatefile("${path.module}/owner_policies/task_execution_monitoring.json", local.owner_policy_values)
 }
 
+# The model API and the page run on the host and read six parameters through the execution role: the key hashes, the serving writer pair, the MLflow pair and the page
+# key. The base policy stays as it was, and the grant exists only while the model API is prepared.
+resource "aws_iam_role_policy" "task_execution_model_api" {
+  count = var.model_api_prepared ? 1 : 0
+
+  name = "task_execution_model_api"
+  role = aws_iam_role.task_execution.id
+  policy = templatefile("${path.module}/owner_policies/task_execution_model_api.json", merge(local.owner_policy_values, {
+    MODEL_API_KEY_HASHES_NAME              = var.model_api_key_hashes_name
+    AWS_POLARIS_SERVING_CLIENT_ID_NAME     = var.aws_polaris_serving_client_id_name
+    AWS_POLARIS_SERVING_CLIENT_SECRET_NAME = var.aws_polaris_serving_client_secret_name
+    MODEL_API_MLFLOW_USER_NAME             = var.model_api_mlflow_user_name
+    MODEL_API_MLFLOW_CREDENTIAL_NAME       = var.model_api_mlflow_credential_name
+    STREAMLIT_MODEL_API_KEY_NAME           = var.streamlit_model_api_key_name
+  }))
+}
+
 resource "aws_iam_role" "polaris_task" {
   name               = format(local.platform_name, "polaris_task")
   description        = "Polaris catalog service: Iceberg files under lakehouse/ only."

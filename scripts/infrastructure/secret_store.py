@@ -66,10 +66,10 @@ SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name")
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
 JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
-# The ten AWS Polaris pair names: outside the 14 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
+# The twelve AWS Polaris pair names: outside the 17 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
 AWS_POLARIS_VARIABLES = (
     *JOB_READER_VARIABLES,
-    *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold") for part in ("id", "secret")),
+    *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")),
 )
 ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
