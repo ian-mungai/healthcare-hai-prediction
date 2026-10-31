@@ -241,7 +241,7 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
         "the read and write set must be the managed variable defaults, each name once",
     )
     check(
-        statement_resources(documents, "ssm", "ReadAirflowAdminParameter") == [prefix + declared["AIRFLOW_ADMIN_SECRET_NAME"]],
+        statement_resources(documents, "ssm", "ReadAirflowAdminParameter") == [prefix + str(declared["AIRFLOW_ADMIN_SECRET_NAME"])],
         "the read only set must be the Airflow administrator password default",
     )
     check(
