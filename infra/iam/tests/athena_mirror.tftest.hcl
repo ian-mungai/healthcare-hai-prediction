@@ -185,8 +185,8 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
   assert {
     condition = (
       length(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) == 70 &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : alltrue([for r in s.Resource : can(regex("^arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/[a-z_]+[*]$", r))]) if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]) &&
-      contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state*") &&
+      alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : alltrue([for r in s.Resource : can(regex("^arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/[a-z_]+/[*]$", r))]) if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]) &&
+      contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state/*") &&
       !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*") &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([for r in s.Resource : startswith(r, "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs")])]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
@@ -298,6 +298,25 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
   }
 
   assert {
+    condition = !anytrue([
+      for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([
+        for r in s.Resource : startswith("arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state_unpublished/data/a.parquet", trimsuffix(r, "*"))
+        if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")
+      ])
+    ])
+    error_message = "A folder that only shares a contract table name as a prefix, such as dim_state_unpublished, is not readable. Each grant ends at the directory boundary."
+  }
+
+  assert {
+    condition = !anytrue([
+      for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([
+        for p in s.Condition.StringLike["s3:prefix"] : startswith("lakehouse/gold/dim_state_unpublished/", trimsuffix(p, "*")) && p != "athena/results/*"
+      ]) if contains(s.Action, "s3:ListBucket")
+    ])
+    error_message = "Listing a non-contract sibling folder that shares a table name prefix is not allowed either."
+  }
+
+  assert {
     condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:ListBucketMultipartUploads")])
     error_message = "The reader cannot list multipart uploads of the whole bucket. Athena writes results with the object actions alone."
   }
@@ -310,7 +329,7 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
       !contains(s.Action, "s3:ListBucket") || (
-        alltrue([for p in s.Condition.StringLike["s3:prefix"] : p == "athena/results/*" || can(regex("^lakehouse/gold/[a-z_]+[*]$", p))]) && !contains(s.Condition.StringLike["s3:prefix"], "lakehouse/gold/publish_runs*")
+        alltrue([for p in s.Condition.StringLike["s3:prefix"] : p == "athena/results/*" || can(regex("^lakehouse/gold/[a-z_]+/[*]$", p))]) && !contains(s.Condition.StringLike["s3:prefix"], "lakehouse/gold/publish_runs*")
       )
     ])
     error_message = "Listing the bucket needs a prefix limited to the results folder and the contract tables."

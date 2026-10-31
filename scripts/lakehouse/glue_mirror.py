@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -39,6 +40,56 @@ class MirrorError(RuntimeError):
     """One table cannot be mirrored; the message says why in plain words."""
 
 
+class MirrorDeadline(MirrorError):
+    """The one absolute deadline of a mirror run passed."""
+
+
+class Budget:
+    """One absolute deadline, started when the hook is entered. Every blocking step runs through ``run``, so none can hold the publish job past it.
+
+    A step that is still running at the deadline is abandoned: its result is discarded and no later step starts. A step cannot be interrupted once it
+    is inside a Spark or Glue call, so ``run`` reports that and a write that was already issued is reported as possibly landed.
+    """
+
+    def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic, started: float | None = None) -> None:
+        self.seconds = seconds
+        self.clock = clock
+        self.end = (clock() if started is None else started) + seconds
+        self.stopped = threading.Event()
+
+    def remaining(self) -> float:
+        return self.end - self.clock()
+
+    def run(self, label: str, work: Callable[..., Any], *arguments: Any, write: bool = False, **keywords: Any) -> Any:
+        """Run ``work`` in a helper thread and wait for it until the deadline. A write checks the deadline again just before it is issued."""
+        left = self.remaining()
+        if left <= 0 or self.stopped.is_set():
+            raise MirrorDeadline(f"the mirror deadline of {self.seconds:g} seconds passed before {label}")
+        box: dict[str, Any] = {}
+
+        def target() -> None:
+            try:
+                if write and (self.stopped.is_set() or self.remaining() <= 0):
+                    raise MirrorDeadline(f"the mirror deadline of {self.seconds:g} seconds passed before {label}")
+                box["value"] = work(*arguments, **keywords)
+            except BaseException as error:
+                box["error"] = error
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(left)
+        if thread.is_alive():
+            self.stopped.set()
+            if write:
+                raise MirrorDeadline(
+                    f"the mirror deadline of {self.seconds:g} seconds passed during {label}: the write may have landed, run check and rerun the step"
+                )
+            raise MirrorDeadline(f"the mirror deadline of {self.seconds:g} seconds passed during {label}")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
+
+
 @dataclass(frozen=True)
 class Layer:
     namespace: str
@@ -50,7 +101,7 @@ class MirrorConfig:
     enabled: bool
     marker: str
     layers: Mapping[str, Layer]
-    mirror_seconds: int = 300
+    mirror_seconds: float = 300
 
 
 class Source(Protocol):
@@ -85,7 +136,7 @@ class SparkSource:
 def load_config(path: Path = CONFIG) -> MirrorConfig:
     document = json.loads(path.read_text())
     layers = {name: Layer(item["namespace"], item["database"]) for name, item in document["layers"].items()}
-    return MirrorConfig(document["enabled"] is True, document["mirror_marker"], layers, int(document["mirror_seconds"]))
+    return MirrorConfig(document["enabled"] is True, document["mirror_marker"], layers, float(document["mirror_seconds"]))
 
 
 def violations(config: MirrorConfig) -> list[str]:
@@ -136,7 +187,7 @@ def client_config() -> Any:
     """Short timeouts and few retries for every Glue call, so a missing network path fails fast instead of holding the publish job."""
     from botocore.config import Config
 
-    return Config(connect_timeout=CONNECT_SECONDS, read_timeout=READ_SECONDS, retries={"max_attempts": CALL_ATTEMPTS, "mode": "standard"})
+    return Config(connect_timeout=CONNECT_SECONDS, read_timeout=READ_SECONDS, retries={"total_max_attempts": CALL_ATTEMPTS, "mode": "standard"})
 
 
 def glue_client() -> Any:
@@ -145,23 +196,23 @@ def glue_client() -> Any:
     return boto3.Session(region_name=os.environ["AWS_REGION"]).client("glue", config=client_config())
 
 
-def register(config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, run_id: str, source: Source, glue: Any) -> str:
+def register(config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, run_id: str, source: Source, glue: Any, budget: Budget) -> str:
     """Create or move one registration to the committed snapshot's metadata file; returns created, updated or unchanged."""
     if not TABLE_NAME.fullmatch(table):
         raise MirrorError("the table name is not a plain lower-case name")
-    pointer = source.pointer(table, snapshot_id)
+    pointer = budget.run(f"reading the metadata file of {table}", source.pointer, table, snapshot_id)
     if pointer is None:
         raise MirrorError(f"Polaris holds no metadata file for the committed snapshot {snapshot_id}: the registration was not changed")
     if not POINTER.fullmatch(pointer):
         raise MirrorError("the metadata file is not an s3:// path that ends in .metadata.json")
-    existing = current(glue, spec.database, table)
+    existing = budget.run(f"reading the registration of {table}", current, glue, spec.database, table)
     if existing is not None:
         held = existing.get("Parameters", {})
         if held.get(config.marker) != "true":
             raise MirrorError(f"Glue already holds {spec.database}.{table} and it is not a mirror: nothing was changed")
         if held.get("metadata_location") == pointer and held.get("hai_snapshot_id") == str(snapshot_id) and held.get("hai_run_id") == run_id:
             return "unchanged"
-    columns = [{"Name": name, "Type": kind} for name, kind in source.columns(table)]
+    columns = [{"Name": name, "Type": kind} for name, kind in budget.run(f"reading the columns of {table}", source.columns, table)]
     parameters = {"table_type": "ICEBERG", "metadata_location": pointer, config.marker: "true", "hai_snapshot_id": str(snapshot_id), "hai_run_id": run_id}
     if existing is not None and existing["Parameters"].get("metadata_location") != pointer:
         parameters["previous_metadata_location"] = existing["Parameters"]["metadata_location"]
@@ -173,13 +224,15 @@ def register(config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, ru
     }
     if existing is None:
         try:
-            glue.create_table(DatabaseName=spec.database, TableInput=document)
+            budget.run(f"creating the registration of {table}", glue.create_table, write=True, DatabaseName=spec.database, TableInput=document)
         except Exception as error:
             if glue_error_code(error) == "EntityNotFoundException":
                 raise MirrorError(f"database {spec.database} does not exist: apply the Athena mirror stack first") from error
             raise
         return "created"
-    glue.update_table(DatabaseName=spec.database, TableInput=document, VersionId=existing["VersionId"])
+    budget.run(
+        f"updating the registration of {table}", glue.update_table, write=True, DatabaseName=spec.database, TableInput=document, VersionId=existing["VersionId"]
+    )
     return "updated"
 
 
@@ -191,24 +244,22 @@ def mirror(
     source: Source,
     glue: Any,
     run_id: str = "",
-    clock: Callable[[], float] = time.monotonic,
+    budget: Budget | None = None,
 ) -> dict[str, Any]:
     """Mirror the newest committed snapshot set of one layer. Never raises: each table's outcome and any failure are in the report.
 
     ``snapshots`` maps each table to its committed snapshot ID. Each registration points at the metadata file of that snapshot, not at the live main,
-    which a later publish that failed halfway may have moved. The mirror stops at ``mirror_seconds``; the tables it did not reach are reported failed.
+    which a later publish that failed halfway may have moved. Every Spark read and Glue call runs under one absolute deadline (``budget``, which the hook
+    starts when it is entered). After it passes, no further step starts and the tables not reached are reported failed.
     """
     wanted, reason = tables_to_mirror(config, layer, mode, list(snapshots))
     if not wanted:
         return {"status": "skipped", "reason": reason, "tables": {}}
+    budget = budget or Budget(config.mirror_seconds)
     outcomes: dict[str, str] = {}
-    started = clock()
     for table in wanted:
-        if clock() - started > config.mirror_seconds:
-            outcomes[table] = f"failed: the mirror deadline of {config.mirror_seconds} seconds passed before this table"
-            continue
         try:
-            outcomes[table] = register(config, config.layers[layer], table, snapshots[table], run_id, source, glue)
+            outcomes[table] = register(config, config.layers[layer], table, snapshots[table], run_id, source, glue, budget)
         except Exception as error:
             outcomes[table] = "failed: " + (str(error) if isinstance(error, MirrorError) else explain(error))
     failed = [table for table, outcome in outcomes.items() if outcome.startswith("failed")]
@@ -219,8 +270,8 @@ def mirror(
     return report
 
 
-def check(config: MirrorConfig, layer: str, snapshots: Mapping[str, int], source: Source, glue: Any) -> dict[str, Any]:
-    """Compare each table's Glue registration with the committed snapshot set's metadata file. Reads only."""
+def check(config: MirrorConfig, layer: str, snapshots: Mapping[str, int], source: Source, glue: Any, run_id: str) -> dict[str, Any]:
+    """Compare each table's Glue registration with the committed snapshot set's metadata file, snapshot and run. Reads only."""
     spec = config.layers[layer]
     outcomes: dict[str, str] = {}
     for table, snapshot_id in snapshots.items():
@@ -236,13 +287,19 @@ def check(config: MirrorConfig, layer: str, snapshots: Mapping[str, int], source
             else:
                 held = found["Parameters"].get("metadata_location")
                 same_snapshot = found["Parameters"].get("hai_snapshot_id") == str(snapshot_id)
-                outcomes[table] = "match" if held == wanted and same_snapshot else f"differs: committed {wanted} (snapshot {snapshot_id}), Glue {held}"
+                held_run = found["Parameters"].get("hai_run_id")
+                if held == wanted and same_snapshot and held_run == run_id:
+                    outcomes[table] = "match"
+                elif held == wanted and same_snapshot:
+                    outcomes[table] = f"stale run: Glue records run {held_run}, the committed run is {run_id}"
+                else:
+                    outcomes[table] = f"differs: committed {wanted} (snapshot {snapshot_id}), Glue {held}"
         except Exception as error:
             outcomes[table] = "unreadable: " + (str(error) if isinstance(error, MirrorError) else explain(error))
     return {"ok": all(outcome == "match" for outcome in outcomes.values()), "tables": outcomes}
 
 
-def committed_set(spark: Any, layer: str) -> dict[str, int]:
+def committed_set(spark: Any, layer: str) -> tuple[dict[str, int], str]:
     """The newest committed snapshot set of the layer: the publish_runs row that a reader reads first."""
     from scripts.lakehouse import gold_publish
 
@@ -250,7 +307,7 @@ def committed_set(spark: Any, layer: str) -> dict[str, int]:
     head = gold_publish.published_head(ctx)
     if head is None:
         raise MirrorError(f"no committed {layer} snapshot set exists")
-    return {str(name): int(snapshot) for name, snapshot in dict(head["snapshot_set"]).items()}
+    return {str(name): int(snapshot) for name, snapshot in dict(head["snapshot_set"]).items()}, str(head["run_id"])
 
 
 def main(
@@ -259,6 +316,7 @@ def main(
     glue: Any = None,
     config: MirrorConfig | None = None,
     snapshots: Mapping[str, int] | None = None,
+    run_id: str | None = None,
 ) -> int:
     """The ``check`` command. Without a source and a Glue client it builds them: Spark on the Polaris catalog and boto3 under the task's own role."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -268,14 +326,15 @@ def main(
     config = config or load_config()
     spark = None
     try:
-        if source is None or snapshots is None:
+        if source is None or snapshots is None or run_id is None:
             from scripts.lakehouse.session import CATALOG, spark_session
 
             spark = spark_session(f"glue_mirror_{args.command}", None)
             source = source or SparkSource(spark, CATALOG, config.layers[args.layer].namespace)
-            snapshots = snapshots if snapshots is not None else committed_set(spark, args.layer)
+            if snapshots is None or run_id is None:
+                snapshots, run_id = committed_set(spark, args.layer)
         glue = glue or glue_client()
-        result = check(config, args.layer, snapshots, source, glue)
+        result = check(config, args.layer, snapshots, source, glue, run_id)
     finally:
         if spark is not None:
             spark.stop()
