@@ -26,7 +26,9 @@ terraform_checks() {
     stack_root="$scratch/${stack//\//_}"
     test_dir="$stack_root/${source_dir#"$repo_root"/}"
     mkdir -p "$test_dir"
-    for config_read_by_stacks in config/lakehouse/bronze_tables.json config/lakehouse/aws_bronze_grants.json config/orchestration/ecs_broker_jobs.json config/lakehouse/athena_mirror.json data_contracts/lakehouse/gold_contract.json; do
+    # Every repository file that a stack or a stack test reads above its own folder. scripts.quality.run_container_mounts_e2e lists them from the stacks
+    # and fails when one is missing here.
+    for config_read_by_stacks in config/lakehouse/bronze_tables.json config/lakehouse/aws_bronze_grants.json config/orchestration/ecs_broker_jobs.json config/lakehouse/athena_mirror.json data_contracts/lakehouse/gold_contract.json config/metadata/ingestion/dbt.json config/metadata/ingestion/marquez.json config/metadata/ingestion/polaris.json scripts/infrastructure/openmetadata_bootstrap.py scripts/infrastructure/openmetadata_bounded_run.sh scripts/infrastructure/openmetadata_ingest.py scripts/infrastructure/openmetadata_marquez.py scripts/infrastructure/openmetadata_migrate.sh; do
       mkdir -p "$stack_root/$(dirname "$config_read_by_stacks")"
       cp "$repo_root/$config_read_by_stacks" "$stack_root/$config_read_by_stacks"
     done
