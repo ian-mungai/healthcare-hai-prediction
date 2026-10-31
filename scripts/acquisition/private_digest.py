@@ -1,8 +1,10 @@
 """Owner script: record a digest, a size and a file count for each original that names people. It reads bytes only.
 
 This tool never downloads, compares or records such a unit. The owner checks it locally: save the original under ``<folder>/<unit id>`` (one file or a
-folder), run this script and compare the digest with the stored one by hand. The script parses nothing, prints only counts and writes an owner-only file
-keyed by the unit IDs of the public queue. It records and prints no file name, folder name or content, and a failure becomes a status for the unit.
+folder), run this script and compare the digest with the stored one by hand. The units are the ones the unit classification lists as personal.
+The script parses nothing, prints only counts and writes an owner-only file keyed by the unit IDs of the public queue. It records and prints no file
+name, folder name or content. A failure on one unit becomes a status for that unit. A failure on the queue, the classification or the output becomes a
+fixed message and an exit code, never a traceback, a path or an exception text.
 """
 
 from __future__ import annotations
@@ -17,9 +19,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.redownload_route import ACTIVE, is_private_unit
+from scripts.acquisition import unit_classification
 
 CHUNK = 1024 * 1024
+NOT_OWNER_ONLY = (2, "the output folder is not owner-only")
+DIFFERENT_RESULT = (3, "the output file exists with a different result and is not overwritten")
+BAD_INPUT = (4, "the queue or the classification cannot be read or is not valid")
+BAD_OUTPUT = (5, "the output folder or file cannot be read or written")
 
 
 class FixedParser(argparse.ArgumentParser):
@@ -73,28 +79,43 @@ def read_unit(root: Path) -> dict[str, Any]:
     return {"sha256": hashlib.sha256("\n".join(sorted(digests)).encode()).hexdigest(), "bytes": total, "files": len(digests), "status": "read"}
 
 
+def fail(code: int, text: str) -> int:
+    sys.stderr.write(f"private_digest: {text}\n")
+    return code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = FixedParser(description="Record a digest, a size and a file count for each private original. It reads bytes only.")
     parser.add_argument("--queue", required=True, type=Path)
+    parser.add_argument("--classification", type=Path, help="defaults to the classification file beside the queue")
     parser.add_argument("--folder", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
-    if args.output.parent.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-        sys.stderr.write("private_digest: the output folder is not owner-only\n")
-        return 2
-    body = args.queue.read_bytes()
-    units = sorted(unit["snapshot_id"] for unit in json.loads(body)["queue"] if unit["disposition"] in ACTIVE and is_private_unit(unit))
+    try:
+        exposed = args.output.parent.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO)
+    except OSError:
+        return fail(*BAD_OUTPUT)
+    if exposed:
+        return fail(*NOT_OWNER_ONLY)
+    try:
+        body = args.queue.read_bytes()
+        queue_sha256 = hashlib.sha256(body).hexdigest()
+        units = unit_classification.personal_units((args.classification or unit_classification.classification_path(args.queue)).read_bytes(), queue_sha256)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return fail(*BAD_INPUT)
     results: dict[str, dict[str, Any]] = {identity: read_unit(args.folder / identity) for identity in units}
-    record = {"kind": "private_original_digests", "queue_sha256": hashlib.sha256(body).hexdigest(), "units": results}
+    record = {"kind": "private_original_digests", "queue_sha256": queue_sha256, "units": results}
     encoded = (json.dumps(record, sort_keys=True, indent=2) + "\n").encode()
-    if args.output.exists():
-        if args.output.read_bytes() != encoded:
-            sys.stderr.write("private_digest: the output file exists with a different result and is not overwritten\n")
-            return 3
-    else:
-        descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(encoded)
+    try:
+        if args.output.exists():
+            if args.output.read_bytes() != encoded:
+                return fail(*DIFFERENT_RESULT)
+        else:
+            descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(encoded)
+    except OSError:
+        return fail(*BAD_OUTPUT)
     statuses = [item["status"] for item in results.values()]
     read, missing = statuses.count("read"), statuses.count("missing")
     unreadable = len(units) - read - missing

@@ -10,12 +10,13 @@ from pathlib import Path
 
 from scripts.acquisition import private_digest
 from scripts.acquisition.cli_tools import run_argv
+from scripts.acquisition.tests.held import classification_body
 from scripts.process import CompletedProcess
 from tests.support import check
 
 NAMES = ("Jane Q. Example", "Ozzie Sample-Rivera", "Dr. Pat Fictional", "Nell Folder-Name")
 PRIVATE = {"snapshot_id": "OWNERS__1", "source_id": "OWNERS", "disposition": "direct_download", "mode": "cms_owners_org", "flags": [], "route": "publisher_url"}
-FLAGGED = PRIVATE | {"snapshot_id": "FLAG__2", "mode": "file", "flags": ["original_contains_personal_details:private_owner_only"]}
+FLAGGED = PRIVATE | {"snapshot_id": "FLAG__2", "mode": "file", "flags": []}
 PUBLIC = PRIVATE | {"snapshot_id": "PUBLIC__3", "mode": "file"}
 
 
@@ -25,7 +26,10 @@ def sha(data: bytes) -> str:
 
 def setup(tmp_path: Path) -> tuple[Path, Path, Path]:
     queue = tmp_path / "queue.json"
-    queue.write_text(json.dumps({"run": 3, "queue": [PRIVATE, FLAGGED, PUBLIC]}))
+    units = [PRIVATE, FLAGGED, PUBLIC]
+    queue.write_text(json.dumps({"run": 3, "queue": units}))
+    classes = {"OWNERS__1": "personal", "FLAG__2": "personal"}
+    queue.with_name("unit_classification.json").write_bytes(classification_body(queue.read_bytes(), units, classes, unreviewed=["FLAG__2"]))
     folder = tmp_path / "originals"
     (folder / "OWNERS__1" / NAMES[3]).mkdir(parents=True)
     (folder / "OWNERS__1" / f"{NAMES[0]}.csv").write_bytes(f"name\n{NAMES[0]}\n".encode())
@@ -138,3 +142,54 @@ def test_the_script_parses_nothing_and_prints_nothing_itself() -> None:
     )
     check(not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print" for node in ast.walk(tree)), "no print call")
     check("csv" not in imported and "zipfile" not in imported and "openpyxl" not in imported, "no parser is imported")
+
+
+def fixed_failure(done: CompletedProcess[str], code: int) -> None:
+    check(done.returncode == code, f"exit {done.returncode}, wanted {code}")
+    lines = done.stderr.strip().splitlines()
+    check(len(lines) == 1 and lines[0].startswith("private_digest: "), f"one fixed line, no traceback: {done.stderr!r}")
+    check("Traceback" not in done.stderr and "Error" not in done.stderr and "/" not in done.stderr, "no traceback, exception text or path")
+    check([name for name in NAMES if name in done.stdout + done.stderr] == [], "no synthetic name appears")
+
+
+def test_a_missing_queue_whose_name_holds_a_person_gives_a_fixed_message(tmp_path: Path) -> None:
+    queue, folder, output = setup(tmp_path)
+    done = run(tmp_path / f"{NAMES[0]} queue.json", folder, output)
+    fixed_failure(done, 4)
+    check(not (output / "digests.json").exists(), "no output was written")
+
+
+def test_a_missing_output_folder_below_a_person_named_folder_gives_a_fixed_message(tmp_path: Path) -> None:
+    queue, folder, output = setup(tmp_path)
+    done = run(queue, folder, tmp_path / NAMES[1] / "owner_only")
+    fixed_failure(done, 5)
+
+
+def test_a_missing_or_stale_classification_gives_a_fixed_message(tmp_path: Path) -> None:
+    queue, folder, output = setup(tmp_path)
+    queue.with_name("unit_classification.json").rename(tmp_path / f"{NAMES[2]}.json")
+    fixed_failure(run(queue, folder, output), 4)
+    (tmp_path / f"{NAMES[2]}.json").rename(queue.with_name("unit_classification.json"))
+    queue.write_text(json.dumps({"run": 3, "queue": []}))
+    fixed_failure(run(queue, folder, output), 4)
+
+
+def test_an_unreadable_queue_or_output_gives_a_fixed_message(tmp_path: Path) -> None:
+    queue, folder, output = setup(tmp_path)
+    queue.chmod(0)
+    try:
+        fixed_failure(run(queue, folder, output), 4)
+    finally:
+        queue.chmod(0o600)
+    (output / "digests.json").write_text("x")
+    (output / "digests.json").chmod(0)
+    try:
+        fixed_failure(run(queue, folder, output), 5)
+    finally:
+        (output / "digests.json").chmod(0o600)
+
+
+def test_a_proposed_personal_unit_is_read_and_a_unit_not_listed_as_personal_never_is(tmp_path: Path) -> None:
+    queue, folder, output = setup(tmp_path)
+    run(queue, folder, output)
+    check(set(json.loads((output / "digests.json").read_text())["units"]) == {"OWNERS__1", "FLAG__2"}, "the proposed and the reviewed personal unit are read")
