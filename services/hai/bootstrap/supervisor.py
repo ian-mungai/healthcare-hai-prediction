@@ -76,39 +76,48 @@ def _members(group: int, deadline: float) -> dict[int, str] | None:
 
 
 def stop_owned(handle: Handle, deadline: float) -> dict[str, Any]:
-    """Signal and reap under one lock, keeping the leader until the last group signal."""
+    """Signal and reap under one lock, keeping the leader until the last group signal.
+
+    A listing that fails and a zombie leader that cannot be reaped yet (its other threads are still exiting, so a no-hang wait answers nothing) are
+    not final: the stop tries again until its deadline. Only a group that is not proven ended at the deadline is reported unconfirmed. The ``reason``
+    of an unconfirmed stop is one fixed word, never a process number, path or message.
+    """
     previous_interrupts = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
     try:
         deadline = min(deadline, time.monotonic() + 5)
         if not handle.lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
-            return {"status": "survivor", "confirmed": False}
+            return {"status": "survivor", "confirmed": False, "reason": "lock_unavailable"}
         try:
             with handle.lock:
                 if handle.state == "read_only":
                     return {"status": "refused_reaped", "confirmed": handle.confirmed}
                 ready_to_reap = handle.state == "reap_only"
                 stopped = False
-                while not ready_to_reap and time.monotonic() < deadline:
-                    members = _members(handle.pgid, deadline)
-                    if members is None:
-                        return {"status": "survivor", "confirmed": False}
-                    if handle.pid not in members:
-                        handle.state = "reap_only"
-                        ready_to_reap = True
-                        break
-                    if all(state == "Z" for state in members.values()):
-                        ready_to_reap = True
-                        break
-                    if not stopped:
-                        if _portable.signal_group(handle.pgid, signal.SIGSTOP) == "gone":
-                            handle.state = "read_only"
-                            return {"status": "worker_unproven", "confirmed": False}
-                        stopped = True
-                    if _portable.signal_group(handle.pgid, signal.SIGKILL) == "gone":
-                        handle.state = "read_only"
-                        return {"status": "worker_unproven", "confirmed": False}
-                    time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-                if ready_to_reap and time.monotonic() < deadline:
+                reason = "deadline_expired"
+                while time.monotonic() < deadline:
+                    if not ready_to_reap:
+                        members = _members(handle.pgid, deadline)
+                        if members is None:
+                            reason = "listing_unavailable"
+                            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+                            continue
+                        if handle.pid not in members:
+                            handle.state = "reap_only"
+                            ready_to_reap = True
+                        elif all(state == "Z" for state in members.values()):
+                            ready_to_reap = True
+                        else:
+                            reason = "group_alive"
+                            if not stopped:
+                                if _portable.signal_group(handle.pgid, signal.SIGSTOP) == "gone":
+                                    handle.state = "read_only"
+                                    return {"status": "worker_unproven", "confirmed": False, "reason": "group_gone_before_reap"}
+                                stopped = True
+                            if _portable.signal_group(handle.pgid, signal.SIGKILL) == "gone":
+                                handle.state = "read_only"
+                                return {"status": "worker_unproven", "confirmed": False, "reason": "group_gone_before_reap"}
+                            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+                            continue
                     try:
                         reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
                     except ChildProcessError:
@@ -119,8 +128,12 @@ def stop_owned(handle: Handle, deadline: float) -> dict[str, Any]:
                             with contextlib.suppress(OSError):
                                 os.close(fd)
                         handle.confirmed = _portable.wait_group_gone(handle.pgid, deadline, time.monotonic, time.sleep)
-                        return {"status": "confirmed" if handle.confirmed else "worker_unproven", "confirmed": handle.confirmed}
-                return {"status": "refused_unproven" if handle.state == "reap_only" else "survivor", "confirmed": False}
+                        if handle.confirmed:
+                            return {"status": "confirmed", "confirmed": True}
+                        return {"status": "worker_unproven", "confirmed": False, "reason": "group_not_gone"}
+                    reason = "leader_not_reapable"
+                    time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+                return {"status": "refused_unproven" if handle.state == "reap_only" else "survivor", "confirmed": False, "reason": reason}
         finally:
             handle.lock.release()
     finally:
@@ -156,6 +169,7 @@ class Supervisor:
         self.closing = False
         self._startup = threading.Lock()
         self.stderr_folder = stderr_folder
+        self.stops: list[dict[str, str]] = []
 
     def _spawn(self, deadline: float, *, withhold: bool) -> Handle:
         if not self._startup.acquire(timeout=max(0.0, deadline - time.monotonic())):
@@ -224,10 +238,11 @@ class Supervisor:
             self._startup.release()
 
     def _finish(self, handle: Handle, deadline: float) -> dict[str, Any]:
-        cleanup = stop_owned(handle, deadline)
+        outcome = stop_owned(handle, deadline)
         if handle.stderr_reader is not None and not handle.stderr_reader.finish(deadline=deadline):
-            return {"status": "worker_stderr_unconfirmed", "confirmed": False}
-        return cleanup
+            outcome = {"status": "worker_stderr_unconfirmed", "confirmed": False, "reason": "stderr_unfinished"}
+        self.stops.append({"status": str(outcome.get("status", "")), "reason": str(outcome.get("reason", ""))})
+        return outcome
 
     def call(self, operation: str, params: dict[str, Any], *, deadline: float) -> dict[str, Any]:
         """Perform one closed call, then confirm its whole group ended before returning success."""

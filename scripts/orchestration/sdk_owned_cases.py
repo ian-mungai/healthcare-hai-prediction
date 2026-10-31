@@ -95,6 +95,8 @@ class _World:
         self.denied_signals = False
         self.group_after_reap = "gone"
         self.failed_scan: str | None = None
+        self.scan_failures = 0
+        self.unreapable_waits = 0
         self.missing_leader = False
         self.lost_witness = False
         self.first_scan_unwitnessed = False
@@ -123,6 +125,10 @@ class _World:
             raise ValueError("synthetic_wait_identity_mismatch")
         if self.reaped:
             raise ChildProcessError
+        if self.members.get(pid) == "Z" and self.unreapable_waits > 0:
+            # A zombie leader whose other threads are still exiting is not reapable yet: the kernel answers a no-hang wait with nothing.
+            self.unreapable_waits -= 1
+            return 0, 0
         if self.members.get(pid) == "Z":
             self._record("reap")
             self.reaped = True
@@ -131,6 +137,9 @@ class _World:
 
     def snapshot(self, deadline: float, witness: str | None = None) -> process_group.Snapshot:
         self.scans += 1
+        if self.scan_failures > 0:
+            self.scan_failures -= 1
+            return process_group.Snapshot("unreadable")
         if self.failed_scan is not None:
             return process_group.Snapshot(self.failed_scan)
         members = tuple(
@@ -253,6 +262,52 @@ def _stop_cases(module: ModuleType, prefix: str) -> dict[str, bool]:
         and world.scans == 0
         and not any(event[0] == "signal" for event in world.events)
     )
+    return checks
+
+
+def _retry_cases(module: ModuleType) -> dict[str, bool]:
+    """The task supervisor retries a failed listing and a not yet reapable zombie leader until its deadline, then fails closed."""
+    checks = {}
+    world = _World(module)
+    world.scan_failures = 2
+    result = world.stop()
+    reaps = [event for event in world.events if event[0] == "reap"]
+    checks["task_transient_listing_failure_is_retried"] = result["confirmed"] and world.reaped and len(reaps) == 1 and world.scans >= 3
+    world = _World(module, child=False)
+    world.members[world.pid] = "Z"
+    world.unreapable_waits = 3
+    result = world.stop()
+    reaps = [event for event in world.events if event[0] == "reap"]
+    checks["task_zombie_leader_with_exiting_threads_is_retried"] = (
+        result["confirmed"] and len(reaps) == 1 and world.waits == 4 and not any(event[0] == "signal" for event in world.events)
+    )
+    world = _World(module)
+    world.failed_scan = "unreadable"
+    result = world.stop()
+    checks["task_persistent_listing_failure_is_unconfirmed_at_the_deadline"] = (
+        result["status"] == "survivor"
+        and result.get("reason") == "listing_unavailable"
+        and not result["confirmed"]
+        and not world.events
+        and world.clock.now >= 100.3
+        and world.clock.now <= 100.5
+    )
+    world = _World(module, child=False)
+    world.members[world.pid] = "Z"
+    world.unreapable_waits = 10**6
+    result = world.stop()
+    checks["task_unreapable_leader_is_unconfirmed_at_the_deadline"] = (
+        result["status"] == "survivor"
+        and result.get("reason") == "leader_not_reapable"
+        and not result["confirmed"]
+        and not world.reaped
+        and world.handle.state == "signalling"
+        and world.clock.now >= 100.3
+        and world.clock.now <= 100.5
+    )
+    world = _World(module)
+    result = world.stop()
+    checks["task_confirmed_stop_names_no_failure"] = result["confirmed"] and result.get("reason", "") == ""
     return checks
 
 
@@ -526,6 +581,7 @@ def owned_cases(folder: Path) -> dict[str, bool]:
     return {
         **_stop_cases(process_group, "host"),
         **_stop_cases(supervisor, "task"),
+        **_retry_cases(supervisor),
         **_witness_cases(),
         **_disposition_cases(supervisor, folder / "stderr"),
         **_changed_disposition_case(supervisor, folder / "changed_disposition"),
