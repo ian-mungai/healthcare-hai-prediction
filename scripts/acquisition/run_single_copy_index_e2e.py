@@ -20,7 +20,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1164,11 +1164,49 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+@dataclass
+class LauncherTrace:
+    """What the launcher did on its own clock: its deadline, when it started each AWS call and the process limit it gave that call."""
+
+    skew: float = 0.0
+    deadline_at: float | None = None
+    calls: list[tuple[str, float, float]] = field(default_factory=list)
+
+    def now(self) -> float:
+        """Return the launcher's clock: real time plus the seconds the identity answer is said to have taken."""
+        return time.monotonic() + self.skew
+
+    def budget_kept(self) -> bool:
+        """Return True when no call was given a process limit that ends after the deadline; a few milliseconds of rounding are allowed."""
+        return self.deadline_at is not None and all(started + limit <= self.deadline_at + 0.05 for _, started, limit in self.calls)
+
+    def started(self, operation: str) -> int:
+        return len([1 for name, _, _ in self.calls if name == operation])
+
+
+def traced_runner(trace: LauncherTrace, identity_wait: float) -> type[single_copy_index.DeadlineRunner]:
+    """Return the launcher's deadline runner, recording each call; the identity call, once answered, counts `identity_wait` seconds on the launcher's clock."""
+
+    class TracedRunner(single_copy_index.DeadlineRunner):
+        def __init__(self, run: Callable[..., Any], deadline_at: float) -> None:
+            def recorded(argv: list[str], **options: Any) -> Any:
+                trace.calls.append((argv[2], trace.now(), options["timeout"]))
+                result = run(argv, **options)
+                if argv[2] == "get-caller-identity":
+                    trace.skew += identity_wait
+                return result
+
+            trace.deadline_at = deadline_at
+            super().__init__(recorded, deadline_at)
+
+    return TracedRunner
+
+
 def stand_in_script(pid_file: Path, identity: str, listing: str) -> str:
     """Return an `aws` stand-in whose identity and listing commands each wait, answer or both."""
     arn = f"arn:aws:iam::{CONFIGURATION['expected_account_id']}:user/{CONFIGURATION['aws_profile']}"
     reply = json.dumps({"Account": CONFIGURATION["expected_account_id"], "Arn": arn})
-    answers = {"never": "exec sleep 30", "now": f"echo '{reply}'", "late": f"sleep 1.5; echo '{reply}'"}
+    answers = {"never": "exec sleep 30", "now": f"echo '{reply}'"}
     return f'#!/bin/sh\necho "$1 $$" >> \'{pid_file}\'\ncase "$1" in\n  sts) {answers[identity]} ;;\n  s3api) {listing} ;;\nesac\n'
 
 
@@ -1182,9 +1220,16 @@ def launcher_scenario(
     limit: float,
     reasons: list[str],
     listing_requests: int | None = None,
+    identity_wait: float = 0.0,
     mutate: Callable[[Workspace], object] | None = None,
 ) -> dict[str, Any]:
-    """Run the real launcher against an `aws` stand-in; no process may outlive the one overall deadline. No reason means the build must succeed."""
+    """Run the real launcher against an `aws` stand-in; no process may outlive the one overall deadline. No reason means the build must succeed.
+
+    The limits are on the launcher's own clock, so a slow machine cannot fail a case that keeps its deadline: every process limit ends by the
+    deadline, the count of listing requests is the launcher's own, and the wall clock only bounds a launcher that waits for a stand-in that never
+    answers. It runs from the launcher's own deadline start, not from the start of the command. `identity_wait` is the time an answered identity
+    call is said to have taken: it moves the launcher's clock and never sleeps, so the case does not race a real sleep against the deadline.
+    """
     bin_folder = root / f"stand_in_bin_{name}"
     bin_folder.mkdir()
     pid_file = bin_folder / "pids.txt"
@@ -1194,32 +1239,38 @@ def launcher_scenario(
     workspace = Workspace(root / f"launcher_{name}")
     if mutate:
         mutate(workspace)
+    trace = LauncherTrace()
     started = time.monotonic()
     with (
         patch.dict(os.environ, {"PATH": f"{bin_folder}{os.pathsep}{os.environ['PATH']}"}),
         patch.object(single_copy_index, "load_configuration", lambda _path: (CONFIGURATION, {})),
+        patch.object(single_copy_index, "time", SimpleNamespace(monotonic=trace.now)),
+        patch.object(single_copy_index, "DeadlineRunner", traced_runner(trace, identity_wait)),
     ):
         code, summary, _ = run(workspace.arguments("--deadline", str(deadline)))
-    elapsed = time.monotonic() - started
+    elapsed = time.monotonic() - (started if trace.deadline_at is None else trace.deadline_at - deadline)
     lines = [line.split() for line in pid_file.read_text().splitlines()] if pid_file.exists() else []
     alive = [int(pid) for _, pid in lines if process_alive(int(pid))]
     for pid in alive:
         os.kill(pid, signal.SIGKILL)
-    started_listing = len([1 for command, _ in lines if command == "s3api"])
+    started_listing = trace.started("list-object-versions")
     observed = {
         "exit_code": code,
         "reasons": sorted(summary_reasons(summary)),
         "seconds": round(elapsed, 2),
+        "process_limits": {f"{operation} at {started - (trace.deadline_at or 0) + deadline:.2f}": round(limit, 2) for operation, started, limit in trace.calls},
+        "process_limits_end_by_the_deadline": trace.budget_kept(),
         "listing_requests_started": started_listing,
         "processes_alive_at_return": len(alive),
         "index_written": workspace.output.exists(),
     }
     passed = code == (1 if reasons else 0) and observed["reasons"] == reasons and elapsed < limit and not alive and workspace.output.exists() == (not reasons)
-    passed = passed and (listing_requests is None or started_listing == listing_requests)
+    passed = passed and trace.budget_kept() and (listing_requests is None or started_listing == listing_requests)
     expected = {
         "exit_code": 1 if reasons else 0,
         "reasons": reasons,
         "seconds_below": limit,
+        "process_limits_end_by_the_deadline": True,
         "listing_requests_started": listing_requests,
         "processes_alive_at_return": 0,
     }
@@ -1242,12 +1293,13 @@ def launcher_scenarios(root: Path) -> list[dict[str, Any]]:
         launcher_scenario(
             root,
             "launcher_identity_time_counts_against_the_deadline",
-            "late",
+            "now",
             "exec sleep 30",
-            2.0,
-            limit=2.9,
+            3.0,
+            limit=4.0,
             reasons=["listing_deadline"],
             listing_requests=1,
+            identity_wait=2.0,
         ),
         launcher_scenario(
             root,
@@ -1299,7 +1351,8 @@ def main() -> None:
         "limits": [
             "The bucket listing, the download records and the identity answer are generated; no AWS call and no real download record is read.",
             "Most cases answer the AWS CLI calls from a stand-in function; the real AWS command line and the real bucket's answers are not covered.",
-            "The launcher cases use the real process launcher and an `aws` stand-in that answers, never answers or answers late; the real AWS CLI is not run.",
+            "The launcher cases use the real process launcher and an `aws` stand-in that answers or never answers; the real AWS CLI is not run.",
+            "The late identity answer moves the launcher's clock and never sleeps. The launcher cases check the process limits it gave, not the wall clock.",
             "Reuse by the store step is covered through the existing fake store, not a real bucket.",
         ],
         "cleanup": "The generated records were removed after the run.",
