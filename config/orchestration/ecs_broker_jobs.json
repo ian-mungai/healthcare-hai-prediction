@@ -217,6 +217,24 @@
         ]
       }
     },
+    "serve": {
+      "deadline_seconds": 900,
+      "log_container": "serve",
+      "network": "training",
+      "needs_serving_request": true,
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_RUN_ID",
+          "CODE_SHA256"
+        ],
+        "serve": [
+          "RUN_ID",
+          "SERVING_REQUEST",
+          "MLFLOW_TRACKING_URI"
+        ]
+      }
+    },
     "metadata": {
       "deadline_seconds": 8100,
       "network": "lakehouse",
@@ -334,6 +352,9 @@
     "seal_features": null,
     "seal_gold": null,
     "seal_silver": null,
+    "serve_deploy": "serve",
+    "serving_final_gate_accepted": null,
+    "serving_final_gate_rejected": null,
     "silver_backup": "silver",
     "silver_build": "silver",
     "silver_candidates": "silver",
@@ -344,6 +365,7 @@
     "silver_reconcile": "silver",
     "silver_validate": "silver",
     "snapshot_project": null,
+    "snapshot_serving": null,
     "snapshot_training": null,
     "training_final_gate_accepted": null,
     "training_final_gate_rejected": null,

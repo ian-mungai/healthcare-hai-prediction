@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -24,11 +25,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 from scripts.features import online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
-from scripts.serving import body, canary, deploy, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
+from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -561,6 +563,105 @@ def case_deploy(c: Checker) -> None:
         c.check("history refuses other content under an existing id", refused(lambda: store.put_history(HAI, RUN_1, b"b")))
         store.replace_active(HAI, b"a", None)
         c.check("a replace with a stale token is refused", refused(lambda: store.replace_active(HAI, b"b", "stale")))
+
+
+class StoredObject:
+    """The body of an object the S3 stand-in returns."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def read(self) -> bytes:
+        return self.data
+
+
+class S3Client:
+    """A stand-in for the boto3 S3 client with the conditional writes the manifest store uses: ETag matches and create-only writes."""
+
+    class NoSuchKey(Exception):
+        pass
+
+    def __init__(self) -> None:
+        from botocore.exceptions import ClientError
+
+        self.exceptions = SimpleNamespace(NoSuchKey=self.NoSuchKey, ClientError=ClientError)
+        self.objects: dict[str, tuple[str, bytes]] = {}
+        self.puts = 0
+
+    def get_object(self, **arguments: Any) -> dict[str, Any]:
+        key = arguments["Key"]
+        if key not in self.objects:
+            raise self.NoSuchKey(key)
+        etag, data = self.objects[key]
+        return {"ETag": etag, "Body": StoredObject(data)}
+
+    def put_object(self, **arguments: Any) -> None:
+        key, create_only, match = arguments["Key"], arguments.get("IfNoneMatch"), arguments.get("IfMatch")
+        failed = (create_only == "*" and key in self.objects) or (match is not None and (key not in self.objects or self.objects[key][0] != match))
+        if failed:
+            raise self.exceptions.ClientError({"Error": {"Code": "PreconditionFailed", "Message": "condition"}}, "PutObject")
+        self.puts += 1
+        self.objects[key] = (f'"etag{self.puts}"', bytes(arguments["Body"]))
+
+
+def run_deploy_job(client: S3Client, registry: Registry, run: str, environment: Mapping[str, str], arguments: Sequence[str] = ()) -> tuple[int, str, str]:
+    """The ``serve_deploy`` entry point as the task starts it: its arguments and environment, with the cloud clients replaced."""
+    out, err = io.StringIO(), io.StringIO()
+    modules = {
+        "boto3": SimpleNamespace(client=lambda name, config=None: client),
+        "botocore.config": SimpleNamespace(Config=lambda **settings: settings),
+        "mlflow": SimpleNamespace(MlflowClient=lambda: registry),
+    }
+    with (
+        mock.patch.dict(sys.modules, modules),
+        mock.patch.dict("os.environ", dict(environment), clear=True),
+        mock.patch.object(sys, "argv", ["deploy_job", "--run", run, *arguments]),
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(err),
+    ):
+        try:
+            code = deploy_job.main()
+        except SystemExit as stop:
+            code = int(str(stop.code))
+    return code, out.getvalue(), err.getvalue()
+
+
+def case_deploy_job(c: Checker) -> None:
+    """The serve job as the task runs it: the checked request arrives in the environment, records go to the one fixed prefix and a refusal writes nothing."""
+    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary"}
+    environment = {"SERVING_REQUEST": json.dumps(request), "MODEL_API_MANIFEST_URI": "s3://example-bucket/serving/deployments"}
+    client, registry = S3Client(), Registry()
+    code, out, err = run_deploy_job(client, registry, RUN_1, environment)
+    printed = json.loads(out) if out.strip() else {}
+    c.check("the job deploys and prints the result", code == 0 and printed.get("status") == "written" and printed.get("candidate_version") == CANDIDATE)
+    c.check(
+        "the records are under the fixed prefix and nowhere else",
+        sorted(client.objects) == [f"serving/deployments/active/{HAI}.json", f"serving/deployments/history/{HAI}/{RUN_1}.json"],
+    )
+    before = dict(client.objects)
+    code, out, err = run_deploy_job(client, registry, RUN_1, environment)
+    c.check("a retry changes nothing", code == 0 and json.loads(out or "{}").get("status") == "unchanged" and client.objects == before)
+    refusals = {
+        "no request": {k: v for k, v in environment.items() if k != "SERVING_REQUEST"},
+        "a request that is not JSON": {**environment, "SERVING_REQUEST": "{"},
+        "a request with a field too many": {**environment, "SERVING_REQUEST": json.dumps({**request, "extra": 1})},
+        "a percent above the limit": {**environment, "SERVING_REQUEST": json.dumps({**request, "percent": 90})},
+        "a manifest address that is not S3": {**environment, "MODEL_API_MANIFEST_URI": "records/folder"},
+        "no manifest address": {k: v for k, v in environment.items() if k != "MODEL_API_MANIFEST_URI"},
+    }
+    for label, changed in refusals.items():
+        fresh = S3Client()
+        code, out, err = run_deploy_job(fresh, registry, RUN_2, changed)
+        c.check(f"{label} exits 2 with the refusal message and writes nothing", code == 2 and "serve_deploy refused" in err and not fresh.objects and not out)
+    code, _, err = run_deploy_job(client, registry, RUN_1, {**environment, "SERVING_REQUEST": json.dumps({**request, "percent": 30})})
+    c.check("a retry under the same id with another request is refused", code == 2 and "serve_deploy refused" in err and client.objects == before)
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        path = Path(folder) / "serving_request.json"
+        path.write_text(json.dumps(request))
+        fresh = S3Client()
+        code, out, err = run_deploy_job(fresh, registry, RUN_3, {"MODEL_API_MANIFEST_URI": environment["MODEL_API_MANIFEST_URI"]}, ["--request", str(path)])
+        c.check("a request file still works", code == 0 and json.loads(out or "{}").get("status") == "written")
+    c.check("no run moved the production alias", registry.alias_writes == 0)
 
 
 def canary_deploy(w: World, percent: int) -> deploy.Outcome:
@@ -1370,6 +1471,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
+    "deploy_job_entry": (case_deploy_job, "deploy aws"),
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),

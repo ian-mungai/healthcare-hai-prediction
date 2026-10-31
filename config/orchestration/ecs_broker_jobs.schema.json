@@ -67,7 +67,8 @@
                   "BRONZE_DRY_RUN",
                   "BRONZE_REQUEST_SHA256",
                   "BRONZE_INVENTORY_SHA256",
-                  "HAI_DEADLINE_UTC"
+                  "HAI_DEADLINE_UTC",
+                  "SERVING_REQUEST"
                 ]
               }
             }
@@ -95,6 +96,10 @@
           "needs_bronze_request": {
             "const": true,
             "description": "The run stages bronze_request.json beside its code archive. The broker reads and checks it before it starts the task and passes its values to the containers"
+          },
+          "needs_serving_request": {
+            "const": true,
+            "description": "The run stages serving_request.json beside its code archive. The broker reads and checks it before it starts the task, binds every attempt to the first one it checked and passes the request to the serve container"
           }
         }
       }
