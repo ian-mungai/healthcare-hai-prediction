@@ -25,7 +25,7 @@ BRONZE_TABLES_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_collection", "bronze_writer_prepared", "job_writer_e2e_prepared"})
 PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
 # Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
-OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared", "athena_mirror_prepared")
+OPTIONAL_PREPARATION_FLAGS = ("job_endpoints_enabled", "training_prepared", "athena_mirror_prepared", "monitoring_enabled")
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
 OPTIONAL_PREPARATION_TEXT = ("athena_owner_user",)
 OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT})
