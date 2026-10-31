@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
-from scripts.lakehouse import code_archive, pins, provenance
+from scripts.lakehouse import code_archive, pins, provenance, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
 
@@ -258,24 +258,23 @@ def input_prefix(job: Job) -> str:
 
 
 def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
-    """The version listing of the layer's input prefix as one digest and a count: every version and delete marker with its ID, entity tag and size. The listing
-    is read page by page and never held whole. It is bounded by ``LIST_PAGES`` and by the task deadline, and a prefix that does not fit is refused."""
-    digest, count = hashlib.sha256(), 0
-    markers: dict[str, str] = {}
-    for _ in range(LIST_PAGES):
-        page = client.list_object_versions(Bucket=bucket, Prefix=prefix, **markers)
-        lines = [
-            f"{kind}\t{item['Key']}\t{item['VersionId']}\t{item.get('ETag', '')}\t{item.get('Size', 0)}\n"
-            for kind, items in (("V", page.get("Versions", [])), ("D", page.get("DeleteMarkers", [])))
-            for item in items
-        ]
-        for line in sorted(lines):
-            digest.update(line.encode())
-        count += len(lines)
-        if not page.get("IsTruncated"):
-            return {"prefix": prefix, "versions": count, "sha256": digest.hexdigest()}
-        markers = {"KeyMarker": page["NextKeyMarker"], "VersionIdMarker": page["NextVersionIdMarker"]}
-    raise StepError(f"the version listing of {prefix} is larger than {LIST_PAGES} pages: refusing to compare a partial listing")
+    """The version listing of the layer's input prefix as one digest and a count: every version and delete marker with its ID, entity tag and size. The rule
+    is ``version_listing.canonical_digest``, which the owner's acceptance report uses too. The listing is read page by page and never held whole. It is bounded
+    by ``LIST_PAGES`` and by the task deadline, and a prefix that does not fit is refused."""
+
+    def entries() -> Iterator[version_listing.Entry]:
+        markers: dict[str, str] = {}
+        for _ in range(LIST_PAGES):
+            page = client.list_object_versions(Bucket=bucket, Prefix=prefix, **markers)
+            found = [("V", item) for item in page.get("Versions", [])] + [("D", item) for item in page.get("DeleteMarkers", [])]
+            for kind, item in sorted(found, key=lambda entry: entry[1]["Key"]):
+                yield kind, item["Key"], item["VersionId"], item.get("ETag", ""), item.get("Size", 0)
+            if not page.get("IsTruncated"):
+                return
+            markers = {"KeyMarker": page["NextKeyMarker"], "VersionIdMarker": page["NextVersionIdMarker"]}
+        raise StepError(f"the version listing of {prefix} is larger than {LIST_PAGES} pages: refusing to compare a partial listing")
+
+    return version_listing.canonical_digest(prefix, entries())
 
 
 def claim_run(job: Job, bucket: str, client: Any) -> None:

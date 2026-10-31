@@ -132,23 +132,32 @@ class FakeBucket:
         start = 0 if KeyMarker is None else next(i for i, item in enumerate(held) if (item["Key"], item["VersionId"]) == (KeyMarker, VersionIdMarker)) + 1
         page = held[start : start + 1000]
         truncated = start + 1000 < len(held)
-        result: dict[str, Any] = {"Versions": page, "IsTruncated": truncated}
+        result: dict[str, Any] = {
+            "Versions": [entry for entry in page if not entry.get("Marker")],
+            "DeleteMarkers": [{"Key": entry["Key"], "VersionId": entry["VersionId"]} for entry in page if entry.get("Marker")],
+            "IsTruncated": truncated,
+        }
         if truncated:
             result |= {"NextKeyMarker": page[-1]["Key"], "NextVersionIdMarker": page[-1]["VersionId"]}
         return result
 
 
 def input_entries(item: Spec) -> list[dict[str, Any]]:
+    """The input prefix in listing order: INPUTS versions and three historical delete markers of keys that were deleted before the run."""
     prefix = acceptance.INPUT_PREFIX[item.layer]
-    return [
+    versions = [
         {"Key": f"{prefix}f{index:05d}", "VersionId": f"v{h(item.tag, str(index))[:8]}", "ETag": f'"{h(item.tag, str(index))[:32]}"', "Size": 100 + index}
         for index in range(INPUTS)
     ]
+    markers = [{"Key": f"{prefix}f{index:05d}x", "VersionId": f"d{h(item.tag, 'marker', str(index))[:8]}", "Marker": True} for index in (10, 1200, 1499)]
+    return sorted([*versions, *markers], key=lambda entry: entry["Key"])
 
 
 def cli_listing(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """The ``--query`` shape of ``aws s3api list-object-versions`` that the doc saves."""
-    return {"versions": [{"key": i["Key"], "version": i["VersionId"], "etag": i["ETag"], "bytes": i["Size"]} for i in entries], "deleted": None}
+    """The ``--query`` shape of ``aws s3api list-object-versions`` that the doc saves: versions and delete markers apart."""
+    versions = [{"key": i["Key"], "version": i["VersionId"], "etag": i["ETag"], "bytes": i["Size"]} for i in entries if not i.get("Marker")]
+    deleted = [{"key": i["Key"], "version": i["VersionId"]} for i in entries if i.get("Marker")]
+    return {"versions": versions, "deleted": deleted or None}
 
 
 def build_records(env: Env) -> None:
@@ -255,7 +264,8 @@ def build_records(env: Env) -> None:
     after = json.loads((root / "before.json").read_text())
     after["versions"] += cli_listing(added)["versions"]
     write(root / "after.json", after)
-    write_describe(env, job_overrides_for(item.layer, run, item.code_sha256, env.producer.spec.run if env.producer else ""))
+    overrides = job_overrides_for(item.layer, run, item.code_sha256, env.producer.spec.run if env.producer else "")
+    write_describe(env, {"containerOverrides": [{"name": "init"}, *overrides["containerOverrides"]]})  # describe-tasks lists every container, init by name only
     write(root / "approval.json", {"schema": 1, "layer": item.layer, "run_id": run, "code_sha256": item.code_sha256, "approved_at": "2026-10-31T16:50:00Z"})
     write(root / "running.json", {"taskArns": []})
     write(root / "host.json", {"desired_capacity": 0, "group_instances": 0, "active_container_instances": 0, "services": {}})
@@ -424,7 +434,7 @@ def common_cases() -> list[Case]:
     def set_env(name: str, value: str) -> Callable[[dict[str, Any]], None]:
         def change(overrides: dict[str, Any]) -> None:
             for container in overrides["containerOverrides"]:
-                for item in container["environment"]:
+                for item in container.get("environment", []):
                     if item["name"] == name:
                         item["value"] = value
 
@@ -433,7 +443,7 @@ def common_cases() -> list[Case]:
     return [
         (
             "the dry run task of the same run",
-            overrides_with(lambda o: [c["environment"].append({"name": "LAYER_DRY_RUN", "value": "1"}) for c in o["containerOverrides"]]),
+            overrides_with(lambda o: [c["environment"].append({"name": "LAYER_DRY_RUN", "value": "1"}) for c in o["containerOverrides"] if "environment" in c]),
             (NAMES["task"],),
         ),
         ("a task started for another run", overrides_with(set_env("RUN_ID", "20261030T000000Z-00000000")), (NAMES["task"],)),
@@ -513,12 +523,25 @@ def common_cases() -> list[Case]:
             (NAMES["listing"], NAMES["scope"]),
         ),
         (
-            "a delete marker under the input prefix",
-            lambda e, o: [
-                edit(e.root / name, lambda d: d.update(deleted=[{"key": f"{acceptance.INPUT_PREFIX[e.spec.layer]}f00001", "version": "d1"}]))
-                for name in ("before.json", "after.json")
-            ],
+            "a delete marker added to the input prefix during the task",
+            lambda e, o: edit(
+                e.root / "after.json",
+                lambda d: d.update(deleted=[*(d.get("deleted") or []), {"key": f"{acceptance.INPUT_PREFIX[e.spec.layer]}f00001", "version": "d1"}]),
+            ),
+            (NAMES["same"], NAMES["scope"]),
+        ),
+        (
+            "a historical delete marker that is another one than the pin saw",
+            lambda e, o: [edit(e.root / name, lambda d: d["deleted"][0].update(version="other")) for name in ("before.json", "after.json")],
             (NAMES["listing"],),
+        ),
+        (
+            "an init override that carries a variable",
+            lambda e, o: edit(
+                e.root / "describe.json",
+                lambda d: d["tasks"][0]["overrides"]["containerOverrides"][0].update(environment=[{"name": "RUN_ID", "value": e.spec.run}]),
+            ),
+            (NAMES["task"],),
         ),
         (
             "an input version changed during the task",
@@ -563,7 +586,7 @@ def layer_cases(layer: str) -> list[Case]:
                 lambda d: [
                     i.update(value=OTHER_SILVER_RUN)
                     for c in d["tasks"][0]["overrides"]["containerOverrides"]
-                    for i in c["environment"]
+                    for i in c.get("environment", [])
                     if i["name"] == "INPUT_RUN_ID"
                 ],
             ),
