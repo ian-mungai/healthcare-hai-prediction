@@ -21,6 +21,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import read_json, require
+from scripts.acquisition.transport import https_connection, require_approved
 
 LOGGER = logging.getLogger(__name__)
 LIMIT = 16 * 1024**2
@@ -92,7 +93,8 @@ def api_bytes(root: Path, year: int, url: str, fetch: bool) -> tuple[bytes, dict
     require(not target.exists(), f"Unreceipted response exists for {year}; review its provenance")
     parsed = urlsplit(url)
     require(parsed.scheme == "https" and bool(parsed.hostname) and parsed.username is None and parsed.password is None, "Invalid HTTPS endpoint")
-    connection = http.client.HTTPSConnection(parsed.hostname or "", timeout=25)
+    require_approved(url)
+    connection = https_connection(parsed.hostname or "", timeout=25)
     try:
         connection.request("GET", parsed.path + "?" + parsed.query, headers={"Accept": "application/json"})
         response = connection.getresponse()

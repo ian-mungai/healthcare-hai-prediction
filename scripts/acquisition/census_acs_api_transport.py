@@ -14,24 +14,27 @@ from scripts.acquisition.bls_api_transport import RetryableRequest
 from scripts.acquisition.bls_api_transport import collection_lock as collection_lock
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import read_json, require
+from scripts.acquisition.transport import https_connection, require_approved
 
 
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     """Read only the named secret inside the request runtime; never persist its URL."""
     require(plan["endpoint"] == contract.ENDPOINT and plan["credential_reference"] == "census_api_key", "Census request scope differs; secret not read")
+    require_approved(contract.ENDPOINT)
     return request_json(contract.ENDPOINT, contract.request_for(batch), client)
 
 
 def request_json(endpoint: str, parameters: dict, client: AwsCli) -> bytes:
     """GET one public Census endpoint with the runtime-only key; never persist its URL or echo."""
     require(endpoint.startswith("https://api.census.gov/data/") and "key" not in parameters, "Census request scope differs; secret not read")
+    require_approved(endpoint)
     identity, settings = client.call("sts", "get-caller-identity"), client.configuration
     expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
     require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "Census project identity differs; secret not read")
     credential = api_keys.read("census_api_key", settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
     require(len(credential) >= 16 and credential.isascii() and credential.isalnum(), "Census credential structure invalid")
     parsed = urlsplit(endpoint)
-    connection = http.client.HTTPSConnection(parsed.netloc, timeout=120)
+    connection = https_connection(parsed.netloc, timeout=120)
     try:
         connection.request("GET", parsed.path + "?" + urlencode(parameters | {"key": credential}), headers={"Accept": "application/json"})
         response = connection.getresponse()

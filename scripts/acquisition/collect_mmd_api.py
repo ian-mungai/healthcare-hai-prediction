@@ -1,7 +1,6 @@
 """Acquire approved MMD condition-years and reuse immutable, verified S3 storage."""
 
 import argparse
-import http.client
 import json
 import logging
 import sys
@@ -31,6 +30,7 @@ from scripts.acquisition.mmd_api_contract import (
 )
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
+from scripts.acquisition.transport import https_connection, require_approved
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration
 
 LOGGER = logging.getLogger(__name__)
@@ -50,7 +50,8 @@ def fetch(root: Path, name: str, url: str, allow_network: bool) -> tuple[bytes, 
     require(not body_path.exists(), "Unreceipted response requires provenance review")
     parsed = urlsplit(url)
     require(parsed.scheme == "https" and parsed.netloc == "data.cms.gov" and parsed.path == "/data-api/v1/mmd-tool/", "Unapproved API endpoint")
-    connection = http.client.HTTPSConnection("data.cms.gov", timeout=25)
+    require_approved(url)
+    connection = https_connection("data.cms.gov", timeout=25)
     try:
         controls.begin(name)
         connection.request("GET", parsed.path + "?" + parsed.query, headers={"Accept": "application/json"})

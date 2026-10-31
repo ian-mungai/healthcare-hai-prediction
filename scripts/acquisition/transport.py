@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -127,13 +128,61 @@ def approved_hosts() -> frozenset[str] | None:
     return frozenset(hosts)
 
 
+def on_raw_route() -> bool:
+    """True when this process captures under the raw root, which is the AWS route."""
+    return os.environ.get(CAPTURE_ROOT_VARIABLE) == RAW_ROOT
+
+
 def require_approved(url: str) -> None:
     """Refuse a URL whose host is not on the approved hosts file; no file set means no extra limit."""
     approved = approved_hosts()
-    if approved is None and os.environ.get(CAPTURE_ROOT_VARIABLE) == RAW_ROOT:
+    if approved is None and on_raw_route():
         raise CaptureError("The raw route requires an approved hosts file.")
     if approved is not None and urllib.parse.urlsplit(url).hostname not in approved:
         raise CaptureError("The host is not on the approved hosts file.")
+
+
+def public_addresses(host: str, port: int) -> list[str]:
+    """Return the addresses a name resolves to, refusing the name when any answer is not a public address."""
+    addresses = [str(info[4][0]).split("%")[0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        mapped = getattr(parsed, "ipv4_mapped", None)
+        if not parsed.is_global or (mapped is not None and not mapped.is_global):
+            raise CaptureError("The host resolves to a non-public address, so the request is refused.")
+    if not addresses:
+        raise CaptureError("The host did not resolve, so the request is refused.")
+    return addresses
+
+
+class PublicHTTPSConnection(http.client.HTTPSConnection):
+    """Connect only to a validated public address and keep the approved name for the TLS check."""
+
+    def connect(self) -> None:
+        address = public_addresses(self.host, self.port)[0]
+        sock = socket.create_connection((address, self.port), self.timeout, self.source_address)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    """The urllib handler for PublicHTTPSConnection, so a redirect target is validated like the first request."""
+
+    def https_open(self, req: Any) -> Any:
+        return self.do_open(PublicHTTPSConnection, req, context=self._context)
+
+
+class ReviewedTransport:
+    """Handlers a caller or a test adds below the redirect policy. The reviewed redirect handler is always installed above them."""
+
+    def __init__(self, *handlers: urllib.request.BaseHandler) -> None:
+        self.handlers = handlers
+
+
+def https_connection(netloc: str, timeout: float) -> PublicHTTPSConnection:
+    """Return the connection every live collector uses. The host must be on the approved hosts file."""
+    require_approved(f"https://{netloc}/")
+    return PublicHTTPSConnection(netloc, timeout=timeout)
 
 
 class HttpsRequest(urllib.request.Request):
@@ -316,12 +365,17 @@ def download(url: str, dest: Path, file_name: str, expected_format: str, role: s
         controls.validate_path(dest, boundary.root)
     host = urllib.parse.urlsplit(url).hostname
     supplied_opener = opener
+    if supplied_opener is not None and not isinstance(supplied_opener, ReviewedTransport) and (approved_hosts() is not None or on_raw_route()):
+        raise CaptureError("A supplied opener must be a reviewed transport on the raw route, so its redirects are reviewed.")
     started = time.monotonic()
     last: Download | None = None
     for attempt in range(1, limits.attempts + 1):
         controls.begin(url)
         redirects = ReviewedRedirects({str(host)}, source_url=url)
-        opener = supplied_opener or urllib.request.build_opener(redirects)
+        if isinstance(supplied_opener, ReviewedTransport):
+            opener = urllib.request.build_opener(redirects, *supplied_opener.handlers)
+        else:
+            opener = supplied_opener or urllib.request.build_opener(redirects, PublicHTTPSHandler())
         resolve_metadata = getattr(supplied_opener, "resolved_metadata", redirects.resolved_metadata)
         directory = dest / f"attempt_{attempt:02}"
         directory.mkdir(parents=True, exist_ok=False)

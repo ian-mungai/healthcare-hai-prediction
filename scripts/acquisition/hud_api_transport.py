@@ -15,11 +15,13 @@ from scripts.acquisition.bls_api_transport import RetryableRequest
 from scripts.acquisition.bls_api_transport import collection_lock as collection_lock
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import read_json, require
+from scripts.acquisition.transport import https_connection, require_approved
 
 
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     """Read only the named secret inside the request runtime; send it only as a header."""
     require(plan["endpoint"] == contract.ENDPOINT and plan["credential_reference"] == contract.CREDENTIAL, "HUD request scope differs; secret not read")
+    require_approved(contract.ENDPOINT)
     parameters = contract.request_for(batch)
     identity, settings = client.call("sts", "get-caller-identity"), client.configuration
     expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
@@ -27,7 +29,7 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     credential = api_keys.read(contract.CREDENTIAL, settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
     require(re.fullmatch(r"[A-Za-z0-9._-]{20,4096}", credential) is not None, "HUD credential structure invalid")
     parsed = urlsplit(contract.ENDPOINT)
-    connection = http.client.HTTPSConnection(parsed.netloc, timeout=300)
+    connection = https_connection(parsed.netloc, timeout=300)
     try:
         headers = {"Accept": "application/json", "Authorization": f"Bearer {credential}"}
         connection.request("GET", parsed.path + "?" + urlencode(parameters), headers=headers)
