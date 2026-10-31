@@ -237,6 +237,7 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256",
           "HAI_DEADLINE_UTC"
         ],
