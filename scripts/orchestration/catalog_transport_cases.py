@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,11 +49,25 @@ ROUTE_CASES = (
     "relay_rebind",
     "relay_live_conflict",
 )
-CASES = ("normal", "half_close", "reverse_half_close", "relay_death", "lifetime_expiry", "dead_target", "stderr_flood", *ROUTE_CASES)
+CASES = (
+    "normal",
+    "half_close",
+    "half_close_with_foreign_client",
+    "reverse_half_close",
+    "relay_death",
+    "lifetime_expiry",
+    "dead_target",
+    "stderr_flood",
+    *ROUTE_CASES,
+)
 # A case whose socket state must not leak into or from the others runs in its own process after them. relay_start_failure fails in a full run and passes alone.
 ISOLATED_CASES = ("relay_start_failure",)
 CASE_SECONDS = 90
+ERROR_TEXT_LIMIT = 4000  # the cases are synthetic, so a traceback holds no secret; the limit only bounds the report
 BODY = b'{"catalog":"synthetic"}'
+# Any process on the host may connect to a listener that the case opens (a tool that probes new loopback ports sends "GET /" and holds the connection for a
+# second). The stream target serves only a connection that opens with the case's own request line and host.
+CASE_REQUEST_START = b"POST / HTTP/1.1\r\nHost: synthetic\r\n"
 # Both payloads exceed the relay buffer (1 MiB) plus the loopback socket buffers, so a relay that drops or reorders bytes under backpressure fails.
 UPLOAD = bytes(range(256)) * 8192
 DOWNLOAD = b"HTTP/1.1 200 Synthetic\r\nConnection: close\r\n\r\n" + bytes(reversed(range(256))) * 16384
@@ -93,7 +108,9 @@ class _StreamTarget:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             listener.bind(("127.0.0.1", 0))
-            listener.listen(1)
+            listener.listen(
+                8
+            )  # the relay opens one connection for its readiness probe and one for the request, so a backlog of one overflows and resets the second
         except BaseException:
             listener.close()
             raise
@@ -135,24 +152,37 @@ class _StreamTarget:
         except OSError as error:
             self.error = type(error).__name__
 
-    def _serve_connection(self, peer: socket.socket) -> bool:
-        if self.mode == "wait_for_eof":
-            self._drain(peer)
-            if not self.received:
-                self.saw_eof = False
+    def _opens_with_case_request(self, peer: socket.socket, data: bytearray) -> bool:
+        """Read until the connection shows whether it opens with the case's own request. A foreign client or a readiness probe is judged at once."""
+        while len(data) < len(CASE_REQUEST_START):
+            chunk = peer.recv(65536)
+            if not chunk:
                 return False
+            data.extend(chunk)
+        return data.startswith(CASE_REQUEST_START)
+
+    def _serve_connection(self, peer: socket.socket) -> bool:
+        """Serve the case's own request. Any other connection is closed unserved, without waiting for it to end."""
+        data = bytearray()
+        if not self._opens_with_case_request(peer, data):
+            return False
+        if self.mode == "wait_for_eof":
+            while chunk := peer.recv(65536):
+                data.extend(chunk)
+            self.received.extend(data)
+            self.saw_eof = True
             self.replied_after_eof = True
             peer.sendall(DOWNLOAD)
             peer.shutdown(socket.SHUT_WR)
             return True
-        while b"\r\n\r\n" not in self.received:
+        while b"\r\n\r\n" not in data:
             chunk = peer.recv(65536)
             if not chunk:
                 return False
-            self.received.extend(chunk)
-        del self.received[:]
+            data.extend(chunk)
         peer.sendall(DOWNLOAD)
         peer.shutdown(socket.SHUT_WR)
+        self.received.extend(data.partition(b"\r\n\r\n")[2])
         self._drain(peer)
         return True
 
@@ -186,6 +216,16 @@ def _reverse_half_closed_request(endpoint: str) -> tuple[bytes, bool]:
         except OSError:
             return reply, False
         return reply, True
+
+
+def _foreign_client(endpoint: str) -> threading.Timer:
+    """Behave like a tool that probes a new loopback port: connect, send "GET /" and keep the connection open for a second before it closes."""
+    peer = socket.create_connection(("127.0.0.1", urlsplit(endpoint).port or 0), timeout=5)
+    peer.sendall(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: keep-alive\r\nuser-agent: node\r\n\r\n")
+    holder = threading.Timer(1.0, peer.close)
+    holder.name = "catalog_foreign_client"
+    holder.start()
+    return holder
 
 
 def _unavailable(transport: CatalogTransport) -> bool:
@@ -251,16 +291,18 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
     started = time.monotonic()
     checks: dict[str, bool] = {}
     failure_code = None
+    error_text = None
     transport = CatalogTransport(scratch / "registry")
     with WorkerStandin(Scenario("catalog", "reset" if name == "dead_target" else "normal", BODY, lifetime_s=12, counted_header="x-synthetic-client")) as peer:
         try:
             if name == "stderr_flood":
                 checks["stderr_tunnel_flood_does_not_block_route"] = _stderr_route(transport, scratch) == BODY
-            elif name in {"half_close", "reverse_half_close"}:
+            elif name in {"half_close", "half_close_with_foreign_client", "reverse_half_close"}:
                 lifetime = time.monotonic() + 12
-                with _StreamTarget("wait_for_eof" if name == "half_close" else "reply_then_receive", lifetime) as target:
+                with _StreamTarget("reply_then_receive" if name == "reverse_half_close" else "wait_for_eof", lifetime) as target:
                     endpoint = transport.start_relay(target.port, deadline=lifetime)
-                    if name == "half_close":
+                    foreign = _foreign_client(endpoint) if name == "half_close_with_foreign_client" else None
+                    if name != "reverse_half_close":
                         reply = transport.execute(lambda: _half_closed_request(endpoint), deadline=lifetime)
                         checks["target_ended_within_its_lifetime"] = target.finish()
                         checks["target_got_the_whole_request_then_eof"] = bytes(target.received).endswith(UPLOAD) and target.saw_eof
@@ -272,6 +314,8 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
                         checks["client_got_the_whole_reply_then_eof_before_sending"] = reply == DOWNLOAD
                         checks["client_upload_after_target_half_close_was_accepted"] = sent
                         checks["target_kept_receiving_the_whole_upload_then_eof"] = bytes(target.received) == UPLOAD and target.saw_eof
+                    if foreign is not None:
+                        foreign.join()
                     checks["stream_target_had_no_socket_error"] = target.error is None
             elif name == "dead_target":
                 failed = False
@@ -323,6 +367,7 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
                     raise ValueError("unsupported_local_catalog_case")
         except (OSError, ValueError, EOFError, TimeoutError, RuntimeError, http.client.HTTPException) as error:
             checks[f"unexpected_{type(error).__name__}"] = False
+            error_text = traceback.format_exc()[-ERROR_TEXT_LIMIT:]
             code = str(error)
             failure_code = (
                 code
@@ -350,6 +395,7 @@ def run_case(name: str, folder: Path) -> dict[str, Any]:
         "registry": str(scratch / "registry"),
         "pid": os.getpid(),
         "cleanup": "done" if confirmed and absent else "unconfirmed",
+        **({"error": error_text} if error_text else {}),
     }
     if row["cleanup"] != "done":
         raise TransportCleanupUnconfirmed(row)
