@@ -81,6 +81,7 @@ class Run:
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
     state_parent: Path | None = None
+    private_in_process: bool = False
     keyed_lane: bool = False
     person_lane: bool = False
     lane_approval: Path | None = None
@@ -1297,7 +1298,8 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
     """Dispatch under one root lock, honoring persisted source pauses and every transport budget."""
     queue = load_queue(run)
     active = [unit for unit in queue if unit["disposition"] in ACTIVE]
-    selected, listed = [], {}
+    selected: list[dict] = []
+    listed: dict[str, list[str]] = {}
     for unit in active:
         lane = lane_of(unit)
         if may_attempt(run, lane):
@@ -1340,7 +1342,13 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         try:
             boundary = controls.Boundary(run.state_root, run.base, identity, run.byte_cap, used=used_bytes(run))
             try:
-                if private:
+                if private and run.private_in_process:
+                    require(
+                        not (run.person_lane or on_raw_route()), "A unit whose original names people runs in the worker on the raw route and in the person lane"
+                    )
+                    with controls.active(boundary):
+                        fields = private_safe(handle(unit, run))
+                elif private:
                     fields = run_private(unit, run)
                     boundary.used = run.cache.pop("private_budget_used", boundary.used)
                 else:

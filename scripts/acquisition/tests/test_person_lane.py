@@ -265,3 +265,14 @@ def test_a_silenced_worker_prints_nothing_through_any_route_and_an_unsilenced_on
         quiet.stdout == "" and quiet.stderr == "",
         f"print, stderr, raw descriptors, logging, warnings, tracebacks and an uncaught error reach nothing: {quiet.stdout!r} {quiet.stderr!r}",
     )
+
+
+def test_running_a_private_unit_in_the_logging_process_is_refused_on_the_raw_route_and_in_the_person_lane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    unit, run = private_run(monkeypatch, tmp_path, "stored/owners/receipt.json")
+    monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
+    monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail("a private unit was loaded in the logging process"))
+    run.private_in_process = True
+    with pytest.raises(ValueError, match="worker"):
+        harness.execute_locked(run, False, True, None, None, None)

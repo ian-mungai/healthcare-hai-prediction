@@ -564,7 +564,9 @@ def real_private_adapter(scenario: Any, root: Path) -> None:
         queue = fixture.freeze()
 
         def matches() -> None:
-            run = harness.Run(queue_path=queue, state_root=root / "onc_state", base=base, opener=onc_e2e.Web(data), sleep=lambda _s: None)
+            run = harness.Run(
+                queue_path=queue, state_root=root / "onc_state", base=base, opener=onc_e2e.Web(data), sleep=lambda _s: None, private_in_process=True
+            )
             control_e2e.approve_fixture(run)
             harness.execute(run)
             result = recorded(run, entry["snapshot_id"])
@@ -583,7 +585,9 @@ def real_private_adapter(scenario: Any, root: Path) -> None:
 
         def changed() -> None:
             revised = onc_e2e.body(lambda rows: rows.append(list(rows[1])))
-            run = harness.Run(queue_path=queue, state_root=root / "onc_changed", base=base, opener=onc_e2e.Web(revised), sleep=lambda _s: None)
+            run = harness.Run(
+                queue_path=queue, state_root=root / "onc_changed", base=base, opener=onc_e2e.Web(revised), sleep=lambda _s: None, private_in_process=True
+            )
             control_e2e.approve_fixture(run)
             harness.execute(run)
             result = recorded(run, entry["snapshot_id"])

@@ -73,7 +73,8 @@ def run_job(job: dict[str, Any]) -> dict[str, Any]:
     except BaseException as error:
         category = harness.error_category(error)
         with contextlib.suppress(BaseException):
-            harness.record_diagnostic(run, job["snapshot_id"], error)
+            if isinstance(error, Exception):
+                harness.record_diagnostic(run, job["snapshot_id"], error)
         return {"kind": "failed", "category": category}
 
 
