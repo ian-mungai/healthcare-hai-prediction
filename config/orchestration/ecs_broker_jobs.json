@@ -243,6 +243,9 @@
         "ingest_polaris": [
           "RUN_ID",
           "POLARIS_URI"
+        ],
+        "ingest_dbt": [
+          "RUN_ID"
         ]
       },
       "chain": true

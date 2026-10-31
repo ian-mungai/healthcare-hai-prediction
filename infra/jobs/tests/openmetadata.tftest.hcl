@@ -169,6 +169,64 @@ run "enabled_plan_registers_one_bounded_private_task" {
   }
 }
 
+run "containers_follow_the_broker_table" {
+  command = plan
+
+  variables {
+    openmetadata_enabled = true
+    openmetadata_images = {
+      server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_server_dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_search_dev@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      database  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_database_dev@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+    openmetadata_roles = {
+      execution         = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
+      openmetadata_task = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
+    }
+  }
+
+  assert {
+    condition = (
+      toset([for container in jsondecode(output.openmetadata_container_definitions) : container.name if length([for variable in container.environment : variable.name if variable.value == ""]) > 0]) ==
+      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers)) &&
+      alltrue([for container in jsondecode(output.openmetadata_container_definitions) : (
+        length([for variable in container.environment : variable.name if variable.value == ""]) == 0 ||
+        toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers[container.name])
+      )]) &&
+      contains([for container in jsondecode(output.openmetadata_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.log_container)
+    )
+    error_message = "Every container with an empty variable is named in the broker table with exactly those variables, so no container of the catalog task starts with an empty run ID."
+  }
+}
+
+run "marquez_step_needs_its_own_table_entry" {
+  command = plan
+
+  variables {
+    openmetadata_enabled     = true
+    openmetadata_marquez_url = "http://10.0.1.20:5000"
+    openmetadata_images = {
+      server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_server_dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_search_dev@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      database  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_database_dev@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+    openmetadata_roles = {
+      execution         = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
+      openmetadata_task = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
+    }
+  }
+
+  assert {
+    condition = (
+      !contains(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers), "ingest_marquez") &&
+      [for variable in one([for container in jsondecode(output.openmetadata_container_definitions) : container if container.name == "ingest_marquez"]).environment : variable.name if variable.value == ""] == ["RUN_ID"]
+    )
+    error_message = "With a Marquez address the Marquez step needs RUN_ID, and the broker table does not name it yet. Add it to the metadata job in the same change that turns the address on."
+  }
+}
+
 run "arm_and_marquez_are_opt_in" {
   command = plan
 
