@@ -163,11 +163,12 @@ The following rules describe the host and its network:
   later. Image pulls and
   log writes use the execution role, which every task definition names. The boot
   script turns on the agent's awslogs override for that. The execution role
-  also reads only the control plane's nine Parameter Store SecureString
+  also reads only the control plane's Parameter Store SecureString
   parameters, `/<PROJECT_NAME>/<name>`, with `ssm:GetParameters` on exactly
-  those parameter ARNs (postgres_password, airflow_db_password,
+  those parameter ARNs. Eight are always granted (postgres_password, airflow_db_password,
   marquez_db_password, airflow_fernet_key, airflow_jwt_secret,
-  airflow_api_secret_key, redis_password, polaris_root_secret and grafana_admin_password). It holds no
+  airflow_api_secret_key, redis_password and polaris_root_secret). The ninth, grafana_admin_password, is a separate inline policy
+  that exists only while the IAM stack input `monitoring_enabled` is true, so the stack is unchanged while monitoring is off. It holds no
   Secrets Manager and no KMS permission: the ECS documentation requires
   `kms:Decrypt` only for a customer-managed key. These parameters use the
   AWS-managed key `aws/ssm`. The Airflow administrator password is not

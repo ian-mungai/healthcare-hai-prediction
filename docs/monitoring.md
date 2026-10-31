@@ -82,7 +82,7 @@ Plan for about 2 GB on the data volume for Prometheus plus the Grafana database.
 
 Nothing here is applied or pushed by the code change. Each step is the owner's, under the project profile unless noted.
 
-1. **Foundation:** set `monitoring_enabled = true` in the platform variable file, then plan and apply the platform stack (three ECR repositories `prometheus`, `grafana` and `statsd_exporter` plus the `monitoring` log group) and the IAM stack (the execution role may read the Grafana password parameter and the project user may create it).
+1. **Foundation:** set `monitoring_enabled = true` in the IAM stack inputs and apply the IAM stack first, so the execution role may inject the Grafana password. Then set `monitoring_enabled = true` in the platform variable file, then plan and apply the platform stack (three ECR repositories `prometheus`, `grafana` and `statsd_exporter` plus the `monitoring` log group) and the IAM stack (the execution role may read the Grafana password parameter and the project user may create it).
 2. **Password:** create the Grafana password once. The command prints only whether it created the parameter:
 
    ```sh

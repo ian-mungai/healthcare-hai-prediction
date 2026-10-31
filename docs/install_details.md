@@ -146,8 +146,8 @@ No script performs the following setup steps. Do them by hand:
    once per name, taking the names from the variable defaults through
    `scripts/infrastructure/secret_store.py`. The `sts` policy file takes the two
    lakehouse role names (`lakehouse_reader_role_name`, `lakehouse_writer_role_name`)
-   and the task execution policy takes its nine parameter names from the same
-   variables, not from `PROJECT_NAME`.
+   and the task execution policy takes its parameter names from the same
+   variables, not from `PROJECT_NAME`. There are eight, plus a ninth while `monitoring_enabled` is true.
 
    To add a secret:
 
