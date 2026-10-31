@@ -81,7 +81,7 @@ Apply the layer jobs in this order. Each apply is the owner's.
 
 ### Dry run
 
-A dry run runs the phases up to export for real, because they write only the task's own folder. The publish phase then reads the catalog without writing and prints the plan of the real publish: each table with rows to write, whether it exists, rows added and deleted, the `publish_runs` row, the backup name and the run branch. It saves nothing to the bucket, the upload phase uploads nothing and the feast phase does nothing. Read the plan in the jobs log group, stream `<layer>/publish/<task id>`. The line that starts with `DRY_RUN_PLAN` and a space holds the whole plan as JSON.
+A dry run runs the phases up to export for real, because they write only the task's own folder. The publish phase then reads the catalog without writing and prints the plan of the real publish: each table with rows to write, whether it exists, rows added and deleted, the `publish_runs` row, the backup name and the run branch. It saves nothing to the bucket, the upload phase uploads nothing and the feast phase does nothing. Read the plan in the jobs log group, stream `<layer>/publish/<task id>`. The line that starts with `DRY_RUN_PLAN` and a space holds the whole plan as JSON. If the plan holds a line that starts with `UNKNOWN` or `CATALOG`, the dry run could not read that catalog state. The plan is still printed and saved. Then the publish phase exits with an error, so a green dry run always has a complete plan.
 
 Set the override `LAYER_DRY_RUN=1` on every container of a hand-started task. The first dry phase marks the run folder, so a later phase without the override stays dry.
 
