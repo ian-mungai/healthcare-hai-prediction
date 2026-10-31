@@ -87,9 +87,11 @@ class Loader:
         self.clock: Clock | None = None
         self.unloadable: set[str] = set()
         self.loaded: list[str] = []
+        self.attempts: list[str] = []
         self.released: list[str] = []
 
     def load(self, hai_type: str, version: str) -> service.LoadedModel:
+        self.attempts.append(version)
         if version in self.unloadable:
             raise RuntimeError(f"synthetic load failure for version {version}")
         self.loaded.append(version)
@@ -391,6 +393,73 @@ def case_version_failure(c: Checker) -> None:
         c.check(
             "a canary that cannot load leaves the stable model serving every request", statuses == {200} and w.api.health().body[HAI]["candidate"] == "failed"
         )
+
+
+def case_recovered_model(c: Checker) -> None:
+    """A model that failed to load while a dependency was down loads on a later refresh. An ejected canary stays ejected until a new deployment."""
+    keys_ = hospital_keys(40)
+    with world(count=40, percent=50, deployment=False) as w:
+        w.loader.unloadable.add(CANDIDATE)
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        w.api.refresh()
+        c.check("a canary that cannot load is failed", w.api.health().body[HAI]["candidate"] == "failed")
+        w.loader.unloadable.discard(CANDIDATE)
+        w.clock.now += 5.0
+        ask(w, keys_[0])
+        c.check("no retry inside the refresh interval", w.loader.attempts.count(CANDIDATE) == 1 and w.api.health().body[HAI]["candidate"] == "failed")
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("the next refresh loads the recovered canary", w.api.health().body[HAI]["candidate"] == CANDIDATE)
+        c.check("and the canary then serves its share", "canary" in {ask(w, key).body["served_by"] for key in keys_})
+        attempts = len(w.loader.attempts)
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("a loaded model is not loaded again by a later refresh", len(w.loader.attempts) == attempts)
+        w.loader.unloadable.add(CANDIDATE)
+        w.loader.unloadable.add("5")
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version="5", percent=30, mode="canary", deployment_id=RUN_2)
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("a new candidate that cannot load is failed while the stable model serves", w.api.health().body[HAI]["candidate"] == "failed")
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("a failing load is tried once per refresh interval", w.loader.attempts.count("5") == 2)
+    with world(count=40, percent=50, deployment=False) as w:
+        w.loader.unloadable.add(PRODUCTION)
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        w.api.refresh()
+        c.check("a stable model that cannot load makes the service unready", w.api.health().status == 503)
+        w.loader.unloadable.discard(PRODUCTION)
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("the recovered stable model makes the service ready", w.api.health().status == 200 and w.api.health().body[HAI]["stable"] == PRODUCTION)
+    with world(count=40, percent=50, deployment=False) as w:
+        w.loader.unloadable.add(CANDIDATE)
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        w.api.refresh()
+        w.loader.unloadable.discard(CANDIDATE)
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=40, mode="canary", deployment_id=RUN_2)
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("a new deployment of the same failed version loads it", w.api.health().body[HAI]["candidate"] == CANDIDATE)
+    with world(count=40, percent=50) as w:
+        canary_keys = [key for key in keys_ if canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) == "canary"]
+        w.loader.broken.add(CANDIDATE)
+        for key in canary_keys[:4]:
+            ask(w, key)
+        c.check("three failed predictions eject the canary", w.api.health().body[HAI]["candidate"] == "ejected")
+        w.loader.broken.discard(CANDIDATE)
+        attempts = w.loader.attempts.count(CANDIDATE)
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check(
+            "an ejected canary is not loaded again by a refresh",
+            w.api.health().body[HAI]["candidate"] == "ejected" and w.loader.attempts.count(CANDIDATE) == attempts,
+        )
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=40, mode="canary", deployment_id=RUN_2)
+        w.clock.now += 31.0
+        ask(w, keys_[0])
+        c.check("the next deployment gives the ejected canary a fresh load", w.api.health().body[HAI]["candidate"] == CANDIDATE)
 
 
 def case_rollback(c: Checker) -> None:
@@ -1297,6 +1366,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "version_failure_isolated": (case_version_failure, "canary"),
     "candidate_feature_errors": (case_candidate_feature_errors, "canary"),
     "nonfinite_predictions": (case_nonfinite, "canary"),
+    "recovered_model": (case_recovered_model, "canary dependency recovery"),
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
