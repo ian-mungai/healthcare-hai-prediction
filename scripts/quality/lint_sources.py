@@ -20,6 +20,11 @@ from scripts.process import TimeoutExpired, find_program, run_command
 from scripts.quality.repo_checks import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+# The limit in seconds of one SQLFluff run. A run over every dbt source takes about 14 minutes on a hosted runner and cannot run in parallel
+# (`processes = 1` in .sqlfluff). The sql_style group took 674 to 908 seconds in six hosted runs (Oct 29 to 31 2026), of which about 30 seconds are
+# the macro usage check, so 900 seconds left the slowest run 2 percent of room. This limit only stops a hung run: it stays below the 30 minute
+# job timeout, which leaves about 100 seconds for setup and the other steps of that job.
+SQLFLUFF_LIMIT = 1500
 CHECKS = ("ruff", "shell-syntax", "shellcheck", "actionlint", "yamllint", "build-contexts", "hadolint", "gofmt", "go-vet", "sql")
 PRIVATE = {".git", ".venv", ".tools", "data", "plans", "node_modules", ".aws", ".codex", ".agents"}
 SHELLS = {"sh", "bash", "dash", "zsh", "ksh"}
@@ -184,7 +189,7 @@ def sql() -> int:
             arguments = ["lint", "--config", str(ROOT / ".sqlfluff")]
             if profile != "dbt":
                 arguments += ["--templater", "raw", "--dialect", profile]
-            result = run_command(str(ROOT / ".tools/sqlfluff/bin/sqlfluff"), [*arguments, *["./" + name for name in sources]], cwd=ROOT, timeout=900)
+            result = run_command(str(ROOT / ".tools/sqlfluff/bin/sqlfluff"), [*arguments, *["./" + name for name in sources]], cwd=ROOT, timeout=SQLFLUFF_LIMIT)
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
             failed |= bool(result.returncode) | bool(refuse_size_skips(result.stdout + result.stderr))
