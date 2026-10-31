@@ -59,7 +59,7 @@ The project profile holds only the permissions of the approved list. The list is
 
 The apply creates or updates the policies, attaches them to two groups and adds the project user to both. It also removes the earlier grouped policies. `infra.iam.scripts.export_policies` writes the policies in IAM back as templates, so that you can see drift.
 
-Before an attended AWS step, `.venv/bin/python -m scripts.infrastructure.iam_preflight` simulates the grants that each project role needs and prints one `PASS` or `FAIL` line per check. It reads from IAM only. The project profile needs the `SimulateProjectRoles` statement of the IAM policy first. The check is described in `docs/infrastructure_controls.md`.
+Before an attended AWS step, `.venv/bin/python -m scripts.infrastructure.iam_preflight` simulates the grants that each project role needs and prints one `PASS` or `FAIL` line per check. It reads from IAM only. The project profile needs the `SimulateProjectPrincipals` statement of the IAM policy first. `--scope silver` checks only the calls of the first silver run. The check is described in `docs/infrastructure_controls.md`.
 
 The IAM Terraform stack holds the roles, the network, the host launch template, the Auto Scaling group and the cost budget. The owner applies it first with `bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`. The project profile then applies the platform stack with `--platform`. The order and the checks are in `docs/infrastructure_controls.md`.
 
