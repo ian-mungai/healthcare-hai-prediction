@@ -3633,9 +3633,11 @@ if [[ -n "${STUB_WAIT_FOR_LOCK:-}" ]]; then
     sleep 0.1
   done
 fi
-printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s", ' \\
-  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}" >>"$STUB_LOG"
-printf '"HAI_CI_REUSE": "%s"}, "seen": "%s", "overlap": "%s"}\\n' "${HAI_CI_REUSE-unset}" "$seen" "$overlap" >>"$STUB_LOG"
+# One append per row: the hook partitions write to this log at the same time, and two appends could interleave another stub's row.
+row="$(printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s", ' \\
+  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}")"
+row+="$(printf '"HAI_CI_REUSE": "%s"}, "seen": "%s", "overlap": "%s"}' "${HAI_CI_REUSE-unset}" "$seen" "$overlap")"
+printf '%s\\n' "$row" >>"$STUB_LOG"
 if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
 exit "${STUB_EXIT_RUN_CI:-0}"
 """.replace("@PATTERN@", INHERITED_PATTERN)

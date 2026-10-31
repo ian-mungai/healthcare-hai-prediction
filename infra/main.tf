@@ -125,21 +125,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
   }
 
   # The MLflow server writes each artifact once, under mlflow/. Only replaced or deleted versions are old, so they expire after
-  # 30 days. Current artifacts never expire.
-  rule {
-    id     = "expire_replaced_mlflow_versions"
-    status = "Enabled"
+  # 30 days. Current artifacts never expire. The rule changes the live lifecycle configuration, so it exists only while the owner
+  # sets mlflow_retention_enabled; a default plan leaves the three rules above as they are.
+  dynamic "rule" {
+    for_each = var.mlflow_retention_enabled ? [1] : []
 
-    filter {
-      prefix = "mlflow/"
-    }
+    content {
+      id     = "expire_replaced_mlflow_versions"
+      status = "Enabled"
 
-    noncurrent_version_expiration {
-      noncurrent_days = 30
-    }
+      filter {
+        prefix = "mlflow/"
+      }
 
-    expiration {
-      expired_object_delete_marker = true
+      noncurrent_version_expiration {
+        noncurrent_days = 30
+      }
+
+      expiration {
+        expired_object_delete_marker = true
+      }
     }
   }
 }

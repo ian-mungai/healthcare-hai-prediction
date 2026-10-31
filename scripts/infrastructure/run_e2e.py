@@ -1313,6 +1313,50 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     evidence.check(step, "apply_not_started", not any(call["arguments"][1] == "apply" for call in calls))
 
 
+def run_storage_retention_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
+    """The MLflow retention rule changes the live lifecycle configuration: only the explicit option renders it, and only a plan made with it passes."""
+    renderer = [sys.executable, "-m", "scripts.infrastructure.render_project_config", "--stack", "storage"]
+    workspace = copied_workspace(evidence.temporary, "storage_retention", sources, FIXTURE)
+    expected = {
+        "aws_profile": PROFILE,
+        "aws_region": FIXTURE["AWS_REGION"],
+        "data_bucket_name": FIXTURE["S3_BUCKET"],
+        "environment": "dev",
+        "expected_account_id": FIXTURE["AWS_ACCOUNT_ID"],
+        "project_name": FIXTURE["PROJECT_NAME"],
+    }
+    stand_in = evidence.temporary / "storage_tools"
+    stand_in.mkdir(exist_ok=True)
+    (stand_in / "terraform").write_text(f"#!{sys.executable}\n" + PLATFORM_TERRAFORM, encoding="utf-8")
+    (stand_in / "terraform").chmod(0o700)
+    (stand_in / "dirname").symlink_to("/usr/bin/dirname")
+    flag = "mlflow_retention_enabled"
+    plans = {"default": platform_plan(expected, {flag: False}), "enabled": platform_plan(expected, {flag: False}, variables={flag: {"value": True}})}
+    cases = {
+        "accept_default_storage_plan": ("default", [], 0, "Rendered private Terraform inputs"),
+        "reject_retention_plan_without_the_option": ("enabled", [], 2, f"Saved plan input {flag} is not its committed default"),
+        "accept_retention_plan_with_the_option": ("enabled", ["--mlflow-retention"], 0, "Rendered private Terraform inputs"),
+        "reject_default_plan_with_the_option": ("default", ["--mlflow-retention"], 2, "Saved plan inputs differ from .env"),
+    }
+    for name, (plan, options, returncode, message) in cases.items():
+        plan_path = workspace / f"{name}.json"
+        plan_path.write_text(json.dumps(plans[plan]), encoding="utf-8")
+        step, result = evidence.run(name, [*renderer, *options, "--check-plan", str(plan_path)], workspace, {"PATH": str(stand_in)})
+        evidence.check(step, "expected_outcome", result.returncode == returncode and message in result.stdout + result.stderr)
+    output = workspace / OUTPUT_NAMES[0]
+    wrapper = ["/bin/bash", "scripts/infrastructure/terraform.sh"]
+    step, result = evidence.run("wrapper_storage_validate_default", [*wrapper, "validate"], workspace, {"PATH": str(stand_in)})
+    evidence.check(step, "default_inputs_hold_no_retention_flag", result.returncode == 0 and json.loads(output.read_bytes()) == expected)
+    step, result = evidence.run("wrapper_storage_validate_retention", [*wrapper, "--mlflow-retention", "validate"], workspace, {"PATH": str(stand_in)})
+    evidence.check(step, "retention_inputs_render_the_flag", result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, flag: True})
+    step, result = evidence.run("wrapper_storage_validate_default_again", [*wrapper, "validate"], workspace, {"PATH": str(stand_in)})
+    evidence.check(step, "the_flag_does_not_persist", result.returncode == 0 and json.loads(output.read_bytes()) == expected)
+    step, result = evidence.run(
+        "wrapper_iam_refuses_the_option", [*wrapper, "--iam", "--mlflow-retention", "--admin-profile", ADMIN, "validate"], workspace, {"PATH": str(stand_in)}
+    )
+    evidence.check(step, "option_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
+
+
 def string_values(value: Any) -> list[str]:
     """List every string leaf so process diagnostics can be checked for input disclosure."""
     if isinstance(value, dict):
@@ -1920,6 +1964,7 @@ def run_suite(evidence: Evidence) -> None:
     step, result = evidence.run("check_refreshed", [*renderer, "--check"], workspace)
     evidence.check(step, "refreshed_inputs_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
     run_platform_cases(evidence, sources)
+    run_storage_retention_cases(evidence, sources)
     run_services_cases(evidence, sources, bash)
     run_host_boot_cases(evidence, bash)
 

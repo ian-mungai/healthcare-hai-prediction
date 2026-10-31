@@ -9,12 +9,18 @@ admin_profile=""
 preparation_inputs=""
 preparation_sha256=""
 identity_probe=false
+mlflow_retention=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --iam | --platform | --services | --jobs)
       [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
       stack="${1#--}"
+      shift
+      ;;
+    --mlflow-retention)
+      [[ "$mlflow_retention" == false ]] || { printf 'Select the MLflow retention rule once.\n' >&2; exit 2; }
+      mlflow_retention=true
       shift
       ;;
     --identity-probe)
@@ -38,6 +44,9 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$identity_probe" == true ]]; then
   [[ "$stack" == jobs ]] || { printf 'The identity probe is allowed only with --jobs.\n' >&2; exit 2; }
+fi
+if [[ "$mlflow_retention" == true ]]; then
+  [[ "$stack" == storage ]] || { printf 'The MLflow retention rule belongs to the storage stack: use it without --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
   [[ "$stack" == jobs || "$stack" == services ]] || { printf 'Preparation inputs are allowed only with --jobs or --services.\n' >&2; exit 2; }
@@ -78,6 +87,9 @@ done
 directory="$repo_root/infra"
 renderer=scripts.infrastructure.render_project_config
 render_args=(--stack "$stack")
+if [[ "$stack" == storage && "$mlflow_retention" == true ]]; then
+  render_args+=(--mlflow-retention)
+fi
 if [[ "$stack" == platform || "$stack" == services ]]; then
   # The shared renderer writes only the inputs the selected stack declares.
   directory="$directory/$stack"

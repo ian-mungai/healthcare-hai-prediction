@@ -192,7 +192,7 @@ def write_text_or_check(path: Path, content: str, check: bool = False) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def verify_plan_variables(plan: dict[str, Any], expected: dict[str, str], preparation: Mapping[str, object] | None = None) -> None:
+def verify_plan_variables(plan: dict[str, Any], expected: Mapping[str, object], preparation: Mapping[str, object] | None = None) -> None:
     """Reject incomplete saved plans, any mismatch in the written inputs or IAM preparation inputs and any other input that is not its committed default."""
     if plan.get("errored") or not plan.get("complete"):
         raise ConfigurationError("Only a complete, successful saved plan may be applied.")
@@ -258,14 +258,22 @@ def main() -> None:
     parser.add_argument("--stack", choices=("storage", "iam", "both", "dvc"), default="both", help="dvc renders only the ignored .dvc/config.local.")
     parser.add_argument("--dvc-config", type=Path, default=DVC_LOCAL_CONFIG, help="Where --stack dvc writes the DVC remote.")
     parser.add_argument("--admin-profile")
+    parser.add_argument(
+        "--mlflow-retention", action="store_true", help="Render mlflow_retention_enabled for the storage stack; without it the stack keeps its default (off)."
+    )
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true", help="Verify that the project profile authenticates as the derived policy user.")
     arguments = parser.parse_args()
     try:
         storage, iam = load_configuration(arguments.env_file, arguments.admin_profile)
+        storage_inputs: dict[str, Any] = dict(storage)
+        if arguments.mlflow_retention:
+            if arguments.stack != "storage":
+                raise ConfigurationError("--mlflow-retention belongs to the storage stack: select --stack storage.")
+            storage_inputs["mlflow_retention_enabled"] = True
         preparation = load_preparation(storage["data_bucket_name"]) if arguments.stack in ("iam", "both") else None
-        selected = {"storage": (REPO_ROOT / "infra", storage), "iam": (REPO_ROOT / "infra" / "iam", iam)}
+        selected = {"storage": (REPO_ROOT / "infra", storage_inputs), "iam": (REPO_ROOT / "infra" / "iam", iam)}
         if arguments.check_plan:
             if arguments.stack in ("both", "dvc"):
                 raise ConfigurationError("Select one Terraform stack when checking a saved plan.")
