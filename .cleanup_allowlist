@@ -65,3 +65,9 @@ flag scripts/lakehouse/run_provenance_e2e.py -- --target here belongs to dbt, aw
 flag scripts/orchestration/ecs_engine_cases.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 flag scripts/orchestration/ecs_stage_runtime_cases.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 flag scripts/quality/lint_sources.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
+unused-code scripts/infrastructure/run_openmetadata_e2e.py -- http.server dispatches do_GET and do_PUT of the stand-in OpenMetadata server by method name
+unused-code scripts/orchestration/ecs_chain_cases.py -- http.server reads daemon_threads of the loopback stand-in server
+unused-code scripts/serving/api.py -- pydantic reads model_config of the request model by name to refuse extra fields
+unused-code scripts/serving/api_image_cases.py -- uvicorn's server loop reads should_exit, which the case sets to stop it
+unused-code scripts/serving/serving_cases.py -- http.server reads close_connection and daemon_threads of the slow stand-in API
+unused-code scripts/streamlit_app/stand_in_api.py -- http.server dispatches do_GET by method name and reads protocol_version, daemon_threads and close_connection of the stand-in API
