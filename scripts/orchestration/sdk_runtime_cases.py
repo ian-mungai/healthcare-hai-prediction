@@ -294,10 +294,11 @@ def _request_never_arrived(row: dict[str, Any]) -> bool:
 
     The call used its whole budget and ended with a deadline error before the request reached the stand-in, and every other check holds: the call
     returned inside its absolute bound, its group is gone and its shutdown is confirmed. Any other failure is a defect of the code under test, not a late
-    start, so it is never excused.
+    start, so it is never excused. A HEAD call that must finish without its body is judged only once a request arrived, so that check is excused here
+    too and fails the final row if no repeat ever reaches the stand-in.
     """
     error = row["reply_error"]
-    excused = {"request_reached_http", "peer_closed"}
+    excused = {"request_reached_http", "peer_closed", "head_finishes_without_body"}
     return (
         error is not None
         and error.get("kind") == "deadline"
