@@ -142,7 +142,7 @@ def task_runs_through_the_broker() -> None:
         sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
         values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
         require(sent["taskDefinition"] == "example_dev_job_train", "the train step ran another definition")
-        require(values["fetch"] == {"RUN_ID": RUN, "CODE_SHA256": DIGEST}, f"fetch variables are wrong: {values['fetch']}")
+        require(values["fetch"] == {"RUN_ID": RUN, "CODE_RUN_ID": RUN, "CODE_SHA256": DIGEST}, f"fetch variables are wrong: {values['fetch']}")
         require(
             json.loads(values["prepare"]["TRAINING_PARAMETERS"]) == {**PARAMETERS, "mlflow": "aws"},
             "the training parameters did not reach the prepare container",
@@ -533,6 +533,21 @@ def chain_layers_use_the_bronze_run_digest() -> None:
             pair["value"] for call in sent for item in call["overrides"]["containerOverrides"] for pair in item["environment"] if pair["name"] == "CODE_SHA256"
         }
         require(digests == {"cd" * 32}, f"a layer used another digest than the bronze run's: {digests}")
+        code_runs = {
+            (item["name"], pair["value"])
+            for call in sent
+            for item in call["overrides"]["containerOverrides"]
+            for pair in item["environment"]
+            if pair["name"] == "CODE_RUN_ID"
+        }
+        require(
+            bool(code_runs) and {value for _, value in code_runs} == {BRONZE_RUN}, f"a chain layer was not told to fetch the bronze run's code: {code_runs}"
+        )
+        require({name for name, _ in code_runs} >= {"fetch", "pin"}, f"fetch and pin must both name the code run: {code_runs}")
+        outputs = {
+            pair["value"] for call in sent for item in call["overrides"]["containerOverrides"] for pair in item["environment"] if pair["name"] == "RUN_ID"
+        }
+        require(outputs == {silver, gold}, f"the job output run IDs changed: {outputs}")
         wait_for(current, current.client.submit(request("chain_gate", run=BRONZE_RUN, dag="bronze_chain_dag", attempt=2)))
         require((current.folder / "state" / "chains").is_dir(), "the chain record is missing")
 

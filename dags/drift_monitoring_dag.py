@@ -19,7 +19,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration import dag_runtime
-from orchestration.training_contract import HAI_TYPES, RUN_ID, parameters_for
+from orchestration.training_contract import HAI_TYPES, RUN_ID, parameters_for, training_run_id
 
 MARKER = "_complete.json"
 
@@ -29,11 +29,6 @@ def s3_client() -> Any:
     from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
     return S3Hook().get_conn()
-
-
-def training_run_id(drift_run: str) -> str:
-    """The training run's id, derived from the drift run's so that a retried decision names the same run."""
-    return f"{drift_run[:16]}-{hashlib.sha256(f'training:{drift_run}'.encode()).hexdigest()[:8]}"
 
 
 def fetch(s3: Any, bucket: str, key: str) -> bytes | None:

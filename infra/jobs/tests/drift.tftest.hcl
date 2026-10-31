@@ -146,7 +146,7 @@ run "drift_commands_and_environment" {
 
   assert {
     condition = (
-      toset([for variable in jsondecode(output.drift_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256"]) &&
+      toset([for variable in jsondecode(output.drift_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
       toset([for variable in jsondecode(output.drift_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI"]) &&
       toset([for variable in jsondecode(output.drift_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
       toset([for variable in jsondecode(output.drift_container_definitions)[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"]) &&
@@ -211,7 +211,7 @@ run "drift_run_task_contract" {
       output.drift_run_task.propagate_tags == "TASK_DEFINITION" &&
       output.drift_run_task.network_source == "training_network output of the IAM stack" &&
       output.drift_run_task.container_environment == {
-        fetch    = ["RUN_ID", "CODE_SHA256"]
+        fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
         baseline = ["RUN_ID", "MLFLOW_TRACKING_URI"]
         current  = ["RUN_ID", "POLARIS_URI"]
         check    = ["RUN_ID"]

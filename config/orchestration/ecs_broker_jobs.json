@@ -9,6 +9,7 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256"
         ],
         "prepare": [
@@ -33,33 +34,41 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256"
         ],
         "pin": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256",
           "POLARIS_URI"
         ],
         "build": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "validate": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ],
         "verify": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "export": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ],
         "publish": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "upload": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ]
       },
       "chain": true,
@@ -75,30 +84,37 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256"
         ],
         "pin": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256",
           "POLARIS_URI",
           "INPUT_RUN_ID"
         ],
         "build": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "validate": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ],
         "export": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ],
         "publish": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "upload": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ]
       },
       "chain": true,
@@ -114,30 +130,37 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256"
         ],
         "pin": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256",
           "POLARIS_URI",
           "INPUT_RUN_ID"
         ],
         "build": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "validate": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ],
         "export": [
-          "RUN_ID"
+          "RUN_ID",
+          "CODE_RUN_ID"
         ],
         "publish": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ],
         "feast": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "POLARIS_URI"
         ]
       },
@@ -154,6 +177,7 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256"
         ],
         "baseline": [
@@ -182,6 +206,7 @@
       "containers": {
         "fetch": [
           "RUN_ID",
+          "CODE_RUN_ID",
           "CODE_SHA256"
         ],
         "promote": [

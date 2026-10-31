@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import ecs_adapter_cases, ecs_broker_cases, ecs_chain_cases
+from scripts.orchestration import ecs_adapter_cases, ecs_broker_cases, ecs_chain_cases, layer_walk_cases, override_docs_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,13 +29,22 @@ SOURCES = (
     "data_contracts/orchestration/ecs_ledger_line.schema.json",
     "scripts/orchestration/ecs_broker_fake.py",
     "scripts/orchestration/ecs_adapter_cases.py",
+    "scripts/orchestration/override_docs_cases.py",
+    "scripts/orchestration/layer_walk_cases.py",
+    "scripts/orchestration/job_overrides.py",
     "scripts/orchestration/run_ecs_broker_e2e.py",
 )
 
 
 def suites() -> dict[str, dict[str, Callable[[], None]]]:
     """Every suite, imported without a guard: a suite that cannot be imported stops the run with its error."""
-    return {"adapter": ecs_adapter_cases.CASES, "broker": ecs_broker_cases.CASES, "chain": ecs_chain_cases.CASES}
+    return {
+        "adapter": ecs_adapter_cases.CASES,
+        "broker": ecs_broker_cases.CASES,
+        "chain": ecs_chain_cases.CASES,
+        "overrides": override_docs_cases.CASES,
+        "walk": layer_walk_cases.CASES,
+    }
 
 
 def revision() -> str:
@@ -44,7 +53,7 @@ def revision() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--only", choices=("adapter", "broker", "chain"))
+    parser.add_argument("--only", choices=("adapter", "broker", "chain", "overrides", "walk"))
     parser.add_argument("--case")
     args = parser.parse_args()
     results = []

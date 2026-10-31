@@ -144,7 +144,7 @@ run "train_commands_and_environment" {
 
   assert {
     condition = (
-      toset([for variable in jsondecode(output.train_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256"]) &&
+      toset([for variable in jsondecode(output.train_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
       toset([for variable in jsondecode(output.train_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS"]) &&
       toset([for variable in jsondecode(output.train_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
       toset([for variable in jsondecode(output.train_container_definitions)[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI"])
@@ -228,7 +228,7 @@ run "train_run_task_contract" {
       output.train_run_task.propagate_tags == "TASK_DEFINITION" &&
       output.train_run_task.network_source == "training_network output of the IAM stack" &&
       output.train_run_task.container_environment == {
-        fetch   = ["RUN_ID", "CODE_SHA256"]
+        fetch   = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
         prepare = ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS"]
         extract = ["RUN_ID", "POLARIS_URI"]
         train   = ["RUN_ID", "MLFLOW_TRACKING_URI"]

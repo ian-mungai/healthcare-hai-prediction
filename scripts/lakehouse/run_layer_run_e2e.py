@@ -39,6 +39,8 @@ REVISION = "0123456789abcdef0123456789abcdef01234567"
 SILVER_RUN = "20261030T010203Z-0a1b2c3d"
 GOLD_RUN = "20261030T020304Z-1b2c3d4e"
 FEATURES_RUN = "20261030T030405Z-2c3d4e5f"
+CODE_RUN = "20261029T230000Z-c0dec0de"  # the run whose staged code every layer task fetches: not the layer run's own ID
+CODE_RUN_EXPECTED = [CODE_RUN]  # the prefix the stand-in bucket serves; the walk cases set it to the run the broker names
 BUCKET = "hai-test-bucket"
 CHAIN = {"silver": SILVER_RUN, "gold": GOLD_RUN, "features": FEATURES_RUN}
 INPUT_OF = {"silver": None, "gold": SILVER_RUN, "features": GOLD_RUN}
@@ -463,7 +465,9 @@ class FakeS3:
         return {}
 
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
-        require(Bucket == BUCKET and Key.startswith("lakehouse/run_stage/"), (Bucket, Key))
+        require(
+            Bucket == BUCKET and Key.startswith(f"lakehouse/run_stage/{CODE_RUN_EXPECTED[0]}/inputs/"), f"the staged code is read from another prefix: {Key}"
+        )
         return {"VersionId": STAGED_VERSION[0], "ETag": f'"{Key.rsplit("/", 1)[1]}"', "ContentLength": 64}
 
     def list_object_versions(self, Bucket: str, Prefix: str, KeyMarker: str = "", VersionIdMarker: str = "") -> dict[str, Any]:
@@ -496,8 +500,9 @@ def commit_repository(folder: Path) -> Path:
         (source / relative).parent.mkdir(parents=True, exist_ok=True)
         (source / relative).write_bytes((repository / relative).read_bytes())
     identity = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid"]
+    fixed_time = {"GIT_AUTHOR_DATE": "2026-10-30T12:00:00Z", "GIT_COMMITTER_DATE": "2026-10-30T12:00:00Z"}  # the same commit ID and times on every build
     for arguments in (["init", "-q"], ["add", "-A"], [*identity, "commit", "-q", "-m", "e2e"]):
-        done = run_command("git", arguments, cwd=source, timeout=60)
+        done = run_command("git", arguments, cwd=source, env={**os.environ, **fixed_time}, timeout=60)
         require(done.returncode == 0, done.stderr)
     return source
 
@@ -538,6 +543,7 @@ class Case:
         STORED.clear()
         STATE.clear()
         reset_input_versions()
+        CODE_RUN_EXPECTED[0] = CODE_RUN
         STAGED_VERSION[0] = "1"
         SLOW_UPLOAD[0] = 0.0
         self.archive, self.digest = archive(root)
@@ -555,7 +561,22 @@ class Case:
         self, layer: str, phase: str, *, label: str = "w", digest: str | None = None, extra: Sequence[str] = (), environment: dict[str, str] | None = None
     ) -> int:
         work = self.work(layer, label)
-        arguments = [phase, "--layer", layer, "--run", CHAIN[layer], "--work", str(work), "--code-sha256", digest or self.digest, "--bucket", BUCKET, *extra]
+        arguments = [
+            phase,
+            "--layer",
+            layer,
+            "--run",
+            CHAIN[layer],
+            "--work",
+            str(work),
+            "--code-sha256",
+            digest or self.digest,
+            "--code-run-id",
+            CODE_RUN,
+            "--bucket",
+            BUCKET,
+            *extra,
+        ]
         if INPUT_OF[layer] and "--input-run" not in extra:
             arguments += ["--input-run", INPUT_OF[layer] or ""]
         out, err = io.StringIO(), io.StringIO()
