@@ -455,14 +455,16 @@ def _wrapper_cases(folder: Path) -> dict[str, bool]:
             ),
         ),
         (
-            "preparation_is_jobs_only",
+            "preparation_is_not_for_the_iam_stack",
             "only with --jobs",
             _wrapper_result(
                 workspace,
                 env | {},
                 [
                     "scripts/infrastructure/terraform.sh",
-                    "--platform",
+                    "--iam",
+                    "--admin-profile",
+                    "example_admin",
                     "--preparation-inputs",
                     "reviewed_inputs.json",
                     "--preparation-sha256",

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reviewed platform preparation inputs",
+  "description": "Nonsecret switches of the platform stack that add its monitoring and serving repositories, bound to a reviewed byte digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "root",
+    "variables"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "root": {
+      "const": "platform"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "monitoring_enabled": {
+          "type": "boolean"
+        },
+        "serving_enabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

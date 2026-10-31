@@ -39,6 +39,7 @@ SOURCE_PATHS = (
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
     "data_contracts/infrastructure/services_preparation.schema.json",
+    "data_contracts/infrastructure/platform_preparation.schema.json",
 )
 PREPARATION_PATH = "config/aws/iam_preparation.json"
 PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
