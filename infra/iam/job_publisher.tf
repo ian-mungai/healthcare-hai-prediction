@@ -79,7 +79,7 @@ resource "aws_iam_role_policy" "job_publisher" {
 
 output "publisher_job_contract" {
   description = "Run 3 publisher class for integration into the jobs root and the target file. The host limit is enforced by the queue gate, not the network."
-  value = {
+  value = var.publisher_job_enabled ? {
     prepared        = var.publisher_job_enabled
     task_role_name  = local.publisher_job_role_name
     task_role_arn   = try(aws_iam_role.job_publisher[0].arn, null)
@@ -89,5 +89,5 @@ output "publisher_job_contract" {
     host_limit      = "application_queue_hosts"
     delete_actions  = []
     writes_to_lakes = false
-  }
+  } : null
 }

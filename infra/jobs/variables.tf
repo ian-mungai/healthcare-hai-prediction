@@ -220,3 +220,15 @@ variable "writer_parameter_names" {
     error_message = "Bind exactly the dedicated client ID and client secret parameter names for each selected writer role. Never substitute another layer or reader pair."
   }
 }
+
+variable "bronze_read_environment" {
+  description = "The read environment the IAM bronze_writer_contract states when the raw read grant is on, for the bronze and qualification writers only. Empty keeps those containers as they were."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for name, value in var.bronze_read_environment : name == "HAI_READ_RAW_ROOT" && value == "true"])
+    error_message = "Only HAI_READ_RAW_ROOT with the value true is accepted."
+  }
+}

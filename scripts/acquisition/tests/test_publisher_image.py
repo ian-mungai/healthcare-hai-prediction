@@ -121,3 +121,30 @@ def test_every_variable_the_task_code_reads_is_set_by_the_task_definition() -> N
     missing = sorted(needed - environment_names_the_task_definition_sets())
     check(missing == [], f"the task definition does not set {missing}")
     check(raw_root.READ_RAW_VARIABLE not in environment_names_the_task_definition_sets(), "the publisher task reads no bronze root variable")
+
+
+def dockerfile_lines() -> list[str]:
+    text = (ROOT / "services/analytics/Dockerfile").read_text(encoding="utf-8")
+    return [line.strip() for line in text.replace("\\\n", " ").splitlines()]
+
+
+def test_every_file_the_default_build_copies_exists() -> None:
+    folder = ROOT / "services/analytics"
+    sources = []
+    for line in dockerfile_lines():
+        parts = line.split()
+        if parts and parts[0] == "COPY" and not any(part.startswith("--from=") for part in parts):
+            sources += [part for part in parts[1:-1] if not part.startswith("--")]
+    missing = sorted(name for name in sources if not list(folder.glob(name)))
+    check(missing == [], f"the default build copies files that do not exist: {missing}")
+
+
+def test_the_publisher_lock_is_read_only_inside_the_conditional_install() -> None:
+    lines = dockerfile_lines()
+    mentions = [line for line in lines if "requirements.publisher.txt" in line and not line.startswith("#")]
+    check(len(mentions) == 1, "the lock is named in exactly one instruction")
+    check(
+        mentions[0].startswith("RUN --mount=type=bind") and 'if [ "$PUBLISHER_DEPENDENCIES" = "1" ]' in mentions[0] and "--require-hashes" in mentions[0],
+        "it is read from the build context only when asked for, with hashes",
+    )
+    check(not any(line.startswith("COPY") and "publisher" in line for line in lines), "no COPY names a publisher file")

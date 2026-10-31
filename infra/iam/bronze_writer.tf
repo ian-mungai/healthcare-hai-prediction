@@ -61,22 +61,23 @@ resource "aws_iam_role_policy" "bronze_writer" {
 
 output "bronze_writer_contract" {
   description = "Inactive bronze identity and the reviewed contract for integration into the writer IAM batch and target file."
-  value = {
+  value = merge({
     principal                = "bronze_writer"
     task_role_key            = "job_write_bronze_task"
     task_role_name           = local.bronze_writer_role_name
     task_role_arn            = try(aws_iam_role.bronze_writer[0].arn, null)
     parameter_names          = local.bronze_parameter_names
     source_collections       = local.bronze_collections
-    read_roots               = local.bronze_source_roots
-    read_environment         = var.source_raw_root_enabled ? { HAI_READ_RAW_ROOT = "true" } : {}
     qualification_collection = var.bronze_qualification_collection
     namespaces               = local.bronze_namespaces
     test_namespaces          = local.bronze_test_namespaces
     production_layer         = "off"
     credentials_owner        = "owner_administrator_profile"
     catalog_grant_contract   = jsondecode(file("${path.module}/../../config/lakehouse/aws_bronze_grants.json"))
-  }
+    }, {
+    for key, value in { read_roots = local.bronze_source_roots, read_environment = { HAI_READ_RAW_ROOT = "true" } } : key => value
+    if var.source_raw_root_enabled
+  })
 }
 
 output "bronze_execution_delta" {

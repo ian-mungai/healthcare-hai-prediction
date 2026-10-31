@@ -122,7 +122,7 @@ run "publisher_job_class_is_off_by_default" {
   command = plan
 
   assert {
-    condition     = length(aws_iam_role.job_publisher) == 0 && length(aws_security_group.job_publisher) == 0 && output.publisher_job_contract.prepared == false
+    condition     = length(aws_iam_role.job_publisher) == 0 && length(aws_security_group.job_publisher) == 0 && output.publisher_job_contract == null
     error_message = "The run 3 publisher class must create nothing by default."
   }
 }
@@ -262,8 +262,11 @@ run "bronze_contract_states_the_read_roots_that_match_the_grants" {
   }
 
   assert {
-    condition     = jsonencode(output.bronze_writer_contract.read_roots) == jsonencode([""]) && length(output.bronze_writer_contract.read_environment) == 0
-    error_message = "With the raw grant off the contract must state the root only and set no read environment."
+    condition = toset(keys(output.bronze_writer_contract)) == toset([
+      "principal", "task_role_key", "task_role_name", "task_role_arn", "parameter_names", "source_collections", "qualification_collection",
+      "namespaces", "test_namespaces", "production_layer", "credentials_owner", "catalog_grant_contract"
+    ])
+    error_message = "With the raw grant off the bronze contract must keep exactly its earlier keys."
   }
 }
 
