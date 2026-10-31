@@ -252,3 +252,36 @@ run "serving_parameter_names_stay_under_the_project_prefix" {
 
   expect_failures = [var.streamlit_model_api_key_name]
 }
+
+run "the_page_role_exists_only_with_the_model_api_and_grants_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role.streamlit_task) == 0 && output.model_api_contract.streamlit_task_role == null
+    error_message = "Without model_api_prepared the page role must not exist."
+  }
+}
+
+run "the_page_role_holds_no_policy" {
+  command = plan
+
+  variables {
+    model_api_prepared        = true
+    model_api_registry_key    = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix = "serving/deployments"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role.streamlit_task[0].name == "example_project_streamlit_task_dev" &&
+      jsondecode(aws_iam_role.streamlit_task[0].assume_role_policy).Statement[0].Principal.Service == "ecs-tasks.amazonaws.com" &&
+      aws_iam_role.streamlit_task[0].name != aws_iam_role.model_api_task[0].name
+    )
+    error_message = "The page has its own role, assumed by ECS tasks only and named apart from the model API role."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.model_api_read[0].role == aws_iam_role.model_api_task[0].name
+    error_message = "The read policy belongs to the model API role and not to the page role."
+  }
+}
