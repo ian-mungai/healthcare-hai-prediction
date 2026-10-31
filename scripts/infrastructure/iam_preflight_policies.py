@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.iam.scripts.render_policy import PolicyRenderError, load_documents, render_template, terraform_names
-from scripts.infrastructure.policy_evaluator import Request, UnsupportedPolicyElement, decide
+from scripts.infrastructure.policy_evaluator import Request, UnsupportedPolicyElement, decide, statement_matches
 from scripts.infrastructure.render_project_config import REPO_ROOT
 
 INFRA = REPO_ROOT / "infra" / "iam"
@@ -33,7 +33,7 @@ OFFLINE_VALUES = {
     "AWS_PROFILE": "healthcare_hai_prediction_dev",
 }
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
-ROW_KEYS = {"role", "action", "resource", "context", "scope"}
+ROW_KEYS = {"role", "action", "resource", "context", "scope", "granted_by"}
 ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments", "kind"}
 SCOPES = ("silver",)
 KINDS = ("role", "user")
@@ -67,6 +67,8 @@ def load_table(path: Path = TABLE) -> dict[str, Any]:
     for row in table["checks"]:
         if not isinstance(row, dict) or not {"role", "action", "resource"} <= set(row) or set(row) - ROW_KEYS:
             raise TableError("Each check needs role, action and resource, and may add context and scope.")
+        if not isinstance(row.get("granted_by", []), list) or not all(isinstance(sid, str) for sid in row.get("granted_by", [])):
+            raise TableError("A check lists granted_by as a list of statement names.")
         if row.get("scope", SCOPES[0]) not in SCOPES:
             raise TableError(f"A check names the unknown scope {row['scope']}.")
         if row["role"] not in table["roles"]:
@@ -299,6 +301,28 @@ def attachment_problems(key: str, role: Mapping[str, Any], infra: Path) -> list[
     return found
 
 
+def grant_problems(documents: list[dict[str, Any]], request: Request, shared: list[str]) -> list[str]:
+    """Remove the granting statements of an allowed row: the row must then fail. A row has one grant, so that a policy mutant that denies its own call fails
+    it. A row that two statements grant lists them in ``granted_by``, and any other set of grants is a problem."""
+    grants = [
+        (index, position, str(statement.get("Sid")))
+        for index, document in enumerate(documents)
+        for position, statement in enumerate(document["Statement"])
+        if statement["Effect"] == "Allow" and statement_matches(statement, request)
+    ]
+    found = []
+    named = sorted(sid for _, _, sid in grants)
+    if named != sorted(shared) and (shared or len(grants) != 1):
+        found.append(f"granted by {', '.join(named)} but the row declares {', '.join(shared) if shared else 'one grant'}")
+    kept = [
+        {**document, "Statement": [item for number, item in enumerate(document["Statement"]) if (i, number) not in {(a, b) for a, b, _ in grants}]}
+        for i, document in enumerate(documents)
+    ]
+    if decide(kept, request).allowed:
+        found.append("still allowed after its grants are removed")
+    return found
+
+
 def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str, str] = OFFLINE_VALUES) -> list[str]:
     """Every row that the policy files do not support, and every policy that Terraform does not attach to its role."""
     names = infra_names(infra)
@@ -322,6 +346,9 @@ def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str,
             continue
         if not decision.allowed:
             found.append(f"{label}: not granted by the policies of role {row['role']} ({decision.effect})")
+            continue
+        request = Request(row["action"], expand(row["resource"], expanded), context)
+        found += [f"{label}: {message}" for message in grant_problems(documents[row["role"]], request, row.get("granted_by", []))]
     return found
 
 

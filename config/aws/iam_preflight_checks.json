@@ -612,7 +612,7 @@
     {
       "role": "write_silver",
       "action": "s3:PutObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/export/manifest.json",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/export/manifest.json",
       "scope": "silver"
     },
     {
@@ -921,6 +921,226 @@
       "role": "project_user",
       "action": "logs:GetLogEvents",
       "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/publish/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/init/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/init/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/fetch/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/fetch/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/pin/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/pin/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/build/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/build/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/validate/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/validate/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/verify/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/verify/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/export/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/export/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/upload/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/upload/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/layer_run.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/pins.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/candidates.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/reconcile.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/backup.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/commit.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/silver_snapshot.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar.gz",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/layer_runs/silver/example_run/"
+      },
+      "granted_by": [
+        "InspectApprovedAcquisitionBucket",
+        "ReadApprovedBucketConfiguration"
+      ],
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/layer_run.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/pins.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/candidates.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/reconcile.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/backup.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/commit.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/publish/export/manifest.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/silver_snapshot.json",
       "scope": "silver"
     }
   ]

@@ -148,7 +148,57 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
         )
     ]
     self_simulation_removed = [("policies/healthcare_hai_prediction_iam_policy.json", '        "arn:aws:iam::${AWS_ACCOUNT_ID}:user/${aws:username}",\n', "")]
+    group = "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}"
+    deny_init_logs = [
+        (
+            "owner_policies/job_execution.json",
+            '"Sid": "WriteJobLogs",',
+            '"Sid": "DenyInitLogs",\n      "Effect": "Deny",\n      "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],\n'
+            f'      "Resource": "{group}:log-stream:silver/init/*"\n    }},\n    {{\n      "Sid": "WriteJobLogs",',
+        )
+    ]
+    deny_publish_uploads = [
+        (
+            "owner_policies/job_writer_layer_upload.json",
+            '"Sid": "LayerRunObjects",',
+            '"Sid": "DenyPublishUploads",\n      "Effect": "Deny",\n      "Action": ["s3:PutObject"],\n'
+            '      "Resource": "arn:aws:s3:::*/lakehouse/layer_runs/silver/*/publish/*"\n    },\n    {\n      "Sid": "LayerRunObjects",',
+        )
+    ]
+    no_owner_listing = [("policies/healthcare_hai_prediction_s3_policy.json", '        "s3:ListBucketVersions",\n', "")]
+    deny_evidence_reads = [
+        (
+            "policies/healthcare_hai_prediction_s3_policy.json",
+            '"Sid": "InspectApprovedAcquisitionBucket",',
+            '"Sid": "DenyEvidenceReads",\n      "Effect": "Deny",\n      "Action": ["s3:GetObject"],\n'
+            '      "Resource": "arn:aws:s3:::*/lakehouse/layer_runs/*"\n    },\n    {\n      "Sid": "InspectApprovedAcquisitionBucket",',
+        )
+    ]
+    deny_stage_uploads = [
+        (
+            "policies/healthcare_hai_prediction_s3_policy.json",
+            '"Sid": "InspectApprovedAcquisitionBucket",',
+            '"Sid": "DenyStageUploads",\n      "Effect": "Deny",\n      "Action": ["s3:PutObject"],\n'
+            '      "Resource": "arn:aws:s3:::*/lakehouse/run_stage/*"\n    },\n    {\n      "Sid": "InspectApprovedAcquisitionBucket",',
+        )
+    ]
+    logs_granted_twice = [
+        (
+            "owner_policies/job_execution.json",
+            '"Sid": "WriteJobLogs",',
+            '"Sid": "WriteAnyLogs",\n      "Effect": "Allow",\n      "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],\n'
+            f'      "Resource": "{group}:log-stream:*"\n    }},\n    {{\n      "Sid": "WriteJobLogs",',
+        )
+    ]
+    containers = ("init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload")
+    evidence = ("layer_run.json", "pins.json", "publish/candidates.json", "publish/reconcile.json", "publish/backup.json", "publish/commit.json")
     silver_scope = ["--scope", "silver"]
+
+    def failed(run: Run, *words: str) -> list[str]:
+        """Each word must appear in a FAIL line, so that the denied call is named by role, action and resource."""
+        lines = [line for line in run.out.splitlines() if line.startswith("FAIL ")]
+        return [f"no FAIL line names {word}" for word in words if not any(word in line for line in lines)]
+
     silver_roles = {"job_execution", "write_silver", "project_user"}
 
     def silver_roles_only(run: Run) -> list[str]:
@@ -263,6 +313,70 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             "the project user may simulate roles but not its own user",
             live_run(planted(self_simulation_removed), extra=silver_scope),
             lambda r: expect(r, 1, FAIL=1) + ([] if "FAIL project_user iam:SimulatePrincipalPolicy" in r.out else ["self simulation not named"]),
+        ),
+        (
+            "live silver scope names each container whose log stream is denied",
+            "init may not create or write its log stream",
+            live_run(planted(deny_init_logs), extra=silver_scope),
+            lambda r: (
+                expect(r, 1, PASS=silver - 2, FAIL=2)
+                + failed(r, "FAIL job_execution logs:CreateLogStream", "FAIL job_execution logs:PutLogEvents", "log-stream:silver/init/")
+            ),
+        ),
+        (
+            "live silver scope covers a log stream of every container",
+            "the execution role may write only the publish log stream",
+            live_run(
+                planted([("owner_policies/job_execution.json", "_jobs_${ENVIRONMENT}:log-stream:*", "_jobs_${ENVIRONMENT}:log-stream:silver/publish/*")]),
+                extra=silver_scope,
+            ),
+            lambda r: (
+                expect(r, 1, FAIL=2 * (len(containers) - 1))
+                + failed(r, *(f"log-stream:silver/{name}/" for name in containers if name != "publish"))
+                + ([] if not any("silver/publish/" in line for line in r.out.splitlines() if line.startswith("FAIL ")) else ["the publish stream failed"])
+            ),
+        ),
+        (
+            "live silver scope names each denied publish upload",
+            "uploads under publish are denied",
+            live_run(planted(deny_publish_uploads), extra=silver_scope),
+            lambda r: (
+                expect(r, 1, FAIL=5)
+                + failed(
+                    r,
+                    *(
+                        f"layer_runs/silver/example_run/publish/{name}"
+                        for name in ("candidates.json", "reconcile.json", "backup.json", "commit.json", "export/manifest.json")
+                    ),
+                )
+            ),
+        ),
+        (
+            "live silver scope names the owner version listing",
+            "the project user may not list object versions",
+            live_run(planted(no_owner_listing), extra=silver_scope),
+            lambda r: expect(r, 1, FAIL=1) + failed(r, "FAIL project_user s3:ListBucketVersions"),
+        ),
+        (
+            "live silver scope names each denied evidence read",
+            "the project user may not read the uploaded run records",
+            live_run(planted(deny_evidence_reads), extra=silver_scope),
+            lambda r: (
+                expect(r, 1, FAIL=len(evidence) + 2)
+                + failed(r, *(f"layer_runs/silver/example_run/{name}" for name in (*evidence, "publish/export/manifest.json", "silver_snapshot.json")))
+            ),
+        ),
+        (
+            "live silver scope names each denied code upload",
+            "the project user may not stage the code archive",
+            live_run(planted(deny_stage_uploads), extra=silver_scope),
+            lambda r: expect(r, 1, FAIL=2) + failed(r, "inputs/code.tar.gz", "inputs/code.sha256"),
+        ),
+        (
+            "offline row granted by two statements",
+            "a second statement also grants the log streams, so a mutant on one grant leaves the row passing",
+            offline_run(planted(logs_granted_twice)),
+            lambda r: expect(r, 1) + ([] if "but the row declares one grant" in r.out and "WriteAnyLogs" in r.out else ["double grant not named"]),
         ),
         (
             "live unknown scope",
