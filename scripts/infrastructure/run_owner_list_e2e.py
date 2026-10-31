@@ -102,6 +102,7 @@ def structure_checks(text: str) -> dict[str, bool]:
         ("images", index("push_images plan", "--repository-urls", "--only spark analytics quality")),
         ("jobs file", index("--jobs", "--preparation-sha256", "layer_jobs")),
         ("staging and approval", index("code_archive", "layer_acceptance approve")),
+        ("IAM preflight", index("iam_preflight", "--scope silver")),
         ("dry run", index("run-task", "--dry-run")),
         ("dry run result", index("layer_acceptance task", "layer_acceptance plan", "get-log-events", "silver/publish/")),
         ("real run", index("before.json", "overrides_real.json")),
@@ -116,6 +117,10 @@ def structure_checks(text: str) -> dict[str, bool]:
     jobs = index("--jobs", "--preparation-sha256", "layer_jobs")
     checks["the jobs step takes its roles, pair names and log group from the outputs of the earlier steps"] = jobs >= 0 and all(
         word in steps[jobs] for word in ("job_roles", "job_writer_layer_contract", "log_group_names", "images")
+    )
+    preflight = index("iam_preflight", "--scope silver")
+    checks["the preflight step stops the list on a FAIL line and names the call that is denied"] = preflight >= 0 and all(
+        word in steps[preflight] for word in ("`FAIL`", "Stop the list", "the role, the action and the resource")
     )
     dry = index("run-task", "--dry-run")
     checks["the dry run step requires an empty failures list and settles a lost reply"] = (
@@ -178,6 +183,7 @@ MUTANTS = (
     ("a mistyped module", "scripts.lakehouse.layer_acceptance task", "scripts.lakehouse.layer_acceptanc task"),
     ("an unknown placeholder", "--layer silver --describe <RECORD_DIR>/describe_dry.json", "--layer silver --describe <RECORD_DIR>/<DESCRIBE_FILE>"),
     ("a broken JSON argument", '\'[{"capacityProvider":"FARGATE","weight":1}]\'', '\'[{"capacityProvider":"FARGATE","weight":1}\''),
+    ("an unknown preflight scope", "iam_preflight --scope silver", "iam_preflight --scope bronze"),
     ("a report without its output path", " --out <RECORD_DIR>/qualification_silver.json", ""),
     ("an unknown layer", "layer_acceptance plan --layer silver", "layer_acceptance plan --layer bronze"),
 )

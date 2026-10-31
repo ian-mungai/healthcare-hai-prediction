@@ -223,8 +223,8 @@ def approved_requests() -> dict[str, list[Request]]:
     add("iam", "PassRole", role("snapshots"), region=None, extra={"iam:PassedToService": "dlm.amazonaws.com"})
     for name in JOB_TASK_ROLES:
         add("iam", "PassRole", role(name), region=None, extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"})
-    for simulated in (role("job_read_task"), READER, WRITER):
-        add("iam", "SimulatePrincipalPolicy", simulated, region=None)
+    for simulated in (role("job_read_task"), READER, WRITER, f"arn:aws:iam::{A}:user/{USER}"):
+        add("iam", "SimulatePrincipalPolicy", simulated, region=None, extra={"aws:username": USER})
     add("logs", "CreateLogGroup", LOG_GROUP, region=None, **tagged)
     for action in (
         "DeleteLogGroup",

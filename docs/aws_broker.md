@@ -188,16 +188,22 @@ Nothing in this list has run against AWS. Each apply is the owner's. Show the pl
    CONFIRM_APPROVE=approve-silver-<RUN_ID>-<CODE_SHA256_FIRST_12> .venv/bin/python -m scripts.lakehouse.layer_acceptance approve --layer silver --run <RUN_ID> --code-sha256 <CODE_SHA256> --out <RECORD_DIR>/approval.json
    ```
 
-9. Dry run (project profile). Write the overrides with `--dry-run`. Start the task in the private subnet with the `lakehouse` group of step 2. The explicit `Project` tag is required, because the IAM condition checks it on the RunTask request. Continue only when `failures` is empty. Keep the task ARN. The task ID is the part after the last slash of the ARN:
+9. IAM preflight (project profile). Run it right before the first task, after the policy apply of step 3 and the jobs apply of step 7. It simulates, read only, each call that the silver path makes: the image pulls, log writes and parameter reads of the execution role, the code, input, run state, table, backup and upload calls of the silver task role and the RunTask, tagging, PassRole, describe, stop, list and log read calls of the project user. It prints one `PASS` or `FAIL` line per call and exits 0 only when every call passes. A `FAIL` line names the role, the action and the resource that is denied. Stop the list on any `FAIL` line or any other exit status. Repair the policy in step 2 or step 3, apply it again and rerun this step. A denied simulation means the policy of step 3 was not applied from this tree, because the project user simulates its own calls under the statement `SimulateProjectPrincipals`. The check proves the grants of the policy documents only. It does not prove that an image, a parameter or the task definition exists:
 
    ```sh
-   .venv/bin/python -m scripts.orchestration.job_overrides --job silver --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --dry-run > <RECORD_DIR>/overrides_dry.json
-   aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --task-definition <PROJECT_NAME>_<ENVIRONMENT>_job_silver --capacity-provider-strategy '[{"capacityProvider":"FARGATE","weight":1}]' --tags '[{"key":"Project","value":"<PROJECT_TAG>"}]' --network-configuration '{"awsvpcConfiguration":{"subnets":["<SUBNET_ID>"],"securityGroups":["<LAKEHOUSE_SECURITY_GROUP>"],"assignPublicIp":"DISABLED"}}' --overrides file://<RECORD_DIR>/overrides_dry.json --query '{taskArn:tasks[0].taskArn,failures:failures}'
-   basename <TASK_ARN>
+   .venv/bin/python -m scripts.infrastructure.iam_preflight --scope silver
    ```
 
-   A lost reply must be settled before another task starts: list the running tasks of the family first. Do not start a second task for the same run.
-10. Wait for the dry run and read its result. The wait ends after 10 minutes. Repeat it. The task deadline is 6 hours from the start of its first container. The driver stops a phase that passes it. If the task has not stopped 6.5 hours after the launch, stop it and take the stop as a failed run. A stopped task is not a good task. Save the describe output. The command checks that one task stopped and that every container exited 0, including `init`, `fetch`, `pin`, `build`, `validate`, `verify`, `export`, `publish` and `upload`. Then save the publish stream of this task and check its plan. The check refuses a plan with unknown state or a catalog error and a publish that would be blocked. It also refuses a plan of another run. Read the whole plan yourself before step 11, because the owner approves the plan and not the check:
+10. Dry run (project profile). Write the overrides with `--dry-run`. Start the task in the private subnet with the `lakehouse` group of step 2. The explicit `Project` tag is required, because the IAM condition checks it on the RunTask request. Continue only when `failures` is empty. Keep the task ARN. The task ID is the part after the last slash of the ARN:
+
+    ```sh
+    .venv/bin/python -m scripts.orchestration.job_overrides --job silver --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --dry-run > <RECORD_DIR>/overrides_dry.json
+    aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --task-definition <PROJECT_NAME>_<ENVIRONMENT>_job_silver --capacity-provider-strategy '[{"capacityProvider":"FARGATE","weight":1}]' --tags '[{"key":"Project","value":"<PROJECT_TAG>"}]' --network-configuration '{"awsvpcConfiguration":{"subnets":["<SUBNET_ID>"],"securityGroups":["<LAKEHOUSE_SECURITY_GROUP>"],"assignPublicIp":"DISABLED"}}' --overrides file://<RECORD_DIR>/overrides_dry.json --query '{taskArn:tasks[0].taskArn,failures:failures}'
+    basename <TASK_ARN>
+    ```
+
+    A lost reply must be settled before another task starts: list the running tasks of the family first. Do not start a second task for the same run.
+11. Wait for the dry run and read its result. The wait ends after 10 minutes. Repeat it. The task deadline is 6 hours from the start of its first container. The driver stops a phase that passes it. If the task has not stopped 6.5 hours after the launch, stop it and take the stop as a failed run. A stopped task is not a good task. Save the describe output. The command checks that one task stopped and that every container exited 0, including `init`, `fetch`, `pin`, `build`, `validate`, `verify`, `export`, `publish` and `upload`. Then save the publish stream of this task and check its plan. The check refuses a plan with unknown state or a catalog error and a publish that would be blocked. It also refuses a plan of another run. Read the whole plan yourself before step 12, because the owner approves the plan and not the check:
 
     ```sh
     aws ecs wait tasks-stopped --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --tasks <TASK_ARN>
@@ -213,7 +219,7 @@ Nothing in this list has run against AWS. Each apply is the owner's. Show the pl
     aws ecs stop-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --task <TASK_ARN> --reason owner-deadline
     ```
 
-11. Real run (project profile). Save the listing of all object versions under `lakehouse/` first. It is the baseline for the input version check and the write scope check. Write the overrides without `--dry-run` and start the task as in step 9. Wait and read the result as in step 10. Describe within one hour of the stop, because ECS forgets stopped tasks after about an hour. Use the `describe_real.json` file name and the real task ARN:
+12. Real run (project profile). Save the listing of all object versions under `lakehouse/` first. It is the baseline for the input version check and the write scope check. Write the overrides without `--dry-run` and start the task as in step 10. Wait and read the result as in step 11. Describe within one hour of the stop, because ECS forgets stopped tasks after about an hour. Use the `describe_real.json` file name and the real task ARN:
 
     ```sh
     aws s3api list-object-versions --profile <PROJECT_PROFILE> --region <REGION> --bucket <DATA_BUCKET> --prefix lakehouse/ --query '{versions:Versions[].{key:Key,version:VersionId,etag:ETag,bytes:Size},deleted:DeleteMarkers[].{key:Key,version:VersionId}}' --output json > <RECORD_DIR>/before.json
@@ -224,7 +230,7 @@ Nothing in this list has run against AWS. Each apply is the owner's. Show the pl
     .venv/bin/python -m scripts.lakehouse.layer_acceptance task --layer silver --describe <RECORD_DIR>/describe_real.json
     ```
 
-12. Collect the evidence (project profile). Save the version listing again and the uploaded run records. Then check that no task of the job is left running:
+13. Collect the evidence (project profile). Save the version listing again and the uploaded run records. Then check that no task of the job is left running:
 
     ```sh
     aws s3api list-object-versions --profile <PROJECT_PROFILE> --region <REGION> --bucket <DATA_BUCKET> --prefix lakehouse/ --query '{versions:Versions[].{key:Key,version:VersionId,etag:ETag,bytes:Size},deleted:DeleteMarkers[].{key:Key,version:VersionId}}' --output json > <RECORD_DIR>/after.json
@@ -232,7 +238,7 @@ Nothing in this list has run against AWS. Each apply is the owner's. Show the pl
     aws ecs list-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --family <PROJECT_NAME>_<ENVIRONMENT>_job_silver --desired-status RUNNING > <RECORD_DIR>/running.json
     ```
 
-13. Stop the host and verify it (project profile). The stop waits until the group has no instance. Fargate tasks do not stop with the host, so step 12 already listed them. Then write the report. It reads every saved file once and refuses a link or a file that is not a record. It names the SHA-256 of each file it read. It checks the whole run against the publish contract of the code revision that the run unpacked: every table set and namespace, the rows and the content fingerprint of every table against its candidate and its export, the run, the sealed identity and the consumer, manifest and candidate hashes, the commit record that follows the backup and names every snapshot ID, the input listing digest of the pin against the listing you saved before the task (H2), the pinned bronze table set (H3), the write scope and the silver namespace. It also checks that the saved task is this run's real task: its definition, its overrides and the approved code digest. Then it checks that no task is running and that the host is stopped. The report is written to the ignored folder only. It prints the text that signs it as `sign_with`. Read the report, then sign it with that text and your name. A report with a failed check is not signed. Do not start gold with a failed or unsigned report:
+14. Stop the host and verify it (project profile). The stop waits until the group has no instance. Fargate tasks do not stop with the host, so step 13 already listed them. Then write the report. It reads every saved file once and refuses a link or a file that is not a record. It names the SHA-256 of each file it read. It checks the whole run against the publish contract of the code revision that the run unpacked: every table set and namespace, the rows and the content fingerprint of every table against its candidate and its export, the run, the sealed identity and the consumer, manifest and candidate hashes, the commit record that follows the backup and names every snapshot ID, the input listing digest of the pin against the listing you saved before the task (H2), the pinned bronze table set (H3), the write scope and the silver namespace. It also checks that the saved task is this run's real task: its definition, its overrides and the approved code digest. Then it checks that no task is running and that the host is stopped. The report is written to the ignored folder only. It prints the text that signs it as `sign_with`. Read the report, then sign it with that text and your name. A report with a failed check is not signed. Do not start gold with a failed or unsigned report:
 
     ```sh
     .venv/bin/python -m scripts.infrastructure.host_session stop
@@ -241,13 +247,13 @@ Nothing in this list has run against AWS. Each apply is the owner's. Show the pl
     CONFIRM_SIGN=<SIGN_TEXT> .venv/bin/python -m scripts.lakehouse.layer_acceptance sign --report <RECORD_DIR>/qualification_silver.json --owner "<OWNER>"
     ```
 
-14. If gold does not follow in the same window, turn the endpoints off to stop their hourly cost. Set `job_endpoints_enabled` to `false` in `config/aws/iam_preparation.json`, plan as in step 2 and confirm that the plan only removes the endpoints and their rules. Apply it and read `job_network` again. `endpoints_enabled` must be `false`. Roles, secrets and data stay. Gold and features come next in "Gold and features after silver".
+15. If gold does not follow in the same window, turn the endpoints off to stop their hourly cost. Set `job_endpoints_enabled` to `false` in `config/aws/iam_preparation.json`, plan as in step 2 and confirm that the plan only removes the endpoints and their rules. Apply it and read `job_network` again. `endpoints_enabled` must be `false`. Roles, secrets and data stay. Gold and features come next in "Gold and features after silver".
 
 ## Gold and features after silver
 
 Gold runs only after the silver publish passed every check and its report is signed. The roles and grants for gold exist from step 2 of the silver list. Features is last and is not ready to run.
 
-1. Gold catalog identity (project profile). If step 14 turned the endpoints off, turn them on again as in step 2 of the silver list. Start the host and find it as in step 4. Approve the namespace `gold` for the writer and read the pair names back. Both `aws_polaris_gold` parameters must show a type and a version:
+1. Gold catalog identity (project profile). If step 15 turned the endpoints off, turn them on again as in step 2 of the silver list. Start the host and find it as in step 4. Approve the namespace `gold` for the writer and read the pair names back. Both `aws_polaris_gold` parameters must show a type and a version:
 
    ```sh
    .venv/bin/python -m scripts.infrastructure.host_session start
@@ -263,7 +269,7 @@ Gold runs only after the silver publish passed every check and its report is sig
    bash scripts/infrastructure/terraform.sh --jobs --preparation-inputs <RECORD_DIR>/jobs_gold.json --preparation-sha256 <SHA256> apply <PLAN>
    ```
 
-3. Stage new code under a new gold run ID and approve it as in step 8 of the silver list, with `gold` in the approval. The input of gold is the signed silver run, so the overrides name it. Gold has no `verify` container. Run the dry run, read its result and check its plan as in steps 9 and 10 with the family `job_gold`, the stream `gold/publish/<TASK_ID>` and `--layer gold`:
+3. Stage new code under a new gold run ID and approve it as in step 8 of the silver list, with `gold` in the approval. The input of gold is the signed silver run, so the overrides name it. Gold has no `verify` container. Run the dry run, read its result and check its plan as in steps 10 and 11 with the family `job_gold`, the stream `gold/publish/<TASK_ID>` and `--layer gold`:
 
    ```sh
    CONFIRM_APPROVE=approve-gold-<RUN_ID>-<CODE_SHA256_FIRST_12> .venv/bin/python -m scripts.lakehouse.layer_acceptance approve --layer gold --run <RUN_ID> --code-sha256 <CODE_SHA256> --out <RECORD_DIR>/approval_gold.json
@@ -271,7 +277,7 @@ Gold runs only after the silver publish passed every check and its report is sig
    .venv/bin/python -m scripts.lakehouse.layer_acceptance plan --layer gold --run <RUN_ID> --log <RECORD_DIR>/plan_log_gold.json
    ```
 
-4. Real gold run and evidence. Save the listing before, start the task, wait, read the result, save the listing after and the uploaded records, as in steps 11 and 12 with the family `job_gold` and the overrides without `--dry-run`:
+4. Real gold run and evidence. Save the listing before, start the task, wait, read the result, save the listing after and the uploaded records, as in steps 12 and 13 with the family `job_gold` and the overrides without `--dry-run`:
 
    ```sh
    .venv/bin/python -m scripts.orchestration.job_overrides --job gold --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog --input-run <SILVER_RUN_ID> > <RECORD_DIR>/overrides_gold_real.json
@@ -288,7 +294,7 @@ Gold runs only after the silver publish passed every check and its report is sig
    CONFIRM_SIGN=<SIGN_TEXT> .venv/bin/python -m scripts.lakehouse.layer_acceptance sign --report <RECORD_DIR>/qualification_gold.json --owner "<OWNER>"
    ```
 
-6. Turn the endpoints off at the end of the window, as in step 14 of the silver list.
+6. Turn the endpoints off at the end of the window, as in step 15 of the silver list.
 
 Features takes the signed gold run as its input and is not ready to run. Before its dry run these steps are needed. None of them is part of the silver or gold acceptance:
 

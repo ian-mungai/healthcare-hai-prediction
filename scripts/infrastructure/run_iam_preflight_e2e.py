@@ -87,7 +87,7 @@ def count(run: Run, word: str) -> int:
     return sum(1 for line in run.out.splitlines() if line.startswith(word + " "))
 
 
-def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Callable[[Run], list[str]]]]:
+def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[], Run], Callable[[Run], list[str]]]]:
     """Each case: name, defect, the command run and the check of its result, which returns the failed expectations."""
     env_file = root / "project.env"
     env_file.write_text(ENV_TEXT, encoding="utf-8")
@@ -127,6 +127,36 @@ def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Call
         )
     ]
     drift_flag_removed = [("drift.tf", "drift_policies = var.drift_prepared ? {", "drift_policies = true ? {")]
+    gold_backup_removed = [("job_writer.tf", 'prefixes        = ["gold", "catalog_backups"]', 'prefixes        = ["gold"]')]
+    silver_pass_removed = [
+        (
+            "policies/healthcare_hai_prediction_iam_policy.json",
+            '        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_silver_task_${ENVIRONMENT}",\n',
+            "",
+        )
+    ]
+    quality_pull_removed = [
+        ("owner_policies/job_execution.json", '        "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_quality_${ENVIRONMENT}",\n', "")
+    ]
+    run_task_other_family = [
+        (
+            "policies/healthcare_hai_prediction_ecs_policy.json",
+            '"Sid": "RunTaggedProjectTasks",\n      "Effect": "Allow",\n      "Action": [\n        "ecs:RunTask"\n      ],\n'
+            '      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_*:*"',
+            '"Sid": "RunTaggedProjectTasks",\n      "Effect": "Allow",\n      "Action": [\n        "ecs:RunTask"\n      ],\n'
+            '      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train:*"',
+        )
+    ]
+    self_simulation_removed = [("policies/healthcare_hai_prediction_iam_policy.json", '        "arn:aws:iam::${AWS_ACCOUNT_ID}:user/${aws:username}",\n', "")]
+    silver_scope = ["--scope", "silver"]
+    silver_roles = {"job_execution", "write_silver", "project_user"}
+
+    def silver_roles_only(run: Run) -> list[str]:
+        named = {line.split()[1] for line in run.out.splitlines() if line.startswith(("PASS ", "FAIL "))}
+        return [f"role {role} is outside the silver path" for role in sorted(named - silver_roles)] + [
+            f"role {role} has no silver check" for role in sorted(silver_roles - named)
+        ]
+
     return [
         (
             "offline real tree",
@@ -169,6 +199,82 @@ def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Call
             "Terraform stops naming the layer storage policy",
             offline_run(planted(no_layer_policy)),
             lambda r: expect(r, 1) + ([] if "no longer names owner_policies/job_writer_layer_storage.json" in r.out else ["attachment not named"]),
+        ),
+        (
+            "live silver scope real tree",
+            "none",
+            live_run(extra=silver_scope),
+            lambda r: (
+                expect(r, 0, PASS=silver, FAIL=0)
+                + reads_only(r)
+                + silver_roles_only(r)
+                + ([] if len(r.calls) == silver + 1 else [f"{len(r.calls)} stand-in calls, expected {silver + 1}"])
+                + ([] if "silver checks passed" in r.out else ["the summary does not name the scope"])
+            ),
+        ),
+        (
+            "live silver scope ignores a gold defect",
+            "gold loses its catalog backup prefix",
+            live_run(planted(gold_backup_removed), extra=silver_scope),
+            lambda r: expect(r, 0, PASS=silver, FAIL=0),
+        ),
+        (
+            "live whole table sees the same gold defect",
+            "gold loses its catalog backup prefix",
+            live_run(planted(gold_backup_removed)),
+            lambda r: expect(r, 1) + ([] if "FAIL write_gold" in r.out and "catalog_backups" in r.out else ["gold failure not named"]),
+        ),
+        (
+            "live silver scope names a denied PassRole",
+            "the project user may not pass the silver task role",
+            live_run(planted(silver_pass_removed), extra=silver_scope),
+            lambda r: (
+                expect(r, 1, PASS=silver - 1, FAIL=1)
+                + (
+                    []
+                    if any(line.startswith("FAIL project_user iam:PassRole") and "job_write_silver_task" in line for line in r.out.splitlines())
+                    else ["denied call not named"]
+                )
+            ),
+        ),
+        (
+            "live silver scope names each denied image pull",
+            "the execution role may not pull the quality image",
+            live_run(planted(quality_pull_removed), extra=silver_scope),
+            lambda r: (
+                expect(r, 1, PASS=silver - 2, FAIL=2)
+                + [
+                    f"{action} on the quality repository not named"
+                    for action in ("ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer")
+                    if not any(line.startswith(f"FAIL job_execution {action}") and "_quality_" in line for line in r.out.splitlines())
+                ]
+            ),
+        ),
+        (
+            "live silver scope names a RunTask refused for the silver family",
+            "the project user may run only the train task definition",
+            live_run(planted(run_task_other_family), extra=silver_scope),
+            lambda r: (
+                expect(r, 1, PASS=silver - 1, FAIL=1) + ([] if "FAIL project_user ecs:RunTask" in r.out and "job_silver" in r.out else ["RunTask not named"])
+            ),
+        ),
+        (
+            "live silver scope needs the user to simulate itself",
+            "the project user may simulate roles but not its own user",
+            live_run(planted(self_simulation_removed), extra=silver_scope),
+            lambda r: expect(r, 1, FAIL=1) + ([] if "FAIL project_user iam:SimulatePrincipalPolicy" in r.out else ["self simulation not named"]),
+        ),
+        (
+            "live unknown scope",
+            "the scope bronze has no table",
+            live_run(extra=["--scope", "bronze"]),
+            lambda r: expect(r, 2) + ([] if not r.calls else ["called AWS with an unknown scope"]),
+        ),
+        (
+            "offline project user loses the silver PassRole",
+            "the project user may not pass the silver task role",
+            offline_run(planted(silver_pass_removed)),
+            lambda r: expect(r, 1) + ([] if "project_user iam:PassRole" in r.out else ["project user row not named"]),
         ),
         (
             "live real tree",
@@ -237,15 +343,21 @@ def cases(root: Path, rows: int) -> list[tuple[str, str, Callable[[], Run], Call
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-directory", type=Path, required=True, help="New directory for the report; an existing path is refused.")
+    parser.add_argument(
+        "--case", action="append", default=[], help="Run only the cases whose name contains this text; repeat it to name more. The default runs every case."
+    )
     arguments = parser.parse_args()
     if arguments.output_directory.exists():
         sys.stderr.write("The output directory exists; pass a new path.\n")
         return 2
-    rows = len(load_table(TABLE)["checks"])
+    checks = load_table(TABLE)["checks"]
+    rows, silver = len(checks), sum(1 for row in checks if row.get("scope") == "silver")
     results = []
     with tempfile.TemporaryDirectory(prefix="iam_preflight_e2e_") as scratch:
         root = Path(scratch)
-        for name, defect, run, check in cases(root, rows):
+        for name, defect, run, check in cases(root, rows, silver):
+            if arguments.case and not any(text in name for text in arguments.case):
+                continue
             outcome = run()
             failed = check(outcome)
             results.append(
@@ -268,8 +380,10 @@ def main() -> int:
     report = {
         "tool": "iam_preflight",
         "table_rows": rows,
+        "silver_rows": silver,
         "commands": {
             "live": ".venv/bin/python -m scripts.infrastructure.iam_preflight --env-file <ENV_FILE>",
+            "silver": ".venv/bin/python -m scripts.infrastructure.iam_preflight --env-file <ENV_FILE> --scope silver",
             "offline": ".venv/bin/python -m scripts.infrastructure.iam_preflight_policies",
         },
         "substitution": "the aws executable is a stand-in that evaluates the rendered infra/iam policies offline; no AWS call was made",

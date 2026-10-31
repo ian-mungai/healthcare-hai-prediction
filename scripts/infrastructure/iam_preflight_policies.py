@@ -15,12 +15,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from infra.iam.scripts.render_policy import PolicyRenderError, render_template, terraform_names
+from infra.iam.scripts.render_policy import PolicyRenderError, load_documents, render_template, terraform_names
 from scripts.infrastructure.policy_evaluator import Request, UnsupportedPolicyElement, decide
 from scripts.infrastructure.render_project_config import REPO_ROOT
 
 INFRA = REPO_ROOT / "infra" / "iam"
 TABLE = REPO_ROOT / "config" / "aws" / "iam_preflight_checks.json"
+BRONZE_TABLES = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
+SILVER_CONTRACT = REPO_ROOT / "data_contracts" / "lakehouse" / "silver_publish.json"
 # The values of the offline run. The project name is the real one because the parameter name defaults start with it.
 OFFLINE_VALUES = {
     "AWS_REGION": "us-west-2",
@@ -28,10 +30,15 @@ OFFLINE_VALUES = {
     "PROJECT_NAME": "healthcare_hai_prediction",
     "ENVIRONMENT": "dev",
     "DATA_BUCKET_NAME": "example-hai-data-bucket",
+    "AWS_PROFILE": "healthcare_hai_prediction_dev",
 }
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
-ROW_KEYS = {"role", "action", "resource", "context"}
-ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments"}
+ROW_KEYS = {"role", "action", "resource", "context", "scope"}
+ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments", "kind"}
+SCOPES = ("silver",)
+KINDS = ("role", "user")
+# The project user holds every policy file of ``infra/iam/policies``: the owner attaches them with ``manage_policies``, not Terraform.
+USER_POLICIES = "policies/*.json"
 ATTACHMENT_KEYS = {"policy", "resource", "flag"}
 SAMPLE_USER_ID = "AROAEXAMPLE:task"
 
@@ -50,14 +57,18 @@ def load_table(path: Path = TABLE) -> dict[str, Any]:
         raise TableError("The preflight table must hold exactly the keys roles and checks.")
     for key, role in table["roles"].items():
         if not isinstance(role, dict) or not {"name", "terraform", "policies"} <= set(role) or set(role) - ROLE_KEYS:
-            raise TableError(f"Role {key} needs name, terraform and policies, and may add layer and attachments.")
+            raise TableError(f"Role {key} needs name, terraform and policies, and may add layer, attachments and kind.")
+        if role.get("kind", "role") not in KINDS or (role.get("kind") == "user") != (role["policies"] == [USER_POLICIES]):
+            raise TableError(f"Role {key}: kind is role or user, and only a user holds {USER_POLICIES}.")
         for attachment in role.get("attachments", []):
             if not isinstance(attachment, dict) or set(attachment) != ATTACHMENT_KEYS or attachment["policy"] not in role["policies"]:
                 raise TableError(f"Role {key} has an attachment without a policy of the role, a resource and a flag.")
     seen: set[str] = set()
     for row in table["checks"]:
         if not isinstance(row, dict) or not {"role", "action", "resource"} <= set(row) or set(row) - ROW_KEYS:
-            raise TableError("Each check needs role, action and resource, and may add context.")
+            raise TableError("Each check needs role, action and resource, and may add context and scope.")
+        if row.get("scope", SCOPES[0]) not in SCOPES:
+            raise TableError(f"A check names the unknown scope {row['scope']}.")
         if row["role"] not in table["roles"]:
             raise TableError(f"A check names the unknown role {row['role']}.")
         identity = json.dumps(row, sort_keys=True)
@@ -86,7 +97,8 @@ def terraform_list(infra: Path, file: str, variable: str) -> list[str]:
 
 
 def infra_names(infra: Path = INFRA) -> dict[str, str]:
-    """The single names a table row or policy may use: the Terraform variable defaults plus the two broker parameters."""
+    """The single names a table row or policy may use: the Terraform variable defaults, the broker and features parameters and one real table each
+    of the bronze map and of the silver publish contract."""
     names = {key: value for key, value in terraform_names(infra / "variables.tf").items() if isinstance(value, str)}
     names["BROKER_TOKEN_NAME"] = terraform_default(infra, "broker.tf", "broker_token_name")
     names["BROKER_SIGNED_PARAMETER_NAME"] = terraform_default(infra, "broker.tf", "broker_signed_parameter_name")
@@ -94,7 +106,19 @@ def infra_names(infra: Path = INFRA) -> dict[str, str]:
         names[f"AWS_POLARIS_FEATURES_CLIENT_{part.upper()}_NAME"] = terraform_default(
             infra, "job_writer_variables.tf", f"aws_polaris_features_client_{part}_name"
         )
+    names["BRONZE_TABLE"] = json.loads(BRONZE_TABLES.read_text(encoding="utf-8"))["tables"][0]["table"]
+    names["SILVER_TABLE"] = sorted(json.loads(SILVER_CONTRACT.read_text(encoding="utf-8"))["publish"]["tables"])[0]
     return names
+
+
+def scoped_checks(table: Mapping[str, Any], scope: str | None) -> list[dict[str, Any]]:
+    """The rows of one scope, or every row when no scope is named."""
+    return [row for row in table["checks"] if scope is None or row.get("scope") == scope]
+
+
+def principal_arn(role: Mapping[str, Any], account: str, values: Mapping[str, str]) -> str:
+    """The ARN of the role or user that a simulation starts from."""
+    return f"arn:aws:iam::{account}:{role.get('kind', 'role')}/{expand(role['name'], values)}"
 
 
 def expand(text: str, values: Mapping[str, str]) -> str:
@@ -204,9 +228,12 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
 
 def role_documents(role: Mapping[str, Any], infra: Path, values: Mapping[str, str], names: Mapping[str, str]) -> list[dict[str, Any]]:
     """The policy documents of one role, rendered from the files in the IAM stack."""
-    documents = []
+    documents: list[dict[str, Any]] = []
     for policy in role["policies"]:
         try:
+            if policy == USER_POLICIES:
+                documents += load_documents(values, directory=infra / "policies", names=terraform_names(infra / "variables.tf")).values()
+                continue
             text = (infra / policy).read_text(encoding="utf-8")
             if policy.startswith("role_policies/"):
                 documents.append(lakehouse_role_policy(text, infra, {**names, **values}))
@@ -279,7 +306,7 @@ def problems(table: Mapping[str, Any], infra: Path = INFRA, values: Mapping[str,
     documents: dict[str, list[dict[str, Any]]] = {}
     for key, role in table["roles"].items():
         terraform = " ".join((infra / file).read_text(encoding="utf-8") for file in role["terraform"])
-        for policy in role["policies"]:
+        for policy in [] if role.get("kind") == "user" else role["policies"]:
             if Path(policy).stem not in terraform:
                 found.append(f"role {key}: Terraform {', '.join(role['terraform'])} no longer names {policy}")
         found += attachment_problems(key, role, infra)

@@ -1,4 +1,4 @@
-"""Check, before an attended AWS step, that each project role holds the grants the project needs: one read-only simulation per table row.
+"""Check, before an attended AWS step, that each project role and the project user hold the grants the project needs: one read-only simulation per table row.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.iam_preflight``. The profile, region and account come from ``.env`` through
 ``load_configuration`` and the calls go through the project's ``AwsCli`` wrapper under the project profile. For each row of
@@ -6,8 +6,10 @@ Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.iam_p
 keys of the row, and prints one line, ``PASS`` or ``FAIL``. Only ``allowed`` passes. An implicit or explicit deny, a denied simulation call, a missing
 role, an answer that is not understood, a decision that needs a condition key the row lacks and a call that outlives its deadline all fail. The exit
 status is 0 when every row passes, 1 when one fails and 2 when the setup is wrong (no configuration, a wrong identity or a table that does not parse).
-Output names the table's resource text, never an account ID. The project profile needs ``iam:SimulatePrincipalPolicy`` on the roles, which the IAM
-policy files grant after the owner applies them.
+``--scope silver`` runs only the rows of the first Silver run: the image pull and parameter reads of the execution role, the calls of the Silver writer task and
+the RunTask, PassRole, describe and log calls of the project user. Each denied call is a ``FAIL`` line with its role, action and resource.
+Output names the table's resource text, never an account ID. The project profile needs ``iam:SimulatePrincipalPolicy`` on the roles and on its own user,
+which the IAM policy files grant after the owner applies them.
 """
 
 from __future__ import annotations
@@ -20,12 +22,24 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli, StorageError
-from scripts.infrastructure.iam_preflight_policies import SAMPLE_USER_ID, TABLE, TableError, expand, infra_names, load_table
+from scripts.infrastructure.iam_preflight_policies import (
+    SAMPLE_USER_ID,
+    SCOPES,
+    TABLE,
+    TableError,
+    expand,
+    infra_names,
+    load_table,
+    principal_arn,
+    scoped_checks,
+)
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 
 CALL_SECONDS = 30
 TOTAL_SECONDS = 600
-DENIED = "the simulation call was denied: the project profile lacks iam:SimulatePrincipalPolicy on this role. The owner applies the IAM policy update first"
+DENIED = (
+    "the simulation call was denied: the project profile lacks iam:SimulatePrincipalPolicy on this principal. The owner applies the IAM policy update first"
+)
 CODE_MESSAGES = {
     "AccessDenied": DENIED,
     "AccessDeniedException": DENIED,
@@ -94,32 +108,36 @@ def verify_identity(client: AwsCli, settings: dict[str, str]) -> None:
         raise ConfigurationError("The project profile must authenticate as its same-named IAM user in the configured account.")
 
 
-def run(table: dict[str, Any], settings: dict[str, str], client: AwsCli, call_seconds: float, total_seconds: float) -> int:
-    """Print one line per row and return the exit status."""
+def run(table: dict[str, Any], settings: dict[str, str], client: AwsCli, call_seconds: float, total_seconds: float, scope: str | None = None) -> int:
+    """Print one line per row of the scope (every row without one) and return the exit status."""
+    checks = scoped_checks(table, scope)
+    if not checks:
+        raise TableError(f"The preflight table has no check for the scope {scope}.")
     values = {**infra_names(), **{key: settings[source] for key, source in BASE.items()}}
     verify_identity(client, settings)
     deadline = time.monotonic() + total_seconds
     failures = 0
-    for row in table["checks"]:
+    for row in checks:
         role = table["roles"][row["role"]]
         left = deadline - time.monotonic()
         if left <= 0:
             message: str | None = "not run: the total deadline passed"
         else:
-            message = check(client, row, f"arn:aws:iam::{settings['expected_account_id']}:role/{expand(role['name'], values)}", values, min(call_seconds, left))
+            message = check(client, row, principal_arn(role, settings["expected_account_id"], values), values, min(call_seconds, left))
         label = f"{row['role']} {row['action']} {row['resource']}"
         if message is None:
             sys.stdout.write(f"PASS {label}\n")
             continue
         failures += 1
         sys.stdout.write(f"FAIL {label}: {message}\n")
-    sys.stdout.write(f"{len(table['checks']) - failures} of {len(table['checks'])} checks passed\n")
+    sys.stdout.write(f"{len(checks) - failures} of {len(checks)} {scope + ' ' if scope else ''}checks passed\n")
     return 1 if failures else 0
 
 
 BASE = {
     "AWS_REGION": "aws_region",
     "AWS_ACCOUNT_ID": "expected_account_id",
+    "AWS_PROFILE": "aws_profile",
     "PROJECT_NAME": "project_name",
     "ENVIRONMENT": "environment",
     "DATA_BUCKET_NAME": "data_bucket_name",
@@ -130,13 +148,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env", help="The project .env file.")
     parser.add_argument("--table", type=Path, default=TABLE, help="The table of role, action and resource rows.")
+    parser.add_argument("--scope", choices=SCOPES, help="Check only the rows of one first run. Without it every row runs.")
     parser.add_argument("--call-seconds", type=float, default=CALL_SECONDS, help="The deadline of one simulation call.")
     parser.add_argument("--total-seconds", type=float, default=TOTAL_SECONDS, help="The deadline of the whole run.")
     arguments = parser.parse_args(argv)
     try:
         settings, _ = load_configuration(arguments.env_file)
         table = load_table(arguments.table)
-        return run(table, settings, AwsCli(settings), arguments.call_seconds, arguments.total_seconds)
+        return run(table, settings, AwsCli(settings), arguments.call_seconds, arguments.total_seconds, arguments.scope)
     except (ConfigurationError, TableError, OSError) as error:
         sys.stderr.write(f"ERROR {error}\n")
         return 2

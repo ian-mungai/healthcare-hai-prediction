@@ -41,8 +41,8 @@ def simulate(given: dict[str, str]) -> dict[str, Any] | None:
     names = infra_names(infra)
     values = {**names, **OFFLINE_VALUES}
     table = load_table()
-    name = given["--policy-source-arn"].rsplit("/", 1)[-1]
-    role = next((item for item in table["roles"].values() if expand(item["name"], values) == name), None)
+    kind, name = given["--policy-source-arn"].rsplit(":", 1)[-1].split("/", 1)
+    role = next((item for item in table["roles"].values() if item.get("kind", "role") == kind and expand(item["name"], values) == name), None)
     if role is None:
         return None
     context: dict[str, tuple[str, ...]] = {}

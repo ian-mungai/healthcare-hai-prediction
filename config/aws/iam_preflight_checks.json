@@ -186,6 +186,14 @@
           "flag": "drift_prepared"
         }
       ]
+    },
+    "project_user": {
+      "name": "${AWS_PROFILE}",
+      "kind": "user",
+      "terraform": [],
+      "policies": [
+        "policies/*.json"
+      ]
     }
   },
   "checks": [
@@ -297,17 +305,20 @@
     {
       "role": "job_execution",
       "action": "ssm:GetParameters",
-      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_ID_NAME}"
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_ID_NAME}",
+      "scope": "silver"
     },
     {
       "role": "job_execution",
       "action": "ssm:GetParameters",
-      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}"
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}",
+      "scope": "silver"
     },
     {
       "role": "job_execution",
       "action": "ssm:GetParameters",
-      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_ID_NAME}"
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_ID_NAME}",
+      "scope": "silver"
     },
     {
       "role": "job_execution",
@@ -327,7 +338,8 @@
     {
       "role": "job_execution",
       "action": "ecr:BatchGetImage",
-      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}"
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}",
+      "scope": "silver"
     },
     {
       "role": "job_execution",
@@ -589,7 +601,8 @@
     {
       "role": "write_silver",
       "action": "s3:PutObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/state/pinned.json"
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/state/pinned.json",
+      "scope": "silver"
     },
     {
       "role": "write_silver",
@@ -599,7 +612,8 @@
     {
       "role": "write_silver",
       "action": "s3:PutObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/export/manifest.json"
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/export/manifest.json",
+      "scope": "silver"
     },
     {
       "role": "write_gold",
@@ -718,6 +732,196 @@
       "role": "drift",
       "action": "s3:PutObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/drift/example_run/records/drift_HAI_1.json"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetAuthorizationToken",
+      "resource": "*",
+      "context": {
+        "aws:RequestedRegion": "${AWS_REGION}"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_spark_${ENVIRONMENT}",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_quality_${ENVIRONMENT}",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_spark_${ENVIRONMENT}",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_quality_${ENVIRONMENT}",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/publish/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/publish/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_SECRET_NAME}",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar.gz",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/bronze/"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze/${BRONZE_TABLE}/data/example.parquet",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/${SILVER_TABLE}/data/example.parquet",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/${SILVER_TABLE}/metadata/example.metadata.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/${SILVER_TABLE}/metadata/example.metadata.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/catalog_backups/example.json",
+      "scope": "silver"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/catalog_backups/example.json",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "iam:SimulatePrincipalPolicy",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:user/${AWS_PROFILE}",
+      "context": {
+        "aws:username": "${AWS_PROFILE}"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:RunTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_silver:1",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
+        "aws:RequestTag/Project": "${PROJECT_NAME}",
+        "aws:TagKeys": [
+          "Project"
+        ]
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:TagResource",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/0123456789abcdef0123456789abcdef",
+      "context": {
+        "ecs:CreateAction": "RunTask"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_execution_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_silver_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:DescribeTasks",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:ListTasks",
+      "resource": "*",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+      },
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:StopTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
+    },
+    {
+      "role": "project_user",
+      "action": "logs:GetLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:silver/publish/0123456789abcdef0123456789abcdef",
+      "scope": "silver"
     }
   ]
 }
