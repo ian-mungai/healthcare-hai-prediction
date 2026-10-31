@@ -59,3 +59,10 @@ variable "expected_account_id" {
     error_message = "Supply the verified 12-digit AWS account ID."
   }
 }
+
+variable "mlflow_retention_enabled" {
+  description = "Add the rule that expires replaced MLflow artifact versions under mlflow/ after 30 days. Off by default, because the rule changes the live lifecycle configuration of the data bucket; the owner sets it in the apply step that prepares MLflow."
+  type        = bool
+  default     = false
+  nullable    = false
+}

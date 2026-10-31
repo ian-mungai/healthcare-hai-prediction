@@ -106,11 +106,11 @@ run "lifecycle_cleanup_rules" {
   assert {
     condition = (
       aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 3 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_replaced_mlflow_versions"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions"])
     )
-    error_message = "Exactly four enabled rules must target the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions, replaced DVC versions and replaced MLflow versions."
+    error_message = "A default plan must hold exactly three enabled rules on the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions and replaced DVC versions. The MLflow rule stays out until mlflow_retention_enabled is set."
   }
 
   assert {
@@ -151,18 +151,6 @@ run "lifecycle_cleanup_rules" {
   assert {
     condition = alltrue([
       for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
-      one(rule.filter).prefix == "mlflow/" &&
-      one(rule.noncurrent_version_expiration).noncurrent_days == 30 &&
-      one(rule.expiration).expired_object_delete_marker == true &&
-      length(rule.abort_incomplete_multipart_upload) == 0
-      if rule.id == "expire_replaced_mlflow_versions"
-    ])
-    error_message = "Only replaced versions under mlflow/ may expire, after 30 days; current MLflow artifacts never expire and orphaned delete markers are removed."
-  }
-
-  assert {
-    condition = alltrue([
-      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
       length(rule.transition) == 0 &&
       length(rule.noncurrent_version_transition) == 0 &&
       length(rule.filter) == 1 &&
@@ -170,6 +158,36 @@ run "lifecycle_cleanup_rules" {
       length(one(rule.filter).tag) == 0
     ])
     error_message = "Rules must never transition objects and must use a single filter without tag or compound restrictions."
+  }
+}
+
+# The MLflow artifact rule is a live change to the bucket's lifecycle configuration, so it exists only when the owner turns the flag on.
+run "mlflow_retention_rule_only_with_its_flag" {
+  command = plan
+
+  variables {
+    mlflow_retention_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_replaced_mlflow_versions"])
+    )
+    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the three default rules."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      one(rule.filter).prefix == "mlflow/" &&
+      one(rule.noncurrent_version_expiration).noncurrent_days == 30 &&
+      one(rule.expiration).expired_object_delete_marker == true &&
+      length(rule.abort_incomplete_multipart_upload) == 0
+      if rule.id == "expire_replaced_mlflow_versions"
+    ])
+    error_message = "Only replaced versions under mlflow/ may expire, after 30 days; current MLflow artifacts never expire and orphaned delete markers are removed."
   }
 }
 
