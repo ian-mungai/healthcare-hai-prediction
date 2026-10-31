@@ -1,4 +1,4 @@
-"""Run one phase of the drift task inside an AWS task (project decision 21).
+"""Run one phase of the drift task inside an AWS task.
 
     python -m monitoring.aws_run baseline|current|check|publish --run <run ID> [--work /workspace]
 

@@ -263,7 +263,7 @@ output "layer_secret_flow" {
 }
 
 output "layer_run_tasks" {
-  description = "What the broker's run-task call needs for each registered layer task. Registration starts nothing. The dry run variable is the one override that makes a run a dry run (decision 70)."
+  description = "What the broker's run-task call needs for each registered layer task. Registration starts nothing. The dry run variable is the one override that makes a run a dry run."
   value = {
     for layer, task in aws_ecs_task_definition.layer : layer => {
       task_definition       = task.family

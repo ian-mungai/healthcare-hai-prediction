@@ -1,4 +1,4 @@
-"""Read the current feature windows of one population from a features publication (project decision 21).
+"""Read the current feature windows of one population from a features publication.
 
 ``python -m monitoring.current_window --hai-type HAI_1 --population primary --features-run latest --newest-window-year 2023 --features FILE --out DIR`` reads
 the selected publication through the feature store reader of ``scripts.features.training_extract`` and writes the inputs of ``monitoring.drift_check``'s

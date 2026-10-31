@@ -1,4 +1,4 @@
-"""Exercise the S3 grants of the training roles (decision 56) without AWS calls.
+"""Exercise the S3 grants of the training roles without AWS calls.
 
 The MLflow service role reads and writes the ``mlflow/`` prefix only. The training job role reads the ``features/`` namespace and the Feast registry
 under ``feast/`` and nothing else of the lakehouse. Each grant is checked against requests listed here, apart from the rendered policy resources,

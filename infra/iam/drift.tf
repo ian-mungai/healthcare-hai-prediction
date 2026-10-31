@@ -1,5 +1,5 @@
 variable "drift_prepared" {
-  description = "Prepare the drift task role and the grants it needs (decision 21). Off by default. It reuses the training network and the endpoints of the jobs, so apply it with training_prepared and job_endpoints_enabled."
+  description = "Prepare the drift task role and the grants it needs. Off by default. It reuses the training network and the endpoints of the jobs, so apply it with training_prepared and job_endpoints_enabled."
   type        = bool
   default     = false
   nullable    = false

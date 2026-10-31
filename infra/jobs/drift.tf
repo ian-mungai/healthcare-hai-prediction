@@ -1,5 +1,5 @@
 variable "drift_enabled" {
-  description = "Register the drift task that the broker starts for drift_monitoring_dag (decision 21). It needs the training, feature store and drift image digests, the execution and drift roles and the jobs log group."
+  description = "Register the drift task that the broker starts for drift_monitoring_dag. It needs the training, feature store and drift image digests, the execution and drift roles and the jobs log group."
   type        = bool
   default     = false
   nullable    = false

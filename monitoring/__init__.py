@@ -1,1 +1,1 @@
-"""Drift monitoring of the Production model's features (project decision 21)."""
+"""Drift monitoring of the Production model's features."""

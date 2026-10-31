@@ -1,4 +1,4 @@
-"""Synthetic E2E cases of the AWS task runner (decision 56): the phases of one training run inside Fargate containers, through ``aws_run.main``."""
+"""Synthetic E2E cases of the AWS task runner: the phases of one training run inside Fargate containers, through ``aws_run.main``."""
 
 from __future__ import annotations
 

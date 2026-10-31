@@ -29,6 +29,7 @@ unused-code scripts/lakehouse/fake_docker.py -- http.server calls the do_* hooks
 unused-code scripts/orchestration/broker.py -- http.server calls the do_* hooks, handle_error and log_message and reads server_version, sys_version, timeout and daemon_threads
 unused-code scripts/orchestration/ecs_broker.py -- http.server calls the do_* hooks and handle_error of the broker listener by name and reads its server_version, sys_version and daemon_threads
 unused-code scripts/lakehouse/code_archive.py -- tarfile writes the gid and gname of each TarInfo into the header, so the archive carries no owner
+unused-code scripts/orchestration/airflow_import_probe.py -- importlib calls Finder.create_module through the Loader protocol when a DAG imports the stand-in airflow package
 unused-code scripts/orchestration/run_supervisor_e2e.py -- http.server calls the do_* hooks and log_message of the stand-in health endpoint
 unused-code scripts/acquisition/run_reference_documents_e2e.py -- urllib's OpenerDirector calls https_open by its protocol name, and the sitecustomize text the E2E writes into each download process calls install_stand_in
 orphan tests/orchestration/fixtures/tiny/* -- dbt loads every model, test and property file of the project it is given; the transform E2E copies the folder as one project

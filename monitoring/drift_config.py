@@ -1,4 +1,4 @@
-"""Read and check the tracked drift configuration (project decision 21).
+"""Read and check the tracked drift configuration.
 
 ``python -m monitoring.drift_config --check [--config PATH]`` validates the file against ``data_contracts/monitoring/drift.schema.json`` and exits 0, or exits 1
 and names the file and the key that is wrong. The schema pins the decision's values (drift share 0.5, the Kolmogorov-Smirnov and chi-square tests, p below 0.05,

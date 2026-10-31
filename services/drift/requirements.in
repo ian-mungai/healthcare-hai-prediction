@@ -1,4 +1,4 @@
-# Drift image (decision 21): the approved versions only. Transitive packages are resolved by services/drift/compile_lock.sh into requirements.txt at lock review
+# Drift image: the approved versions only. Transitive packages are resolved by services/drift/compile_lock.sh into requirements.txt at lock review
 # and listed there. A clash is reported, not forced.
 #
 # evidently: the dataset drift report (its legacy namespace, whose drift_by_columns result monitoring/evidently_report.py reads). The release is checked

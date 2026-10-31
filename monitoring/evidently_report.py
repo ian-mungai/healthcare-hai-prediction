@@ -2,7 +2,7 @@
 
 The report is Evidently's ``DataDriftPreset`` from its ``legacy`` namespace, whose result layout (``drift_by_columns``) is documented and stable in the pinned
 release. The tests are named explicitly because Evidently's own choice depends on the row count: above 1000 reference rows it picks Wasserstein distance and
-Jensen-Shannon distance, not the Kolmogorov-Smirnov and chi-square tests of decision 21.
+Jensen-Shannon distance, not the Kolmogorov-Smirnov and chi-square tests.
 """
 
 from __future__ import annotations
