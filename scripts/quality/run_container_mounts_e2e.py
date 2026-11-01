@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
@@ -36,7 +37,11 @@ EXTRACT = "scripts/features/training_extract.py"
 TERRAFORM_GROUP = "scripts/ci/groups/terraform_checks.sh"
 # Where the Terraform stacks read repository files from above their own folder: the jobs root has the repository path, the others walk up two folders.
 STACK_FILE_READS = (r"\$\{path\.module\}/\.\./\.\./([A-Za-z0-9_./-]+)", r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)")
-RUN_SECONDS = 720
+# The run deadline is a hang guard for the whole run, not part of what a case proves: every case has its own hook deadline. A fixed 720 s ran out before the
+# last of the 52 cases on hosted runners (11 to 16 s a case with every group running at once, 3.5 s on an idle machine), and the run then printed
+# "46/52 passed" with no failed case. The limit grows with the number of cases instead.
+RUN_BASE_SECONDS = 120
+CASE_ALLOWANCE_SECONDS = 20
 # Runs of a case whose hook the deadline stopped before the checker began: each repeat gets twice the seconds of the run before.
 DEADLINE_ATTEMPTS = 3
 # Written into the Python start-up of the fixture's checker process only, so the case can tell a hook stopped before the checker began from one stopped after.
@@ -538,7 +543,7 @@ def stack_read_files() -> set[str]:
 def remaining(deadline: float, cap: float) -> float:
     seconds = min(cap, deadline - time.monotonic())
     if seconds <= 0:
-        raise TimeoutError(f"The container import run exceeded its {RUN_SECONDS}-second deadline")
+        raise TimeoutError("The container import run exceeded its run deadline")
     return seconds
 
 
@@ -579,7 +584,7 @@ def bounded(program: str, arguments: list[str], folder: Path, environment: dict[
     """Run a fixture command under the repository's process-group deadline entry point."""
     seconds = min(seconds, deadline - time.monotonic() - 70)
     if seconds < 4:
-        raise TimeoutError(f"The container import cases exhausted their {RUN_SECONDS}-second deadline, including process-group cleanup")
+        raise TimeoutError("The container import cases exhausted their run deadline, including process-group cleanup")
     child_environment = environment | {"HAI_DEADLINE_UTC": str(time.time() + seconds + 2)}
     result = run_command(
         str(PYTHON),
@@ -762,9 +767,108 @@ def mutant_cases(source: dict[str, str], workspace: Path, deadline: float, cases
     return results
 
 
+def case_reason(row: dict[str, Any]) -> str:
+    """Return one line that says why a case failed, from its recorded exit codes and fixed expectations, never from the output of its hook."""
+    if row.get("scenario_rejected_mutant") is False:
+        return "the planted defect was not rejected"
+    if row.get("observed_exit") == 124 and row.get("expected_exit") != 124:
+        started = "yes" if row.get("checker_started") else "no"
+        return f"stopped by the hook deadline ({row.get('attempts', 1)} runs, last limit {row.get('seconds', '?'):g} s), checker started: {started}"
+    broken = [str(name) for key in ("path_selection", "dispatched_once") for name, ok in dict(row.get(key, {})).items() if not ok]
+    if broken:
+        return "failed: " + ", ".join(broken[:4])
+    parts = []
+    if row.get("observed_exit") != row.get("expected_exit"):
+        parts.append(f"exit {row.get('observed_exit')} instead of {row.get('expected_exit')}")
+    output = str(row.get("output", ""))
+    missing = [str(message)[:80] for message in tuple(row.get("expected_messages", ())) if str(message) not in output]
+    if missing:
+        parts.append(f"{len(missing)} expected message{'s' if len(missing) > 1 else ''} missing: " + ", ".join(missing[:3]))
+    return "; ".join(parts) or "a count or marker check failed"
+
+
+def default_run_limit(cases: int) -> float:
+    """Return the hang guard for a run of this many cases: a base for the setup plus an allowance for each case."""
+    return RUN_BASE_SECONDS + CASE_ALLOWANCE_SECONDS * cases
+
+
+def failure_lines(report: dict[str, Any], expected: list[str]) -> list[str]:
+    """Return the lines that name every failed case, every case that never ran and the error that stopped the run."""
+    rows = [row for row in list(report.get("cases", [])) if isinstance(row, dict)]
+    ran = {str(row.get("name")) for row in rows}
+    never = [name for name in expected if name not in ran]
+    lines = [f"{report.get('passed')} of {report.get('total')} passed in {float(report.get('run_seconds', 0)):.0f} s"]
+    lines.extend(f"FAILED {row.get('name')}: {case_reason(row)}" for row in rows if not row.get("passed"))
+    if never:
+        lines.append(f"NOT RUN ({len(never)}): " + ", ".join(never[:20]) + (f" and {len(never) - 20} more" if len(never) > 20 else ""))
+    if report.get("error"):
+        lines.append("STOPPED: " + str(report["error"])[:200])
+    if report.get("cleanup", "done") != "done":
+        lines.append("The temporary workspace was kept because a process group did not stop")
+    if report.get("source_unchanged") is False:
+        lines.append("The source snapshot changed during the run")
+    return lines
+
+
+def self_check() -> None:
+    """Prove with a synthetic report that the failure summary names the failed cases, the cases never run and the stop, and none of the passing rows."""
+    rows: list[dict[str, Any]] = [
+        {"name": "case_ok", "passed": True, "observed_exit": 1, "expected_exit": 1, "output": "fine"},
+        {
+            "name": "case_wrong_exit",
+            "passed": False,
+            "observed_exit": 0,
+            "expected_exit": 1,
+            "expected_messages": ("expected sentence one",),
+            "output": "secret sample output that must not be printed",
+            "attempts": 1,
+            "seconds": 30,
+            "checker_started": True,
+        },
+        {
+            "name": "case_slow",
+            "passed": False,
+            "observed_exit": 124,
+            "expected_exit": 1,
+            "output": "x",
+            "attempts": 3,
+            "seconds": 120,
+            "checker_started": False,
+        },
+        {"name": "mutant_alive", "passed": False, "scenario_rejected_mutant": False, "output": "x"},
+    ]
+    report: dict[str, Any] = {
+        "cases": rows,
+        "passed": 1,
+        "total": 6,
+        "error": "TimeoutError: The container import cases exhausted their run deadline, including process-group cleanup",
+        "run_seconds": 42.5,
+    }
+    text = "\n".join(failure_lines(report, ["case_ok", "case_wrong_exit", "case_slow", "mutant_alive", "never_a", "never_b"]))
+    needed = (
+        "FAILED case_wrong_exit: exit 0 instead of 1; 1 expected message missing: expected sentence one",
+        "FAILED case_slow: stopped by the hook deadline (3 runs, last limit 120 s), checker started: no",
+        "FAILED mutant_alive: the planted defect was not rejected",
+        "NOT RUN (2): never_a, never_b",
+        "STOPPED: TimeoutError: The container import cases exhausted their run deadline",
+        "1 of 6 passed in 42 s",
+    )
+    slowest_hosted_case = 16.0
+    if default_run_limit(52) - 70 < 52 * slowest_hosted_case * 1.2:
+        raise SystemExit(
+            "The default run limit for 52 cases does not cover the slowest hosted pace seen (16 s a case) with a margin of 20 percent after the 70 s reserve"
+        )
+    missing = [line for line in needed if line not in text]
+    if missing or "secret sample output" in text or "case_ok" in text:
+        raise SystemExit(
+            "The failure summary is wrong. Missing: " + "; ".join(missing) + ("; it leaks a case output or names a passing case" if not missing else "")
+        )
+
+
 def main() -> int:
     """Run the source-only hook cases and save repeatable pass and failure evidence."""
-    deadline = time.monotonic() + RUN_SECONDS
+    clock_start = time.monotonic()
+    deadline = clock_start + RUN_BASE_SECONDS
     for variable in tuple(os.environ):
         if variable.startswith("GIT_") or variable in {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"}:
             os.environ.pop(variable, None)
@@ -772,7 +876,15 @@ def main() -> int:
     parser.add_argument("--case", action="append", help="run only a named case")
     parser.add_argument("--output", type=Path, help="write the run record to this ignored folder")
     parser.add_argument("--mutants", action="store_true", help="also prove the cases reject weakened checker and CI wiring copies")
+    parser.add_argument(
+        "--run-seconds", type=float, help=f"hang guard for the whole run; default {RUN_BASE_SECONDS} s plus {CASE_ALLOWANCE_SECONDS} s for each case"
+    )
+    parser.add_argument("--self-check", action="store_true", help="check the failure summary with a synthetic report and stop")
     args = parser.parse_args()
+    self_check()
+    if args.self_check:
+        sys.stdout.write("failure summary self-check passed\n")
+        return 0
     started = datetime.now(UTC)
     out = args.output or ROOT / "data/e2e/container_mounts" / started.strftime("%Y%m%dT%H%M%S_%fZ")
     out.mkdir(parents=True, exist_ok=False)
@@ -783,8 +895,13 @@ def main() -> int:
         if unknown := set(args.case) - {case.name for case in selected}:
             parser.error("Unknown case: " + ", ".join(sorted(unknown)))
         selected = [case for case in selected if case.name in args.case]
+    total = len(selected) + int(not args.case) + (5 + len(checker_mutations()) if args.mutants else 0)
+    run_limit = args.run_seconds or default_run_limit(total)
+    deadline = clock_start + run_limit
+    expected = [case.name for case in selected] + ([] if args.case else ["ci_selection_and_dispatch"])
     report: dict[str, object] = {
         "started_at_utc": started.isoformat(),
+        "run_limit_seconds": run_limit,
         "command": ".venv/bin/python -m scripts.quality.run_container_mounts_e2e",
         "revision": run_command("git", ["rev-parse", "HEAD"], cwd=ROOT, timeout=remaining(deadline, 15), check=True).stdout.strip(),
         "source_sha256": {name: hashlib.sha256(text.encode()).hexdigest() for name, text in source.items()},
@@ -809,14 +926,21 @@ def main() -> int:
         if cleanup == "done":
             shutil.rmtree(workspace)
     passed = sum(bool(case["passed"]) for case in results)
-    total = len(selected) + int(not args.case) + (5 + len(checker_mutations()) if args.mutants else 0)
     try:
         unchanged = snapshot(deadline) == source
     except (OSError, ValueError, TimeoutError, TimeoutExpired) as error:
         unchanged = False
-        report["error"] = f"{type(error).__name__}: {error}"
+        report.setdefault("error", f"{type(error).__name__}: {error}")
     success = passed == total and unchanged and "error" not in report
-    report.update(cases=results, passed=passed, total=total, source_unchanged=unchanged, cleanup=cleanup, status="passed" if success else "failed")
+    report.update(
+        cases=results,
+        passed=passed,
+        total=total,
+        source_unchanged=unchanged,
+        cleanup=cleanup,
+        run_seconds=round(time.monotonic() - clock_start, 1),
+        status="passed" if success else "failed",
+    )
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (out / "retention.json").write_text(
         json.dumps(
@@ -832,6 +956,12 @@ def main() -> int:
         encoding="utf-8",
     )
     sys.stdout.write(f"{passed}/{total} passed. Report: {out / 'report.json'}\n")
+    if not success:
+        lines = failure_lines(report, expected)
+        extra = total - len(results) - len([name for name in expected if name not in {str(row["name"]) for row in results}])
+        if extra > 0:
+            lines.append(f"NOT RUN: {extra} more mutant cases")
+        sys.stdout.write("\n".join(lines) + "\n")
     return 0 if success else 1
 
 

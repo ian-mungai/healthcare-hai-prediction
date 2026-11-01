@@ -395,11 +395,11 @@ A new launcher job is checked without updating a module allowlist. Positive case
 The runner also checks CI path selection and runs the real dispatcher with a timing wrapper that records leaf commands without executing them.
 It requires the checker and sample runner commands exactly once. `--mutants` plants weaker checker copies and a missing CI command to prove that the cases detect them.
 
-Evidence is `data/e2e/container_mounts/<UTC>/report.json`. It includes source hashes, fixture changes, exact hook commands, expected diagnostics and observed exit codes.
+Evidence is `data/e2e/container_mounts/<UTC>/report.json`. In `scripts/run_ci.sh` it is `container_mounts/report.json` under the quality artifact folder, which the hosted job uploads. It holds source hashes, fixture changes, exact hook commands, expected diagnostics and observed exit codes. A failed run prints how many cases passed and how long it took. It then prints one line for each failed case with its reason, which is an exit code that differs or expected messages that are missing or a stop by the hook deadline. It also prints the cases that never ran and the error that stopped the run. It never prints the output of a hook. `--self-check` checks that summary with a synthetic report.
 The runner checks that its source snapshot stays unchanged and removes its temporary repositories.
 Each hook runs under the repository's process-group deadline entry point, with a 30-second command deadline.
 A hook that the deadline stops before its checker began is run again with twice the seconds, up to three runs in all. The fixture's Python start-up writes a marker when the checker process begins. A stop after that marker is a result that fails the case at once. The record names the runs, the seconds of the last one and whether the checker started.
-The 720-second run deadline includes setup and reserves 70 seconds for process-group cleanup.
+The run deadline is a hang guard for the whole run: 120 seconds plus 20 seconds for each case (1,160 seconds for the 52 cases). `--run-seconds` sets it. It includes setup and reserves 70 seconds for process-group cleanup. A fixed 720 seconds ran out on hosted runners, where a case takes 11 to 16 seconds against 3.5 on an idle machine. The run then stopped with cases unrun and none failed.
 An unconfirmed cleanup stops the run and retains its workspace. A case labeled `harness` verifies the deadline entry point and its process-group cleanup.
 
 ## Model metadata
