@@ -135,6 +135,12 @@
       "source_id": "care-visits-cms"
     },
     {
+      "dataset_id": "cms_9n3s_kdb3",
+      "detail": "the landing URL of care-hrrp-cms contains the publisher dataset ID 9n3s-kdb3",
+      "rule": "cms_token_in_landing_url",
+      "source_id": "care-hrrp-cms"
+    },
+    {
       "dataset_id": "cms_avtz_f2ge",
       "detail": "the registry record of care-vbp-cms names a member file that starts with avtz-f2ge",
       "rule": "cms_token_in_registry_record",
@@ -309,6 +315,12 @@
       "source_id": "care-deaths-cms"
     },
     {
+      "dataset_id": "cms_legacy_ypbt_wvdk",
+      "detail": "the registry record of care-vbp-cms names a member file that starts with ypbt-wvdk",
+      "rule": "cms_token_in_registry_record",
+      "source_id": "care-vbp-cms"
+    },
+    {
       "dataset_id": "cms_legacy_yq43_i98g",
       "detail": "the landing URL of care-hac-cms contains the publisher dataset ID yq43-i98g",
       "rule": "cms_token_in_landing_url",
@@ -373,6 +385,12 @@
       "detail": "the landing URL of care-deaths-cms contains the publisher dataset ID ynj2-r877",
       "rule": "cms_token_in_landing_url",
       "source_id": "care-deaths-cms"
+    },
+    {
+      "dataset_id": "cms_ypbt_wvdk",
+      "detail": "the registry record of care-vbp-cms names a member file that starts with ypbt-wvdk",
+      "rule": "cms_token_in_registry_record",
+      "source_id": "care-vbp-cms"
     },
     {
       "dataset_id": "cms_yq43_i98g",
@@ -2691,10 +2709,16 @@
         "recorded_in": "plans/wave3_20261012/rg/owner_publisher_answers.json#/answers/care-hrrp-cms"
       },
       "dataset_ids": [
+        "cms_9n3s_kdb3",
         "cms_legacy_9n3s_kdb3",
         "cms_legacy_pdc_s3_hos_data_9n3s_kdb3"
       ],
       "dataset_ids_evidence": [
+        {
+          "dataset_id": "cms_9n3s_kdb3",
+          "detail": "the landing URL of care-hrrp-cms contains the publisher dataset ID 9n3s-kdb3",
+          "rule": "cms_token_in_landing_url"
+        },
         {
           "acquired_via": "main-hai-pdc",
           "dataset_id": "cms_legacy_9n3s_kdb3",
@@ -2813,7 +2837,9 @@
         "cms_legacy_pdc_s3_hos_data_ypbt_wvdk",
         "cms_legacy_pudb_wetr",
         "cms_legacy_su9h_3pvj",
-        "cms_su9h_3pvj"
+        "cms_legacy_ypbt_wvdk",
+        "cms_su9h_3pvj",
+        "cms_ypbt_wvdk"
       ],
       "dataset_ids_evidence": [
         {
@@ -2883,9 +2909,19 @@
           "rule": "cms_token_in_registry_record"
         },
         {
+          "dataset_id": "cms_legacy_ypbt_wvdk",
+          "detail": "the registry record of care-vbp-cms names a member file that starts with ypbt-wvdk",
+          "rule": "cms_token_in_registry_record"
+        },
+        {
           "acquired_via": "main-hai-pdc",
           "dataset_id": "cms_su9h_3pvj",
           "detail": "the registry record of care-vbp-cms names a member file that starts with su9h-3pvj",
+          "rule": "cms_token_in_registry_record"
+        },
+        {
+          "dataset_id": "cms_ypbt_wvdk",
+          "detail": "the registry record of care-vbp-cms names a member file that starts with ypbt-wvdk",
           "rule": "cms_token_in_registry_record"
         }
       ],
