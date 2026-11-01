@@ -37,9 +37,15 @@
     {%- endif -%}
 {% endmacro %}
 
-{#- A build with no selection whose results are all success or pass (D1 section 10 item 5). No result may warn. -#}
+{#- The selection of the silver layer build (scripts/lakehouse/pipeline_build.py layer_selection): the seeds and the silver models with what they depend on.
+    The build step of a layer task always passes it, so it counts as the whole layer. Any other selection, and any exclusion, is a partial build. -#}
+{% macro hai_silver_layer_selection() %}
+    {{ return(['resource_type:seed', '+path:models/silver']) }}
+{% endmacro %}
+
+{#- A whole build whose results are all success or pass (D1 section 10 item 5): no selection, or the selection of the silver layer build. No result may warn. -#}
 {% macro hai_build_eligible(results, which, selection) %}
-    {%- if which != 'build' or selection | length > 0 or results | length == 0 -%}
+    {%- if which != 'build' or (selection | length > 0 and selection != hai_silver_layer_selection()) or results | length == 0 -%}
         {{ return(false) }}
     {%- endif -%}
     {%- for result in results -%}
