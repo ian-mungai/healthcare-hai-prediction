@@ -102,7 +102,7 @@ HOOK_MACRO_SHA256 = {
     "macro.hai.hai_build_eligible": "ffdf7ec74f1717754abea2bfbe60f4124a3959940f1687f9c3deb6d0e0f557ab",
     "macro.hai.hai_silver_layer_selection": "cd606e9b7b3229685b85dcff3abc34d26ee4ab84e761854bde59095c4f88f089",
     "macro.hai.hai_build_provenance": "2a07480d4f847d269c176e4fd9ac31dd6bb3473edf9d208e7eea7451475cb355",
-    "macro.hai.hai_build_selection": "65cf815d81e767c674551776c5625a0dc266b7f2b6edf2bbc8e2d2de996ef428",
+    "macro.hai.hai_build_selection": "5fc85bd4f133b7e047cfe0a2cb561433c2eabe18ad11d60ca89164b01b6a7c7c",
     "macro.hai.hai_drop_build_marker": "8f98a6465ec4d67cd3821dd92adf58b9c8e29565fdd293193729454576d8be9c",
     "macro.hai.hai_drop_marker_relation": "05b0a0ebeaae9c6cfc0b3de0005d18310a44a282e3318abacb6de1ed3a3a7a86",
     "macro.hai.hai_finalize_build_marker": "bdd25488b86490a9e1b91954c00ff77daab5b295c6017a15ae55d7c973df3a81",

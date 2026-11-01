@@ -83,7 +83,10 @@
     {%- set typed = (args.get('resource_types') or []) | list + (args.get('exclude_resource_types') or []) | list -%}
     {%- set named = [args.get('selector')] if args.get('selector') else [] -%}
     {%- set empty = ['--empty'] if args.get('empty') else [] -%}
-    {{ return(selected + excluded + typed + named + empty) }}
+    {%- if excluded or typed or named or empty or (selected and args.get('indirect_selection') != 'cautious') -%}
+        {{ return(['--partial-build']) }}
+    {%- endif -%}
+    {{ return(selected) }}
 {% endmacro %}
 
 {% macro hai_finalize_build_marker(results) %}
