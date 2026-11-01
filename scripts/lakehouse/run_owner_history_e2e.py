@@ -6,13 +6,14 @@ Run from the repository root, no Docker, no network and no real data:
 
 The delivered model files are rendered with stand-in refs and run in an in-memory DuckDB over synthetic owner and enrollment rows. Each case
 names one rule: periods of one hospital, owner and role never overlap, one current row per open period, an owner change closes one row and
-opens one, one missing release is bridged and a longer gap splits the period, a rerun on the same rows changes nothing, a correction that
-removes a period removes its rows, an owner row not typed as an organisation gets no period, and no name or contact column reaches the table.
-The report goes to ``data/e2e/owner_history/``.
+opens one, every gold period equals its silver period, one missing release is bridged and a longer gap splits the period, a rerun on the same
+rows changes nothing, a correction that removes a period removes its rows, an owner row not typed as an organisation gets no period, and no name
+or contact column reaches the table. The report goes to ``data/e2e/owner_history/``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from datetime import UTC, date, datetime
@@ -40,6 +41,8 @@ ALLOWED_GOLD_COLUMNS = {
     "is_current",
     "bridged_releases",
 }
+# The attributes gold takes from silver unchanged.
+SILVER_COLUMNS = ALLOWED_GOLD_COLUMNS - {"hospital_owner_history_sk"}
 # (enrollment_id, ccn) of the synthetic enrollments; E9 has no CCN.
 ENROLLMENTS = [(f"E{n}", f"01000{n}" if n != 9 else None) for n in range(1, 10)]
 # (enrollment_id, associate_id_owner, role_code, release numbers 1 to 6 that list it)
@@ -98,6 +101,16 @@ def periods(rows: list[dict[str, Any]], ccn: str, owner: str) -> list[tuple[date
     return sorted((row["valid_from"], row["valid_to"], row["is_current"]) for row in rows if row["ccn"] == ccn and row["associate_id_owner"] == owner)
 
 
+def period_rows(rows: list[dict[str, Any]]) -> list[list[tuple[str, Any]]]:
+    """Each row's period attributes in one order, so gold and silver rows compare value by value."""
+    return sorted((sorted((name, row[name]) for name in SILVER_COLUMNS) for row in rows), key=repr)
+
+
+def period_key(row: dict[str, Any]) -> str:
+    text = "|".join((row["ccn"], row["associate_id_owner"], row["role_code"], row["valid_from"].isoformat()))
+    return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()
+
+
 def check(results: dict[str, bool], name: str, condition: bool) -> None:
     results[name] = bool(condition)
 
@@ -145,6 +158,9 @@ def run() -> dict[str, bool]:
     check(results, "gold_key_unique", len({row["hospital_owner_history_sk"] for row in gold}) == len(gold))
     check(results, "gold_one_unknown_member", sum(1 for row in gold if row["ccn"] == "<unknown>") == 1)
     check(results, "gold_rows_equal_silver_rows_plus_unknown", len(ordinary) == len(silver))
+    check(results, "gold_periods_equal_silver_in_every_attribute", period_rows(ordinary) == period_rows(silver))
+    check(results, "gold_current_means_open_end", all(row["is_current"] == (row["valid_to"] is None) for row in ordinary))
+    check(results, "gold_key_is_the_hash_of_the_period", all(row["hospital_owner_history_sk"] == period_key(row) for row in ordinary))
 
     _, silver_again, gold_again = build(OWNERS)
     check(results, "rerun_on_same_rows_changes_no_rows", silver_again == silver and gold_again == gold)
