@@ -251,6 +251,11 @@
       "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
     },
     {
+      "module": "scripts/lakehouse/run_duckdb_spill_cases.py",
+      "pattern": "^dbt/profiles\\.yml$",
+      "why": "reviewed: it lists only its own temporary spill folder, and the one repository file it reads is dbt/profiles.yml"
+    },
+    {
       "module": "scripts/lakehouse/run_gold_e2e.py",
       "pattern": ".",
       "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"

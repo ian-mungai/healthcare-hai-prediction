@@ -196,10 +196,11 @@ locals {
 
 # A phase that exits with an error does not stop the task: the phases after it wait for its success and never start, and the one essential container (the last
 # phase) never runs, so the task stays PENDING until somebody stops it. The guard is a second essential container with no dependency. It reads the task metadata
-# endpoint and exits with an error as soon as a phase has failed, which stops the whole task (scripts/orchestration/task_guard.py). It also ends the task after the
-# job deadline of 21600 seconds, the 30 minutes the fetch phase may take and a margin, so a hand-started task has a limit too.
+# endpoint and exits with an error as soon as a phase has failed, which stops the whole task (scripts/orchestration/task_guard.py). It also ends the task 900 seconds
+# after the job deadline of 21600 seconds, so a hand-started task has a limit too. The deadline counts from the init container and covers the fetch phase and every
+# other phase, so the order is: the driver stops a phase at 21600 seconds, the guard stops the task at 22500 seconds and the owner's last resort in the guide is 23400.
 locals {
-  layer_guard_seconds = 24000
+  layer_guard_seconds = 22500
   layer_guards = {
     for layer in local.layer_jobs : layer => {
       name                   = "guard"

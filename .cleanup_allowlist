@@ -71,3 +71,4 @@ unused-code scripts/serving/api.py -- pydantic reads model_config of the request
 unused-code scripts/serving/api_image_cases.py -- uvicorn's server loop reads should_exit, which the case sets to stop it
 unused-code scripts/serving/serving_cases.py -- http.server reads close_connection and daemon_threads of the slow stand-in API
 unused-code scripts/streamlit_app/stand_in_api.py -- http.server dispatches do_GET by method name and reads protocol_version, daemon_threads and close_connection of the stand-in API
+unused-code scripts/orchestration/task_guard_cases.py -- http.server dispatches do_GET of the loopback task metadata stand-in by method name

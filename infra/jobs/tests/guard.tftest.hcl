@@ -80,8 +80,8 @@ run "a_failed_phase_ends_the_task_through_the_guard" {
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
       tonumber(one([for item in one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).environment : item.value if item.name == "GUARD_SECONDS"]))
-      >= jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].deadline_seconds + 1800
+      == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].deadline_seconds + 900
     )])
-    error_message = "The guard's time limit is not shorter than the job deadline plus the time the fetch phase may take, so it never ends a run that is within its deadline."
+    error_message = "The guard's time limit is the job deadline plus 900 seconds, so it never ends a run that is within its deadline and ends a task that nobody supervises soon after it."
   }
 }
