@@ -194,6 +194,47 @@ locals {
   }
 }
 
+# A phase that exits with an error does not stop the task: the phases after it wait for its success and never start, and the one essential container (the last
+# phase) never runs, so the task stays PENDING until somebody stops it. The guard is a second essential container with no dependency. It reads the task metadata
+# endpoint and exits with an error as soon as a phase has failed, which stops the whole task (scripts/orchestration/task_guard.py). It also ends the task after the
+# job deadline of 21600 seconds, the 30 minutes the fetch phase may take and a margin, so a hand-started task has a limit too.
+locals {
+  layer_guard_seconds = 24000
+  layer_guards = {
+    for layer in local.layer_jobs : layer => {
+      name                   = "guard"
+      image                  = lookup(var.images, "spark", "invalid")
+      essential              = true
+      privileged             = false
+      readonlyRootFilesystem = true
+      user                   = "10001:10001"
+      entryPoint             = ["python", "-I", "-c"]
+      command                = [file("${path.module}/../../scripts/orchestration/task_guard.py")]
+      stopTimeout            = 5
+      linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
+      ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
+      dependsOn              = []
+      environment = [
+        { name = "GUARD_SECONDS", value = tostring(local.layer_guard_seconds) },
+        { name = "GUARD_INTERVAL_SECONDS", value = "10" },
+        { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
+      ]
+      secrets     = []
+      mountPoints = []
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = var.log_group_name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = layer
+          mode                  = "non-blocking"
+          max-buffer-size       = "16m"
+        }
+      }
+    }
+  }
+}
+
 resource "aws_ecs_task_definition" "layer" {
   for_each = local.layer_jobs
 
@@ -204,7 +245,7 @@ resource "aws_ecs_task_definition" "layer" {
   memory                   = tostring(var.layer_resources.memory)
   execution_role_arn       = lookup(var.job_role_arns, "execution", "")
   task_role_arn            = lookup(var.job_role_arns, local.layer_roles[each.key], "")
-  container_definitions    = jsonencode(local.layer_containers[each.key])
+  container_definitions    = jsonencode(concat(local.layer_containers[each.key], [local.layer_guards[each.key]]))
   skip_destroy             = true
   enable_fault_injection   = false
   tags                     = local.tags
@@ -251,6 +292,11 @@ output "layer_task_definition_arns" {
 output "layer_container_definitions" {
   description = "Complete container JSON of each layer task, keyed by layer, for review and mocked plan assertions."
   value       = { for layer, task in aws_ecs_task_definition.layer : layer => task.container_definitions }
+}
+
+output "layer_phase_containers" {
+  description = "The phase containers of each layer task without the guard, in pipeline order, for review and mocked plan assertions."
+  value       = { for layer, task in aws_ecs_task_definition.layer : layer => jsonencode(local.layer_containers[layer]) }
 }
 
 output "layer_secret_flow" {

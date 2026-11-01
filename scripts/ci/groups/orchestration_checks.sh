@@ -18,6 +18,7 @@ orchestration_checks() {
   timed "orchestration_checks: lineage E2E" "$python_bin" -m scripts.orchestration.run_lineage_e2e
   timed "orchestration_checks: ECS placement static proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof S
   timed "orchestration_checks: ECS placement handler proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof D
+  timed "orchestration_checks: task guard cases" "$python_bin" -m scripts.orchestration.task_guard_cases
   timed "orchestration_checks: lean broker E2E" "$python_bin" -m scripts.orchestration.run_ecs_broker_e2e
   timed "orchestration_checks: layer driver E2E" "$python_bin" -m scripts.lakehouse.run_layer_run_e2e
   timed "orchestration_checks: bronze driver E2E" "$python_bin" -m scripts.lakehouse.run_bronze_run_e2e
