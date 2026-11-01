@@ -13,8 +13,10 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -41,7 +43,7 @@ class Endpoint:
     """A stand-in of the metadata endpoint. ``documents`` is what each request returns, in order, and the last one repeats."""
 
     def __init__(self, documents: list[Any]) -> None:
-        self.documents, self.requests = documents, 0
+        self.documents, self.requests, self.delay = documents, 0, 0.0
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -49,6 +51,7 @@ class Endpoint:
                 return
 
             def do_GET(self) -> None:
+                time.sleep(outer.delay)
                 found = outer.documents[min(outer.requests, len(outer.documents) - 1)]
                 outer.requests += 1
                 if found is None:
@@ -87,21 +90,48 @@ def load_guard() -> Any:
     return module
 
 
-def run_guard(documents: list[Any], limit: str = "1.5") -> tuple[int, str]:
-    """Run the guard against the stand-in until it exits. Returns its exit code and what it printed. A task it leaves alone ends at its time limit."""
+def run_guard(documents: list[Any], limit: str = "1.5", changes: dict[str, str | None] | None = None) -> tuple[int, str]:
+    """Run the guard against the stand-in until it exits. Returns its exit code and what it printed. A task it leaves alone ends at its time limit.
+
+    ``changes`` replaces or, with None, removes a setting of the guard's environment."""
     guard = load_guard()
     with Endpoint(documents) as endpoint:
-        environment = {"ECS_CONTAINER_METADATA_URI_V4": endpoint.address, "GUARD_INTERVAL_SECONDS": "0.1", "GUARD_SECONDS": limit}
+        environment: dict[str, str | None] = {"ECS_CONTAINER_METADATA_URI_V4": endpoint.address, "GUARD_INTERVAL_SECONDS": "0.1", "GUARD_SECONDS": limit}
+        environment.update(changes or {})
         output = io.StringIO()
-        with mock.patch.dict(os.environ, environment), contextlib.redirect_stdout(output):
+        with mock.patch.dict(os.environ, {name: value for name, value in environment.items() if value is not None}), contextlib.redirect_stdout(output):
+            for name, value in environment.items():
+                if value is None:
+                    os.environ.pop(name, None)
             code = guard.main()
         return code, output.getvalue()
 
 
-def left_alone(documents: list[Any]) -> bool:
+def left_alone(documents: list[Any], changes: dict[str, str | None] | None = None) -> bool:
     """The guard ended only at its time limit, so it never saw a failed phase."""
-    code, output = run_guard(documents)
-    return code == 1 and "time limit" in output and "failed" not in output
+    code, output = run_guard(documents, changes=changes)
+    return code == 1 and "time limit" in output and "phase" not in output.replace("watching the phases", "")
+
+
+def stopped_by_ecs() -> tuple[int, str]:
+    """ECS stops the task when the essential phase ends: SIGTERM reaches the guard while it watches a healthy task."""
+    guard = load_guard()
+    previous = signal.getsignal(signal.SIGTERM)
+    output = io.StringIO()
+    with Endpoint([task({"init": ("STOPPED", 0), "build": ("RUNNING", None)})]) as endpoint:
+        environment = {"ECS_CONTAINER_METADATA_URI_V4": endpoint.address, "GUARD_INTERVAL_SECONDS": "0.1", "GUARD_SECONDS": "30"}
+        timer = threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGTERM))
+        try:
+            with mock.patch.dict(os.environ, environment), contextlib.redirect_stdout(output):
+                timer.start()
+                try:
+                    code = guard.main()
+                except SystemExit as stop:
+                    code = int(stop.code or 0)
+        finally:
+            timer.cancel()
+            signal.signal(signal.SIGTERM, previous)
+    return code, output.getvalue()
 
 
 def cases() -> dict[str, bool]:
@@ -124,6 +154,30 @@ def cases() -> dict[str, bool]:
     code, output = run_guard([task(working)], limit="0.5")
     checks["a task that passes its time limit ends with an error"] = code == 1 and "time limit" in output
     checks["the guard does not count itself"] = left_alone([task({**working, "guard": ("STOPPED", 1)})])
+    code, output = stopped_by_ecs()
+    checks["SIGTERM from ECS ends the guard with exit 0 at once"] = code == 0
+    code, output = run_guard([None, None, None], limit="0.5")
+    checks["an endpoint that errors is logged as unreadable and does not end the task"] = (
+        code == 1 and "cannot read" in output and "time limit" in output and "failed" not in output
+    )
+    checks["an endpoint that never answered is not reported as readable"] = "can be read" not in output
+    code, output = run_guard([task(working)], limit="0.5")
+    checks["an endpoint that answers is logged once as readable"] = output.count("can be read") == 1
+    checks["a task metadata address that is missing never ends a task"] = left_alone([task(working)], {"ECS_CONTAINER_METADATA_URI_V4": None})
+    checks["an address that refuses the connection never ends a task"] = left_alone(
+        [task(working)], {"ECS_CONTAINER_METADATA_URI_V4": "http://127.0.0.1:9/v4/task-id"}
+    )
+    checks["an address that is not a URL never ends a task"] = left_alone([task(working)], {"ECS_CONTAINER_METADATA_URI_V4": "not a url"})
+    slow = Endpoint([task({**working, "build": ("STOPPED", 1)})])
+    slow.delay = 1.0
+    with slow:
+        code, output = run_guard([task(working)], changes={"ECS_CONTAINER_METADATA_URI_V4": slow.address, "GUARD_READ_SECONDS": "0.1"}, limit="1.2")
+    checks["a reading that times out is a failed reading and not a failed phase"] = code == 1 and "cannot read" in output and "phase build" not in output
+    guard = load_guard()
+    checks["a missing setting falls back to the default"] = guard.number("", 7.0) == 7.0
+    checks["a setting that is not positive falls back to the default"] = guard.number("-3", 7.0) == 7.0 and guard.number("0", 7.0) == 7.0
+    checks["a setting that is not a number falls back to the default"] = guard.number("abc", 7.0) == 7.0
+    checks["a valid setting is used"] = guard.number("2.5", 7.0) == 2.5
     return checks
 
 

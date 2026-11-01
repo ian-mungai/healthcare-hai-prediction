@@ -22,6 +22,7 @@ PENDING_STATUSES = frozenset({"PROVISIONING", "PENDING", "ACTIVATING"})
 STOPPED = "STOPPED"
 NO_EXIT_CODE = 125
 USER_STOP_CODE = 143
+GUARD = "guard"  # the container of a layer task that ends the task when a phase fails (scripts/orchestration/task_guard.py)
 REASON_LIMIT = 200
 ARN = re.compile(r"arn:[^\s,;]+")
 ACCOUNT = re.compile(r"\b[0-9]{12}\b")
@@ -164,7 +165,8 @@ class EcsAdapter:
         raise TaskRefused(scrub(reasons) or "no_task_started")
 
     def poll(self, task_arn: str) -> TaskReport:
-        """The task's state now. A task counts as passed only when every one of its containers exited 0."""
+        """The task's state now. A task counts as passed only when every one of its containers exited 0, except the guard of a layer task: ECS stops the guard
+        when the last phase ends, so its exit code says nothing about the job, and a failed phase fails the job with the phase's own code."""
         try:
             reply = self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=[task_arn])
         except (ClientError, BotoCoreError) as error:
@@ -177,8 +179,8 @@ class EcsAdapter:
             return TaskReport("pending" if status in PENDING_STATUSES else "running", None, "")
         containers = tuple((str(item["name"]), item.get("exitCode")) for item in task.get("containers", []))
         reason = scrub(str(task.get("stoppedReason", "")))
-        codes = [code for _, code in containers]
-        if containers and all(code == 0 for code in codes):
+        codes = [code for name, code in containers if name != GUARD]
+        if codes and all(code == 0 for code in codes):
             return TaskReport("succeeded", 0, reason, containers)
         failing = next((code for code in codes if code not in (0, None)), None)
         fallback = USER_STOP_CODE if task.get("stopCode") == "UserInitiated" else NO_EXIT_CODE

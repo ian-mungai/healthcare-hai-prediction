@@ -6,7 +6,9 @@ adapter through the HTTP route. Every case runs offline against ``FakeEcs``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from botocore.config import Config
@@ -15,6 +17,7 @@ from orchestration import ecs_adapter
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable
 from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, client_error
 
+JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"
 SETTINGS = EcsSettings(
     cluster=CLUSTER,
     family_prefix="example_dev_job_",
@@ -135,6 +138,48 @@ def stopped_without_exit_codes_fails() -> None:
     require(report.state == "failed" and report.exit_code == 125, f"a task with no exit codes passed or lost its code: {report}")
 
 
+def layer_task(layer: str, codes: dict[str, int | None], stop_code: str = "EssentialContainerExited") -> tuple[EcsAdapter, str]:
+    """A stopped task of a layer job as ECS reports it: init, the containers of the broker table in order and the guard, each with the exit code given."""
+    adapter, ecs, _ = build()
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    table = json.loads(JOBS_FILE.read_text())["jobs"][layer]["containers"]
+    containers = []
+    for name in ["init", *table, "guard"]:
+        entry: dict[str, Any] = {"name": name, "lastStatus": "STOPPED"}
+        if codes.get(name) is not None:
+            entry["exitCode"] = codes[name]
+        containers.append(entry)
+    ecs.tasks[arn].update(lastStatus="STOPPED", containers=containers, stopCode=stop_code, stoppedReason="Essential container in task exited")
+    return adapter, arn
+
+
+def layer_tasks_with_a_guard() -> None:
+    """The guard is an extra container of every layer task. A good run ends with its exit code 0, 143 (SIGTERM) or 137 (SIGKILL) or none, and still passes; a
+    failed phase fails the job with the phase's own exit code and never with the guard's."""
+    for layer in ("silver", "gold", "features"):
+        table = json.loads(JOBS_FILE.read_text())["jobs"][layer]["containers"]
+        good = {name: 0 for name in ["init", *table]}
+        for guard in (0, 143, 137, None):
+            adapter, arn = layer_task(layer, {**good, "guard": guard})
+            report = adapter.poll(arn)
+            require(report.state == "succeeded" and report.exit_code == 0, f"{layer}: a good run with guard exit {guard} did not pass: {report}")
+        phases = list(table)
+        adapter, arn = layer_task(layer, {"init": 0, "fetch": 0, "pin": 0, phases[2]: 1, "guard": 1})
+        report = adapter.poll(arn)
+        require(report.state == "failed" and report.exit_code == 1, f"{layer}: a failed {phases[2]} did not fail the job with its code: {report}")
+        adapter, arn = layer_task(layer, {**good, phases[-2]: 3, phases[-1]: None, "guard": 143})
+        report = adapter.poll(arn)
+        require(report.state == "failed" and report.exit_code == 3, f"{layer}: the exit code of the guard replaced the exit code of the phase: {report}")
+        adapter, arn = layer_task(layer, {"guard": 1})
+        report = adapter.poll(arn)
+        require(
+            report.state == "failed" and report.exit_code == 125, f"{layer}: a task whose phases never ran and whose guard stopped it did not fail: {report}"
+        )
+        adapter, arn = layer_task(layer, {name: 137 for name in ["init", *table, "guard"]}, "UserInitiated")
+        report = adapter.poll(arn)
+        require(report.state == "failed" and report.exit_code == 137, f"{layer}: a task stopped by the owner did not fail with the stop code: {report}")
+
+
 def unknown_task_is_gone() -> None:
     adapter, _, _ = build()
     require(adapter.poll(f"arn:aws:ecs:stand-in:{ACCOUNT}:task/stand-in-cluster/missing").state == "gone", "a missing task was not reported gone")
@@ -208,6 +253,7 @@ CASES: dict[str, Callable[[], None]] = {
     "family_not_allowed": family_not_allowed,
     "network_not_bound": network_not_bound,
     "all_containers_zero_passes": all_containers_zero_passes,
+    "layer_tasks_with_a_guard": layer_tasks_with_a_guard,
     "one_container_nonzero_fails": one_container_nonzero_fails,
     "early_failure_names_first_nonzero": early_failure_names_first_nonzero,
     "stopped_without_exit_codes_fails": stopped_without_exit_codes_fails,
