@@ -224,7 +224,7 @@ STOP_MUTATIONS = (
     ),
     StopMutation(
         "host_stop_counts_an_exiting_leader_as_live",
-        'return state.startswith(("Z", "?"))',
+        'return state.startswith("Z") or "E" in state[1:]',
         'return state.startswith("Z")',
         "host_exiting_leader_is_reaped_within_the_exit_grace_without_a_demotion_or_a_signal",
         HOST_STOP,
@@ -241,6 +241,20 @@ STOP_MUTATIONS = (
         "                    if not dying_leader or time.monotonic() >= grace_end:",
         "                    if not dying_leader:",
         "host_exiting_leader_that_stays_unreapable_is_unconfirmed_after_the_grace_and_stays_signalling",
+        HOST_STOP,
+    ),
+    StopMutation(
+        "host_stop_counts_an_unknown_task_state_as_dying",
+        'return state.startswith("Z") or "E" in state[1:]',
+        'return state.startswith(("Z", "?")) or "E" in state[1:]',
+        "host_unknown_state_with_a_witness_is_stopped_and_reaped_like_a_live_member",
+        HOST_STOP,
+    ),
+    StopMutation(
+        "host_stop_grace_ignores_the_time_left",
+        "grace_end = now + min(EXIT_GRACE_SECONDS, EXIT_GRACE_SHARE * max(0.0, deadline - now))",
+        "grace_end = now + EXIT_GRACE_SECONDS",
+        "host_a_dying_unreapable_leader_leaves_a_short_shared_budget_to_the_next_live_worker",
         HOST_STOP,
     ),
     StopMutation(
