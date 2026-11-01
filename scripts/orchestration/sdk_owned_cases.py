@@ -101,6 +101,7 @@ class _World:
         self.group_after_reap = "gone"
         self.failed_scan: str | None = None
         self.scan_failures = 0
+        self.scripted_scans: list[dict[int, str]] = []
         self.unreapable_waits = 0
         self.missing_leader = False
         self.lost_witness = False
@@ -154,9 +155,9 @@ class _World:
                 self.pid,
                 state,
                 "synthetic_worker",
-                not (self.first_scan_unwitnessed and self.scans == 1) and not (self.lost_witness and self.scans >= 2) and not state.startswith("?"),
+                not (self.first_scan_unwitnessed and self.scans == 1) and not (self.lost_witness and self.scans >= 2) and "E" not in state[1:],
             )
-            for pid, state in self.members.items()
+            for pid, state in (self.scripted_scans[self.scans - 1] if self.scans <= len(self.scripted_scans) else self.members).items()
             if not (self.missing_leader and pid == self.pid)
         )
         return process_group.Snapshot("seen", members)
@@ -367,6 +368,50 @@ def _exit_cases(module: ModuleType = process_group) -> dict[str, bool]:
     checks["host_exiting_leader_with_a_live_unwitnessed_member_is_still_demoted"] = (
         not result["confirmed"] and world.handle.state == "reap_only" and not any(event[0] == "signal" for event in world.events)
     )
+    world = _World(module, child=False)
+    world.members[world.pid] = "?"
+    result = world.stop(budget=4.0)
+    signals = [event[3] for event in world.events if event[0] == "signal"]
+    checks["host_unknown_state_with_a_witness_is_stopped_and_reaped_like_a_live_member"] = (
+        result["confirmed"] and world.reaped and signals == [signal.SIGSTOP, signal.SIGKILL]
+    )
+    world = _World(module, child=False)
+    world.scripted_scans = [{world.pid: "?"}, {world.pid: "R"}]
+    world.first_scan_unwitnessed = True
+    world.lost_witness = True
+    result = world.stop(budget=4.0)
+    checks["host_unknown_state_without_a_witness_is_refused_and_never_signalled"] = (
+        not result["confirmed"] and world.handle.state == "reap_only" and not any(event[0] == "signal" for event in world.events)
+    )
+    first = _World(module, child=False)
+    first.members[first.pid] = "Z"
+    first.unreapable_waits = 10**6
+    second = _World(module)
+    second.clock = first.clock
+    deadline = first.clock.now + 0.2
+    one = first.stop(budget=0.2)
+    two = second.stop(budget=deadline - second.clock.now)
+    checks["host_a_dying_unreapable_leader_leaves_a_short_shared_budget_to_the_next_live_worker"] = (
+        not one["confirmed"] and two["confirmed"] and second.reaped and second.handle.state == "read_only"
+    )
+    handles = [_World(module, child=False) for _ in range(2)]
+    for handle in handles:
+        handle.clock = handles[0].clock
+        handle.members[handle.pid] = "Z"
+        handle.unreapable_waits = 10**6
+    start = handles[0].clock.now
+    for handle in handles:
+        handle.stop(budget=start + 0.2 - handle.clock.now)
+    checks["host_two_unreapable_leaders_leave_more_than_half_of_a_short_budget"] = handles[0].clock.now - start <= 0.12
+    handles = [_World(module, child=False) for _ in range(4)]
+    for handle in handles:
+        handle.clock = handles[0].clock
+        handle.members[handle.pid] = "?E"
+        handle.unreapable_waits = 10**6
+    start = handles[0].clock.now
+    for handle in handles:
+        handle.stop(budget=start + 1.0 - handle.clock.now)
+    checks["host_four_unreapable_leaders_leave_a_quarter_of_the_budget_for_recovery"] = start + 1.0 - handles[0].clock.now >= 0.25
     dying = _World(module, child=False)
     dying.members[dying.pid] = "?E"
     dying.unreapable_waits = 10**6
@@ -378,6 +423,38 @@ def _exit_cases(module: ModuleType = process_group) -> dict[str, bool]:
     second = waiting.stop(budget=deadline - waiting.clock.now)
     checks["host_serial_handles_a_stuck_exiting_leader_leaves_time_for_the_next_handle"] = not first["confirmed"] and second["confirmed"] and waiting.reaped
     return checks
+
+
+def _tick_with_dying_leaders_case(folder: Path) -> dict[str, bool]:
+    """Two dying leaders that never become reapable must leave the recovery refresh of the same tick usable time (a real tick, a real clock)."""
+    from orchestration.worker_pool import Worker
+
+    members = {1000701: "?E", 1000702: "?E"}
+
+    def listing(deadline: float, witness: str | None = None, witnesses: Any = None) -> process_group.Snapshot:
+        return process_group.Snapshot("seen", tuple(process_group.Member(pid, pid, state, "synthetic_worker", False) for pid, state in members.items()))
+
+    seen: list[float] = []
+
+    def observe(*, deadline: float) -> bool:
+        seen.append(deadline - time.monotonic())
+        return False
+
+    with (
+        patch("orchestration.worker_recovery.process_snapshot", return_value=process_group.Snapshot("seen")),
+        patch.object(process_group, "process_snapshot", side_effect=listing),
+        patch.object(process_group.os, "waitpid", return_value=(0, 0)),
+    ):
+        api = EcsApi(WorkerConfig("synthetic"), folder / "tick_dying_registry")
+        for pid in members:
+            handle = process_group.OwnedProcess(
+                pid, pid, -1, -1, -1, "synthetic_witness", f"synthetic_{pid}", "current", "data", "current", "synthetic", "synthetic"
+            )
+            api.pool.workers.append(Worker(handle, "data", None, time.monotonic(), True, status="unproven"))
+        with patch.object(api.recovery, "refresh_closures", side_effect=observe):
+            started = time.monotonic()
+            api.tick(deadline=started + 0.4)
+    return {"tick_with_two_unreapable_dying_leaders_leaves_recovery_usable_time": bool(seen) and seen[0] >= 0.15}
 
 
 def _witness_cases() -> dict[str, bool]:
@@ -652,6 +729,7 @@ def owned_cases(folder: Path) -> dict[str, bool]:
         **_stop_cases(supervisor, "task"),
         **_retry_cases(supervisor),
         **_exit_cases(),
+        **_tick_with_dying_leaders_case(folder / "tick_dying"),
         **_witness_cases(),
         **_disposition_cases(supervisor, folder / "stderr"),
         **_changed_disposition_case(supervisor, folder / "changed_disposition"),

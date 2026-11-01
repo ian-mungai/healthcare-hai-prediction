@@ -22,10 +22,13 @@ from scripts.process import TimeoutExpired, find_program, run_command
 
 WORKER_STOP_SECONDS = 5.0
 POLL_SECONDS = 0.1
-# How long one stop waits for a leader that the kernel already reports as dying (a zombie, or on macOS an exiting process) to become reapable. The exit
-# of a worker takes milliseconds, tens of milliseconds when memory or disk are busy, and a zombie leader with live threads is not reapable until they
-# end. Only such a leader is waited for: a live handle, a reap-only handle and a listing that fails return at once.
+# How long one stop waits for a leader that the kernel already reports as dying (a zombie, or on macOS a process that carries the exiting flag E) to become
+# reapable: at most this many seconds and at most EXIT_GRACE_SHARE of the time the stop has left, so a handle that never becomes reapable cannot use the
+# deadline that the handles after it, and the recovery refresh after them, still need. The exit of a worker takes milliseconds, tens of milliseconds when
+# memory or disk are busy, and a zombie leader with live threads is not reapable until they end. Only such a leader is waited for: a live handle, a
+# reap-only handle and a listing that fails return at once.
 EXIT_GRACE_SECONDS = 0.25
+EXIT_GRACE_SHARE = 0.25
 EXIT_POLL_SECONDS = 0.01
 ALLOWED_PYTHON_EXECUTABLES = frozenset({Path(sys.executable).resolve(), (Path(__file__).resolve().parents[1] / ".venv/bin/python").resolve()})
 HandleState = Literal["signalling", "reap_only", "read_only"]
@@ -279,8 +282,12 @@ def _close_pipes(handle: OwnedProcess) -> None:
 
 
 def _dying(state: str) -> bool:
-    """Return True for a zombie (``Z``) and for an exiting process (``?``, macOS): its address space and environment are gone, so it can show no witness."""
-    return state.startswith(("Z", "?"))
+    """Return True for a zombie (``Z``) and for a macOS process that carries the exiting flag (``E`` after the state letter, as in ``?E``).
+
+    Its address space and environment are gone, so it can show no witness. A bare ``?`` only means that the task query failed, and Linux has no ``E`` flag,
+    so neither is dying: they stay live members and keep the witness requirement.
+    """
+    return state.startswith("Z") or "E" in state[1:]
 
 
 def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
@@ -337,7 +344,8 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                         _close_pipes(handle)
                         return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
                     time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
-                grace_end = time.monotonic() + EXIT_GRACE_SECONDS
+                now = time.monotonic()
+                grace_end = now + min(EXIT_GRACE_SECONDS, EXIT_GRACE_SHARE * max(0.0, deadline - now))
                 while ready_to_reap and time.monotonic() < deadline:
                     try:
                         reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
