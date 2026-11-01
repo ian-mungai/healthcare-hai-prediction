@@ -32,10 +32,15 @@ def default_client(service: str, region: str) -> Any:
     import boto3
     from botocore.config import Config
 
-    if service not in {"sts", "secretsmanager", "s3"}:
-        raise ApiKeyError(f"the task makes no {service} client")
     options = Config(retries={"total_max_attempts": 3, "mode": "standard"}, connect_timeout=5, read_timeout=60)
-    return boto3.session.Session(region_name=region).client(service, config=options)
+    session = boto3.session.Session(region_name=region)
+    if service == "sts":
+        return session.client("sts", config=options)
+    if service == "secretsmanager":
+        return session.client("secretsmanager", config=options)
+    if service == "s3":
+        return session.client("s3", config=options)
+    raise ApiKeyError(f"the task makes no {service} client")
 
 
 class TaskKeys:

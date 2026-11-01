@@ -324,7 +324,7 @@ def test_a_unit_reviewed_personal_runs_in_no_context_with_every_flag_on(monkeypa
     monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail("a personal unit was dispatched"))
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     run = harness.Run(
-        queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path, task_keys=object(), task_storage=object()
+        queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path, task_keys=str, task_storage=object()
     )
     held.hold(run, [unit], {"P__0": "personal"})
     run.state_root.mkdir()

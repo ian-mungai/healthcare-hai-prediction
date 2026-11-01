@@ -240,7 +240,7 @@ def select(table: dict[str, Any], dataset_id: str, file_name: str, snapshot_id: 
 
 
 def source_roots(collection: str, roots: tuple[str, ...] | None = None) -> tuple[str, ...]:
-    """The key prefixes under which a collection's captures are read, one for each read root.
+    """The key prefixes under which a collection's captures are read, one for each read root. Raw joins the bucket root only with the raw read grant.
 
     Every listing of a collection's manifests asks this function. A document is read beside its manifest, under the same root.
     """
@@ -408,7 +408,6 @@ def discover(
             raise BronzeError("discovery requires typed retirement evidence, not a checksum mapping")
         retired = RetiredObjects()
     published_observations = published_observations or set()
-    roots = read_roots() if roots is None else roots
     tables = {table["table"]: table for table in config["tables"]}
     chosen = [tables[name] for name in names]
     by_collection: dict[str, list[dict[str, Any]]] = {}
@@ -417,16 +416,15 @@ def discover(
     inputs: list[dict[str, Any]] = []
     unselected: list[dict[str, Any]] = []
     for collection, group in sorted(by_collection.items()):
-        listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(source_roots(collection, roots))}
+        prefixes = source_roots(collection) if roots is None else source_roots(collection, roots)
+        listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(prefixes)}
         matched: set[tuple[str, str]] = set()
         stored_manifests = {
             (manifest_key, manifest_version): storage.get(bucket, manifest_key, manifest_version)
-            for root in source_roots(collection, roots)
+            for root in prefixes
             for manifest_key, manifest_version in storage.list_keys(bucket, f"{root}manifests/")
             if manifest_key.endswith("/manifest.json")
         }
-        if not stored_manifests:
-            raise BronzeError(f"{collection}: no manifest under the read roots {list(roots)}; a missing manifest is never an empty collection")
         skipped = superseded(stored_manifests)
         for (manifest_key, manifest_version), raw in stored_manifests.items():
             replacement = skipped.get((manifest_key, manifest_version))

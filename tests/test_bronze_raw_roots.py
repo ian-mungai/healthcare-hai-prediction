@@ -32,6 +32,9 @@ class Storage:
     def get(self, bucket: str, key: str, version_id: str) -> bytes:
         return self.objects[(key, version_id)]
 
+    def download(self, bucket: str, key: str, version_id: str, path: Path) -> None:
+        path.write_bytes(self.objects[(key, version_id)])
+
 
 class GrantedStorage(Storage):
     """Storage whose role may list only the given roots, like the submitted source-prefix policy. Any other list is AccessDenied."""
@@ -89,26 +92,13 @@ def test_bronze_lists_both_roots_once_the_capability_is_on_and_a_denied_list_is_
         bronze.discover(denied, BUCKET, table_config(tmp_path), ["hospitals"])
 
 
-def test_a_collection_with_no_manifest_in_any_read_root_fails_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_a_collection_with_no_manifest_in_any_read_root_gives_no_inputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The pin step refuses a table without objects by name. run_bronze_run_e2e proves that through the real command for a real and a dry run."""
     monkeypatch.delenv("HAI_READ_RAW_ROOT", raising=False)
     storage = Storage()
-    with pytest.raises(bronze.BronzeError, match="no manifest"):
-        bronze.discover(storage, BUCKET, table_config(tmp_path), ["hospitals"])
+    check(bronze.discover(storage, BUCKET, table_config(tmp_path), ["hospitals"])[0] == [], "no manifest gives no inputs")
     store(storage, "raw/", "CA__new", "CA_file_002.csv", b"a,b\n3,4\n")
-    with pytest.raises(bronze.BronzeError, match="no manifest"):
-        bronze.discover(storage, BUCKET, table_config(tmp_path), ["hospitals"])
-
-
-def test_a_deleted_manifest_cannot_leave_a_collection_silently_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("HAI_READ_RAW_ROOT", raising=False)
-    storage = Storage()
-    store(storage, "", "CA__old", "CA_file_001.csv", b"a,b\n1,2\n")
-    config = table_config(tmp_path)
-    check(len(bronze.discover(storage, BUCKET, config, ["hospitals"])[0]) == 1, "the stored manifest gives one input")
-    for key_version in [item for item in storage.objects if item[0].endswith("/manifest.json")]:
-        del storage.objects[key_version]
-    with pytest.raises(bronze.BronzeError, match="no manifest"):
-        bronze.discover(storage, BUCKET, config, ["hospitals"])
+    check(bronze.discover(storage, BUCKET, table_config(tmp_path), ["hospitals"])[0] == [], "a manifest under a root that is off gives no inputs")
 
 
 def test_bronze_reads_a_table_held_in_both_roots_with_exact_keys_and_versions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
