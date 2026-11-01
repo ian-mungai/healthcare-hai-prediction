@@ -847,7 +847,7 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Repository Hooks (documentation) | 12 | 30 | estimate, prose, Markdown and review checks |
 | Repository Hooks (code) | 24 | 40 | estimate, 22 measured Oct 30 2026 for the remaining manual hooks plus about 2 for the seven linters |
 | Repository Hooks (samples) | 10 | 20 | measured Oct 30 2026, the `test-checks` hook alone |
-| Local CI Core | 15 | 30 | hosted, supplied run duration |
+| Local CI Core | 26 | 45 | hosted, measured Oct 31 2026 |
 | CI Reuse and Gate E2E | 7 | 12 | estimate, 98 seconds on the Mac (88 and 10) plus the setup and the gates |
 | Lakehouse Bronze Checks | 8.9 | 20 | hosted |
 | Lakehouse Silver Checks | 2.4 | 5 | hosted |
