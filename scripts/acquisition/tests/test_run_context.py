@@ -14,19 +14,17 @@ from scripts.acquisition.tests.test_run_lanes import lane_files, make_unit
 from tests.support import check
 
 
-@pytest.mark.parametrize("flags", [{"keyed_lane": True}, {"person_lane": True}, {"keyed_lane": True, "person_lane": True}])
-def test_a_lane_flag_on_a_queue_that_is_not_run_3_is_refused_before_any_gate(tmp_path: Path, flags: dict) -> None:
+def test_the_person_flag_on_a_queue_that_is_not_run_3_is_refused_before_any_gate(tmp_path: Path) -> None:
     run = execution_run(tmp_path, 2)
-    for name, value in flags.items():
-        setattr(run, name, value)
-    with pytest.raises(ValueError, match="belongs to run 3|one lane"):
+    run.person_lane = True
+    with pytest.raises(ValueError, match="belongs to run 3"):
         harness.execute(run, allow_network=True)
 
 
 def test_a_plain_run_3_on_the_mac_is_refused_because_it_has_no_placement(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
     run, _, _ = lane_files(tmp_path)
-    run.keyed_lane = False
+    run.person_lane = False
     called: list[str] = []
 
     def record(unit: dict, run: Any) -> dict:
@@ -40,15 +38,10 @@ def test_a_plain_run_3_on_the_mac_is_refused_because_it_has_no_placement(monkeyp
 
 
 def test_a_run_3_in_the_task_context_needs_the_mirror_and_a_lane_run_must_not_have_one(tmp_path: Path) -> None:
-    check(harness.resolve_context(3, keyed=False, person=False, mirror=True) == "task", "the mirror makes it the task")
-    check(harness.resolve_context(3, keyed=True, person=False, mirror=False) == "mac_keyed_units", "the keyed flag makes the keyed lane")
-    check(harness.resolve_context(3, keyed=False, person=True, mirror=False) == "mac_person_units", "the person flag makes the person lane")
-    check(harness.resolve_context(2, keyed=False, person=False, mirror=False) == "local", "earlier runs stay local")
-    for bad in (
-        {"keyed": True, "person": True, "mirror": False},
-        {"keyed": True, "person": False, "mirror": True},
-        {"keyed": False, "person": False, "mirror": False},
-    ):
+    check(harness.resolve_context(3, person=False, mirror=True) == "task", "the mirror makes it the task")
+    check(harness.resolve_context(3, person=True, mirror=False) == "mac_person_units", "the person flag makes the person lane")
+    check(harness.resolve_context(2, person=False, mirror=False) == "local", "earlier runs stay local")
+    for bad in ({"person": True, "mirror": True}, {"person": False, "mirror": False}):
         with pytest.raises(ValueError):
             harness.resolve_context(3, **bad)
 
@@ -80,7 +73,7 @@ def test_a_pilot_of_another_lane_never_blocks_the_tasks_own_units_and_every_unit
     keyed = make_unit("bls", 3) | {"snapshot_id": "K__1", "source_id": "K"}
     passes, summaries = second_pass(monkeypatch, tmp_path, [first, second, keyed], stored_root=tmp_path / "mirror")
     check(passes == [["A__1"], ["A__2"]], f"the task finished its own units: {passes}")
-    check(all(summary["not_attempted"]["keyed_mac_lane"] == ["K__1"] for summary in summaries), "the keyed unit is named in every pass")
+    check(all(summary["not_attempted"]["task_keyed"] == ["K__1"] for summary in summaries), "the keyed unit is named in every pass")
 
 
 def test_a_unit_the_mirror_does_not_carry_cannot_be_the_pilot_of_a_unit_it_does(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 """Frozen scope and privacy checks for ONC's meaningful-use attestation file (2011-2017), hospital rows only.
 
 The file mixes eligible-professional rows (individual clinicians) with eligible-hospital rows, so the original stays
-on this Mac only and S3 receives hospital rows without the clinician-only Specialty column.
+on this Mac or, on the run 3 task, in the task's temporary workspace until the unit ends. S3 receives hospital rows without the clinician-only Specialty column.
 It is a separate "Medicare meaningful use" series, not the 2023-2024 Promoting Interoperability file.
 Failure modes: data/acquisition_planning/onc_mu_hospital_failure_modes.md.
 """

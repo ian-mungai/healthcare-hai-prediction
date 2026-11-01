@@ -113,8 +113,6 @@ def synthetic_run(folder: Path, number: int, context: str, damage: str = "none")
         fields |= {"stored_root": mirror}
     if context == "person":
         fields |= {"person_lane": True}
-    if context == "keyed":
-        fields |= {"keyed_lane": True}
     run = harness.Run(queue, folder / "state", base=folder, **fields)
     control_cases.approve_fixture(run)
     if number == 3:
@@ -126,9 +124,9 @@ def synthetic_run(folder: Path, number: int, context: str, damage: str = "none")
             json.dumps({"hosts_sha256": json.loads((folder / "hosts.json").read_bytes())["hosts_sha256"], "approved_by": "synthetic_owner"})
         )
         run.route = route.RouteFiles(paths["plan"], paths["confirmation"], folder / "hosts.json", folder / "hosts_approval.json")
-        if context in {"person", "keyed"}:
+        if context == "person":
             approval = folder / "lane_approval.json"
-            route.write_lane_template(queue, approval, route.PERSON_LANE if context == "person" else route.LANE_NAME)
+            route.write_lane_template(queue, approval)
             document = json.loads(approval.read_text())
             approval.write_text(json.dumps(document | {"approved_by": "synthetic_owner"}))
             run.lane_approval = approval
@@ -137,7 +135,7 @@ def synthetic_run(folder: Path, number: int, context: str, damage: str = "none")
     return run, unit
 
 
-CONTEXTS = [(2, "local"), (3, "task"), (3, "person"), (3, "keyed")]
+CONTEXTS = [(2, "local"), (3, "task"), (3, "person")]
 
 
 def quiet_environment(monkeypatch: pytest.MonkeyPatch, number: int) -> None:
@@ -267,7 +265,7 @@ def test_the_units_a_run_dispatches_cannot_be_changed_through_the_list_it_was_gi
 
 
 def test_no_context_may_attempt_the_private_lane(tmp_path: Path) -> None:
-    for fields in ({}, {"stored_root": tmp_path}, {"keyed_lane": True}, {"person_lane": True}):
+    for fields in ({}, {"stored_root": tmp_path}, {"stored_root": tmp_path, "task_keys": object(), "task_storage": object()}, {"person_lane": True}):
         run = harness.Run(queue_path=tmp_path / "q.json", state_root=tmp_path / "s", base=tmp_path, **fields)
         check(harness.may_attempt(run, "private_local") is False, f"{fields} may not attempt it")
         check(harness.may_attempt(run, "not_reviewed") is False, f"{fields} may not attempt an unreviewed unit")
@@ -288,7 +286,7 @@ def test_the_removed_private_machinery_is_gone() -> None:
     check(importlib.util.find_spec(removed) is None, "the worker module is gone")
 
 
-PRIVATE_MODES = ["cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"]
+PRIVATE_MODES = ["hcai_util_workbook"]
 
 
 @pytest.mark.parametrize("disposition", ["direct_download", "approved_manual", "api"])
@@ -298,7 +296,9 @@ def test_a_private_collector_mode_has_no_lane_even_when_reviewed_non_personal(mo
     check(harness.lane_of(unit, {unit["snapshot_id"]: "non_personal"}) == "private_local", f"{mode} as {disposition} is kept out of every lane")
 
 
-@pytest.mark.parametrize("fields", [{}, {"person_lane": True}, {"stored_root": "mirror"}, {"keyed_lane": True}], ids=["local", "person", "task", "keyed"])
+@pytest.mark.parametrize(
+    "fields", [{}, {"person_lane": True}, {"stored_root": "mirror"}, {"stored_root": "mirror", "keys": True}], ids=["local", "person", "task", "flags"]
+)
 def test_a_private_collector_unit_reviewed_non_personal_is_never_dispatched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fields: dict) -> None:
     monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
     units = [
@@ -308,8 +308,25 @@ def test_a_private_collector_unit_reviewed_non_personal_is_never_dispatched(monk
     monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail(f"{unit['snapshot_id']} was dispatched"))
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     fields = {key: tmp_path / value if isinstance(value, str) else value for key, value in fields.items()}
+    if fields.pop("keys", False):
+        fields |= {"task_keys": object(), "task_storage": object()}
     run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, **fields)
     held.hold(run, units)
     run.state_root.mkdir()
     summary = harness.execute_locked(run, False, True, None, None, None)
-    check(sorted(summary["not_attempted"]["private_local"]) == ["P__0", "P__1", "P__2"], f"all three are named: {summary.get('not_attempted')}")
+    check(sorted(summary["not_attempted"]["private_local"]) == ["P__0"], f"it is named: {summary.get('not_attempted')}")
+
+
+@pytest.mark.parametrize("mode", ["cms_owners_org", "onc_mu_hospital", "file", "hcai_util_workbook"])
+def test_a_unit_reviewed_personal_runs_in_no_context_with_every_flag_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> None:
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
+    unit = make_unit("file", 0) | {"snapshot_id": "P__0", "source_id": "P", "mode": mode}
+    monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail("a personal unit was dispatched"))
+    monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
+    run = harness.Run(
+        queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path, task_keys=object(), task_storage=object()
+    )
+    held.hold(run, [unit], {"P__0": "personal"})
+    run.state_root.mkdir()
+    summary = harness.execute_locked(run, False, True, None, None, None)
+    check(summary["not_attempted"]["private_local"] == ["P__0"], f"the unit is named: {summary.get('not_attempted')}")

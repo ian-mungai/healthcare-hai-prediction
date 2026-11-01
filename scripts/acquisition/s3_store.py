@@ -147,6 +147,8 @@ class AwsCli:
 
 def preflight(client: AwsCli, outputs: dict) -> None:
     """Reject any mismatch in project identity, destination or required bucket protections."""
+    if getattr(client, "checked_by_task_identity", False):
+        return
     settings = client.configuration
     account, profile = settings["expected_account_id"], settings["aws_profile"]
     identity = client.call("sts", "get-caller-identity")

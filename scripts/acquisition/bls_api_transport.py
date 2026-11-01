@@ -68,13 +68,7 @@ def reserve(root: Path, identity: str, limit: int, now: datetime, *, state_backe
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     """Read the key from Secrets Manager only inside this runtime boundary, after the identity check; return public data bytes."""
     require_approved(plan["endpoint"])
-    identity = client.call("sts", "get-caller-identity")
-    settings = client.configuration
-    expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
-    require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "BLS project identity differs; secret not read")
-    credential = api_keys.read(
-        plan["credential_reference"], settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"]
-    )
+    credential = api_keys.checked_read(client, plan["credential_reference"], "BLS")
     require(len(credential) >= 16 and credential.strip() == credential and not credential.startswith(("{", "[", '"')), "BLS credential structure invalid")
     parsed = urlsplit(plan["endpoint"])
     connection = https_connection(parsed.netloc, timeout=60)

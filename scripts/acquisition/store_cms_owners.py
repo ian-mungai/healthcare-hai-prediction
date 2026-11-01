@@ -1,8 +1,9 @@
 """Capture CMS Hospital All Owners releases locally and store organisation owner rows only, with verified S3 storage.
 
-Offline by default. ``--fetch`` downloads missing originals into an owner-only local folder that never enters a
-snapshot or S3; ``--execute`` stores the derived CSV, download proof and scope. Each release is independent: one
-that fails is held and named, never partly stored, and the others continue.
+Offline by default. ``--fetch`` downloads missing originals into an owner-only folder that never enters a snapshot or S3;
+``--execute`` stores the derived CSV, download proof and scope. Each release is independent: one that fails is held and
+named, never partly stored, and the others continue. On the run 3 task the folder is the task's temporary workspace and
+the harness removes the original when the unit ends.
 """
 
 import argparse
@@ -28,6 +29,8 @@ from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
 ROOT = REPO_ROOT / "data/datasets/historical_acquisition/cms_hospital_owners"
+MAC_RETENTION = "This Mac only, owner-only; names individual owners; never uploaded; deleted at collection closeout after user confirmation"
+TASK_RETENTION = "Run 3 task workspace only, owner-only; names individual owners; never uploaded; removed when the unit ended"
 TRANSFORMATIONS = [
     "Kept rows with TYPE - OWNER = O; dropped name, title, street address, city and ZIP columns.",
     "Replaced owner organisation or DBA names containing an individual owner's whole name with [REDACTED].",
@@ -76,7 +79,7 @@ def fetch(release: dict, root: Path, allowed: bool, opener: Any, limits: Limits)
     return found
 
 
-def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: Path, root: Path) -> Path:
+def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: Path, root: Path, retention: str = MAC_RETENTION) -> Path:
     """Write the derived CSV, download proof, scope and receipt; the original stays outside the snapshot."""
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "CMS owners base registry changed")
@@ -92,7 +95,7 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
         "sha256": meta["sha256"],
         "bytes": meta["byte_count"],
         "original_path": original.relative_to(root).as_posix(),
-        "original_retention": "This Mac only, owner-only; names individual owners; never uploaded; deleted at collection closeout after user confirmation",
+        "original_retention": retention,
         "statistics": statistics,
         "transformations": TRANSFORMATIONS,
     }
@@ -256,6 +259,7 @@ def execute(
     outputs: dict,
     opener: Any = None,
     limits: Limits | None = None,
+    retention: str = MAC_RETENTION,
 ) -> dict:
     """Run the integrated capture/storage path for one release; a valid completion performs no writes."""
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()) and release in plan["releases"], "CMS owners selected plan or release differs")
@@ -264,7 +268,7 @@ def execute(
     if not receipt_path.exists():
         contract.require_code()
         original, meta = fetch(release, root, allow_fetch, opener, limits or Limits())
-        receipt_path = make_receipt(plan, release, original, meta, branch, root)
+        receipt_path = make_receipt(plan, release, original, meta, branch, root, retention)
     receipt = verify_local(receipt_path)
     require(json.loads(receipt["lineage"]["extraction_or_query"])["release_id"] == release["id"], "CMS owners selected release differs from receipt")
     done_path = branch / "completed.json"

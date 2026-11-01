@@ -28,10 +28,7 @@ def request_json(endpoint: str, parameters: dict, client: AwsCli) -> bytes:
     """GET one public Census endpoint with the runtime-only key; never persist its URL or echo."""
     require(endpoint.startswith("https://api.census.gov/data/") and "key" not in parameters, "Census request scope differs; secret not read")
     require_approved(endpoint)
-    identity, settings = client.call("sts", "get-caller-identity"), client.configuration
-    expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
-    require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "Census project identity differs; secret not read")
-    credential = api_keys.read("census_api_key", settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
+    credential = api_keys.checked_read(client, "census_api_key", "Census")
     require(len(credential) >= 16 and credential.isascii() and credential.isalnum(), "Census credential structure invalid")
     parsed = urlsplit(endpoint)
     connection = https_connection(parsed.netloc, timeout=120)

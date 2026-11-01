@@ -1,6 +1,7 @@
 """Frozen scope and privacy checks for CMS Hospital All Owners releases (C067, C068).
 
-Each original names individual owners, so it stays on this Mac only. S3 receives a
+Each original names individual owners, so it stays in an owner-only folder on this Mac or, on the run 3 task, in the
+task's temporary workspace until the unit ends. S3 receives only a
 derived CSV of organisation owner rows, without name, title or street-address columns; kept cells are unchanged
 except owner organisation or DBA names that contain an individual owner's whole name, which are redacted.
 Failure modes: data/acquisition_planning/cms_owners_failure_modes.md.

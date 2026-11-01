@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import http.client
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from email.message import Message
+from functools import partial
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -19,7 +21,7 @@ from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import run_redownload_controls_e2e as control_e2e
 from scripts.acquisition import run_wonder_export_e2e as wonder_e2e
-from scripts.acquisition import unit_classification
+from scripts.acquisition import task_role, unit_classification
 from scripts.acquisition import wonder_export_contract as wonder_contract
 from scripts.acquisition.build_wonder_plan import build as build_wonder_plan
 from scripts.acquisition.collect_bls_api import execute as bls_execute
@@ -543,6 +545,62 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
             require(not list(fresh.rglob("completed.json")) and not list(fresh.rglob("s3_collections_reconciliation.json")), "Fresh run stored to S3")
 
         scenario("real_bls_collector_runs_in_a_fresh_root_with_storage_off", matches)
+
+        def keyed_on_the_task() -> None:
+            key = "planted" + "BLSvalue" + "0123456789" * 2
+            account = "1" * 12
+            reads: list[str] = []
+            sent: list[bytes] = []
+
+            class Cloud:
+                def get_caller_identity(self) -> dict:
+                    return {"Account": account, "Arn": f"arn:aws:sts::{account}:assumed-role/example_publisher_task/session"}
+
+                def get_secret_value(self, SecretId: str) -> dict:
+                    reads.append(SecretId)
+                    return {"SecretString": key}
+
+            class Reply:
+                status = 200
+
+                def getheader(self, _name: str, default: str = "") -> str:
+                    return "application/json"
+
+                def read(self, _size: int) -> bytes:
+                    return payload
+
+            class Connection:
+                def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                def request(self, _method: str, _path: str, body: bytes = b"", headers: dict | None = None) -> None:
+                    sent.append(body)
+
+                def getresponse(self) -> Reply:
+                    return Reply()
+
+                def close(self) -> None:
+                    pass
+
+            environment = {"AWS_REGION": "us-west-2", "EXPECTED_ACCOUNT_ID": account, "TASK_ROLE_NAME": "example_publisher_task"}
+            state = root / "bls_task_state"
+            task = harness.Run(
+                queue_path=queue,
+                state_root=state,
+                base=base,
+                task_keys=partial(task_role.TaskKeys, environment=environment, factory=lambda _service, _region: Cloud()),
+                sleep=lambda _s: None,
+            )
+            control_e2e.approve_fixture(task)
+            with patch.object(http.client, "HTTPSConnection", Connection):
+                harness.execute(task)
+            result = recorded(task, entry["snapshot_id"])
+            require(result["outcome"] == "exact_match", f"The task's BLS outcome differs: {result}")
+            require(reads == ["bls_api_key"] and len(sent) == 1 and key.encode() in sent[0], "The task read another secret or did not send its key")
+            kept = [str(path) for path in state.rglob("*") if key.encode() in path.name.encode() or (path.is_file() and key.encode() in path.read_bytes())]
+            require(not kept, f"The key reached {kept}")
+
+        scenario("real_bls_collector_on_the_task_reads_only_its_key_and_keeps_no_trace_of_it", keyed_on_the_task)
 
 
 # Stored and fresh bodies for the content scenarios: each fresh body differs from its stored body in the noted way. Only

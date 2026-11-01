@@ -92,10 +92,10 @@ run "source_roots_add_raw_for_the_bronze_writer_and_qualification_roles" {
 
   assert {
     condition = (
-      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset(flatten([
+      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset(concat(flatten([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         ["arn:aws:s3:::example-data-bucket/${collection}/*", "arn:aws:s3:::example-data-bucket/raw/${collection}/*"]
-      ])) &&
+      ]), ["arn:aws:s3:::example-data-bucket/bronze_objects/sha256/*", "arn:aws:s3:::example-data-bucket/raw/bronze_objects/sha256/*"])) &&
       toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset(flatten([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         ["${collection}/*", "raw/${collection}/*"]
@@ -286,5 +286,96 @@ run "bronze_contract_sets_the_raw_read_environment_with_the_grant" {
   assert {
     condition     = jsonencode(output.bronze_writer_contract.read_roots) == jsonencode(["", "raw/"]) && jsonencode(output.bronze_writer_contract.read_environment) == jsonencode({ HAI_READ_RAW_ROOT = "true" })
     error_message = "With the raw grant on the contract must state both roots and tell dispatch to set the raw read variable."
+  }
+}
+
+run "publisher_keys_are_off_by_default" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.job_publisher_keys) == 0 && !strcontains(aws_iam_role_policy.job_publisher[0].policy, "secretsmanager") && length(output.publisher_job_contract.secrets) == 0
+    error_message = "The publisher task role reads no secret until the owner switches the keys on."
+  }
+}
+
+run "publisher_keys_read_only_the_three_exact_secrets" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr"
+    }
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_iam_role_policy.job_publisher_keys[0].policy).Statement) == 1 &&
+      jsondecode(aws_iam_role_policy.job_publisher_keys[0].policy).Statement[0].Action == ["secretsmanager:GetSecretValue"] &&
+      toset(jsondecode(aws_iam_role_policy.job_publisher_keys[0].policy).Statement[0].Resource) == toset([
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr",
+      ]) &&
+      !strcontains(aws_iam_role_policy.job_publisher_keys[0].policy, "*") &&
+      join(",", output.publisher_job_contract.secrets) == "bls_api_key,census_api_key,hud_api_key"
+    )
+    error_message = "The publisher task role may read exactly the three key secrets by exact ARN and nothing else."
+  }
+}
+
+run "publisher_keys_refuse_a_wildcard_arn" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-*"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_fourth_or_a_missing_secret" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
+      other_secret   = "arn:aws:secretsmanager:us-west-2:111111111111:secret:other_secret-GhIjKl"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_need_the_class" {
+  command = plan
+
+  variables {
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr"
+    }
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.job_publisher_keys) == 0
+    error_message = "With the class off there is no role to grant anything to."
   }
 }

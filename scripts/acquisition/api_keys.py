@@ -146,6 +146,18 @@ def read(name: str, profile: str, region: str, account: str, arn: str, seconds: 
     return value
 
 
+def checked_read(client: Any, name: str, label: str) -> str:
+    """The key for one request. A task's key reader answers for itself. Otherwise the project client's identity must be its same-named IAM user."""
+    reader = getattr(client, "read_api_key", None)
+    if reader is not None:
+        return str(reader(name))
+    identity, settings = client.call("sts", "get-caller-identity"), client.configuration
+    expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
+    if identity.get("Account") != settings["expected_account_id"] or identity.get("Arn") != expected:
+        raise ValueError(f"{label} project identity differs; secret not read")
+    return read(name, settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
+
+
 def number_shaped(value: str) -> bool:
     """True when every character of ``value`` can appear in a JSON number."""
     return set(value) <= NUMBER_CHARACTERS

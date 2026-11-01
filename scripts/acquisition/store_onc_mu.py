@@ -29,6 +29,8 @@ from scripts.infrastructure.render_project_config import load_configuration
 LOGGER = logging.getLogger(__name__)
 ROOT = REPO_ROOT / "data/datasets/historical_acquisition/onc_mu_attestation"
 FILE_NAME = "mu_report.csv"
+MAC_RETENTION = "This Mac only, owner-only; contains clinician NPIs; never uploaded; deleted at collection closeout after user confirmation"
+TASK_RETENTION = "Run 3 task workspace only, owner-only; contains clinician NPIs; never uploaded; removed when the unit ended"
 TRANSFORMATIONS = [
     "Kept rows whose Provider_Type is Hospital; dropped eligible-professional (clinician) rows and the clinician-only Specialty column.",
     "Other kept cells unchanged; written as UTF-8 CSV with LF line endings.",
@@ -66,7 +68,7 @@ def fetch(plan: dict, root: Path, allowed: bool, opener: Any, limits: Limits | N
     return found
 
 
-def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Path) -> Path:
+def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Path, retention: str = MAC_RETENTION) -> Path:
     """Write the derived CSV, download proof, scope and receipt; the original stays outside the snapshot."""
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "ONC meaningful-use base registry changed")
@@ -80,7 +82,7 @@ def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Pat
         "sha256": meta["sha256"],
         "bytes": meta["byte_count"],
         "original_path": original.relative_to(root).as_posix(),
-        "original_retention": "This Mac only, owner-only; contains clinician NPIs; never uploaded; deleted at collection closeout after user confirmation",
+        "original_retention": retention,
         "statistics": statistics,
         "transformations": TRANSFORMATIONS,
     }
@@ -231,7 +233,15 @@ def verify_storage(path: Path, receipt: dict, settings: dict) -> None:
 
 
 def execute(
-    plan: dict, root: Path, allow_fetch: bool, upload: bool, client: AwsCli | None, outputs: dict, opener: Any = None, limits: Limits | None = None
+    plan: dict,
+    root: Path,
+    allow_fetch: bool,
+    upload: bool,
+    client: AwsCli | None,
+    outputs: dict,
+    opener: Any = None,
+    limits: Limits | None = None,
+    retention: str = MAC_RETENTION,
 ) -> dict:
     """Run the integrated capture/storage path; a valid completion performs no writes."""
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()), "ONC meaningful-use selected plan differs")
@@ -243,7 +253,7 @@ def execute(
         if not receipt_path.exists():
             contract.require_code()
             original, meta = fetch(plan, root, allow_fetch, opener, limits)
-            receipt_path = make_receipt(plan, original, meta, branch, root)
+            receipt_path = make_receipt(plan, original, meta, branch, root, retention)
         receipt = verify_local(receipt_path)
         done_path = branch / "completed.json"
         if done_path.exists():

@@ -5,7 +5,30 @@ variable "publisher_job_enabled" {
   nullable    = false
 }
 
+variable "publisher_keys_enabled" {
+  description = "Let the run 3 publisher task role read the three API keys by exact ARN. Off until the owner approves the keyed units on the task."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "publisher_secret_arns" {
+  description = "The exact ARNs of census_api_key, bls_api_key and hud_api_key, with their six-character suffix. Empty until publisher_keys_enabled is true."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+
+  validation {
+    condition = !var.publisher_keys_enabled || (
+      toset(keys(var.publisher_secret_arns)) == toset(["bls_api_key", "census_api_key", "hud_api_key"]) &&
+      alltrue([for name, arn in var.publisher_secret_arns : can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:${name}-[A-Za-z0-9]{6}$", arn))])
+    )
+    error_message = "Name exactly census_api_key, bls_api_key and hud_api_key, each with its exact ARN and no wildcard."
+  }
+}
+
 locals {
+  publisher_keys_active   = var.publisher_job_enabled && var.publisher_keys_enabled
   publisher_job_role_name = format(local.platform_name, "job_publisher_task")
   publisher_job_inputs = {
     BUCKET_ARN = local.bronze_bucket_arn
@@ -69,6 +92,14 @@ resource "aws_iam_role" "job_publisher" {
   tags                 = local.project_tags
 }
 
+resource "aws_iam_role_policy" "job_publisher_keys" {
+  count = local.publisher_keys_active ? 1 : 0
+
+  name   = "read_three_api_keys"
+  role   = aws_iam_role.job_publisher[0].name
+  policy = templatefile("${path.module}/owner_policies/job_publisher_keys.json", { SECRET_ARNS = jsonencode(values(var.publisher_secret_arns)) })
+}
+
 resource "aws_iam_role_policy" "job_publisher" {
   count = var.publisher_job_enabled ? 1 : 0
 
@@ -89,5 +120,6 @@ output "publisher_job_contract" {
     host_limit      = "application_queue_hosts"
     delete_actions  = []
     writes_to_lakes = false
+    secrets         = local.publisher_keys_active ? sort(keys(var.publisher_secret_arns)) : []
   } : null
 }

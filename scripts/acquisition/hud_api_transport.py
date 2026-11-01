@@ -23,10 +23,7 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     require(plan["endpoint"] == contract.ENDPOINT and plan["credential_reference"] == contract.CREDENTIAL, "HUD request scope differs; secret not read")
     require_approved(contract.ENDPOINT)
     parameters = contract.request_for(batch)
-    identity, settings = client.call("sts", "get-caller-identity"), client.configuration
-    expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
-    require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "HUD project identity differs; secret not read")
-    credential = api_keys.read(contract.CREDENTIAL, settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
+    credential = api_keys.checked_read(client, contract.CREDENTIAL, "HUD")
     require(re.fullmatch(r"[A-Za-z0-9._-]{20,4096}", credential) is not None, "HUD credential structure invalid")
     parsed = urlsplit(contract.ENDPOINT)
     connection = https_connection(parsed.netloc, timeout=300)

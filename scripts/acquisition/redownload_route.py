@@ -22,13 +22,9 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, 
 from scripts.acquisition.unused_files import read_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
-# These collectors read an API key from the secret store. The AWS task holds no secret, so only the owner's Mac lane may run them.
-SECRET_MODES = frozenset({"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"})
-LANE_NAME = "mac_keyed_units"
 PERSON_LANE = "mac_person_units"
 PERSON_CLASSES = frozenset({"needs_person"})
 PERSON_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the browser saves only, by owner decision 120"
-LANE_DEPARTURE = "owner decision 82 (run 3 on the AWS route) for the units of the listed modes only"
 
 
 @dataclass(frozen=True)
@@ -41,52 +37,41 @@ class RouteFiles:
     hosts_approval: Path
 
 
-def lane_template(queue_body: bytes, classification_body: bytes, lane: str = LANE_NAME) -> dict:
-    """The approval the owner reviews and signs for a Mac lane: the queue, its reviewed classification, what the lane takes and how many units that is."""
+def lane_template(queue_body: bytes, classification_body: bytes) -> dict:
+    """The approval the owner reviews and signs for the person lane: the queue, its reviewed classification, what the lane takes and how many units that is."""
     from scripts.acquisition import redownload
 
-    queue_sha256 = hashlib.sha256(queue_body).hexdigest()
     classes = unit_classification.reviewed(classification_body, queue_body)
     lanes = [redownload.lane_of(unit, classes) for unit in json.loads(queue_body)["queue"] if unit["disposition"] in ACTIVE]
-    bound = {"queue_sha256": queue_sha256, "classification_sha256": hashlib.sha256(classification_body).hexdigest()}
-    if lane == PERSON_LANE:
-        return {
-            "lane": PERSON_LANE,
-            "departs_from": PERSON_DEPARTURE,
-            **bound,
-            "classes": sorted(PERSON_CLASSES),
-            "units": sum(1 for found in lanes if found in PERSON_CLASSES),
-            "approved_by": None,
-        }
     return {
-        "lane": LANE_NAME,
-        "departs_from": LANE_DEPARTURE,
-        **bound,
-        "modes": sorted(SECRET_MODES),
-        "units": sum(1 for found in lanes if found == redownload.KEYED),
-        "keys_stay_off_aws": True,
+        "lane": PERSON_LANE,
+        "departs_from": PERSON_DEPARTURE,
+        "queue_sha256": hashlib.sha256(queue_body).hexdigest(),
+        "classification_sha256": hashlib.sha256(classification_body).hexdigest(),
+        "classes": sorted(PERSON_CLASSES),
+        "units": sum(1 for found in lanes if found in PERSON_CLASSES),
         "approved_by": None,
     }
 
 
-def write_lane_template(queue_path: Path, output: Path, lane: str = LANE_NAME) -> dict:
-    document = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes(), lane)
+def write_lane_template(queue_path: Path, output: Path) -> dict:
+    document = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes())
     write_once(output, encoded_json(document))
     return document
 
 
-def lane_problems(queue_path: Path, approval_path: Path, lane: str = LANE_NAME) -> list[str]:
-    """Return why the Mac lane may not start. Only an approval that names this lane, queue, modes and unit count lets it."""
+def lane_problems(queue_path: Path, approval_path: Path) -> list[str]:
+    """Return why the person lane may not start. Only an approval that names this lane, queue, classes and unit count lets it."""
     try:
         approval = json.loads(approval_path.read_text(encoding="utf-8"))
-        expected = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes(), lane)
+        expected = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes())
     except (OSError, ValueError, KeyError, TypeError, RegistryError) as error:
         return [f"the lane approval or the unit classification is missing or unreadable: {error}"]
     if not isinstance(approval, dict):
         return ["the lane approval is not a record"]
     named = {key: approval.get(key) for key in expected if key != "approved_by"}
     if named != {key: value for key, value in expected.items() if key != "approved_by"}:
-        return ["the lane approval does not name this lane, queue, modes and unit count"]
+        return ["the lane approval does not name this lane, queue, classes and unit count"]
     if not (isinstance(approval.get("approved_by"), str) and approval["approved_by"].strip()):
         return ["the lane approval has no approver"]
     return []
@@ -212,7 +197,6 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
     templating = commands.add_parser("lane-template")
     templating.add_argument("--queue", required=True, type=Path)
     templating.add_argument("--output", required=True, type=Path)
-    templating.add_argument("--lane", choices=[LANE_NAME, PERSON_LANE], default=LANE_NAME)
     checking = commands.add_parser("check")
     for name in ("queue", "plan", "confirmation", "hosts", "hosts-approval"):
         checking.add_argument(f"--{name}", required=True, type=Path)
@@ -223,7 +207,7 @@ def main(argv: Sequence[str] | None = None, root: str | None = None) -> None:
             sys.stdout.write(json.dumps({"hosts": len(document["hosts"]), "hosts_sha256": document["hosts_sha256"]}) + "\n")
             return
         if args.command == "lane-template":
-            document = write_lane_template(args.queue, args.output, args.lane)
+            document = write_lane_template(args.queue, args.output)
             sys.stdout.write(json.dumps({"units": document["units"], "approved_by": None}) + "\n")
             return
         found = check(args.queue, args.plan, args.confirmation, capture_root() if root is None else root, args.hosts, args.hosts_approval)

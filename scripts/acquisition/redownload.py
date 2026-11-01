@@ -27,13 +27,14 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
 from defusedxml import ElementTree as SafeElementTree
 
-from scripts.acquisition import bls_api_transport, data_paths, stored_mirror, unit_classification
+from scripts.acquisition import bls_api_transport, data_paths, stored_mirror, task_role, unit_classification
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
@@ -77,9 +78,10 @@ class Run:
     materialize: Callable[[Path], bool] | None = None
     stored_root: Path | None = None
     state_parent: Path | None = None
-    keyed_lane: bool = False
     person_lane: bool = False
     lane_approval: Path | None = None
+    task_keys: Callable[[str], Any] | None = None
+    task_storage: Any = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
 
@@ -88,8 +90,10 @@ class Run:
         """Where stored captures, frozen inputs and job files live. In a task this is the stored mirror, otherwise the base."""
         return self.stored_root or self.base
 
-    def client(self) -> Any:
-        """The project AWS client, created once and only for collectors that read an API key."""
+    def client(self, mode: str = "") -> Any:
+        """What a keyed collector reads its key through: on the task a reader of that collector's key only, otherwise the project AWS client, made once."""
+        if self.task_keys is not None:
+            return self.task_keys(mode)
         if "client" not in self.cache:
             if self.client_factory is not None:
                 self.cache["client"] = self.client_factory()
@@ -324,16 +328,14 @@ def ensure_stored(path: Path, run: Run) -> None:
         run.materialize(path)
 
 
-def resolve_context(number: int | None, *, keyed: bool, person: bool, mirror: bool) -> str:
-    """Decide the one execution context of a run, before any gate or early return. Run 3 has exactly four: the task, or one of the Mac lanes."""
-    if keyed and person:
-        raise RegistryError("Only one lane runs at a time")
-    if (keyed or person) and number != 3:
+def resolve_context(number: int | None, *, person: bool, mirror: bool) -> str:
+    """Decide the one execution context of a run, before any gate or early return. Run 3 has exactly two: the task or the person lane on the Mac."""
+    if person and number != 3:
         raise RegistryError("A lane belongs to run 3")
-    if keyed or person:
+    if person:
         if mirror:
-            raise RegistryError(f"A Mac lane runs on the owner's Mac only, so {'the keys' if keyed else 'the originals'} stay off AWS")
-        return route.LANE_NAME if keyed else route.PERSON_LANE
+            raise RegistryError("The person lane runs on the owner's Mac only, so the originals stay off AWS")
+        return route.PERSON_LANE
     if number != 3:
         return "local"
     if not mirror:
@@ -345,35 +347,28 @@ def may_attempt(run: Run, lane: str) -> bool:
     """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only, and none takes a private or unreviewed unit."""
     if lane in (PRIVATE, NOT_REVIEWED):
         return False
-    if run.keyed_lane:
-        return lane == KEYED
     if run.person_lane:
         return lane in route.PERSON_CLASSES
     if run.stored_root is not None:
-        return lane == TASK
-    return not (on_raw_route() and (lane == KEYED or lane in route.PERSON_CLASSES))
+        return lane == TASK or (lane == TASK_KEYED and run.task_keys is not None) or (lane == TASK_FILTERED and run.task_storage is not None)
+    if lane == TASK_FILTERED:
+        return False
+    return not (on_raw_route() and (lane == TASK_KEYED or lane in route.PERSON_CLASSES))
 
 
 def route_gate(run: Run) -> None:
     """Run 3 starts only on a passing route: removal recorded for every planned file, the raw root and an approved hosts file."""
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
         return
-    if run.keyed_lane and run.person_lane:
-        raise RegistryError("Only one lane runs at a time")
-    if run.keyed_lane or run.person_lane:
-        kept = "the keys stay off AWS" if run.keyed_lane else "the originals stay off AWS"
-        if run.stored_root is not None or any(name in os.environ for name in TASK_ENVIRONMENT):
-            raise RegistryError(f"A Mac lane runs on the owner's Mac only, so {kept}")
-        require(json.loads(run.queue_path.read_bytes()).get("run") == 3, "A Mac lane belongs to run 3")
+    if run.person_lane and (run.stored_root is not None or any(name in os.environ for name in TASK_ENVIRONMENT)):
+        raise RegistryError("The person lane runs on the owner's Mac only, so the originals stay off AWS")
     files = run.route
     if files is None:
         raise RegistryError("Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
     problems = route.check(run.queue_path, files.plan, files.confirmation, capture_root(), files.hosts, files.hosts_approval)
     require(not problems, "Run 3 route gate: " + "; ".join(problems))
-    if run.keyed_lane or run.person_lane:
-        lane = route.lane_problems(
-            run.queue_path, run.lane_approval or run.queue_path.with_name("lane_approval.json"), route.PERSON_LANE if run.person_lane else route.LANE_NAME
-        )
+    if run.person_lane:
+        lane = route.lane_problems(run.queue_path, run.lane_approval or run.queue_path.with_name("lane_approval.json"))
         require(not lane, "Run 3 lane approval: " + "; ".join(lane))
     # The downloader reads the hosts file and its approval from these paths, so it enforces exactly what the gate checked.
     os.environ[APPROVED_HOSTS_VARIABLE] = str(files.hosts)
@@ -899,7 +894,7 @@ def adapt_bls(unit: dict, run: Run) -> Path:
     plan, batch = planned(unit, run)
     require_bls_budget([collection_root(receipt_file(unit, run)), fresh_root(unit, run)], datetime.now(UTC))
     try:
-        result = collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(), {}, run.api_request or transport.request_live)
+        result = collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, run.api_request or transport.request_live)
     except transport.QuotaPause as pause:
         raise Pause(str(pause)) from None
     return Path(result["receipt_path"])
@@ -911,7 +906,7 @@ def adapt_census_api(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or transport.request_live
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(), {}, request)["receipt_path"])
+    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, request)["receipt_path"])
 
 
 def adapt_census_detailed(unit: dict, run: Run) -> Path:
@@ -919,7 +914,7 @@ def adapt_census_detailed(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or collector.live_request
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(), {}, request)["receipt_path"])
+    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, request)["receipt_path"])
 
 
 def adapt_hud_api(unit: dict, run: Run) -> Path:
@@ -928,7 +923,7 @@ def adapt_hud_api(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or transport.request_live
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(), {}, request)["receipt_path"])
+    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, request)["receipt_path"])
 
 
 def adapt_mmd(unit: dict, run: Run) -> Path:
@@ -976,7 +971,31 @@ def adapt_cms_owners(unit: dict, run: Run) -> Path:
 
     plan, release = planned(unit, run)
     limits = Limits(attempts=MAX_ATTEMPTS)
-    return Path(collector.execute(plan, release, fresh_root(unit, run), True, False, None, {}, run.opener, limits)["receipt_path"])
+    root = fresh_root(unit, run)
+    if run.task_storage is None:
+        return Path(collector.execute(plan, release, root, True, False, None, {}, run.opener, limits)["receipt_path"])
+    capture = partial(collector.execute, plan, release, root, True, True, run.task_storage, {}, run.opener, limits, retention=collector.TASK_RETENTION)
+    return filtered_capture(capture, root / task_role.ORIGINAL_FOLDER / release["id"], root / "batches" / release["id"])
+
+
+def filtered_capture(capture: Callable[[], dict], original: Path, snapshot: Path) -> Path:
+    """Run a task capture whose original names people. The original exists only between the two removals, and only the filtered copy reaches S3.
+
+    Failure text could quote a cell, so it is replaced with a fixed message and nothing is chained to it.
+    """
+    shutil.rmtree(original, ignore_errors=True)
+    shutil.rmtree(snapshot, ignore_errors=True)
+    try:
+        result = capture()
+    except (Pause, Pending, controls.BudgetExceeded):
+        raise
+    except Exception:
+        raise CaptureError("The filtered capture failed on the task.") from None
+    finally:
+        shutil.rmtree(original, ignore_errors=True)
+        if original.exists():
+            raise CaptureError("The original could not be removed from the task workspace.")
+    return Path(result["receipt_path"])
 
 
 def adapt_hcai_util(unit: dict, run: Run) -> Path:
@@ -993,12 +1012,19 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
     plan, _ = planned(unit, run)
     # The plan raises the time and size bounds for this one large file; only the attempt count is lowered.
     limits = Limits(attempts=MAX_ATTEMPTS, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
-    return Path(collector.execute(plan, fresh_root(unit, run), True, False, None, {}, run.opener, limits)["receipt_path"])
+    root = fresh_root(unit, run)
+    if run.task_storage is None:
+        return Path(collector.execute(plan, root, True, False, None, {}, run.opener, limits)["receipt_path"])
+    capture = partial(collector.execute, plan, root, True, True, run.task_storage, {}, run.opener, limits, retention=collector.TASK_RETENTION)
+    return filtered_capture(capture, root / task_role.ORIGINAL_FOLDER, root / "batches" / plan["id"])
 
 
-# These collectors read an API key from the secret store. The publisher task holds no secret, so on the raw route they are reported, never attempted.
-SECRET_MODES = route.SECRET_MODES
-TASK, KEYED, PRIVATE, NOT_REVIEWED = "task", "keyed_mac_lane", "private_local", "not_reviewed"
+# These collectors read an API key. Only the task may run them on the raw route, each with its own key, when its switch is on.
+SECRET_MODES = frozenset(task_role.KEY_OF_MODE)
+TASK, TASK_KEYED, TASK_FILTERED, PRIVATE, NOT_REVIEWED = "task", "task_keyed", "task_filtered", "private_local", "not_reviewed"
+# These collectors keep their originals only in the task's workspace and store a filtered copy under raw/, by owner decisions 132, 133 and 142.
+FILTERED_MODES = frozenset({"cms_owners_org", "onc_mu_hospital"})
+NEVER_IN_THE_TOOL = unit_classification.PERSONAL_COLLECTORS - FILTERED_MODES
 MANUAL_MODES = frozenset({"hud_xlsx", "wonder_export", "reference_download"})
 TASK_ENVIRONMENT = (
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
@@ -1015,7 +1041,7 @@ def lane_of(unit: dict, classes: Mapping[str, str]) -> str:
     ``classes`` holds the units the owner reviewed, as ``unit_classification.reviewed`` returns them. A queue flag or a collector mode decides nothing here.
     """
     # The collectors of originals that name people get no lane whatever an entry says, so a review mistake cannot send one to a person lane or a local run.
-    if unit["mode"] in unit_classification.PERSONAL_COLLECTORS or handler_mode(unit) in unit_classification.PERSONAL_COLLECTORS:
+    if unit["mode"] in NEVER_IN_THE_TOOL or handler_mode(unit) in NEVER_IN_THE_TOOL:
         return PRIVATE
     classification = classes.get(unit["snapshot_id"])
     if classification == unit_classification.PERSONAL:
@@ -1024,7 +1050,9 @@ def lane_of(unit: dict, classes: Mapping[str, str]) -> str:
         return NOT_REVIEWED
     mode = handler_mode(unit)
     if mode in SECRET_MODES:
-        return KEYED
+        return TASK_KEYED
+    if mode in FILTERED_MODES:
+        return TASK_FILTERED
     if unit["disposition"] == "approved_manual" or mode in MANUAL_MODES:
         return "needs_person"
     if mode == "mmd_api":
@@ -1224,7 +1252,7 @@ def execute(
         require_readable_root(run)
         return execute_locked(run, pilot, False, selected_sources(preview_scope(run), sources), max_units, log)
     validate_root(run)
-    resolve_context(json.loads(run.queue_path.read_bytes()).get("run"), keyed=run.keyed_lane, person=run.person_lane, mirror=run.stored_root is not None)
+    resolve_context(json.loads(run.queue_path.read_bytes()).get("run"), person=run.person_lane, mirror=run.stored_root is not None)
     route_gate(run)
     run.cache["controls_sha256"] = review_gate(run)
     # The scope comes only from the controls the gate just accepted, never from a separate file read (failure mode 56).
@@ -1404,6 +1432,7 @@ def run_from(
     paths = [args.removal_plan, args.removal_confirmation, args.hosts, args.hosts_approval]
     files = route.RouteFiles(*paths) if all(paths) else None
     mirror = stored_mirror.from_environment(environment, factory) if environment.get(stored_mirror.MIRROR_VARIABLE) else None
+    switched = {name: mirror is not None and environment.get(name) == "1" for name in (task_role.KEYS_VARIABLE, task_role.FILTERED_VARIABLE)}
     return Run(
         queue_path=args.queue,
         state_root=state_root,
@@ -1413,9 +1442,10 @@ def run_from(
         route=files,
         materialize=mirror.materialize if mirror else None,
         stored_root=mirror.root if mirror else None,
-        keyed_lane=bool(getattr(args, "keyed_lane", False)),
         person_lane=bool(getattr(args, "person_lane", False)),
         lane_approval=getattr(args, "lane_approval", None),
+        task_keys=partial(task_role.TaskKeys, environment=environment) if switched[task_role.KEYS_VARIABLE] else None,
+        task_storage=task_role.storage_from_environment(environment, factory) if switched[task_role.FILTERED_VARIABLE] else None,
     )
 
 
@@ -1436,9 +1466,8 @@ def main() -> None:
     for name in ("removal-plan", "removal-confirmation", "hosts", "hosts-approval"):
         parser.add_argument(f"--{name}", type=Path, help="run 3 route file")
     parser.add_argument("--state-parent", type=Path, help="a writable folder outside the code tree that holds the state root, for the AWS task")
-    parser.add_argument("--keyed-lane", action="store_true", help="run only the units that need an API key, on the owner's Mac")
-    parser.add_argument("--person-lane", action="store_true", help="run only the browser saves and the originals that name people, on the owner's Mac")
-    parser.add_argument("--lane-approval", type=Path, help="the owner's approval of the keyed lane")
+    parser.add_argument("--person-lane", action="store_true", help="run only the browser saves, on the owner's Mac")
+    parser.add_argument("--lane-approval", type=Path, help="the owner's approval of the person lane")
     args = parser.parse_args()
     run = run_from(args, os.environ)
 

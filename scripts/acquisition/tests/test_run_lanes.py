@@ -19,17 +19,19 @@ KINDS = {
     "page": ("il_directory", "direct_download", [], "task"),
     "mmd": ("mmd_api", "api", [], "needs_local_data"),
     "mmd_moved": ("file", "api", ["browser_export_moved_to_api"], "needs_local_data"),
-    "bls": ("bls_api_v2", "api", [], "keyed_mac_lane"),
-    "census": ("census_acs_api", "api", [], "keyed_mac_lane"),
-    "census_detailed": ("census_acs_detailed", "api", [], "keyed_mac_lane"),
-    "hud": ("hud_api", "api", [], "keyed_mac_lane"),
+    "bls": ("bls_api_v2", "api", [], "task_keyed"),
+    "census": ("census_acs_api", "api", [], "task_keyed"),
+    "census_detailed": ("census_acs_detailed", "api", [], "task_keyed"),
+    "hud": ("hud_api", "api", [], "task_keyed"),
     "hud_xlsx": ("hud_xlsx", "approved_manual", [], "needs_person"),
     "wonder": ("wonder_export", "approved_manual", [], "needs_person"),
     "reference": ("reference_download", "approved_manual", [], "needs_person"),
     "manual_file": ("file", "approved_manual", [], "needs_person"),
-    "owners": ("cms_owners_org", "direct_download", [], "private_local"),
+    "owners": ("cms_owners_org", "direct_download", [], "task_filtered"),
+    "owners_personal": ("cms_owners_org", "direct_download", [], "private_local"),
     "hcai": ("hcai_util_workbook", "direct_download", [], "private_local"),
-    "onc": ("onc_mu_hospital", "direct_download", [], "private_local"),
+    "onc": ("onc_mu_hospital", "direct_download", [], "task_filtered"),
+    "onc_personal": ("onc_mu_hospital", "direct_download", [], "private_local"),
     "contacts_file": ("file", "direct_download", [], "private_local"),
     "unreviewed_file": ("file", "direct_download", [], "not_reviewed"),
 }
@@ -69,7 +71,7 @@ def test_an_unknown_mode_has_no_lane_to_run_in() -> None:
     )
 
 
-COLLECTORS_OF_PERSONAL_ORIGINALS = frozenset({"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"})
+COLLECTORS_OF_PERSONAL_ORIGINALS = frozenset({"hcai_util_workbook"})
 
 
 def test_every_adapter_mode_is_classified() -> None:
@@ -100,7 +102,7 @@ def test_the_task_attempts_only_the_units_its_mirror_can_serve_and_lists_the_res
     seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror")
     served = sorted(unit_id for unit_id, lane in LANES.items() if lane == "task")
     check(sorted(seen) == served, f"the task attempted {sorted(seen)}")
-    for lane in ("needs_local_data", "needs_person", "private_local", "keyed_mac_lane", "not_reviewed"):
+    for lane in ("needs_local_data", "needs_person", "private_local", "task_keyed", "task_filtered", "not_reviewed"):
         expected = sorted(unit_id for unit_id, found in LANES.items() if found == lane)
         check(sorted(summary["not_attempted"][lane]) == expected, f"{lane} units are listed: {summary.get('not_attempted')}")
 
@@ -122,7 +124,7 @@ def classify(folder: Path, queue_body: bytes) -> None:
     (folder / "unit_classification.json").write_bytes(classification_body(queue_body, UNITS, CLASSES, unreviewed))
 
 
-def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes: Any) -> tuple[harness.Run, Path, route.RouteFiles]:
+def lane_files(tmp_path: Path, **changes: Any) -> tuple[harness.Run, Path, route.RouteFiles]:
     folder = tmp_path / "route"
     folder.mkdir(parents=True)
     units = []
@@ -145,7 +147,7 @@ def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes
     paths["hosts_approval"].write_text(json.dumps({"hosts_sha256": json.loads(hosts.read_text())["hosts_sha256"], "approved_by": "owner"}))
     files = route.RouteFiles(paths["plan"], paths["confirmation"], hosts, paths["hosts_approval"])
     approval = folder / "lane_approval.json"
-    route.write_lane_template(queue, approval, template_lane)
+    route.write_lane_template(queue, approval)
     document = json.loads(approval.read_text())
     document["approved_by"] = "owner"
     approval.write_text(json.dumps({**document, **changes}))
@@ -154,8 +156,7 @@ def lane_files(tmp_path: Path, template_lane: str = "mac_keyed_units", **changes
         state_root=tmp_path / "run",
         base=tmp_path / "base",
         route=files,
-        keyed_lane=template_lane == "mac_keyed_units",
-        person_lane=template_lane == "mac_person_units",
+        person_lane=True,
         lane_approval=approval,
     )
     return run, approval, files
@@ -174,82 +175,37 @@ def refused(monkeypatch: pytest.MonkeyPatch, run: harness.Run, message: str) -> 
     check(called == [], "nothing was attempted")
 
 
-def test_the_lane_template_is_not_an_approval(tmp_path: Path) -> None:
+def test_with_both_flags_the_task_takes_the_keyed_and_filtered_units_and_still_no_personal_browser_or_unreviewed_unit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
+    seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror", task_keys=object(), task_storage=object())
+    served = sorted(unit_id for unit_id, lane in LANES.items() if lane in {"task", "task_keyed", "task_filtered"})
+    check(sorted(seen) == served, f"the task attempted {sorted(seen)}")
+    check(
+        set(summary["not_attempted"]) == {"needs_local_data", "needs_person", "private_local", "not_reviewed"},
+        f"the rest are named: {summary['not_attempted']}",
+    )
+
+
+def test_a_key_flag_alone_opens_only_the_keyed_units(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
+    seen, _ = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror", task_keys=object())
+    check(sorted(seen) == sorted(unit_id for unit_id, lane in LANES.items() if lane in {"task", "task_keyed"}), f"the task attempted {sorted(seen)}")
+
+
+def test_the_mac_keyed_lane_is_gone() -> None:
+    for name in ("LANE_NAME", "LANE_DEPARTURE", "SECRET_MODES"):
+        check(not hasattr(route, name), f"{name} is gone from the route")
+    check("keyed_lane" not in harness.Run.__dataclass_fields__, "the run has no keyed lane field")
+    check(not hasattr(harness, "KEYED"), "the harness has no Mac keyed lane")
+
+
+def test_the_person_lane_approval_names_only_the_browser_units(tmp_path: Path) -> None:
     folder = tmp_path / "route"
     folder.mkdir()
     write_state(folder, UNITS, [])
     classify(folder, (folder / "queue.json").read_bytes())
-    template = folder / "template.json"
-    route.write_lane_template(folder / "queue.json", template)
-    document = json.loads(template.read_text())
-    check(
-        document["approved_by"] is None and document["lane"] == "mac_keyed_units" and document["keys_stay_off_aws"] is True,
-        "the template names the lane and no approver",
-    )
-    check(document["modes"] == sorted(route.SECRET_MODES) and document["units"] == 4, "the template names the modes and the unit count")
-    check(any("approval" in item for item in route.lane_problems(folder / "queue.json", template)), "an unsigned template is not accepted")
-
-
-@pytest.mark.parametrize(
-    ("change", "message"),
-    [
-        ({"approved_by": None}, "lane approval"),
-        ({"queue_sha256": "0" * 64}, "lane approval"),
-        ({"modes": ["bls_api_v2"]}, "lane approval"),
-        ({"units": 3}, "lane approval"),
-        ({"lane": "something_else"}, "lane approval"),
-        ({"keys_stay_off_aws": False}, "lane approval"),
-    ],
-)
-def test_the_lane_refuses_to_start_unless_the_owner_approval_names_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: dict, message: str) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    run, _, _ = lane_files(tmp_path, **change)
-    refused(monkeypatch, run, message)
-
-
-def test_the_lane_refuses_to_start_without_any_approval_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    run, approval, _ = lane_files(tmp_path)
-    approval.unlink()
-    refused(monkeypatch, run, "lane approval")
-
-
-def test_the_lane_refuses_to_start_inside_a_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    run, _, _ = lane_files(tmp_path)
-    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/example")
-    refused(monkeypatch, run, "keys stay off AWS")
-    run.stored_root = run.base
-    monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-    refused(monkeypatch, run, "keys stay off AWS")
-
-
-def test_the_lane_needs_the_same_gate_and_the_raw_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
-    run, _, files = lane_files(tmp_path)
-    refused(monkeypatch, run, "raw/")
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    files.confirmation.unlink()
-    refused(monkeypatch, run, "removal confirmation")
-
-
-def test_an_approved_lane_attempts_only_the_keyed_units_and_the_task_never_the_same_ones(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    seen, summary = dispatch(monkeypatch, tmp_path, keyed_lane=True)
-    keyed = sorted(unit_id for unit_id, lane in LANES.items() if lane == "keyed_mac_lane")
-    check(sorted(seen) == keyed, f"the lane attempted {sorted(seen)}")
-    check("keyed_mac_lane" not in summary.get("not_attempted", {}), "the lane does not list its own units as blocked")
-    (tmp_path / "task").mkdir()
-    task_seen, _ = dispatch(monkeypatch, tmp_path / "task", stored_root=tmp_path / "mirror")
-    check(not set(task_seen) & set(seen), "no unit runs in both lanes")
-
-
-def test_an_approved_lane_on_the_mac_passes_both_gates_and_stops_at_the_next_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    for name in ("HAI_APPROVED_HOSTS", "HAI_APPROVED_HOSTS_APPROVAL"):
-        monkeypatch.setenv(name, "placeholder")
-    for name in harness.TASK_ENVIRONMENT:
-        monkeypatch.delenv(name, raising=False)
-    run, _, _ = lane_files(tmp_path)
-    with pytest.raises(ValueError, match="independent review"):
-        harness.execute(run, allow_network=True)
+    document = route.write_lane_template(folder / "queue.json", folder / "template.json")
+    check(document["lane"] == "mac_person_units" and document["classes"] == ["needs_person"], "the only lane template is the person lane")
+    check("keys_stay_off_aws" not in document and "modes" not in document, "no keyed lane field remains")

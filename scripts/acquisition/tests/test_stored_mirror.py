@@ -303,7 +303,7 @@ def test_units_that_need_an_api_key_are_reported_blocked_on_the_raw_route_and_ne
     hold(run, keyed)
     summary = harness.execute_locked(run, False, True, None, None, None)
     check(
-        attempts == [] and sorted(summary["not_attempted"]["keyed_mac_lane"]) == sorted(unit["snapshot_id"] for unit in keyed),
+        attempts == [] and sorted(summary["not_attempted"]["task_keyed"]) == sorted(unit["snapshot_id"] for unit in keyed),
         "key units are listed and not attempted",
     )
 
