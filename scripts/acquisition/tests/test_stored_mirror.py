@@ -4,7 +4,9 @@ import csv
 import hashlib
 import io
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -360,4 +362,52 @@ def test_a_frozen_input_that_changed_after_the_queue_was_frozen_is_refused(tmp_p
     document["inputs_sha256"] = {"stored/frozen_input.json": sha(b"original")}
     stored.queue.write_text(json.dumps(document))
     with pytest.raises(CaptureError, match="frozen input"):
+        stored.build(tmp_path / "out")
+
+
+def fake_loader(paths: list[Path]) -> ModuleType:
+    module = ModuleType("scripts.acquisition.fake_plan_contract")
+
+    def load_plan() -> dict:
+        return {"read": [path.read_bytes() for path in paths]}
+
+    vars(module)["load_plan"] = load_plan
+    return module
+
+
+def test_the_mirror_carries_what_a_plan_loader_reads_under_data_and_nothing_else(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    stored = Stored(tmp_path / "src")
+    wanted = stored.base / "data/refs/county.csv"
+    wanted.parent.mkdir(parents=True)
+    wanted.write_bytes(b"fips\n01001\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside")
+    monkeypatch.chdir(stored.base)
+    monkeypatch.setitem(sys.modules, "scripts.acquisition.fake_plan_contract", fake_loader([Path("data/refs/county.csv"), outside]))
+    monkeypatch.setattr(harness, "PLANNED", {"file": ("fake_plan_contract", "load_plan", None, "id")})
+    built = stored.build(tmp_path / "out")
+    listed = json.loads((built["mirror"] / stored_mirror.PLAN_INPUTS_NAME).read_text())
+    check(listed == {"data/refs/county.csv": sha(b"fips\n01001\n")}, f"the list names the file the loader read: {listed}")
+    check((built["mirror"] / "data/refs/county.csv").read_bytes() == b"fips\n01001\n", "the file travels in the mirror")
+    check(not any(path.name == "outside.txt" for path in built["mirror"].rglob("*")), "a file outside data does not travel")
+
+
+def test_a_plan_loader_that_fails_stops_the_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    stored = Stored(tmp_path / "src")
+    monkeypatch.chdir(stored.base)
+    monkeypatch.setitem(sys.modules, "scripts.acquisition.fake_plan_contract", fake_loader([Path("data/refs/absent.csv")]))
+    monkeypatch.setattr(harness, "PLANNED", {"file": ("fake_plan_contract", "load_plan", None, "id")})
+    with pytest.raises(OSError):
+        stored.build(tmp_path / "out")
+
+
+def test_a_plan_input_under_an_original_folder_stops_the_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    stored = Stored(tmp_path / "src")
+    original = stored.base / "data/x/private_original/owners.csv"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"names")
+    monkeypatch.chdir(stored.base)
+    monkeypatch.setitem(sys.modules, "scripts.acquisition.fake_plan_contract", fake_loader([Path("data/x/private_original/owners.csv")]))
+    monkeypatch.setattr(harness, "PLANNED", {"file": ("fake_plan_contract", "load_plan", None, "id")})
+    with pytest.raises(CaptureError, match="original"):
         stored.build(tmp_path / "out")

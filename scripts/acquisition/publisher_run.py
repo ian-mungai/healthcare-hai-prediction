@@ -17,7 +17,7 @@ import sys
 import tarfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from scripts.acquisition import redownload as harness
@@ -62,6 +62,26 @@ def queue_of(inputs: Path) -> Path:
     if not queue.resolve().is_relative_to(inputs.resolve()) or not queue.is_file():
         raise PublisherError("The staged manifest names no queue under the inputs.")
     return queue
+
+
+def install_plan_inputs(mirror: Path, code_root: Path) -> None:
+    """Copy the files the locked plans read into the code root's data folder, as real files, because the registry check refuses a link."""
+    listing = mirror / stored_mirror.PLAN_INPUTS_NAME
+    if not listing.is_file():
+        return
+    listed = json.loads(listing.read_text(encoding="utf-8"))
+    for name, expected in listed.items():
+        relative = PurePosixPath(name)
+        if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "data":
+            raise PublisherError("A carried plan input names an unsafe path.")
+        source = mirror / name
+        if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+            raise PublisherError("A carried plan input differs from its digest.")
+    for name in listed:
+        target = code_root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_bytes((mirror / name).read_bytes())
 
 
 def state_prefix(environment: Mapping[str, str]) -> str:
@@ -124,6 +144,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     stored_mirror.require_task_identity(factory("sts", region), env["EXPECTED_ACCOUNT_ID"], env["TASK_ROLE_NAME"])
     s3 = factory("s3", region)
     inputs = fetch_inputs(s3, env)
+    install_plan_inputs(inputs / "mirror", harness.REPO_ROOT)
     state_parent = workspace_of(env) / "state"
     state_root = state_parent / "run"
     restore_state(s3, state_root, env)

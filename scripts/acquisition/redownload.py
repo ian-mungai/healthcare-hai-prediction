@@ -842,6 +842,13 @@ PLANNED = {
 }
 
 
+def load_plans_of(mode: str) -> list[dict]:
+    """Load and check the locked plans of one collector mode."""
+    module_name, loader = PLANNED[mode][:2]
+    loaded = getattr(importlib.import_module(f"scripts.acquisition.{module_name}"), loader)()
+    return loaded if isinstance(loaded, list) else [loaded]
+
+
 def planned(unit: dict, run: Run) -> tuple[dict, dict]:
     """Return the locked plan and the single planned item that produced a stored capture."""
     module_name, loader, group, key = PLANNED[unit["mode"]]
@@ -851,8 +858,7 @@ def planned(unit: dict, run: Run) -> tuple[dict, dict]:
             verify_input(run.data_root / relative, run)
     if f"plans:{module_name}" not in run.cache:
         # Loading a plan re-validates the registry, so each locked plan is loaded once per invocation.
-        loaded = getattr(importlib.import_module(f"scripts.acquisition.{module_name}"), loader)()
-        run.cache[f"plans:{module_name}"] = loaded if isinstance(loaded, list) else [loaded]
+        run.cache[f"plans:{module_name}"] = load_plans_of(unit["mode"])
     plans = run.cache[f"plans:{module_name}"]
     identity = lineage(unit, run)[key]
     matches = [(plan, plan if group is None else item) for plan in plans for item in ([plan] if group is None else plan[group]) if item["id"] == identity]

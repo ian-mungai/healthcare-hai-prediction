@@ -16,7 +16,7 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,10 @@ MIRROR_VARIABLE = "HAI_STORED_MIRROR"
 INDEX_VARIABLE = "HAI_STORED_INDEX"
 REQUIRED_ENVIRONMENT = (MIRROR_VARIABLE, INDEX_VARIABLE, "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "AWS_REGION")
 CHUNK = 1024 * 1024
+PLAN_INPUTS_NAME = "plan_inputs.json"
+# The collectors the task runs whose locked plans read reference and registry files from the data folder while they load.
+PLAN_MODES = ("bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api", "cms_owners_org", "onc_mu_hospital")
+OPENED: list[Path] = []
 
 
 def sha256_of(data: bytes) -> str:
@@ -78,6 +82,39 @@ def copy_run_records(queue_path: Path, base: Path, mirror: Path) -> None:
         copy_once(base / TEMPLATE, mirror / TEMPLATE)
 
 
+def record_open(event: str, arguments: tuple[Any, ...]) -> None:
+    if event == "open" and isinstance(arguments[0], str | os.PathLike):
+        OPENED.append(Path(os.path.abspath(arguments[0])))
+
+
+sys.addaudithook(record_open)
+
+
+def copy_plan_inputs(modes: Iterable[str], base: Path, mirror: Path) -> dict[str, str]:
+    """Load each mode's locked plans, copy every file they read under ``data`` into the mirror and list them by digest.
+
+    A plan names its references and its registry version, and it checks their digests as it loads. Tracing the load carries what it really reads.
+    """
+    from scripts.acquisition import redownload
+
+    OPENED.clear()
+    for mode in modes:
+        redownload.load_plans_of(mode)
+    data = base.resolve() / "data"
+    listed: dict[str, str] = {}
+    for path in sorted({path.resolve() for path in OPENED if path.is_file()}):
+        if path.is_relative_to(data):
+            relative = path.relative_to(base.resolve())
+            if "private_original" in relative.parts:
+                raise CaptureError("A locked plan reads an original, so the mirror cannot carry it.")
+            target = mirror / relative
+            if not target.is_file():
+                copy_once(path, target)
+            listed[relative.as_posix()] = sha256_of(path.read_bytes())
+    write_once(mirror / PLAN_INPUTS_NAME, encoded_json(listed))
+    return listed
+
+
 def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, bucket: str) -> dict[str, int]:
     """Write the mirror folder, its index and its manifest under ``output``. A second build with the same inputs changes nothing."""
     queue = json.loads(queue_path.read_text(encoding="utf-8"))["queue"]
@@ -117,6 +154,10 @@ def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, buck
                 "byte_count": artifact["byte_count"],
             }
         units += 1
+    from scripts.acquisition import redownload
+
+    runnable = set(redownload.PLANNED) - redownload.MANUAL_MODES - redownload.NEVER_IN_THE_TOOL
+    copy_plan_inputs(sorted({item["mode"] for item in queue if item["disposition"] in ACTIVE} & runnable), base, mirror)
     index = {"bucket": bucket, "objects": dict(sorted(objects.items())), "unavailable": sorted(set(unavailable))}
     write_once(output / "stored_index.json", encoded_json(index))
     files = [

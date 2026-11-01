@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from botocore.exceptions import ClientError
 
-from scripts.acquisition import publisher_run, stage_publisher
+from scripts.acquisition import publisher_run, stage_publisher, stored_mirror
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.tests.test_task_keys import ACCOUNT, PLANTED, ROLE, TASK_IDENTITY
 from tests.support import check
@@ -258,3 +258,43 @@ def test_the_stage_refuses_a_queue_outside_the_mirror(tmp_path: Path) -> None:
             tmp_path / "stage",
             (),
         )
+
+
+def carried(tmp_path: Path, body: bytes = b"county\n") -> Path:
+    mirror = tmp_path / "mirror"
+    (mirror / "data/refs").mkdir(parents=True)
+    (mirror / "data/refs/county.csv").write_bytes(body)
+    (mirror / stored_mirror.PLAN_INPUTS_NAME).write_text(json.dumps({"data/refs/county.csv": hashlib.sha256(b"county\n").hexdigest()}))
+    return mirror
+
+
+def test_the_plan_inputs_are_copied_into_the_code_root_as_real_files(tmp_path: Path) -> None:
+    code = tmp_path / "code"
+    code.mkdir()
+    publisher_run.install_plan_inputs(carried(tmp_path), code)
+    target = code / "data/refs/county.csv"
+    check(target.read_bytes() == b"county\n" and not target.is_symlink(), "the file is a real copy, so the legacy registry's symlink check holds")
+    publisher_run.install_plan_inputs(tmp_path / "mirror", code)
+    check(target.read_bytes() == b"county\n", "a second install changes nothing")
+
+
+def test_a_changed_plan_input_or_a_path_that_leaves_data_is_refused(tmp_path: Path) -> None:
+    code = tmp_path / "code"
+    code.mkdir()
+    with pytest.raises(publisher_run.PublisherError, match="digest"):
+        publisher_run.install_plan_inputs(carried(tmp_path, b"changed\n"), code)
+    check(not (code / "data/refs/county.csv").exists(), "nothing is installed")
+    other = tmp_path / "other"
+    other.mkdir()
+    mirror = carried(other)
+    (mirror / stored_mirror.PLAN_INPUTS_NAME).write_text(json.dumps({"data/../../outside.csv": "0" * 64}))
+    with pytest.raises(publisher_run.PublisherError, match="path"):
+        publisher_run.install_plan_inputs(mirror, code)
+
+
+def test_a_mirror_without_a_plan_list_installs_nothing(tmp_path: Path) -> None:
+    code = tmp_path / "code"
+    code.mkdir()
+    (tmp_path / "mirror").mkdir()
+    publisher_run.install_plan_inputs(tmp_path / "mirror", code)
+    check(list(code.iterdir()) == [], "nothing is installed")
