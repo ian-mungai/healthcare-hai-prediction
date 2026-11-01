@@ -85,22 +85,28 @@ hai:
         - path: "{{ env_var('STAGING_E2E_CASE') }}/fixture_lakehouse.duckdb"
           alias: lakehouse
           read_only: true
+    # The spill directory is a connect option and the byte cap is a setting. The adapter runs every entry of settings as SET on each new cursor, and DuckDB
+    # refuses to switch the temporary directory once a query has spilled into it, even to the same path. So temp_directory in settings fails every model and test
+    # after the first spill. The cap is the other way round: max_temp_directory_size given at connect is read back but not enforced, while SET on each cursor
+    # is enforced and may be repeated after a spill. scripts/lakehouse/run_duckdb_spill_cases.py proves both with the pinned adapter.
     pinned_silver_bounded:
       <<: *pinned_silver
       settings:
         <<: *pinned_silver_settings
+        max_temp_directory_size: &bounded_temp_cap "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
+      config_options: &bounded_temp_options
         temp_directory: "{{ env_var('HAI_DUCKDB_TEMP_DIRECTORY') }}"
-        max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
     lakehouse_session_bounded: &lakehouse_session_bounded
       <<: *lakehouse_session
       settings:
         <<: *session_settings
-        temp_directory: "{{ env_var('HAI_DUCKDB_TEMP_DIRECTORY') }}"
-        max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
+        max_temp_directory_size: *bounded_temp_cap
+      config_options: *bounded_temp_options
     lakehouse_task:
       <<: *lakehouse_session_bounded
       # The task has an empty home and no egress. The image keeps the extensions read-only in this one directory and nothing is downloaded.
       config_options:
+        <<: *bounded_temp_options
         extension_directory: /opt/duckdb/extensions
         autoinstall_known_extensions: false
         autoload_known_extensions: false
@@ -124,8 +130,8 @@ hai:
       <<: *fixture
       settings:
         <<: *fixture_settings
-        temp_directory: "{{ env_var('HAI_DUCKDB_TEMP_DIRECTORY') }}"
-        max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
+        max_temp_directory_size: *bounded_temp_cap
+      config_options: *bounded_temp_options
     # SQLFluff's dbt templater (.sqlfluff): compiles the models without the catalog or any credentials.
     lint:
       type: duckdb

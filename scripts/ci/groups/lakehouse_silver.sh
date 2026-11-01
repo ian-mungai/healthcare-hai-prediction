@@ -7,4 +7,6 @@
 lakehouse_silver() {
   # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
   timed "lakehouse_silver: suite check" "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
+  # The bounded dbt profiles against a real spill and a second cursor, with the pinned adapter from .tools/sqlfluff (DuckDB and dbt are not in .venv).
+  timed "lakehouse_silver: DuckDB spill cases" "$repo_root/.tools/sqlfluff/bin/python" -m scripts.lakehouse.run_duckdb_spill_cases
 }

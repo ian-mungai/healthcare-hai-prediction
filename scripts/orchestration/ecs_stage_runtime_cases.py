@@ -958,6 +958,11 @@ def engine_configuration(folder: Path) -> None:
     profiles = yaml.safe_load((ROOT / "dbt/profiles.yml").read_text())["hai"]["outputs"]
     for profile in ("pinned_silver_bounded", "fixture_bounded", "lakehouse_session_bounded", "lakehouse_task"):
         require("max_temp_directory_size" in profiles[profile]["settings"], "bounded_profile_definition")
+        # The adapter runs settings as SET on each new cursor, and DuckDB refuses to switch a temporary directory that a query has spilled into.
+        require(
+            "temp_directory" in profiles[profile]["config_options"] and "temp_directory" not in profiles[profile]["settings"],
+            "bounded_profile_scratch_at_connect",
+        )
     native_secret = profiles["lakehouse_task"]["secrets"][0]
     require(
         native_secret["provider"] == "credential_chain" and "chain" not in native_secret and "profile" not in native_secret, "native_duckdb_chain_definition"
