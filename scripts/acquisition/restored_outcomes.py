@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from scripts.acquisition.transport import canonical_url
 DATA_ROLES = frozenset({"data", "api_page"})
 CLAIMS = frozenset({"exact_match", "changed_needs_review"})
 KNOWN_OUTCOMES = CLAIMS | {"blocked", "unavailable"}
+CHARGE_KINDS = frozenset({"received_bytes", "injected_received_bytes", "persisted_copy_bytes"})
 
 
 def read_object(client: Any, item: dict, folder: Path, *, earlier_capture: bool = False) -> Path:
@@ -133,6 +136,58 @@ def active_units(run: Any) -> dict[str, dict]:
     from scripts.acquisition.redownload import ACTIVE, accepted
 
     return {unit["snapshot_id"]: unit for unit in accepted(run).units() if unit["disposition"] in ACTIVE}
+
+
+def ledger_body(body: bytes) -> dict:
+    document = json.loads(body)
+    if not isinstance(document, dict):
+        raise ValueError("Not a record")
+    return document
+
+
+def is_count(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
+def check_ledgers(files: Mapping[str, bytes], outcomes: Mapping[str, dict], units: Mapping[str, dict]) -> None:
+    """A restored ledger can only tighten a limit. Numbered entries run without a gap, a settlement never exceeds its charge, every entry belongs to a queued
+    unit, the charges cover what the outcomes received and every claimed unit was charged. A missing, shrunken or foreign entry could give spent budget back."""
+    try:
+        charges: dict[int, dict] = {}
+        settled: dict[int, Any] = {}
+        attempts: dict[tuple[str, str], list[int]] = {}
+        for name, body in files.items():
+            parts = name.split("/")
+            record = ledger_body(body)
+            if parts[0] == ".budgets" and parts[1].endswith(".settled.json"):
+                settled[int(parts[1].removesuffix(".settled.json"))] = record["bytes"]
+            elif parts[0] == ".budgets":
+                charges[int(parts[1].removesuffix(".json"))] = record
+            else:
+                attempts.setdefault((parts[1], parts[2]), []).append(int(parts[3].removesuffix(".json")))
+                datetime.fromisoformat(record["reserved_at_utc"])
+                require(parts[1] in units, "Restored ledger names a unit outside the queue")
+        require(sorted(charges) == list(range(1, len(charges) + 1)), "Restored ledger has a gap in its charges")
+        require(all(count in charges for count in settled), "Restored ledger settles a charge it does not hold")
+        for number, record in charges.items():
+            usable = is_count(record["bytes"]) and record["kind"] in CHARGE_KINDS and record["unit"] in units
+            require(usable, "Restored ledger holds a charge it cannot count")
+            spent = settled.get(number, record["bytes"])
+            require(is_count(spent) and spent <= record["bytes"], "Restored ledger settles more than it charged")
+        require(
+            all(sorted(numbers) == list(range(1, len(numbers) + 1)) and len(numbers) <= 2 for numbers in attempts.values()),
+            "Restored ledger has wrong attempts",
+        )
+        total = sum(settled.get(number, record["bytes"]) for number, record in charges.items())
+        received = sum(record.get("fresh_bytes", 0) for record in outcomes.values() if is_count(record.get("fresh_bytes", 0)))
+        require(total >= received, "Restored ledger charged less than the outcomes received")
+        charged_units = {record["unit"] for record in charges.values()}
+        claims = [identity for identity, record in outcomes.items() if record.get("outcome") in CLAIMS]
+        require(all(identity in charged_units for identity in claims), "Restored ledger has no charge for a claimed unit")
+    except RegistryError:
+        raise
+    except (ValueError, KeyError, TypeError, IndexError):
+        raise RegistryError("Restored ledger is not usable") from None
 
 
 def check_record(identity: str, record: dict, units: dict[str, dict], run: Any, client: Any) -> dict | None:

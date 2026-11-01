@@ -46,24 +46,29 @@ def check_state(run: Any, body: bytes, since: datetime, until: datetime, client:
         if not publisher_run.records_only(saved):
             report["not_verified"].append("saved state")
             return report
-        for member in saved.getmembers():
-            reader = saved.extractfile(member)
-            if reader is None or not member.name.startswith("outcomes/"):
+        records = {member.name: reader.read() for member in saved.getmembers() if (reader := saved.extractfile(member)) is not None}
+    outcomes: dict[str, dict] = {}
+    for name, body in records.items():
+        if not name.startswith("outcomes/"):
+            continue
+        identity = Path(name).stem
+        report["outcomes"] += 1
+        try:
+            outcomes[identity] = json.loads(body)
+            receipt = restored_outcomes.check_record(identity, outcomes[identity], units, run, client)
+            if receipt is None:
                 continue
-            identity = Path(member.name).stem
-            report["outcomes"] += 1
-            try:
-                record = json.loads(reader.read())
-                receipt = restored_outcomes.check_record(identity, record, units, run, client)
-                if receipt is None:
-                    continue
-                times = (stored_at(client, record["stored"]["receipt"]), retrieved_at(receipt))
-            except (RegistryError, KeyError, ValueError, TypeError, OSError):
-                report["not_verified"].append(identity)
-                continue
-            report["verified"] += 1
-            if not all(since <= moment <= until for moment in times):
-                report["outside_window"].append(identity)
+            times = (stored_at(client, outcomes[identity]["stored"]["receipt"]), retrieved_at(receipt))
+        except (RegistryError, KeyError, ValueError, TypeError, OSError):
+            report["not_verified"].append(identity)
+            continue
+        report["verified"] += 1
+        if not all(since <= moment <= until for moment in times):
+            report["outside_window"].append(identity)
+    try:
+        restored_outcomes.check_ledgers({name: body for name, body in records.items() if name.startswith((".budgets/", ".attempts/"))}, outcomes, units)
+    except RegistryError:
+        report["not_verified"].append("saved state")
     return report
 
 

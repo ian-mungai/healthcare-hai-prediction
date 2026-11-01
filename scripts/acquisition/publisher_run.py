@@ -25,7 +25,11 @@ from scripts.acquisition import stored_mirror
 from scripts.acquisition.collection_layout import RAW_ROOT
 
 REQUIRED = ("RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "AWS_REGION", "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "DATA_BUCKET_NAME")
-SAVED = re.compile(r"(run\.json|(outcomes|pauses|resumes)/[^/]+\.json|collectors/bls_api_v2/requests/[^/]+\.json)")
+# The attempt and byte ledgers travel too, settlements and unsettled charges alike, so a new task cannot spend a limit again.
+SAVED = re.compile(
+    r"(run\.json|(outcomes|pauses|resumes)/[^/]+\.json|collectors/bls_api_v2/requests/[^/]+\.json"
+    r"|\.budgets/[0-9]{9}(\.settled)?\.json|\.attempts/[^/]+/[a-f0-9]{64}/[0-9]{3}\.json)"
+)
 INPUTS_NAME = "publisher_inputs.tar.gz"
 SAVE_EVERY = 25
 PRIOR_KEYS = {"key", "version_id", "sha256"}
@@ -136,6 +140,21 @@ def approved_prior(environment: Mapping[str, str]) -> dict[str, str] | None:
     return reference
 
 
+def require_latest(s3: Any, reference: dict[str, str] | None, environment: Mapping[str, str]) -> None:
+    """The ledgers only grow, so an older state or none would hand spent limits back. A writer's extra object can only stop the job, never choose a state."""
+    named = {"Bucket": environment["DATA_BUCKET_NAME"], "ExpectedBucketOwner": environment["EXPECTED_ACCOUNT_ID"], "Prefix": state_prefix(environment)}
+    keys: list[str] = []
+    options: dict[str, str] = {}
+    while True:
+        page = s3.list_objects_v2(**named, **options)
+        keys.extend(item["Key"] for item in page.get("Contents", []))
+        if not page.get("IsTruncated"):
+            break
+        options = {"ContinuationToken": page["NextContinuationToken"]}
+    if max(keys, default=None) != (None if reference is None else reference["key"]):
+        raise PublisherError("The request does not name the latest saved state of this queue.")
+
+
 def records_only(archive: tarfile.TarFile) -> bool:
     """A saved state holds plain record files, each once. The task and the owner's verifier both refuse anything else."""
     members = archive.getmembers()
@@ -145,6 +164,7 @@ def records_only(archive: tarfile.TarFile) -> bool:
 def restore_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> str | None:
     """Unpack exactly the approved prior state into an empty state root, or nothing. A digest that differs or a member that is not a record stops the job."""
     reference = approved_prior(environment)
+    require_latest(s3, reference, environment)
     if reference is None:
         return None
     reply = s3.get_object(

@@ -1318,6 +1318,7 @@
     "scripts/acquisition/tests/test_source_verification_log.py",
     "scripts/acquisition/tests/test_stored_mirror.py",
     "scripts/acquisition/tests/test_task_keys.py",
+    "scripts/acquisition/tests/test_task_ledgers.py",
     "scripts/acquisition/tests/test_task_owners.py",
     "scripts/acquisition/tests/test_task_raw_store.py",
     "scripts/acquisition/tests/test_task_state.py",

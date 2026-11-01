@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import shutil
 import tarfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from scripts.acquisition import publisher_run
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import verify_publisher_run as verifier
 from scripts.acquisition.tests.test_task_owners import TaskS3
@@ -46,8 +48,10 @@ class Stamped(TaskS3):
 def state_body(run: harness.Run) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for path in sorted((run.state_root / "outcomes").glob("*.json")):
-            archive.add(path, arcname=f"outcomes/{path.name}")
+        for path in sorted(run.state_root.rglob("*")):
+            relative = path.relative_to(run.state_root).as_posix()
+            if path.is_file() and publisher_run.SAVED.fullmatch(relative):
+                archive.add(path, arcname=relative)
     return buffer.getvalue()
 
 
@@ -181,3 +185,12 @@ def test_a_state_the_task_would_refuse_fails_the_verifier(monkeypatch: pytest.Mo
                 saved.addfile(info, io.BytesIO(b"{}"))
     report = verifier.check_state(run, buffer.getvalue(), SINCE, UNTIL, run.task_storage)
     check(report["not_verified"] == ["saved state"], f"the whole state is named: {report}")
+
+
+def test_the_verifier_names_a_state_whose_ledgers_the_task_would_refuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = Stamped(SINCE + timedelta(hours=1))
+    run, _unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    shutil.rmtree(run.state_root / ".budgets")
+    monkeypatch.setattr(verifier, "retrieved_at", lambda _receipt: SINCE + timedelta(hours=1))
+    check("saved state" in checked(run, SINCE)["not_verified"], "the verifier and the task agree")

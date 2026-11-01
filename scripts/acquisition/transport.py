@@ -208,8 +208,8 @@ def addresses_within(host: str, port: int, seconds: float) -> list[str]:
 
 
 def connect_within(connection: Any, seconds: float) -> None:
-    """Open a connection with one absolute limit across the name lookup, the TCP connection and each TLS step."""
-    connection.resolve_seconds, connection.timeout = seconds, seconds
+    """Open a connection with one absolute deadline across the name lookup, the TCP connection and the TLS handshake."""
+    connection.deadline, connection.timeout = time.monotonic() + seconds, seconds
     connection.connect()
 
 
@@ -222,14 +222,26 @@ class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
     def __init__(self, *args: Any, context: ssl.SSLContext | None = None, source_address: tuple[str, int] | None = None, **kwargs: Any) -> None:
         self.tls_context = context if context is not None else ssl.create_default_context()
         self.bound_source = source_address
-        self.resolve_seconds: float | None = None
+        self.deadline: float | None = None
         super().__init__(*args, context=self.tls_context, source_address=source_address, **kwargs)
 
     def connect(self) -> None:
-        address = (public_addresses(self.host, self.port) if self.resolve_seconds is None else addresses_within(self.host, self.port, self.resolve_seconds))[0]
-        sock = socket.create_connection((address, self.port), self.timeout, self.bound_source)
+        if self.deadline is None:
+            address = public_addresses(self.host, self.port)[0]
+            sock = socket.create_connection((address, self.port), self.timeout, self.bound_source)
+        else:
+            address = addresses_within(self.host, self.port, self.time_left())[0]
+            sock = socket.create_connection((address, self.port), self.time_left(), self.bound_source)
+            # Python applies one socket timeout across the whole TLS handshake, so this bounds it too.
+            sock.settimeout(self.time_left())
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock = self.tls_context.wrap_socket(sock, server_hostname=self.host)
+
+    def time_left(self) -> float:
+        left = (self.deadline or 0.0) - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("The connection did not finish before its deadline.")
+        return left
 
 
 class PublicHTTPSHandler(urllib.request.HTTPSHandler):

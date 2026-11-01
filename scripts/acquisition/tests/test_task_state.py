@@ -335,11 +335,13 @@ def environment(tmp_path: Path, prior_state: str = "") -> dict[str, str]:
     return ENV | {"PUBLISHER_QUEUE_SHA256": QUEUE, "PUBLISHER_PRIOR_STATE": prior_state, "PUBLISHER_WORKSPACE": str(tmp_path), "RUN_ID": "r"}
 
 
-def test_a_first_task_restores_nothing_and_never_lists_the_state(tmp_path: Path) -> None:
+def test_a_first_task_restores_nothing_and_an_unnamed_state_is_never_unpacked(tmp_path: Path) -> None:
+    check(publisher_run.restore_state(Ledger(), tmp_path / "state", environment(tmp_path)) is None, "no state at all means an empty start")
     cloud = Ledger()
     other = state_archive({"run.json": b"{}"})
     cloud.objects[f"raw/run3_state/{QUEUE}/zzzz_UNCHECKED.tar.gz"] = {"Body": other, "LastModified": NOW}
-    check(publisher_run.restore_state(cloud, tmp_path / "state", environment(tmp_path)) is None, "no approved state means an empty start")
+    with pytest.raises(publisher_run.PublisherError, match="latest"):
+        publisher_run.restore_state(cloud, tmp_path / "state", environment(tmp_path))
     check(not (tmp_path / "state").exists(), "nothing was unpacked")
 
 

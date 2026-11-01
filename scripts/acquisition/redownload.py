@@ -742,8 +742,12 @@ def stored_outcome(unit: dict, run: Run, fields: dict, results: list[Any]) -> di
 def validate_restored(run: Run) -> None:
     """Every restored outcome passes the one check the owner's verifier also runs."""
     units = restored_outcomes.active_units(run)
+    outcomes = {}
     for path in sorted((run.state_root / "outcomes").glob("*.json")):
-        restored_outcomes.check_record(path.stem, read_json(path), units, run, run.task_storage)
+        outcomes[path.stem] = read_json(path)
+        restored_outcomes.check_record(path.stem, outcomes[path.stem], units, run, run.task_storage)
+    ledgers = [path for folder in (".budgets", ".attempts") for path in (run.state_root / folder).rglob("*.json")]
+    restored_outcomes.check_ledgers({path.relative_to(run.state_root).as_posix(): path.read_bytes() for path in ledgers}, outcomes, units)
 
 
 def page_unit(unit: dict, run: Run) -> dict:
