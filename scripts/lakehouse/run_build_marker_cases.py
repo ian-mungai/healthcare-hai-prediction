@@ -47,7 +47,7 @@ sys.stdout.write(json.dumps({"tables": tables, "marker_rows": len(rows)}))
 """
 
 
-def project(folder: Path, failing: bool) -> Path:
+def project(folder: Path, failing: bool, singular: bool = False) -> Path:
     """A project with the real marker macros, the real marker model and the real hook registration, and stand-ins for the two models it depends on."""
     path = folder / "project"
     (path / "macros").mkdir(parents=True)
@@ -59,6 +59,11 @@ def project(folder: Path, failing: bool) -> Path:
         (path / f"models/silver/intermediate/{name}.sql").write_text("{{ config(materialized='table') }}\nselect 1 as a\n")
     (path / "models/silver/big.sql").write_text("{{ config(materialized='table') }}\nselect i, repeat('x', 40) as s from range(200000) r(i)\n")
     (path / "models/other.sql").write_text("{{ config(materialized='table') }}\nselect 1 as a\n")
+    (path / "seeds").mkdir()
+    (path / "seeds/input.csv").write_text("id\n1\n")
+    if singular:
+        (path / "tests").mkdir()
+        (path / "tests/failing_singular.sql").write_text("select * from {{ ref('big') }} where i=0\n")
     test = "      - name: run_id\n        tests: [not_null" + (", accepted_values: {values: ['never']}" if failing else "") + "]\n"
     (path / "models/silver/schema.yml").write_text(f"version: 2\nmodels:\n  - name: {MARKER}\n    columns:\n{test}")
     (path / "dbt_project.yml").write_text(
@@ -69,13 +74,16 @@ def project(folder: Path, failing: bool) -> Path:
     return path
 
 
-def build(arguments: list[str], failing: bool = False) -> dict[str, Any]:
+def build(arguments: list[str], failing: bool = False, singular: bool = False) -> dict[str, Any]:
     """Build in a child process, then read the file in another. Returns what the reader saw and whether a write-ahead log was left."""
     with tempfile.TemporaryDirectory(prefix="marker_case_") as scratch:
         folder = Path(scratch)
         output = rendered("pinned_silver_bounded", folder, 20 * 2**30)
         built = run_command(
-            sys.executable, ["-c", CHILD, str(folder), str(project(folder, failing)), json.dumps(arguments), json.dumps(output)], cwd=ROOT, timeout=300
+            sys.executable,
+            ["-c", CHILD, str(folder), str(project(folder, failing, singular)), json.dumps(arguments), json.dumps(output)],
+            cwd=ROOT,
+            timeout=300,
         )
         database = Path(output["path"])
         seen = run_command(sys.executable, ["-c", READ, str(database)], cwd=ROOT, timeout=120)
@@ -100,6 +108,14 @@ def cases() -> dict[str, bool]:
     checks["the gold selection is not the silver layer: no marker"] = MARKER not in build(["--select", *layer_selection("gold")])["tables"]
     failed = build(layer, failing=True)
     checks["a layer build with a failing test leaves no marker"] = not failed["success"] and MARKER not in failed["tables"]
+    excluded = build(["--select", "resource_type:seed", "--exclude", "+path:models/silver", "--indirect-selection", "cautious"])
+    checks["excluded silver models cannot retain a marker"] = excluded["success"] and "input" in excluded["tables"] and MARKER not in excluded["tables"]
+    skipped = build(["--select", *layer_selection("silver"), "--indirect-selection", "empty"], singular=True)
+    checks["skipping singular tests cannot retain a marker"] = skipped["success"] and "big" in skipped["tables"] and MARKER not in skipped["tables"]
+    failed_singular = build(layer, singular=True)
+    checks["a failing singular test removes the marker"] = (
+        not failed_singular["success"] and "big" in failed_singular["tables"] and MARKER not in failed_singular["tables"]
+    )
     return checks
 
 
