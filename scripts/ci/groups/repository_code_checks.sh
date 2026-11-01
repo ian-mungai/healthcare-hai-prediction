@@ -16,7 +16,7 @@ repository_code_checks() {
   timed "repository_code_checks: docker_calls rebind E2E" "$python_bin" -m scripts.quality.run_docker_calls_rebind_e2e
   timed "repository_code_checks: CI group files" "$python_bin" -m scripts.quality.ci_group_files
   timed "repository_code_checks: container imports" "$python_bin" -m scripts.quality.container_mounts
-  timed "repository_code_checks: container import hook E2E" "$python_bin" -m scripts.quality.run_container_mounts_e2e
+  timed "repository_code_checks: container import hook E2E" "$python_bin" -m scripts.quality.run_container_mounts_e2e --output "$quality_output/container_mounts"
   timed "repository_code_checks: documentation review E2E" "$python_bin" -m scripts.quality.run_documentation_review_e2e
   timed "repository_code_checks: CI groups selection E2E" "$python_bin" -m scripts.quality.run_ci_groups_e2e --selection-only
   timed "repository_code_checks: scratch worktree E2E" "$python_bin" -m scripts.quality.run_scratch_worktree_e2e
