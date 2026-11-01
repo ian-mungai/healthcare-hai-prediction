@@ -167,6 +167,10 @@
     "scripts/lakehouse/run_duckdb_spill_cases.py": {
       "runtime": "analytics",
       "reason": "Library stubs not installed for \"yaml\"; Skipping analyzing \"dbt.adapters.duckdb.credentials\": module is installed, but missing library stubs or py.typed marker; Skipping analyzing \"dbt.adapters.duckdb.environments.local\": module is installed, but missing library stubs or py.typed marker"
+    },
+    "scripts/lakehouse/run_duckdb_bounds_cases.py": {
+      "runtime": "analytics",
+      "reason": "Library stubs not installed for \"yaml\""
     }
   }
 }

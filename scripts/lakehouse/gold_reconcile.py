@@ -17,7 +17,7 @@ from typing import Any
 
 import duckdb
 
-from scripts.lakehouse import gold_checks, silver_quality
+from scripts.lakehouse import duckdb_bounds, gold_checks, silver_quality
 
 
 def rows_of(connection: duckdb.DuckDBPyConnection, sql: str) -> list[list[str]]:
@@ -27,7 +27,7 @@ def rows_of(connection: duckdb.DuckDBPyConnection, sql: str) -> list[list[str]]:
 def reconcile(database: Path) -> dict[str, Any]:
     """The per-fact row and content reconciliation of a build file: how many facts could be compared and the problems found, by check name."""
     contract = gold_checks.load_contract()
-    connection = duckdb.connect(str(database), read_only=True, config=silver_quality.engine_config())
+    connection = duckdb_bounds.connect(duckdb, database, read_only=True)
     try:
         relations = gold_checks.parse_relations(rows_of(connection, gold_checks.COLUMNS_SQL))
         ready, unready = gold_checks.reconcilable(contract, relations)

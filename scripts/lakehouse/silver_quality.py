@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import sys
@@ -32,6 +31,7 @@ import great_expectations as gx
 import great_expectations.expectations as gxe
 from great_expectations.execution_engine import sqlalchemy_execution_engine as engine_module
 
+from scripts.lakehouse import duckdb_bounds
 from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_settings
 
 # The connection fix below patches a private constant, so it is applied only to the version the spike proved.
@@ -44,9 +44,9 @@ PLACEHOLDER = re.compile(r"<<([a-z0-9_.]+)>>")
 
 
 def engine_config() -> dict[str, str | bool | int | float | list[str]]:
-    """DuckDB's memory and thread limits from the launch plan, the same settings a dbt build gets."""
-    settings = {"memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", ""), "threads": os.environ.get("JOB_THREADS", "")}
-    return {**{name: value for name, value in settings.items() if value}, **duckdb_temp_settings()}
+    """The connect options of the Great Expectations connection: the memory and thread limits and the spill directory of the allocation, the same a dbt
+    build gets. Great Expectations opens that connection itself, so the byte cap cannot be set on it here: DuckDB does not enforce it at connect."""
+    return duckdb_bounds.options()
 
 
 class QualityError(RuntimeError):
@@ -104,7 +104,7 @@ def private_copy(database: Path) -> Iterator[tuple[Path, str]]:
 
 def read_marker(database: Path) -> dict[str, str]:
     """Return the build marker, read-only; without it there is no finished build to validate."""
-    with duckdb.connect(str(database), read_only=True, config=engine_config()) as con:
+    with duckdb_bounds.connect(duckdb, database, read_only=True) as con:
         tables = {row[0] for row in con.execute("SELECT table_name FROM information_schema.tables").fetchall()}
         if MARKER not in tables:
             raise QualityError(f"no {MARKER} table: the build did not finish, so it is not validated")
@@ -121,7 +121,7 @@ def read_marker(database: Path) -> dict[str, str]:
 def fingerprints(database: Path, tables: list[str]) -> dict[str, dict[str, Any]]:
     """Row count and an order-independent content hash per table, so a result binds the exact build it read."""
     out = {}
-    with duckdb.connect(str(database), read_only=True, config=engine_config()) as con:
+    with duckdb_bounds.connect(duckdb, database, read_only=True) as con:
         for table in tables:
             count, digest = con.table(table).set_alias("t").aggregate("count(*), bit_xor(hash(t))").fetchone() or (0, None)
             out[table] = {"rows": count, "fingerprint": str(digest)}
@@ -188,7 +188,7 @@ def load_suites(folders: list[Path], baselines: dict[str, Any], proposed: frozen
 
 def existing_tables(database: Path) -> set[str]:
     """Names of the tables and views in the build file's main schema, read-only."""
-    with duckdb.connect(str(database), read_only=True, config=engine_config()) as con:
+    with duckdb_bounds.connect(duckdb, database, read_only=True) as con:
         return {row[0] for row in con.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()}
 
 

@@ -42,6 +42,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from scripts.lakehouse import duckdb_bounds
 from scripts.process import TimeoutExpired, run_command
 
 yaml: Any = importlib.import_module("yaml")
@@ -69,8 +70,6 @@ FILTER_SQL = "select * from shell.main.bridge_measure_control where source_seed 
 RAW_BRIDGE = "bridge_measure_control"
 # The gold models that ``build_shell`` runs with dbt, beside every seed: the registry controls and the raw control bridge built from the bridge seeds.
 SHELL_MODELS = {"dim_registry_control", RAW_BRIDGE}
-# Only the feature run opens its database with this option: no file, extension or other database can be read, and DuckDB does not allow switching it on again.
-LOCKED_SETTINGS = "      config_options:\n        enable_external_access: false\n"
 SHELL_HINT = (
     "The database holds only the gold tables of the frozen contract that list their columns (not bridge_measure_control), the live seeds (dbt/seeds and "
     "dbt/seeds/features) and the bridge filter models (read feature_bridge_<retired seed> instead of the bridge); a model or test reads only the relations "
@@ -228,11 +227,11 @@ def copy_project(root: Path, project: Path, contract: bool = True) -> None:
 
 
 def write_profile(folder: Path, database: Path, locked: bool) -> Path:
-    """Write ``profiles.yml`` with one DuckDB target ``shell`` on a file and return the folder; ``locked`` turns external access off (DuckDB keeps it off)."""
+    """Write ``profiles.yml`` with one DuckDB target ``shell`` on a file and return the folder. ``locked`` turns external access off, so no file, extension or
+    other database can be read (DuckDB keeps it off): only the feature run opens its database so. In a task the profile also names the spill directory and the
+    byte cap (``duckdb_bounds.shell_profile``)."""
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "profiles.yml").write_text(
-        f"hai:\n  target: shell\n  outputs:\n    shell:\n      type: duckdb\n      path: {database}\n      threads: 1\n{LOCKED_SETTINGS if locked else ''}"
-    )
+    (folder / "profiles.yml").write_text(duckdb_bounds.shell_profile(database, locked))
     return folder
 
 
@@ -483,7 +482,7 @@ def worker_shell(database: Path, contract: Path) -> None:
     document = json.loads(contract.read_text())
     tables = {name: value["columns"] for name, value in document["facts"].items()}
     tables.update({name: value["columns"] for name, value in document["dimensions_and_bridges"].items() if "columns" in value})
-    connection = duckdb.connect(str(database))
+    connection = duckdb_bounds.connect(duckdb, database)
     for name, columns in tables.items():
         connection.execute(f'create table main."{name}" (' + ", ".join(f'"{column["name"]}" {column["type"]}' for column in columns) + ")")
     connection.close()
@@ -492,7 +491,7 @@ def worker_shell(database: Path, contract: Path) -> None:
 def worker_fill(database: Path) -> None:
     """Fill dim_measure with the distinct fact, measure key and value column of the bridge seeds, so the control bridge can join it."""
     duckdb: Any = importlib.import_module("duckdb")
-    connection = duckdb.connect(str(database))
+    connection = duckdb_bounds.connect(duckdb, database)
     seeds = [
         row[0]
         for row in connection.execute(
@@ -527,7 +526,7 @@ def worker_restrict(full: Path, shell: Path, contract: Path, seeds: list[str]) -
     duckdb: Any = importlib.import_module("duckdb")
     document = json.loads(contract.read_text())
     allowed = {*document["facts"], *document["dimensions_and_bridges"], *seeds}
-    connection = duckdb.connect(str(shell))
+    connection = duckdb_bounds.connect(duckdb, shell)
     connection.execute(f"attach '{full}' as source (read_only)")
     held = [
         row[0]
@@ -561,7 +560,7 @@ def worker_stage_two(shell: Path, stage_two: Path, filters: list[str]) -> None:
     bad = [name for name in filters if not FILTER_NAME.fullmatch(name)]
     if bad:
         raise SystemExit(f"{bad} are no bridge filter model names (feature_bridge_<retired seed>)")
-    connection = duckdb.connect(str(stage_two))
+    connection = duckdb_bounds.connect(duckdb, stage_two)
     connection.execute(f"attach '{shell}' as shell (read_only)")
     tables = [
         row[0]
@@ -586,7 +585,7 @@ def worker_relations(database: Path) -> None:
     reports as a problem.
     """
     duckdb: Any = importlib.import_module("duckdb")
-    connection = duckdb.connect(str(database), read_only=True)
+    connection = duckdb_bounds.connect(duckdb, database, read_only=True)
     found: dict[str, str] = {}
     for schema, name in connection.execute("select table_schema, table_name from information_schema.tables order by 1, 2").fetchall():
         relation = '"' + schema.replace('"', '""') + '"."' + name.replace('"', '""') + '"'
@@ -612,7 +611,7 @@ def restricted_database(duckdb: Any, source: Path, relations: list[str], folder:
     """
     staged = folder / "staged" / "restricted.duckdb"
     staged.parent.mkdir()
-    connection = duckdb.connect(str(staged))
+    connection = duckdb_bounds.connect(duckdb, staged)
     connection.execute(f"attach '{source}' as features (read_only)")
     for relation in relations:
         schema, name = relation.split(".", 1)
@@ -635,7 +634,7 @@ def worker_bind(database: Path, manifest: Path) -> None:
     """
     duckdb: Any = importlib.import_module("duckdb")
     nodes = json.loads(manifest.read_text())["nodes"]
-    shared = duckdb.connect(str(database), read_only=True, config={"enable_external_access": False})
+    shared = duckdb_bounds.connect(duckdb, database, read_only=True, config={"enable_external_access": False})
     shared.execute("set lock_configuration = true")
     result: dict[str, dict[str, Any]] = {}
     for unique_id, node in sorted(nodes.items()):
@@ -648,7 +647,7 @@ def worker_bind(database: Path, manifest: Path) -> None:
             else:
                 with tempfile.TemporaryDirectory(prefix="feature_bind_") as folder:
                     target = restricted_database(duckdb, database, node["inputs"], Path(folder))
-                    connection = duckdb.connect(str(target), read_only=True, config={"enable_external_access": False})
+                    connection = duckdb_bounds.connect(duckdb, target, read_only=True, config={"enable_external_access": False})
                     connection.execute("set lock_configuration = true")
                     connection.execute("explain " + code)
                     connection.close()
@@ -662,7 +661,7 @@ def worker_bind(database: Path, manifest: Path) -> None:
 def worker_describe(database: Path, models: list[str]) -> None:
     """Print the column names and types of each model as JSON."""
     duckdb: Any = importlib.import_module("duckdb")
-    connection = duckdb.connect(str(database), read_only=True)
+    connection = duckdb_bounds.connect(duckdb, database, read_only=True)
     built: dict[str, list[list[str]]] = {}
     for model in models:
         exists = connection.execute("select count(*) from information_schema.tables where table_name = ?", [model]).fetchone()[0]

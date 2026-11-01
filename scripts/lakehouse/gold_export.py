@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from scripts.lakehouse import duckdb_bounds
 from scripts.lakehouse.gold_publish import DEFAULT_PUBLISH_DIR, SCHEMA, Plan, export_files_match, ident, load_plan, remove_tree, sha256_file, write_record
 from scripts.lakehouse.gold_publish_record import RESULT_NAME, RUN_ID, SHA256, PublishError, read_record
 
@@ -72,7 +73,7 @@ def export_sealed(sealed: Path, expected_sha256: str, publish_dir: Path, plan: P
     staging = publish_dir / "export.partial"
     remove_tree(staging)
     staging.mkdir(parents=True)
-    connection = duckdb.connect(str(sealed), read_only=True)
+    connection = duckdb_bounds.connect(duckdb, sealed, read_only=True)
     try:
         tables: dict[str, Any] = {}
         for name, key in plan.tables.items():

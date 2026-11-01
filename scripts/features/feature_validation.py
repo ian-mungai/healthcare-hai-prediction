@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.features import feature_schema
+from scripts.lakehouse import duckdb_bounds
 
 DEFAULT_SCHEMA = "/workspace/data_contracts/features/feature_schema.json"
 DEFAULT_CONTRACT = "/workspace/data_contracts/lakehouse/features_publish.json"
@@ -389,7 +390,7 @@ def validate(database: Path, schema_path: Path, contract_path: Path, suites: lis
     duckdb: Any = importlib.import_module("duckdb")
     schema = json.loads(schema_path.read_text())
     contract = json.loads(contract_path.read_text())
-    connection = duckdb.connect(str(database), read_only=True)
+    connection = duckdb_bounds.connect(duckdb, database, read_only=True)
     try:
         checker = Checker(connection, schema, contract, sha256_of(schema_path))
         checker.receipt()

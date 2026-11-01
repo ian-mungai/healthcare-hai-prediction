@@ -70,37 +70,41 @@ def spill_bytes(folder: Path) -> int:
 
 def run_case(target: str, cap: int, old_shape: bool = False) -> dict[str, Any]:
     """Spill on the first cursor, then open a second one. Returns what happened, never raises."""
+    with tempfile.TemporaryDirectory(prefix="duckdb_spill_") as scratch:
+        return run_output(rendered(target, Path(scratch), cap, old_shape), Path(scratch))
+
+
+def run_output(output: dict[str, Any], folder: Path) -> dict[str, Any]:
+    """Spill on the first cursor of the adapter built from one profile output, whose spill directory is ``folder/spill``, then open a second cursor."""
     from dbt.adapters.duckdb.credentials import DuckDBCredentials
     from dbt.adapters.duckdb.environments.local import LocalEnvironment
 
-    with tempfile.TemporaryDirectory(prefix="duckdb_spill_") as scratch:
-        folder = Path(scratch)
-        credentials = DuckDBCredentials.from_dict(rendered(target, folder, cap, old_shape))
-        environment = LocalEnvironment(credentials)
-        peak = [0]
-        stop = threading.Event()
+    credentials = DuckDBCredentials.from_dict(output)
+    environment = LocalEnvironment(credentials)
+    peak = [0]
+    stop = threading.Event()
 
-        def watch() -> None:
-            while not stop.is_set():
-                peak[0] = max(peak[0], spill_bytes(folder / "spill"))
-                time.sleep(0.02)
+    def watch() -> None:
+        while not stop.is_set():
+            peak[0] = max(peak[0], spill_bytes(folder / "spill"))
+            time.sleep(0.02)
 
-        result: dict[str, Any] = {"spill_error": "", "second_cursor_error": "", "second_cursor": None}
-        first = environment.handle()
-        watcher = threading.Thread(target=watch)
-        watcher.start()
-        try:
-            first.cursor().execute(SPILL_SQL)
-        except Exception as error:
-            result["spill_error"] = str(error)
-        stop.set()
-        watcher.join()
-        result["spill_bytes"] = peak[0]
-        try:
-            result["second_cursor"] = environment.handle().cursor().execute("SELECT 42").fetchall()
-        except Exception as error:
-            result["second_cursor_error"] = str(error)
-        return result
+    result: dict[str, Any] = {"spill_error": "", "second_cursor_error": "", "second_cursor": None}
+    first = environment.handle()
+    watcher = threading.Thread(target=watch)
+    watcher.start()
+    try:
+        first.cursor().execute(SPILL_SQL)
+    except Exception as error:
+        result["spill_error"] = str(error)
+    stop.set()
+    watcher.join()
+    result["spill_bytes"] = peak[0]
+    try:
+        result["second_cursor"] = environment.handle().cursor().execute("SELECT 42").fetchall()
+    except Exception as error:
+        result["second_cursor_error"] = str(error)
+    return result
 
 
 def cases() -> dict[str, bool]:

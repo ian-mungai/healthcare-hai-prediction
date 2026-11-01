@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
-from scripts.lakehouse import code_archive, pins, provenance, version_listing
+from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
 
@@ -164,6 +164,7 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
         expired.set()
         kill_descendants()
 
+    child = {**os.environ, **(environment or {})}
     watchdog = threading.Timer(STEP_SECONDS, stop_tree)
     watchdog.daemon = True
     watchdog.start()
@@ -172,7 +173,7 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
             sys.executable,
             ["-m", module, *map(str, arguments)],
             cwd=job.code,
-            env={**os.environ, **(environment or {})},
+            env=child,
             timeout=STEP_SECONDS + STEP_GRACE_SECONDS,
         )
     except TimeoutExpired:
@@ -185,6 +186,12 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
         raise StepError(f"{module} ran longer than {STEP_SECONDS} seconds")
     sys.stdout.write(done.stdout)
     sys.stderr.write(done.stderr)
+    if done.returncode and duckdb_bounds.cap_reached(done.stdout + done.stderr):
+        raise StepError(
+            f"{module} stopped at the temporary storage cap of DuckDB: it needed more than HAI_DUCKDB_MAX_TEMP_BYTES = {child['HAI_DUCKDB_MAX_TEMP_BYTES']} "
+            f"bytes in HAI_DUCKDB_TEMP_DIRECTORY = {child['HAI_DUCKDB_TEMP_DIRECTORY']}. Raise the cap in the task definition only after a measured need, "
+            "or reduce what the phase holds on disk."
+        )
     if done.returncode:
         raise StepError(f"{module} exited {done.returncode}")
 

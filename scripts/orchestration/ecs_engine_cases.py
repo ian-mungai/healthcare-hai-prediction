@@ -141,7 +141,7 @@ def build(
     project = folder / "project"
     project.mkdir()
     (project / "profiles.yml").write_bytes((ROOT / "dbt/profiles.yml").read_bytes())
-    captured: dict[str, Any] = {"invocations": 0, "connections": []}
+    captured: dict[str, Any] = {"invocations": 0, "connections": [], "caps": []}
     seen = threading.Event()
     observer = pipeline_build.disk_observation
 
@@ -178,13 +178,15 @@ def build(
 
     class Connection:
         def execute(self, statement: str, parameters: Any = None) -> Connection:
+            if statement.startswith("SET max_temp_directory_size"):
+                captured["caps"].append(parameters[0])
             return self
 
         def close(self) -> None:
             return None
 
-    def connect(path: str, config: dict[str, str]) -> Connection:
-        captured["connections"].append(dict(config))
+    def connect(path: str, read_only: bool = False, config: dict[str, str] | None = None) -> Connection:
+        captured["connections"].append(dict(config or {}))
         Path(path).write_bytes(b"synthetic database stand-in")
         return Connection()
 
@@ -448,7 +450,12 @@ def gold_import(folder: Path) -> None:
     values = environment(folder)
     captured = build(folder, values, layer="gold")
     require(captured["exit_code"] == 0 and captured["target"] == "pinned_silver_bounded", "gold_bounded_target")
-    require(captured["connections"] == [{"temp_directory": values["HAI_DUCKDB_TEMP_DIRECTORY"], "max_temp_directory_size": "1048576B"}], "gold_import_cap")
+    # DuckDB reads the spill directory at connect and enforces the byte cap only as a setting on the open connection.
+    require(
+        captured["connections"] == [{"memory_limit": "1GB", "threads": "1", "temp_directory": values["HAI_DUCKDB_TEMP_DIRECTORY"]}],
+        "gold_import_temp_directory",
+    )
+    require(captured["caps"] == ["1048576B"], "gold_import_cap")
     imported = captured["receipt"]["runtime_measurements"]["import"]
     require(imported["verified_input_bytes"] == len(b"synthetic parquet stand-in"), "gold_import_bytes")
     require(imported.get("hash_seconds", -1) >= 0, "gold_import_hash_measurement")
@@ -496,6 +503,7 @@ def sampler_deadline(folder: Path) -> None:
 
 def quality_connections(folder: Path) -> None:
     captures: list[dict[str, Any]] = []
+    caps: list[str] = []
 
     class Connection:
         def __init__(self) -> None:
@@ -507,7 +515,10 @@ def quality_connections(folder: Path) -> None:
         def __exit__(self, *args: Any) -> None:
             return None
 
-        def execute(self, statement: str) -> Connection:
+        def execute(self, statement: str, parameters: list[str] | None = None) -> Connection:
+            if statement.startswith("SET max_temp_directory_size"):
+                caps.append((parameters or [""])[0])
+                return self
             self.statement = statement
             return self
 
@@ -568,8 +579,9 @@ def quality_connections(folder: Path) -> None:
         with quality.private_copy(database) as (copied, digest):
             require(copied.is_relative_to(Path(values["HAI_DUCKDB_TEMP_DIRECTORY"]).parent), "quality_copy_outside_task_scratch")
             require(digest == hashlib.sha256(b"synthetic database").hexdigest(), "quality_copy_identity_changed")
-        expected = {"memory_limit": "1GB", "threads": "1", "temp_directory": values["HAI_DUCKDB_TEMP_DIRECTORY"], "max_temp_directory_size": "1048576B"}
-        require(len(captures) == 3 and all(value == expected for value in captures), "quality_connection_temp_cap")
+        expected = {"memory_limit": "1GB", "threads": "1", "temp_directory": values["HAI_DUCKDB_TEMP_DIRECTORY"]}
+        require(len(captures) == 3 and all(value == expected for value in captures), "quality_connection_temp_directory")
+        require(caps == ["1048576B"] * 3, "quality_connection_temp_cap")
         values["HAI_DUCKDB_MAX_TEMP_BYTES"] = ""
         with patch.dict(os.environ, values, clear=True):
             expect_refusal("temporary_storage_settings_incomplete", quality.engine_config)
@@ -739,8 +751,10 @@ def mutations(folder: Path) -> dict[str, Any]:
         path = mutant_root / "scripts/lakehouse/silver_quality.py"
         path.parent.mkdir(parents=True)
         original = (ROOT / "scripts/lakehouse/silver_quality.py").read_text()
-        require(original.count("**duckdb_temp_settings()") == 1, "quality_cap_mutation_anchor")
-        path.write_text(original.replace("**duckdb_temp_settings()", "**{}"))
+        # The mutant opens its connections the old way: the options at connect, which carry the spill directory, and no byte cap on the open connection.
+        bounded = "duckdb_bounds.connect(duckdb, database, read_only=True)"
+        require(original.count(bounded) == 3, "quality_cap_mutation_anchor")
+        path.write_text(original.replace(bounded, "duckdb.connect(str(database), read_only=True, config=duckdb_bounds.options())"))
         lint_mutant((path,), folder, "omit_quality_cap")
         with patch(__name__ + ".ROOT", mutant_root):
             observed = observe(quality_connections, folder)

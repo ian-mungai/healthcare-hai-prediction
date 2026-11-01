@@ -150,6 +150,7 @@ def mounted_imports(folder: Path) -> None:
     mount = folder / "mount"
     for relative in (
         "scripts/lakehouse/__init__.py",
+        "scripts/lakehouse/duckdb_bounds.py",
         "scripts/lakehouse/ecs_engine.py",
         "scripts/lakehouse/session.py",
         "scripts/lakehouse/silver_quality.py",
@@ -924,15 +925,19 @@ def engine_configuration(folder: Path) -> None:
     manifest_raw = json.dumps(manifest).encode()
     (extract / "manifest.json").write_bytes(manifest_raw)
 
+    import_caps: list[str] = []
+
     class DuckConnection:
         def execute(self, statement: str, parameters: Any = None) -> DuckConnection:
+            if statement.startswith("SET max_temp_directory_size"):
+                import_caps.append(parameters[0])
             return self
 
         def close(self) -> None:
             return None
 
-    def connect(path: str, config: dict[str, str]) -> DuckConnection:
-        require(config["max_temp_directory_size"] == "1048576B", "actual_import_temp_cap")
+    def connect(path: str, read_only: bool = False, config: dict[str, str] | None = None) -> DuckConnection:
+        require("temp_directory" in (config or {}), "actual_import_temp_directory")
         Path(path).write_bytes(b"synthetic database stand-in")
         return DuckConnection()
 
@@ -948,6 +953,7 @@ def engine_configuration(folder: Path) -> None:
         redirect_stdout(io.StringIO()),
     ):
         require(pipeline_build.main() == 0, "gold_build_entry")
+        require(import_caps == ["1048576B"], "actual_import_temp_cap")
         require(captures[-1][captures[-1].index("--target") + 1] == "pinned_silver_bounded", "gold_fixture_pinned_profile")
         receipt = json.loads((output / "build_receipt.json").read_bytes())
         require(receipt["runtime_measurements"]["import"]["verified_input_bytes"] == len(part), "actual_import_byte_measurement")
@@ -1033,8 +1039,7 @@ def engine_configuration(folder: Path) -> None:
         from scripts.lakehouse import silver_quality
 
         require(
-            silver_quality.engine_config()
-            == {"memory_limit": "1GB", "threads": "1", "temp_directory": environment["HAI_DUCKDB_TEMP_DIRECTORY"], "max_temp_directory_size": "1048576B"},
+            silver_quality.engine_config() == {"memory_limit": "1GB", "threads": "1", "temp_directory": environment["HAI_DUCKDB_TEMP_DIRECTORY"]},
             "quality_temp_cap_wiring",
         )
     with (
@@ -1121,7 +1126,7 @@ def changed_function(owner: Any, attribute: str, edits: tuple[tuple[str, str], .
 
 def source_mutations(base: Path) -> dict[str, Any]:
     from orchestration import ecs_stage
-    from scripts.lakehouse import pipeline_build, session, silver_quality
+    from scripts.lakehouse import duckdb_bounds, pipeline_build, session
     from scripts.orchestration import ecs_stage_contract_cases
     from services.hai.bootstrap import integrity, outputs, redaction, transfer
 
@@ -1366,7 +1371,14 @@ def source_mutations(base: Path) -> dict[str, Any]:
             "wrong_fixture_credential_refusal",
             "omit_fixture_role_credential_refusal",
         ),
-        (silver_quality, "engine_config", (("**duckdb_temp_settings()", "**{}"),), engine_configuration, "quality_temp_cap_wiring", "omit_quality_temp_cap"),
+        (
+            duckdb_bounds,
+            "options",
+            (('spill = duckdb_temp_settings().get("temp_directory")', "spill = None"),),
+            engine_configuration,
+            "actual_import_temp_directory",
+            "omit_spill_directory_option",
+        ),
         (
             ecs_stage,
             "validate_result",

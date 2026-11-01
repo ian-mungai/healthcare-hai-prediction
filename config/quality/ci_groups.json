@@ -84,7 +84,8 @@
       "^scripts/ci/groups/lakehouse_gold\\.sh$"
     ],
     "lakehouse_features": [
-      "^scripts/lakehouse/(feature_allowlist|feature_sources|run_feature_sources_e2e|feature_columns|run_feature_columns_e2e|feature_shards)\\.py$",
+      "^scripts/lakehouse/(feature_allowlist|feature_sources|run_feature_sources_e2e|feature_columns|run_feature_columns_e2e|feature_shards|run_duckdb_bounds_cases|duckdb_bounds)\\.py$",
+      "^monitoring/(current_window|drift_check)\\.py$",
       "^scripts/ci/groups/lakehouse_features\\.sh$",
       "^config/quality/feature_cases\\.json$",
       "^feature_store/",
