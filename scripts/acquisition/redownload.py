@@ -726,9 +726,8 @@ def validate_restored(run: Run) -> None:
         if record.get("outcome") not in STORED_OUTCOMES:
             continue
         stored = record.get("stored")
-        require(
-            isinstance(stored, dict) and isinstance(stored.get("manifests"), list) and bool(stored["manifests"]), "Restored outcome names no stored capture"
-        )
+        if not isinstance(stored, dict) or not isinstance(stored.get("manifests"), list) or not stored["manifests"]:
+            raise RegistryError("Restored outcome names no stored capture")
         for item in [stored.get("receipt"), *stored["manifests"]]:
             require(isinstance(item, dict) and str(item.get("key", "")).startswith(RAW_ROOT), "Restored outcome names a capture outside the raw root")
             try:
