@@ -78,7 +78,7 @@
       "^dbt/seeds/census_county_change_events\\.csv$",
       "^scripts/lakehouse/(gold_export|gold_maintenance|gold_publish|gold_publish_record|gold_reconcile|gold_writer_setup)\\.py$",
       "^scripts/lakehouse/run_gold_(sql_e2e|publish_e2e|publish_cases|publish_launcher_cases|publish_runner_cases)\\.py$",
-      "^scripts/lakehouse/(bridge_references|identity_splits|source_labels|county_change_seed|run_bridge_references_e2e|run_identity_seeds_e2e|run_county_change_seed_e2e)\\.py$",
+      "^scripts/lakehouse/(bridge_references|identity_splits|source_labels|county_change_seed|run_bridge_references_e2e|run_owner_history_e2e|run_identity_seeds_e2e|run_county_change_seed_e2e)\\.py$",
       "^config/training/targets\\.json$",
       "^scripts/training/(__init__|targets|run_targets_e2e)\\.py$",
       "^scripts/ci/groups/lakehouse_gold\\.sh$"

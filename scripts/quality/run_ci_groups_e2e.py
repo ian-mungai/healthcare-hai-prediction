@@ -1520,6 +1520,7 @@ FEATURE_COMMANDS = (
 OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.bridge_references --check",
     "scripts.lakehouse.run_bridge_references_e2e",
+    "scripts.lakehouse.run_owner_history_e2e",
     "scripts.lakehouse.identity_splits --check",
     "scripts.lakehouse.source_labels --check",
     "scripts.lakehouse.county_change_seed --check",
@@ -1664,6 +1665,7 @@ def gold_unit_cases() -> list[dict[str, Any]]:
     modes = re.findall(r"run_gold_publish_e2e --mode (\w+)", " ".join(found))
     folders = {
         "scripts/lakehouse/run_bridge_references_e2e.py": "data/e2e/bridge_references",
+        "scripts/lakehouse/run_owner_history_e2e.py": "data/e2e/owner_history",
         "scripts/lakehouse/run_identity_seeds_e2e.py": "data/e2e/gold_identity_seeds",
         "scripts/training/run_targets_e2e.py": "data/e2e/training_targets",
         "scripts/lakehouse/run_feature_sources_e2e.py": "data/e2e/feature_sources",
