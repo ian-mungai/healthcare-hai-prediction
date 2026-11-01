@@ -57,6 +57,7 @@ SHA256 = re.compile(r"[a-f0-9]{64}")
 REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")
 TASK_ARN = re.compile(r"arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9_-]+/[a-f0-9]{32}")
+GUARD_NAME = "guard"  # ECS stops the guard of a layer task when the last phase ends, so its exit code is never a result of the job
 LIMIT = 1 << 28  # the largest input: a version listing of the lakehouse prefix
 EXPORT = "publish/export/manifest.json"
 EVIDENCE_FILES = (
@@ -138,7 +139,10 @@ def expected_containers(layer: str) -> list[str]:
 
 
 def task_problems(layer: str, described: Any) -> list[str]:
-    """What is wrong with the output of ``aws ecs describe-tasks`` for the run's one task. The texts are fixed."""
+    """What is wrong with the output of ``aws ecs describe-tasks`` for the run's one task. The texts are fixed.
+
+    Every container of the job must exit 0. The guard may be absent (a task definition from before it) and may have any exit code, because ECS stops it with
+    SIGTERM or SIGKILL when the last phase ends."""
     if not isinstance(described, dict):
         return ["the describe output is not an object"]
     problems = ["the describe call reported failures"] if described.get("failures") else []
@@ -154,6 +158,8 @@ def task_problems(layer: str, described: Any) -> list[str]:
             problems.append(f"container {name} has no result")
         elif type(containers[name].get("exitCode")) is not int or containers[name]["exitCode"] != 0:
             problems.append(f"container {name} did not exit 0")
+    if set(containers) - {*expected_containers(layer), GUARD_NAME}:
+        problems.append("the task holds a container that is not part of the job")
     return problems
 
 
@@ -168,7 +174,7 @@ def task_is_this_runs(layer: str, run: str, task: Mapping[str, Any], approved_sh
     wanted = read_json(JOBS_FILE)["jobs"][layer]["containers"]
     given = {}
     for item in mapping(task.get("overrides")).get("containerOverrides") or []:
-        if item == {"name": "init"}:  # describe-tasks lists the container that has no override by its name alone
+        if item in ({"name": "init"}, {"name": GUARD_NAME}):  # describe-tasks lists a container that has no override by its name alone
             continue
         environment = item.get("environment") if isinstance(item, dict) else None
         if not isinstance(environment, list) or not all(isinstance(entry, dict) for entry in environment):

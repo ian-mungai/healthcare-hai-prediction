@@ -272,7 +272,8 @@ def build_records(env: Env) -> None:
     after["versions"] += cli_listing(added)["versions"]
     write(root / "after.json", after)
     overrides = job_overrides_for(item.layer, run, item.code_sha256, env.producer.spec.run if env.producer else "")
-    write_describe(env, {"containerOverrides": [{"name": "init"}, *overrides["containerOverrides"]]})  # describe-tasks lists every container, init by name only
+    # describe-tasks lists every container of the task definition: init and the guard have no override and appear by name only
+    write_describe(env, {"containerOverrides": [{"name": "init"}, *overrides["containerOverrides"], {"name": "guard"}]})
     write(root / "approval.json", {"schema": 1, "layer": item.layer, "run_id": run, "code_sha256": item.code_sha256, "approved_at": "2026-10-31T16:50:00Z"})
     write(root / "running.json", {"taskArns": []})
     write(root / "host.json", {"desired_capacity": 0, "group_instances": 0, "active_container_instances": 0, "services": {}})
@@ -281,6 +282,9 @@ def build_records(env: Env) -> None:
 def write_describe(env: Env, overrides: dict[str, Any], definition: str | None = None) -> None:
     layer = env.spec.layer
     containers = [{"name": name, "lastStatus": "STOPPED", "exitCode": 0} for name in acceptance.expected_containers(layer)]
+    containers.append(
+        {"name": "guard", "lastStatus": "STOPPED", "exitCode": 0}
+    )  # the guard container of the task definition, stopped by ECS when the last phase ended
     task = h(env.spec.tag, "task")[:32]
     write(
         env.root / "describe.json",
@@ -488,7 +492,7 @@ def common_cases() -> list[Case]:
             lambda e, o: edit(e.root / "describe.json", lambda d: d["tasks"][0]["containers"][3].update(exitCode=1)),
             (NAMES["exits"],),
         ),
-        ("a container has no result", lambda e, o: edit(e.root / "describe.json", lambda d: d["tasks"][0]["containers"].pop()), (NAMES["exits"],)),
+        ("a container has no result", lambda e, o: edit(e.root / "describe.json", lambda d: d["tasks"][0]["containers"].pop(-2)), (NAMES["exits"],)),
         ("the task is still running", lambda e, o: edit(e.root / "describe.json", lambda d: d["tasks"][0].update(lastStatus="RUNNING")), (NAMES["exits"],)),
         ("only one table of the contract", lambda e, o: None, (NAMES["sets"],)),
         (
@@ -560,6 +564,21 @@ def common_cases() -> list[Case]:
                 lambda d: d["tasks"][0]["overrides"]["containerOverrides"][0].update(environment=[{"name": "RUN_ID", "value": e.spec.run}]),
             ),
             (NAMES["task"],),
+        ),
+        (
+            "a guard override that carries a variable",
+            lambda e, o: edit(
+                e.root / "describe.json",
+                lambda d: d["tasks"][0]["overrides"]["containerOverrides"][-1].update(environment=[{"name": "RUN_ID", "value": e.spec.run}]),
+            ),
+            (NAMES["task"],),
+        ),
+        (
+            "a container that is not part of the job",
+            lambda e, o: edit(
+                e.root / "describe.json", lambda d: d["tasks"][0]["containers"].append({"name": "extra", "lastStatus": "STOPPED", "exitCode": 0})
+            ),
+            (NAMES["exits"],),
         ),
         (
             "an input version changed during the task",
@@ -678,6 +697,34 @@ def good_cases(work: Path) -> dict[str, bool]:
         checks[f"{layer}: a wrong confirmation does not sign"] = (
             run_cli(["sign", "--report", str(wrong), "--owner", "Owner"], {"CONFIRM_SIGN": "sign-other"})[0] == 1
         )
+    return checks
+
+
+def guard_cases(work: Path) -> dict[str, bool]:
+    """A good run still passes when its task has a guard container: ECS stops the guard when the last phase ends, so its exit code is 0, 143 (SIGTERM), 137
+    (SIGKILL) or none, and a task definition from before the guard has no guard at all."""
+    checks: dict[str, bool] = {}
+    variants: dict[str, Callable[[dict[str, Any]], None]] = {
+        "exit 143": lambda task: task["containers"][-1].update(exitCode=143),
+        "exit 137": lambda task: task["containers"][-1].update(exitCode=137),
+        "no exit code": lambda task: task["containers"][-1].pop("exitCode"),
+        "exit 1": lambda task: task["containers"][-1].update(exitCode=1),
+        "absent from the task definition": lambda task: (task["containers"].pop(), task["overrides"]["containerOverrides"].pop()),
+    }
+    for layer in acceptance.LAYERS:
+        for number, (label, change) in enumerate(variants.items()):
+            env, _ = scenario(work, layer, f"guard variant {'abcdefgh'[number]}")
+            edit(env.root / "describe.json", lambda d, change=change: change(d["tasks"][0]))
+            code, failed, _ = accept(env)
+            checks[f"{layer}: a good run whose guard is {label} passes"] = code == 0 and not failed
+            checks[f"{layer}: the task check passes with a guard that is {label}"] = (
+                run_cli(["task", "--layer", layer, "--describe", str(env.root / "describe.json")])[0] == 0
+            )
+        env, _ = scenario(work, layer, "guard stops a failed phase")
+        edit(env.root / "describe.json", lambda d: d["tasks"][0]["containers"][3].update(exitCode=1))
+        edit(env.root / "describe.json", lambda d: d["tasks"][0]["containers"][-1].update(exitCode=1))
+        code, failed, _ = accept(env)
+        checks[f"{layer}: a failed phase still fails when the guard ended the task"] = code == 1 and NAMES["exits"] in failed
     return checks
 
 
@@ -818,6 +865,7 @@ def main() -> int:
             for layer in acceptance.LAYERS:
                 results[f"defects {layer}"] = group(f"defects {layer}", cases, work, layer)
             results["inputs"] = group("inputs", input_cases, work)
+            results["guard"] = group("guard", guard_cases, work)
             results["commands"] = command_cases(work)
             results["plan"] = plan_cases(work)
     finally:
