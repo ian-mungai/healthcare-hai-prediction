@@ -9,6 +9,13 @@ from scripts.acquisition.api_fallbacks import api_specification, check_bls, chec
 from scripts.acquisition.source_registry import canonical_hash, read_json
 from scripts.acquisition.transport import CaptureError
 
+DENIED_ROUTE_STATUSES = frozenset({"access_failed", "HTTP_403_file_route_unverified"})
+
+
+def route_denied(route: dict) -> bool:
+    """Whether the registry marks a route as a discovery index or a failed route, which cannot supply a data upload."""
+    return route.get("route_type") == "file_index" or route.get("status") in DENIED_ROUTE_STATUSES
+
 
 def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
     """Reject receipt lineage or API coverage that differs from the source's approved route."""
@@ -77,7 +84,7 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
         routes = [route for route in source["file_routes"] if route["route_id"] == lineage.get("route_id")]
         if len(routes) != 1 or routes[0]["url"] != receipt["acquisition"]["requested_url"]:
             raise CaptureError("Storage requires the receipt's exact approved file route.")
-        if routes[0].get("route_type") == "file_index" or routes[0].get("status") in {"access_failed", "HTTP_403_file_route_unverified"}:
+        if route_denied(routes[0]):
             raise CaptureError("Discovery indexes and failed routes cannot be promoted to data uploads.")
         return
     request = receipt["acquisition"]["request_parameters"]

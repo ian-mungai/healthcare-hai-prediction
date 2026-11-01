@@ -30,7 +30,11 @@ CHUNK = 1024 * 1024
 # One create-once object per counted BLS request, shared by every task on the one key. The role cannot delete, so a task can never hand a request back.
 BLS_LEDGER_PREFIX = f"{RAW_ROOT}run3_ledger/bls/"
 BLS_ENTRY = re.compile(rf"{re.escape(BLS_LEDGER_PREFIX)}([0-9]{{10}})\.json")
-BLS_WINDOW = timedelta(hours=24)
+# An entry stays counted for a day after the latest moment its request can reach the publisher. A task sends nothing later than the send limit after it
+# reserved, and the bound covers the connection and send timeouts of that last moment and a small clock difference between the task and the store.
+BLS_SEND_LIMIT = timedelta(minutes=5)
+BLS_SEND_BOUND = timedelta(minutes=5)
+BLS_WINDOW = timedelta(hours=24) + BLS_SEND_LIMIT + BLS_SEND_BOUND
 RESERVE_ATTEMPTS = 5
 CONFLICT_CODES = {"PreconditionFailed", "412", "ConditionalRequestConflict", "409"}
 ClientFactory = Callable[[str, str], Any]
@@ -62,6 +66,7 @@ class TaskKeys:
             raise ApiKeyError("this collector mode reads no key")
         self.name, self.environment, self.factory, self.clock = KEY_OF_MODE[mode], environment, factory, clock
         self.storage: TaskStorage | None = None
+        self.reserved_at: datetime | None = None
 
     @property
     def checked_by_task_identity(self) -> bool:
@@ -97,12 +102,18 @@ class TaskKeys:
             s3 = self.factory("s3", self.environment["AWS_REGION"])
             for _attempt in range(RESERVE_ATTEMPTS):
                 if self._reserve_once(s3, identity, limit):
+                    self.reserved_at = self.clock()
                     return
         except QuotaPause:
             raise
         except Exception:
             raise QuotaPause("BLS request ledger is unavailable; no request was made") from None
         raise QuotaPause("BLS request ledger stayed contended; no request was made")
+
+    def require_send_window(self) -> None:
+        """Refuse a request too late for its reservation. The entry stays spent, so the budget only errs on the safe side."""
+        if self.reserved_at is None or self.clock() - self.reserved_at > BLS_SEND_LIMIT:
+            raise QuotaPause("BLS request is too late for its reservation; it was not sent")
 
     def _reserve_once(self, s3: Any, identity: str, limit: int) -> bool:
         named = {"Bucket": self.environment["DATA_BUCKET_NAME"], "ExpectedBucketOwner": self.environment["EXPECTED_ACCOUNT_ID"]}
@@ -126,7 +137,8 @@ class TaskKeys:
             raise QuotaPause("BLS rolling-24-hour request budget reached; resume after the oldest reservation expires")
         body = encoded_json({"batch_id": identity})
         try:
-            s3.put_object(**named, Key=f"{BLS_LEDGER_PREFIX}{max(numbers, default=0) + 1:010d}.json", Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+            key = f"{BLS_LEDGER_PREFIX}{max(numbers, default=0) + 1:010d}.json"
+            s3.put_object(**named, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
         except Exception as error:
             if _error_code(error) in CONFLICT_CODES:
                 return False
@@ -155,7 +167,7 @@ def _argument(arguments: list[str], name: str) -> str:
 
 
 class TaskStorage:
-    """The project's storage calls with the task role, in the call shape of the command line adapter. It reads and creates objects under ``raw/`` only.
+    """The project's storage calls with the task role, in the command line adapter's shape. It creates under ``raw/`` only and reads elsewhere only by version.
 
     It never stores a file from the original's folder, so a wrong path cannot send an original to S3. The identity check runs when the command line builds it.
     """
@@ -174,12 +186,14 @@ class TaskStorage:
             raise StorageError(operation, "outside_task_storage")
         given = arguments or []
         key = _argument(given, "--key")
-        if not key.startswith(RAW_ROOT):
+        # A stored capture elsewhere is read only by its exact version, for a comparison. Everything else stays under the raw root.
+        if not key.startswith(RAW_ROOT) and not (operation == "get-object" and "--version-id" in given):
             raise StorageError(operation, "outside_raw_root")
         named = {"Bucket": self.configuration["data_bucket_name"], "ExpectedBucketOwner": self.configuration["expected_account_id"], "Key": key}
         try:
             if operation == "head-object":
-                return self._answer(self.client.head_object(**named, ChecksumMode="ENABLED"))
+                version = {"VersionId": _argument(given, "--version-id")} if "--version-id" in given else {}
+                return self._answer(self.client.head_object(**named, **version, ChecksumMode="ENABLED"))
             if operation == "put-object":
                 return self._put(named, given)
             return self._get(named, given)
@@ -190,7 +204,7 @@ class TaskStorage:
 
     @staticmethod
     def _answer(reply: Mapping[str, Any]) -> dict:
-        return {name: reply[name] for name in ("VersionId", "ContentLength", "ChecksumSHA256", "ServerSideEncryption") if name in reply}
+        return {name: reply[name] for name in ("VersionId", "ContentLength", "ChecksumSHA256", "ServerSideEncryption", "LastModified") if name in reply}
 
     def _put(self, named: dict, given: list[str]) -> dict:
         body = Path(_argument(given, "--body"))

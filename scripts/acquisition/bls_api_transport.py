@@ -74,6 +74,9 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
         reserver(batch["id"], plan["request_limit_24h"])
     credential = api_keys.checked_read(client, plan["credential_reference"], "BLS")
     require(len(credential) >= 16 and credential.strip() == credential and not credential.startswith(("{", "[", '"')), "BLS credential structure invalid")
+    send_window = getattr(client, "require_send_window", None)
+    if send_window is not None:
+        send_window()
     parsed = urlsplit(plan["endpoint"])
     connection = https_connection(parsed.netloc, timeout=60)
     try:

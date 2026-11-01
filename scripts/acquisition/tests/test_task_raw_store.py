@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import copy
+import dataclasses
+import hashlib
 import io
 import json
 import logging
@@ -25,6 +29,7 @@ from scripts.acquisition import (
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.capture import capture, receipt_validator
 from scripts.acquisition.run_redownload_e2e import Fixture
+from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.source_registry import REPO_ROOT, load_registry, read_json
 from scripts.acquisition.tests.leak_check import channel_leaks, tree_leaks
 from scripts.acquisition.tests.task_fixture import task_run
@@ -209,11 +214,25 @@ def reviewed_archive_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bucket
     """A stored archive whose earlier storage names each member's dataset and role, in the reconciliation beside its receipt."""
     earlier = archive({"one.csv": STORED, "two.csv": b"c\n1\n", "notes.txt": b"notes\n"})
     fixture, unit = stored_unit(monkeypatch, tmp_path, earlier, "a.zip")
-    rows = [
-        {"role": "data", "dataset_id": "first_table", "mapped_dataset_id": "first_table", "archive_member": json.dumps(["one.csv"])},
-        {"role": "data", "dataset_id": "second_table", "mapped_dataset_id": "second_table", "archive_member": json.dumps(["two.csv"])},
-        {"role": "reference", "dataset_id": "first_table", "mapped_dataset_id": None, "archive_member": json.dumps(["notes.txt"])},
-    ]
+    rows = []
+    for name, role, dataset, body in (
+        ("one.csv", "data", "first_table", STORED),
+        ("two.csv", "data", "second_table", b"c\n1\n"),
+        ("notes.txt", "reference", "first_table", b"notes\n"),
+    ):
+        key = f"cms/stored/datasets/{name}"
+        checksum = base64.b64encode(hashlib.sha256(body).digest()).decode()
+        bucket.objects[key] = ("v0", body, {"ChecksumSHA256": checksum, "ServerSideEncryption": "AES256"})
+        record = {"key": key, "version_id": "v0", "sha256": harness.digest(body), "byte_count": len(body)}
+        rows.append(
+            {
+                "role": role,
+                "dataset_id": dataset,
+                "mapped_dataset_id": dataset if role == "data" else None,
+                "archive_member": json.dumps([name]),
+                "object": record,
+            }
+        )
     (tmp_path / unit["receipt"]).parent.joinpath("s3_collections_reconciliation.json").write_text(json.dumps({"objects": rows, "manifests": []}))
     return task_run(tmp_path, fixture, opener=opener(Web({unit["url"]: fresh})), task_storage=storage(bucket)), unit
 
@@ -250,7 +269,8 @@ def test_an_archive_whose_members_differ_from_the_review_blocks_and_stores_nothi
     bucket = TaskS3()
     run, unit = reviewed_archive_run(monkeypatch, tmp_path, bucket, archive(members))
     check(harness.execute(run)["outcomes"] == {"blocked": 1}, "a member the review never saw is blocked")
-    check((harness.outcome(run, unit["snapshot_id"]) or {})["reason"] == "raw_store_failed" and not bucket.objects, "nothing was stored")
+    stored_now = [key for key in bucket.objects if key.startswith("raw/")]
+    check((harness.outcome(run, unit["snapshot_id"]) or {})["reason"] == "raw_store_failed" and not stored_now, "nothing was stored")
 
 
 KEYED = ["bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"]
@@ -294,3 +314,161 @@ def test_a_key_reader_without_a_storage_client_cannot_store() -> None:
     client = task_role.TaskKeys("hud_api", {"AWS_REGION": "us-west-2"})
     with pytest.raises(s3_store.StorageError):
         client.call("s3api", "head-object", ["--key", "raw/a"])
+
+
+def restart(run: harness.Run) -> harness.Run:
+    """A new task over the same state: nothing is cached."""
+    return dataclasses.replace(run, cache={})
+
+
+def forge(bucket: TaskS3, item: dict, body: bytes) -> dict:
+    """Replace an object as a writer could, with a checksum that fits, and return the matching evidence."""
+    version, _old, fields = bucket.objects[item["key"]]
+    bucket.objects[item["key"]] = (version, body, fields | {"ChecksumSHA256": base64.b64encode(hashlib.sha256(body).digest()).decode()})
+    return item | {"sha256": harness.digest(body), "byte_count": len(body)}
+
+
+def rewrite_outcome(run: harness.Run, unit: dict, **fields: Any) -> None:
+    path = run.state_root / "outcomes" / f"{unit['snapshot_id']}.json"
+    path.write_bytes(encoded_json(read_json(path) | fields))
+
+
+def test_a_real_outcome_survives_the_recomputation_and_its_unit_is_not_attempted_again(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, _unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "first task")
+    check(harness.execute(restart(run))["attempted"] == 0, "a real outcome is not attempted again")
+
+
+def test_a_real_changed_outcome_survives_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, _unit = file_run(monkeypatch, tmp_path, bucket, b"a,b\n3,4\n")
+    check(harness.execute(run)["outcomes"] == {"changed_needs_review": 1}, "first task")
+    check(harness.execute(restart(run))["attempted"] == 0, "a changed capture stays recorded")
+
+
+def test_a_changed_capture_labelled_exact_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, b"a,b\n3,4\n")
+    harness.execute(run)
+    rewrite_outcome(run, unit, outcome="exact_match")
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_evidence_of_another_unit_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    stored = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    document = json.loads(bucket.objects[stored["receipt"]["key"]][1])
+    lineage = json.loads(document["lineage"]["extraction_or_query"]) | {"fresh_of": "another_unit"}
+    forged = encoded_json(document | {"lineage": document["lineage"] | {"extraction_or_query": json.dumps(lineage)}})
+    rewrite_outcome(run, unit, stored={"receipt": forge(bucket, stored["receipt"], forged), "manifests": stored["manifests"]})
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_a_manifest_without_the_data_object_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    stored = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    item = stored["manifests"][0]
+    document = json.loads(bucket.objects[item["key"]][1])
+    forged = encoded_json(document | {"objects": [entry for entry in document["objects"] if entry["role"] != "data"]})
+    rewrite_outcome(run, unit, stored={"receipt": stored["receipt"], "manifests": [forge(bucket, item, forged)]})
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_data_bytes_that_differ_from_the_manifest_stop_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    name = next(key for key, (_, data, _) in bucket.objects.items() if data == STORED)
+    forge(bucket, {"key": name}, b"other")
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_a_changed_archive_member_labelled_exact_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    fresh = archive({"one.csv": b"a,b\n9,9\n", "two.csv": b"c\n1\n", "notes.txt": b"notes\n"})
+    run, unit = reviewed_archive_run(monkeypatch, tmp_path, bucket, fresh)
+    harness.execute(run)
+    rewrite_outcome(run, unit, outcome="exact_match")
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_a_real_reviewed_archive_outcome_survives_the_recomputation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, _unit = reviewed_archive_run(monkeypatch, tmp_path, bucket, archive({"one.csv": STORED, "two.csv": b"c\n1\n", "notes.txt": b"notes\n"}))
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "first task")
+    check(harness.execute(restart(run))["attempted"] == 0, "the archive outcome verifies")
+
+
+def denying_registry(unit: dict, **route: Any) -> dict:
+    registry = copy.deepcopy(load_registry())
+    source = next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])
+    source["file_routes"] = [{"route_id": "named_route", "url": unit["url"], **route}]
+    return registry
+
+
+@pytest.mark.parametrize(
+    "route",
+    [{"status": "access_failed"}, {"status": "HTTP_403_file_route_unverified"}, {"route_type": "file_index"}],
+    ids=["access failed", "http 403", "file index"],
+)
+def test_a_route_the_registry_denies_stays_denied_and_stores_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, route: dict) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: denying_registry(unit, **route))
+    summary = harness.execute(run)
+    record = harness.outcome(run, unit["snapshot_id"]) or {}
+    check(summary["outcomes"] == {"blocked": 1} and record["reason"] == "raw_store_failed", f"{summary} {record}")
+    check(not bucket.objects, "nothing was stored")
+
+
+def test_a_denied_route_under_another_spelling_of_the_address_stays_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    respelled = unit["url"].replace("https://", "HTTPS://").replace(".gov", ".GOV") + "#fragment"
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: denying_registry(unit | {"url": respelled}, status="access_failed"))
+    check(harness.execute(run)["outcomes"] == {"blocked": 1} and not bucket.objects, "the denial follows the address")
+
+
+def test_a_route_denied_under_another_source_stays_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+
+    def registry(**_options: Any) -> dict:
+        document = copy.deepcopy(load_registry())
+        other = next(item for item in document["sources"] if item["source_id"] != unit["source_id"])
+        other["file_routes"] = [*other.get("file_routes", []), {"route_id": "elsewhere", "url": unit["url"], "status": "access_failed"}]
+        return document
+
+    monkeypatch.setattr(harness, "load_registry", registry)
+    check(harness.execute(run)["outcomes"] == {"blocked": 1} and not bucket.objects, "the denial follows the address across sources")
+
+
+def test_a_route_the_registry_names_and_allows_is_used_with_its_own_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: denying_registry(unit))
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "an allowed named route stores")
+    receipt = json.loads(bucket.objects[(harness.outcome(run, unit["snapshot_id"]) or {})["stored"]["receipt"]["key"]][1])
+    check(json.loads(receipt["lineage"]["extraction_or_query"])["route_id"] == "named_route", "no alias replaces a named route")
+
+
+def test_only_a_route_the_registry_does_not_name_takes_the_frozen_queue_approval(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    registry = copy.deepcopy(load_registry())
+    for source in registry["sources"]:
+        source["file_routes"] = [route for route in source.get("file_routes", []) if route["url"] != unit["url"]]
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: copy.deepcopy(registry))
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "an unnamed route stores")
+    receipt = json.loads(bucket.objects[(harness.outcome(run, unit["snapshot_id"]) or {})["stored"]["receipt"]["key"]][1])
+    check(json.loads(receipt["lineage"]["extraction_or_query"])["route_id"].startswith("frozen_queue_"), "the unnamed route carries the queue approval")

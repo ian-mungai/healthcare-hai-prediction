@@ -112,6 +112,52 @@ def test_a_reservation_is_durable_before_the_request_and_a_kill_never_hands_it_b
     check(len(entries(cloud)) == 450, "the second task reserved nothing and made no request")
 
 
+def later_entries(cloud: Ledger, count: int, when: datetime) -> None:
+    for index in range(count):
+        cloud.objects[f"{PREFIX}{index + 2:010d}.json"] = {"Body": b"{}", "LastModified": when}
+
+
+def test_a_reservation_counts_until_a_day_after_its_latest_possible_send() -> None:
+    """The review's model: an entry reserved at T, sent 30 seconds later, with 449 others made after it. At T plus a day and a second it still counts."""
+    cloud = Ledger()
+    keys(cloud).reserve_request("first", LIMIT)
+    later_entries(cloud, 449, NOW + timedelta(hours=1))
+    client = task_role.TaskKeys("bls_api_v2", ENV, cloud.factory, clock=lambda: NOW + timedelta(hours=24, seconds=1))
+    with pytest.raises(bls.QuotaPause):
+        client.reserve_request("second", LIMIT)
+    check(len(entries(cloud)) == 450, "the window still held 450 counted requests")
+
+
+def test_a_reservation_leaves_the_window_only_after_the_send_limit_has_passed() -> None:
+    cloud = Ledger()
+    keys(cloud).reserve_request("first", LIMIT)
+    later_entries(cloud, 449, NOW + timedelta(hours=1))
+    client = task_role.TaskKeys("bls_api_v2", ENV, cloud.factory, clock=lambda: NOW + task_role.BLS_WINDOW + timedelta(seconds=1))
+    client.reserve_request("second", LIMIT)
+    check(len(entries(cloud)) == 451, "the first entry has left the window")
+    check(timedelta(hours=24) + task_role.BLS_SEND_LIMIT + task_role.BLS_SEND_BOUND <= task_role.BLS_WINDOW, "the window covers the latest possible send")
+
+
+def test_a_request_too_late_for_its_reservation_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict] = []
+    monkeypatch.setattr(http.client, "HTTPSConnection", connection_class(Reply(200, b'{"status": "REQUEST_SUCCEEDED"}'), sent))
+    monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
+    now = [NOW]
+    cloud = Ledger()
+    reads = cloud.get_secret_value
+
+    def slow(SecretId: str) -> dict:
+        now[0] = NOW + task_role.BLS_SEND_LIMIT + timedelta(seconds=1)
+        return reads(SecretId)
+
+    monkeypatch.setattr(cloud, "get_secret_value", slow)
+    client = task_role.TaskKeys("bls_api_v2", ENV, cloud.factory, clock=lambda: now[0])
+    with pytest.raises(bls.QuotaPause):
+        bls.request_live(PLAN, BATCH, cast(AwsCli, client))
+    check(sent == [], "a late request stays unsent and its entry stays spent")
+    check(len(entries(cloud)) == 1, "the entry remains")
+
+
 def test_two_tasks_racing_for_the_last_slot_cannot_both_win() -> None:
     cloud = Ledger(earlier=449)
     cloud.race = [f"{PREFIX}{450:010d}.json"]
@@ -329,15 +375,6 @@ def test_an_outcome_for_another_source_or_a_unit_outside_the_queue_stops_the_run
     )
     with pytest.raises(ValueError, match="outcome"):
         harness.execute(run)
-
-
-def test_an_outcome_with_verified_evidence_skips_its_unit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    cloud = VersionedS3()
-    record = evidence(cloud, b"receipt")
-    run = state_for(tmp_path, cloud, {"outcome": "exact_match", "stored": {"receipt": record, "manifests": [record]}})
-    summary = harness.execute(run)
-    check(summary["attempted"] == 0, f"a verified outcome is not attempted again: {summary}")
 
 
 def test_a_blocked_outcome_needs_no_evidence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import logging
@@ -200,6 +201,7 @@ def test_the_task_stores_only_the_filtered_copy_under_raw_and_keeps_no_original(
         "metadata of the original stays as the inventory",
     )
     check(proofs[0]["original_retention"] == collector.TASK_RETENTION, f"the proof states where the original lived: {proofs[0]['original_retention']}")
+    check(harness.execute(dataclasses.replace(run, cache={}))["attempted"] == 0, "the real outcome survives a restart's recomputation")
 
 
 @pytest.mark.parametrize("failure", ["bad bytes", "parse error with a name", "storage refused", "removal of leftovers"])
@@ -327,6 +329,7 @@ def test_the_task_stores_only_the_hospital_rows_of_the_onc_file_under_raw_and_ke
     clean_of_clinicians(run.state_root, {"summary": str(summary), "stdout": captured.out, "stderr": captured.err, "log": caplog.text})
     proofs = [json.loads(stored) for key, (_, stored, _) in bucket.objects.items() if key.endswith("download_proof.json")]
     check(len(proofs) == 1 and proofs[0]["original_retention"] == onc_collector.TASK_RETENTION, "the proof states where the original lived")
+    check(harness.execute(dataclasses.replace(run, cache={}))["attempted"] == 0, "the real outcome survives a restart's recomputation")
 
 
 @pytest.mark.parametrize("failure", ["changed bytes", "parse error with an identifier", "storage refused", "removal of leftovers"])

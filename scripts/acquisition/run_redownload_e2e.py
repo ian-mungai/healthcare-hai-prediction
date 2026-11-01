@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import dataclasses
 import http.client
 import io
 import json
@@ -648,6 +649,9 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
             require(bool(bucket.objects) and all(name.startswith("raw/") for name in bucket.objects), f"The capture is outside raw/: {sorted(bucket.objects)}")
             require(result["stored"]["receipt"]["key"] in bucket.objects, "The outcome does not name the stored receipt")
             require(not any(key.encode() in name.encode() or key.encode() in body for name, body in bucket.objects.items()), "A stored object holds the key")
+            with patch.dict(os.environ, route):
+                again = harness.execute(dataclasses.replace(task, cache={}))
+            require(again["attempted"] == 0, f"The real keyed outcome did not survive the recomputation: {again}")
             require(reads == ["bls_api_key"] and len(sent) == 1 and key.encode() in sent[0], "The task read another secret or did not send its key")
             kept = [str(path) for path in state.rglob("*") if key.encode() in path.name.encode() or (path.is_file() and key.encode() in path.read_bytes())]
             require(not kept, f"The key reached {kept}")
