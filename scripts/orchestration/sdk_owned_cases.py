@@ -383,16 +383,16 @@ def _exit_cases(module: ModuleType = process_group) -> dict[str, bool]:
     checks["host_unknown_state_without_a_witness_is_refused_and_never_signalled"] = (
         not result["confirmed"] and world.handle.state == "reap_only" and not any(event[0] == "signal" for event in world.events)
     )
-    first = _World(module, child=False)
-    first.members[first.pid] = "Z"
-    first.unreapable_waits = 10**6
-    second = _World(module)
-    second.clock = first.clock
-    deadline = first.clock.now + 0.2
-    one = first.stop(budget=0.2)
-    two = second.stop(budget=deadline - second.clock.now)
+    stuck = _World(module, child=False)
+    stuck.members[stuck.pid] = "Z"
+    stuck.unreapable_waits = 10**6
+    later = _World(module)
+    later.clock = stuck.clock
+    deadline = stuck.clock.now + 0.2
+    one = stuck.stop(budget=0.2)
+    two = later.stop(budget=deadline - later.clock.now)
     checks["host_a_dying_unreapable_leader_leaves_a_short_shared_budget_to_the_next_live_worker"] = (
-        not one["confirmed"] and two["confirmed"] and second.reaped and second.handle.state == "read_only"
+        not one["confirmed"] and two["confirmed"] and later.reaped and later.handle.state == "read_only"
     )
     handles = [_World(module, child=False) for _ in range(2)]
     for handle in handles:
