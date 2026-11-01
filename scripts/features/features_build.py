@@ -36,6 +36,7 @@ from typing import Any
 from orchestration.pipeline_protocol import PipelineError, read_record, safe_name
 from scripts.features import feature_schema
 from scripts.features.features_input import INPUT_NAME, PIN_NAME, check_gold_pin
+from scripts.lakehouse import duckdb_bounds
 from scripts.lakehouse import feature_columns as columns
 from scripts.lakehouse.gold_publish import load_plan
 from scripts.lakehouse.gold_publish_record import PublishError
@@ -116,16 +117,7 @@ def write_profile(folder: Path, database: Path, locked: bool) -> Path:
     """The dbt profile of the build: one DuckDB target on a file, external access off when ``locked`` (a seed reads its CSV, so the seed step is not),
     memory and threads from the job's allocation when it sets them."""
     folder.mkdir(parents=True, exist_ok=True)
-    settings = []
-    if os.environ.get("DUCKDB_MEMORY_LIMIT"):
-        settings.append(f"        memory_limit: '{os.environ['DUCKDB_MEMORY_LIMIT']}'")
-    if os.environ.get("JOB_THREADS"):
-        settings.append(f"        threads: {int(os.environ['JOB_THREADS'])}")
-    text = f"hai:\n  target: shell\n  outputs:\n    shell:\n      type: duckdb\n      path: {database}\n      threads: 1\n"
-    text += columns.LOCKED_SETTINGS if locked else ""
-    if settings:
-        text += "      settings:\n" + "\n".join(settings) + "\n"
-    (folder / "profiles.yml").write_text(text)
+    (folder / "profiles.yml").write_text(duckdb_bounds.shell_profile(database, locked))
     return folder
 
 
@@ -182,7 +174,7 @@ def materialize(
     """Write ``destination`` with the published tables as plain tables, the build inputs, the receipt and the own-snapshot reference."""
     duckdb: Any = importlib.import_module("duckdb")
     destination.unlink(missing_ok=True)
-    connection = duckdb.connect(str(destination))
+    connection = duckdb_bounds.connect(duckdb, destination)
     try:
         # Views store the catalog name of the file that built them (the file's stem), so the build file is attached under that name.
         catalog = safe_name(source.stem)
@@ -219,7 +211,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
     full, shell, stage = work / "full.duckdb", work / "shell.duckdb", work / "features.duckdb"
-    connection = duckdb.connect(str(full))
+    connection = duckdb_bounds.connect(duckdb, full)
     try:
         if os.environ.get("DUCKDB_MEMORY_LIMIT"):
             connection.execute("SET memory_limit = ?", [os.environ["DUCKDB_MEMORY_LIMIT"]])
