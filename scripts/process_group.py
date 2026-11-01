@@ -22,6 +22,11 @@ from scripts.process import TimeoutExpired, find_program, run_command
 
 WORKER_STOP_SECONDS = 5.0
 POLL_SECONDS = 0.1
+# How long one stop waits for a leader that the kernel already reports as dying (a zombie, or on macOS an exiting process) to become reapable. The exit
+# of a worker takes milliseconds, tens of milliseconds when memory or disk are busy, and a zombie leader with live threads is not reapable until they
+# end. Only such a leader is waited for: a live handle, a reap-only handle and a listing that fails return at once.
+EXIT_GRACE_SECONDS = 0.25
+EXIT_POLL_SECONDS = 0.01
 ALLOWED_PYTHON_EXECUTABLES = frozenset({Path(sys.executable).resolve(), (Path(__file__).resolve().parents[1] / ".venv/bin/python").resolve()})
 HandleState = Literal["signalling", "reap_only", "read_only"]
 
@@ -273,6 +278,11 @@ def _close_pipes(handle: OwnedProcess) -> None:
     handle.pipes_closed = True
 
 
+def _dying(state: str) -> bool:
+    """Return True for a zombie (``Z``) and for an exiting process (``?``, macOS): its address space and environment are gone, so it can show no witness."""
+    return state.startswith(("Z", "?"))
+
+
 def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
     """Signal and reap under one lock. Reaping irrevocably removes signal authority."""
     previous_interrupts = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -290,7 +300,7 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                 if handle.state == "signalling":
                     snapshot = process_snapshot(deadline, handle.witness)
                     members = snapshot.group(handle.pgid)
-                    live = tuple(member for member in members if not member.state.startswith("Z"))
+                    live = tuple(member for member in members if not _dying(member.state))
                     leader = next((member for member in members if member.pid == handle.pid), None)
                     if snapshot.status != "seen" or leader is None or (live and not any(member.witness for member in members)):
                         handle.state = "reap_only"
@@ -305,6 +315,7 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                             _portable.signal_group(handle.pgid, signal.SIGCONT)
                             handle.state = "reap_only"
                 ready_to_reap = handle.state == "reap_only"
+                dying_leader = False
                 while not ready_to_reap and time.monotonic() < deadline:
                     snapshot = process_snapshot(deadline)
                     if snapshot.status != "seen":
@@ -315,9 +326,10 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                         handle.state = "reap_only"
                         ready_to_reap = True
                         break
-                    live = tuple(member for member in members if not member.state.startswith("Z"))
-                    if not live and (handle.exit_observed or leader.state.startswith("Z")):
+                    live = tuple(member for member in members if not _dying(member.state))
+                    if not live and (handle.exit_observed or _dying(leader.state)):
                         ready_to_reap = True
+                        dying_leader = _dying(leader.state)
                         break
                     if _portable.signal_group(handle.pgid, signal.SIGKILL) == "gone":
                         handle.state = "read_only"
@@ -325,7 +337,8 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                         _close_pipes(handle)
                         return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
                     time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
-                if ready_to_reap and time.monotonic() < deadline:
+                grace_end = time.monotonic() + EXIT_GRACE_SECONDS
+                while ready_to_reap and time.monotonic() < deadline:
                     try:
                         reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
                     except ChildProcessError:
@@ -336,6 +349,9 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                         handle.confirmed = _portable.wait_group_gone(handle.pgid, deadline, time.monotonic, time.sleep)
                         handle.last_stop = "confirmed" if handle.confirmed else "worker_unproven"
                         return StopResult(handle.last_stop, handle.pid, handle.pgid, handle.confirmed)
+                    if not dying_leader or time.monotonic() >= grace_end:
+                        break
+                    time.sleep(min(EXIT_POLL_SECONDS, max(0.0, grace_end - time.monotonic()), max(0.0, deadline - time.monotonic())))
                 handle.last_stop = "worker_unproven" if handle.state == "reap_only" else "survivor"
                 status = "refused_unproven" if handle.state == "reap_only" else "survivor"
                 return StopResult(status, handle.pid, handle.pgid, False)

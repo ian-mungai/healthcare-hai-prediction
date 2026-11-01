@@ -183,15 +183,18 @@ MUTATIONS = (
 
 @dataclass(frozen=True)
 class StopMutation:
-    """A defect planted in the task supervisor's stop and the fake-backed stop case that must fail for it."""
+    """A defect planted in a stop (the task supervisor's or the host's) and the fake-backed stop case that must fail for it."""
 
     name: str
     before: str
     after: str
     check: str
+    path: str = "services/hai/bootstrap/supervisor.py"
 
 
 SUPERVISOR = "services/hai/bootstrap/supervisor.py"
+HOST_STOP = "scripts/process_group.py"
+HOST_SIBLINGS = ("services/hai/deadline_run.py",)
 SUPERVISOR_SIBLINGS = ("services/hai/deadline_run.py", "orchestration/worker_protocol.py", "orchestration/worker_stderr.py")
 RETRY_SLEEP = "time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))\n"
 STOP_MUTATIONS = (
@@ -219,21 +222,50 @@ STOP_MUTATIONS = (
         "                while time.monotonic() < deadline + 100:\n                    if not ready_to_reap:",
         "task_unreapable_leader_is_unconfirmed_at_the_deadline",
     ),
+    StopMutation(
+        "host_stop_counts_an_exiting_leader_as_live",
+        'return state.startswith(("Z", "?"))',
+        'return state.startswith("Z")',
+        "host_exiting_leader_is_reaped_within_the_exit_grace_without_a_demotion_or_a_signal",
+        HOST_STOP,
+    ),
+    StopMutation(
+        "host_stop_gives_a_dying_leader_no_grace",
+        "                    if not dying_leader or time.monotonic() >= grace_end:",
+        "                    if True:",
+        "host_exiting_leader_is_reaped_within_the_exit_grace_without_a_demotion_or_a_signal",
+        HOST_STOP,
+    ),
+    StopMutation(
+        "host_stop_waits_for_a_dying_leader_without_a_bound",
+        "                    if not dying_leader or time.monotonic() >= grace_end:",
+        "                    if not dying_leader:",
+        "host_exiting_leader_that_stays_unreapable_is_unconfirmed_after_the_grace_and_stays_signalling",
+        HOST_STOP,
+    ),
+    StopMutation(
+        "host_stop_gives_every_leader_the_grace",
+        "                dying_leader = False\n",
+        "                dying_leader = True\n",
+        "host_live_leader_without_a_witness_is_still_demoted_and_never_waited_for",
+        HOST_STOP,
+    ),
 )
 
 
 def stop_mutation_rows(run_folder: Path) -> list[dict[str, Any]]:
-    """Plant each stop defect in a copy of the supervisor and require the named fake-backed stop case to fail, after a passing baseline."""
-    from scripts.orchestration.sdk_owned_cases import _retry_cases
+    """Plant each stop defect in a copy of its file and require the named fake-backed stop case to fail, after a passing baseline on the real file."""
+    from scripts.orchestration.sdk_owned_cases import _exit_cases, _retry_cases
 
-    source = (ROOT / SUPERVISOR).read_text()
+    cases = {SUPERVISOR: (_retry_cases, SUPERVISOR_SIBLINGS), HOST_STOP: (_exit_cases, HOST_SIBLINGS)}
 
-    def checks_of(text: str, label: str) -> dict[str, bool]:
+    def checks_of(path: str, text: str, label: str) -> dict[str, bool]:
+        run_cases, siblings = cases[path]
         root = run_folder / label
-        for relative in SUPERVISOR_SIBLINGS:
+        for relative in siblings:
             (root / relative).parent.mkdir(parents=True, exist_ok=True)
             (root / relative).write_text((ROOT / relative).read_text())
-        target = root / SUPERVISOR
+        target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
         spec = importlib.util.spec_from_file_location(f"hai_stop_mutation_{label}", target)
@@ -242,22 +274,25 @@ def stop_mutation_rows(run_folder: Path) -> list[dict[str, Any]]:
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-        return _retry_cases(module)
+        return run_cases(module)
 
-    baseline = checks_of(source, "stop_baseline")
-    if not baseline or not all(baseline.values()):
-        raise RuntimeError("stop_mutations_require_passing_baseline")
+    sources = {path: (ROOT / path).read_text() for path in cases}
+    for path, text in sources.items():
+        baseline = checks_of(path, text, f"stop_baseline_{Path(path).stem}")
+        if not baseline or not all(baseline.values()):
+            raise RuntimeError("stop_mutations_require_passing_baseline")
     rows = []
     for mutation in STOP_MUTATIONS:
+        source = sources[mutation.path]
         if source.count(mutation.before) != 1:
             raise ValueError("stop_mutation_location_changed")
         changed = source.replace(mutation.before, mutation.after, 1)
         ast.parse(changed)
-        observed = checks_of(changed, mutation.name)
+        observed = checks_of(mutation.path, changed, mutation.name)
         rows.append(
             {
                 "name": mutation.name,
-                "source": SUPERVISOR,
+                "source": mutation.path,
                 "assertion": mutation.check,
                 "observed": observed.get(mutation.check),
                 "caught": observed.get(mutation.check) is False,

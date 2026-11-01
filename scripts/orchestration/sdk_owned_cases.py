@@ -73,6 +73,11 @@ class _ObservedLock:
         self.release()
 
 
+def _is_host(module: ModuleType) -> bool:
+    """Return True for the host stop module (or a planted copy of it), False for the task supervisor."""
+    return hasattr(module, "OwnedProcess")
+
+
 class _World:
     def __init__(self, module: ModuleType, *, child: bool = True) -> None:
         self.module = module
@@ -80,7 +85,7 @@ class _World:
         self.lock = _ObservedLock()
         self.pid = 1000101
         self.handle: Any
-        if module is process_group:
+        if _is_host(module):
             self.handle = process_group.OwnedProcess(
                 self.pid, self.pid, -1, -1, -1, "synthetic_witness", "synthetic_nonce", "current", "control", "current", "synthetic", "synthetic"
             )
@@ -125,11 +130,12 @@ class _World:
             raise ValueError("synthetic_wait_identity_mismatch")
         if self.reaped:
             raise ChildProcessError
-        if self.members.get(pid) == "Z" and self.unreapable_waits > 0:
-            # A zombie leader whose other threads are still exiting is not reapable yet: the kernel answers a no-hang wait with nothing.
+        if self.members.get(pid) in {"Z", "?E"} and self.unreapable_waits > 0:
+            # A dying leader is not reapable yet (a zombie whose other threads are still exiting, or an exiting process that is not a zombie yet):
+            # the kernel answers a no-hang wait with nothing.
             self.unreapable_waits -= 1
             return 0, 0
-        if self.members.get(pid) == "Z":
+        if self.members.get(pid) in {"Z", "?E"}:
             self._record("reap")
             self.reaped = True
             return pid, 0
@@ -148,7 +154,7 @@ class _World:
                 self.pid,
                 state,
                 "synthetic_worker",
-                not (self.first_scan_unwitnessed and self.scans == 1) and not (self.lost_witness and self.scans >= 2),
+                not (self.first_scan_unwitnessed and self.scans == 1) and not (self.lost_witness and self.scans >= 2) and not state.startswith("?"),
             )
             for pid, state in self.members.items()
             if not (self.missing_leader and pid == self.pid)
@@ -166,12 +172,12 @@ class _World:
             stack.enter_context(patch.object(self.module.os, "killpg", side_effect=self.killpg))
             stack.enter_context(patch.object(self.module.os, "waitpid", side_effect=self.waitpid))
             stack.enter_context(patch.object(self.module.os, "close", side_effect=self.closed.append))
-            if self.module is process_group:
+            if _is_host(self.module):
                 stack.enter_context(patch.object(self.module, "process_snapshot", side_effect=self.snapshot))
             else:
                 stack.enter_context(patch.object(self.module, "_members", side_effect=self.member_states))
             result = self.module.stop_owned(self.handle, self.clock.now + budget)
-        return {"status": result.status, "confirmed": result.confirmed} if self.module is process_group else dict(result)
+        return {"status": result.status, "confirmed": result.confirmed} if _is_host(self.module) else dict(result)
 
 
 def _supervisor() -> ModuleType:
@@ -308,6 +314,69 @@ def _retry_cases(module: ModuleType) -> dict[str, bool]:
     world = _World(module)
     result = world.stop()
     checks["task_confirmed_stop_names_no_failure"] = result["confirmed"] and result.get("reason", "") == ""
+    return checks
+
+
+def _exit_cases(module: ModuleType = process_group) -> dict[str, bool]:
+    """A leader that the kernel reports as exiting is dying, not live without a witness: the host stop keeps it signalling and gives its reap a short grace."""
+    checks = {}
+    world = _World(module, child=False)
+    world.members[world.pid] = "?E"
+    world.unreapable_waits = 3
+    result = world.stop(budget=4.0)
+    checks["host_exiting_leader_is_reaped_within_the_exit_grace_without_a_demotion_or_a_signal"] = (
+        result["confirmed"]
+        and world.reaped
+        and world.handle.state == "read_only"
+        and not any(event[0] == "signal" for event in world.events)
+        and world.clock.now <= 100.3
+    )
+    world = _World(module, child=False)
+    world.members[world.pid] = "?E"
+    world.unreapable_waits = 10**6
+    result = world.stop(budget=4.0)
+    checks["host_exiting_leader_that_stays_unreapable_is_unconfirmed_after_the_grace_and_stays_signalling"] = (
+        result["status"] == "survivor"
+        and not result["confirmed"]
+        and world.handle.state == "signalling"
+        and not any(event[0] == "signal" for event in world.events)
+        and not world.reaped
+        and 100.2 <= world.clock.now <= 100.4
+    )
+    world = _World(module, child=False)
+    world.members[world.pid] = "?E"
+    world.unreapable_waits = 10**6
+    first = world.stop(budget=4.0)
+    world.unreapable_waits = 0
+    second = world.stop(budget=4.0)
+    checks["host_a_later_attempt_reaps_an_exiting_leader_that_was_not_reapable_before"] = (
+        not first["confirmed"] and second["confirmed"] and world.reaped and not any(event[0] == "signal" for event in world.events)
+    )
+    world = _World(module)
+    world.first_scan_unwitnessed = True
+    result = world.stop(budget=4.0)
+    checks["host_live_leader_without_a_witness_is_still_demoted_and_never_waited_for"] = (
+        not result["confirmed"] and world.handle.state == "reap_only" and not any(event[0] == "signal" for event in world.events) and world.clock.now <= 100.05
+    )
+    world = _World(module)
+    world.members[world.pid] = "?E"
+    world.members[world.pid + 1] = "R"
+    world.first_scan_unwitnessed = True
+    world.unreapable_waits = 10**6
+    result = world.stop(budget=4.0)
+    checks["host_exiting_leader_with_a_live_unwitnessed_member_is_still_demoted"] = (
+        not result["confirmed"] and world.handle.state == "reap_only" and not any(event[0] == "signal" for event in world.events)
+    )
+    dying = _World(module, child=False)
+    dying.members[dying.pid] = "?E"
+    dying.unreapable_waits = 10**6
+    waiting = _World(module, child=False)
+    waiting.clock = dying.clock
+    waiting.members[waiting.pid] = "Z"
+    deadline = dying.clock.now + 0.6
+    first = dying.stop(budget=0.6)
+    second = waiting.stop(budget=deadline - waiting.clock.now)
+    checks["host_serial_handles_a_stuck_exiting_leader_leaves_time_for_the_next_handle"] = not first["confirmed"] and second["confirmed"] and waiting.reaped
     return checks
 
 
@@ -582,6 +651,7 @@ def owned_cases(folder: Path) -> dict[str, bool]:
         **_stop_cases(process_group, "host"),
         **_stop_cases(supervisor, "task"),
         **_retry_cases(supervisor),
+        **_exit_cases(),
         **_witness_cases(),
         **_disposition_cases(supervisor, folder / "stderr"),
         **_changed_disposition_case(supervisor, folder / "changed_disposition"),

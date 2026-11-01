@@ -1387,11 +1387,11 @@
     },
     {
       "path": "scripts/process_group.py",
-      "line": 221,
+      "line": 226,
       "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "c46084909b91c5e2a7c81405df102cac1c258c0ae499fe38b6d4208c77066f27",
+      "file_sha256": "c340feb82b37b10925313280048f62833aa70e20fdea003528f679d8915e2689",
       "dependencies": {
         "orchestration/worker_stderr.py": "sha256:b789fbb6d329adf6e571344079066028bb80b9a78be9e9f0700dbdac855898d1",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
