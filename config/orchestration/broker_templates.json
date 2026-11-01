@@ -530,6 +530,10 @@
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
+              "model.hai.int_hospital_owner_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
               "model.hai.int_hospital_owner_rows": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
@@ -1928,6 +1932,10 @@
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
               "model.hai.int_hospital_enrollment_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hospital_owner_periods": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },

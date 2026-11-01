@@ -1373,6 +1373,41 @@
       "severity": "structural"
     },
     {
+      "id": "int_hospital_owner_periods.columns",
+      "table": "int_hospital_owner_periods",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "ccn",
+          "associate_id_owner",
+          "role_code",
+          "valid_from",
+          "valid_to",
+          "is_current",
+          "bridged_releases"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_owner_periods.has_rows",
+      "table": "int_hospital_owner_periods",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_owner_periods.types",
+      "table": "int_hospital_owner_periods",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('ccn', 'VARCHAR'), ('associate_id_owner', 'VARCHAR'), ('role_code', 'VARCHAR'), ('valid_from', 'DATE'), ('valid_to', 'DATE'), ('is_current', 'BOOLEAN'), ('bridged_releases', 'BIGINT')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_hospital_owner_periods' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "int_hospital_owner_rows.columns",
       "table": "int_hospital_owner_rows",
       "type": "ExpectTableColumnsToMatchSet",

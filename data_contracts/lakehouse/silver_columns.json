@@ -3122,6 +3122,47 @@
       "package": null,
       "unchanged": true
     },
+    "int_hospital_owner_periods": {
+      "baseline_content": null,
+      "baseline_rows": null,
+      "changes": {
+        "grain": "ccn, associate_id_owner, role_code, valid_from",
+        "note": "New model: one row per hospital, organisation owner and role per continuous period of the monthly owner releases. It reads int_hospital_owner_rows and int_hospital_enrollment_rows, so it has no beab859 baseline."
+      },
+      "columns": [
+        [
+          "ccn",
+          "VARCHAR"
+        ],
+        [
+          "associate_id_owner",
+          "VARCHAR"
+        ],
+        [
+          "role_code",
+          "VARCHAR"
+        ],
+        [
+          "valid_from",
+          "DATE"
+        ],
+        [
+          "valid_to",
+          "DATE"
+        ],
+        [
+          "is_current",
+          "BOOLEAN"
+        ],
+        [
+          "bridged_releases",
+          "BIGINT"
+        ]
+      ],
+      "new": true,
+      "package": null,
+      "unchanged": false
+    },
     "int_hospital_owner_rows": {
       "baseline_content": "66690895611293803144:140791237029156965872777868193352924373",
       "baseline_rows": 8,
