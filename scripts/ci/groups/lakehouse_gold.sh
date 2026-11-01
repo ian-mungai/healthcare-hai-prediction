@@ -10,6 +10,7 @@ lakehouse_gold_checks() {
   # Reference seeds of the gold control bridge, the formula recipes and the repeatable negative cases of their check.
   timed "lakehouse_gold: bridge references check" "$python_bin" -m scripts.lakehouse.bridge_references --check
   timed "lakehouse_gold: bridge references E2E" "$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
+  timed "lakehouse_gold: owner history E2E" "$python_bin" -m scripts.lakehouse.run_owner_history_e2e
   timed "lakehouse_gold: identity splits check" "$python_bin" -m scripts.lakehouse.identity_splits --check
   timed "lakehouse_gold: source labels check" "$python_bin" -m scripts.lakehouse.source_labels --check
   timed "lakehouse_gold: county change seed check" "$python_bin" -m scripts.lakehouse.county_change_seed --check

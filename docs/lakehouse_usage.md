@@ -428,6 +428,7 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.run_mmd_conditions_e2e           # the check catches drift; report: data/e2e/mmd_conditions/
 .venv/bin/python -m scripts.lakehouse.bridge_references --check          # bridges and recipes match the gold contract and the registry
 .venv/bin/python -m scripts.lakehouse.run_gold_e2e                     # gold on fixtures; --real adds two pinned real builds; report: data/e2e/gold/
+.venv/bin/python -m scripts.lakehouse.run_owner_history_e2e             # the owner period rules on synthetic rows, no Docker; report: data/e2e/owner_history/
 .venv/bin/python -m scripts.lakehouse.gold_checks check-suites          # the gold suites match the gold contract
 .venv/bin/python -m scripts.lakehouse.gold_checks check-models          # gold models read published silver models only; YAML lists only tests dbt can bind
 .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # pin bronze in data/analytics/dbt/runs/<run_id>/pins.json
