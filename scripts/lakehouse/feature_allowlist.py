@@ -99,7 +99,8 @@ HOOK_MACROS = ("macro.hai.hai_drop_build_marker", "macro.hai.hai_finalize_build_
 # SHA-256 of the macro code (the manifest's macro_sql) of each hook macro and each project macro they reach, as of dbt/macros/build_marker_hooks.sql and
 # dbt/macros/build_provenance.sql. A change needs a new review of the hooks: they act on the build marker of a real build and on nothing else.
 HOOK_MACRO_SHA256 = {
-    "macro.hai.hai_build_eligible": "9e9f9531bf349c0e3a7a5753719c6d19f1956981218d3e09eadbdd5808acb1cb",
+    "macro.hai.hai_build_eligible": "ffdf7ec74f1717754abea2bfbe60f4124a3959940f1687f9c3deb6d0e0f557ab",
+    "macro.hai.hai_silver_layer_selection": "cd606e9b7b3229685b85dcff3abc34d26ee4ab84e761854bde59095c4f88f089",
     "macro.hai.hai_build_provenance": "2a07480d4f847d269c176e4fd9ac31dd6bb3473edf9d208e7eea7451475cb355",
     "macro.hai.hai_build_selection": "65cf815d81e767c674551776c5625a0dc266b7f2b6edf2bbc8e2d2de996ef428",
     "macro.hai.hai_drop_build_marker": "8f98a6465ec4d67cd3821dd92adf58b9c8e29565fdd293193729454576d8be9c",

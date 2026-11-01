@@ -62,7 +62,7 @@
       "^data_contracts/lakehouse/(silver_columns|gold_contract)\\.json$",
       "^data_contracts/great_expectations/",
       "^features/great_expectations/",
-      "^scripts/lakehouse/(silver|silver_quality|run_silver_e2e|run_duckdb_spill_cases)\\.py$",
+      "^scripts/lakehouse/(silver|silver_quality|run_silver_e2e|run_duckdb_spill_cases|run_build_marker_cases)\\.py$",
       "^scripts/ci/groups/lakehouse_silver\\.sh$"
     ],
     "lakehouse_gold": [
