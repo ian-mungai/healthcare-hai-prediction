@@ -1263,6 +1263,13 @@ dim_footnote,code_label,,false
 dim_hospital,ccn,,false
 dim_hospital,first_seen,,false
 dim_hospital,last_seen,,false
+dim_hospital_owner_history,ccn,,false
+dim_hospital_owner_history,associate_id_owner,,false
+dim_hospital_owner_history,role_code,,false
+dim_hospital_owner_history,valid_from,,false
+dim_hospital_owner_history,valid_to,,false
+dim_hospital_owner_history,is_current,,false
+dim_hospital_owner_history,bridged_releases,,false
 dim_measure,measure_identity,,false
 dim_measure,fact,,false
 dim_measure,measure_key,,false

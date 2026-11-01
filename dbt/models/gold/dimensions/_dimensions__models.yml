@@ -824,6 +824,49 @@ models:
                 column: ccn
                 dates:
                   - release_date
+  - name: dim_hospital_owner_history
+    description: >
+      Type 2 history of hospital ownership: one row per hospital CCN, organisation owner associate ID and role code per continuous period of the
+      monthly CMS owner releases, plus the unknown member. Grain: ccn, owner, role and valid_from. valid_from is the period end of the first release that lists
+      the owner in the role, valid_to (exclusive) the period end of the release after the last one, and is_current marks the open period. One missing
+      release is bridged and counted in bridged_releases; two or more end the period. History is recomputed from all releases on every build, so a corrected
+      publisher release can change or remove a period, and the publish merge deletes rows missing from the new build. No personal name or contact enters
+      the table. It inherits the owner dimension's classification because it holds owner associate IDs.
+    meta:
+      classification: Confidential
+    columns:
+      - name: hospital_owner_history_sk
+        description: 'Surrogate key: the md5 of CCN, owner associate ID, role code and valid_from joined with a pipe. The unknown member''s key is md5(''<unknown>'').'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+      - name: ccn
+        description: The hospital CCN as published, matched to dim_hospital. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: ccn
+      - name: associate_id_owner
+        description: The owner organisation's 10-digit associate ID as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: role_code
+        description: The owner role code as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: valid_from
+        description: Period end of the first release that lists the owner in the role. Null on the unknown member only.
+      - name: valid_to
+        description: Exclusive end of the period, the period end of the release after the last one that lists the owner. Null while the period is open.
+      - name: is_current
+        description: True while the latest release still lists the owner in the role. False on the unknown member.
+        data_tests:
+          - not_null
+      - name: bridged_releases
+        description: The number of single missing releases the period covers. Null on the unknown member.
   - name: dim_measure
     description: One row per measure identity (fact, measure_key, value_column), plus the unknown member. A measure whose published meaning changed
       (identity_rule split) has one row per label edition; a measure with a renamed or held label keeps one row with its latest label.

@@ -453,6 +453,22 @@
       ],
       "package": "G2"
     },
+    "dim_hospital_owner_history": {
+      "attributes": [
+        "ccn",
+        "associate_id_owner",
+        "role_code",
+        "valid_from",
+        "valid_to",
+        "is_current",
+        "bridged_releases"
+      ],
+      "grain": "hospital, organisation owner and role per continuous period of the monthly owner releases (type 2)",
+      "inputs": [
+        "int_hospital_owner_periods"
+      ],
+      "package": "G2"
+    },
     "dim_measure": {
       "attributes": [
         "measure_identity",
@@ -9705,6 +9721,12 @@
         "kind": "dimension",
         "merge_key": [
           "hospital_sk"
+        ]
+      },
+      "dim_hospital_owner_history": {
+        "kind": "dimension",
+        "merge_key": [
+          "hospital_owner_history_sk"
         ]
       },
       "dim_measure": {

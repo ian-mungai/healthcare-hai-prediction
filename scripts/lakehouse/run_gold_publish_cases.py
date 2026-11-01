@@ -1064,9 +1064,9 @@ def contract_plan(h: Harness) -> Check:
     """The contract's publish entry names every gold table with a merge key and the two namespaces."""
     plan = publish.load_plan()
     return {
-        "70 tables with a non-empty key": len(plan.tables) == 70 and all(plan.tables.values()),
-        "46 facts, 20 dimensions and 4 bridges": sum(n.startswith("fct_") for n in plan.tables) == 46
-        and sum(n.startswith("dim_") for n in plan.tables) == 20
+        "71 tables with a non-empty key": len(plan.tables) == 71 and all(plan.tables.values()),
+        "46 facts, 21 dimensions and 4 bridges": sum(n.startswith("fct_") for n in plan.tables) == 46
+        and sum(n.startswith("dim_") for n in plan.tables) == 21
         and sum(n.startswith("bridge_") for n in plan.tables) == 4,
         "the namespaces are gold and gold_e2e": dict(plan.namespaces) == {"publish_fixture": "gold_e2e", "real": "gold"},
         "the backup prefix is the owner's folder under lakehouse/": plan.backup_prefix == "lakehouse/catalog_backups/",
@@ -1133,7 +1133,7 @@ def readback(h: Harness) -> Check:
         wanted = publish.fingerprint(ctx, item["columns"], view)
         found = content_at(ctx, name, int(head["snapshot_set"][name]), item["columns"])
         equal += found == wanted and found[0] == int(item["rows"])
-    checks["every table at the named snapshot equals the export (rows and fingerprint)"] = equal == len(manifest["tables"]) == 70
+    checks["every table at the named snapshot equals the export (rows and fingerprint)"] = equal == len(manifest["tables"]) == 71
     checks.update(release_list_checks(ctx, manifest, export_dir, int(head["snapshot_set"]["dim_release"])))
     checks["main of every table is at the named snapshot"] = {n: m for n, m in mains(ctx).items()} == head["snapshot_set"]
     checks["no run branch is left"] = all(ctx.branch not in publish.table_refs(ctx, n) for n in plan.tables)

@@ -2300,6 +2300,15 @@
       "severity": "structural"
     },
     {
+      "id": "dim_hospital_owner_history.key_type",
+      "table": "dim_hospital_owner_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('hospital_owner_history_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_hospital_owner_history' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "dim_measure.key_type",
       "table": "dim_measure",
       "type": "UnexpectedRowsExpectation",

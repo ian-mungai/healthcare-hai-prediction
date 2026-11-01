@@ -404,7 +404,7 @@ def contract_check(report: Path) -> list[dict[str, Any]]:
     columns = {fact.name: {c.name for c in fact.columns} for fact in contract.facts} | {t.name: {c.name for c in t.columns} for t in contract.bridges}
     missing = [n for n, key in plan.tables.items() if n in columns and not set(key) <= columns[n]]
     return [
-        step("the plan names exactly the contract's 70 tables", set(plan.tables) == set(expected) and len(plan.tables) == 70),
+        step("the plan names exactly the contract's 71 tables", set(plan.tables) == set(expected) and len(plan.tables) == 71),
         step("every merge key equals the contract's grain, dimension key or bridge grain", dict(plan.tables) == expected),
         step("every key column of a fact or bridge is one of the table's contract columns", not missing, missing=missing),
         step("the namespaces are gold_e2e for publish_fixture and gold for real", dict(plan.namespaces) == {"publish_fixture": "gold_e2e", "real": "gold"}),
@@ -1061,8 +1061,8 @@ def publish_offline(session: Session, report: Path) -> list[dict[str, Any]]:
     manifest = json.loads((publish_dir / "export" / "manifest.json").read_text()) if (publish_dir / "export" / "manifest.json").is_file() else {"tables": {}}
     steps.append(
         step(
-            "gold_export: the consumer exports the 70 tables on the expected digest",
-            exported.ok and accept_ok and len(manifest["tables"]) == 70,
+            "gold_export: the consumer exports the 71 tables on the expected digest",
+            exported.ok and accept_ok and len(manifest["tables"]) == 71,
             exit=exported.exit_code,
         )
     )
@@ -1092,7 +1092,7 @@ def publish_offline(session: Session, report: Path) -> list[dict[str, Any]]:
         present = {p.name for p in namespace_folder.iterdir()} if namespace_folder.is_dir() else set()
         if index < 4:
             steps.append(
-                step(f"after {name}: publish_runs does not exist in the catalog", "publish_runs" not in present and len(present) >= 70, tables=len(present))
+                step(f"after {name}: publish_runs does not exist in the catalog", "publish_runs" not in present and len(present) >= 71, tables=len(present))
             )
         else:
             steps.append(step("after commit: publish_runs exists", "publish_runs" in present))

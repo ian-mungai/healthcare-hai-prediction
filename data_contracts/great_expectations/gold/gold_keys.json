@@ -1911,6 +1911,24 @@
       "severity": "structural"
     },
     {
+      "id": "dim_hospital_owner_history.key_unique",
+      "table": "dim_hospital_owner_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hospital_owner_history_sk\" FROM {batch} GROUP BY \"hospital_owner_history_sk\" HAVING count(*) > 1 OR \"hospital_owner_history_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_hospital_owner_history.unknown_member_once",
+      "table": "dim_hospital_owner_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"hospital_owner_history_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "dim_measure.key_unique",
       "table": "dim_measure",
       "type": "UnexpectedRowsExpectation",

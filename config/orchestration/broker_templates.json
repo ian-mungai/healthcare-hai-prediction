@@ -206,6 +206,10 @@
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
+              "model.hai.dim_hospital_owner_history": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
               "model.hai.dim_measure": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
@@ -1608,6 +1612,10 @@
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
               "model.hai.dim_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_hospital_owner_history": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
