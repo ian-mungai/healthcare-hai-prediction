@@ -832,6 +832,8 @@ models:
       release is bridged and counted in bridged_releases; two or more end the period. History is recomputed from all releases on every build, so a corrected
       publisher release can change or remove a period, and the publish merge deletes rows missing from the new build. No personal name or contact enters
       the table. It inherits the owner dimension's classification because it holds owner associate IDs.
+      Every period uses the enrollment's latest valid CCN, not a dated mapping, so a CCN change rewrites the earlier periods and their keys on the next build.
+      The table records listings: a change of share or any other attribute of a listed owner opens no new version.
     meta:
       classification: Confidential
     columns:
@@ -842,7 +844,7 @@ models:
           - not_null
           - unknown_member_once
       - name: ccn
-        description: The hospital CCN as published, matched to dim_hospital. The unknown member holds '<unknown>'.
+        description: The latest valid CCN of the owner row's enrollment, not a CCN dated to the period, matched to dim_hospital. The unknown member holds '<unknown>'.
         data_tests:
           - not_null
           - relationships:
