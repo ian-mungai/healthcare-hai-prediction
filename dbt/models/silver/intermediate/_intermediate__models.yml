@@ -537,11 +537,13 @@ models:
       One row per hospital CCN, organisation owner associate ID and role code per continuous period of the monthly owner releases (type 2 history).
       Grain: ccn, associate_id_owner, role_code and valid_from. One missing release is bridged and counted; two or more end the period. Recomputed from every
       release on each build. Organisation owners only, with no name, contact or share.
+      Every period uses the enrollment's latest valid CCN, not a dated mapping, so a CCN change rewrites the earlier periods and their keys on the next build.
+      The table records listings: a change of share or any other attribute of a listed owner opens no new version.
     meta:
       classification: Confidential
     columns:
       - name: ccn
-        description: The hospital CCN of the owner row's enrollment.
+        description: The latest valid CCN of the owner row's enrollment, not a CCN dated to the period.
         data_tests: [not_null]
       - name: associate_id_owner
         description: The owner organisation's 10-digit associate ID.
