@@ -271,7 +271,9 @@ def task_dbt(folder: Path) -> None:
     require(catalog["oauth2_server_uri"] == values["POLARIS_URI"] + "/v1/oauth/tokens", "task_dbt_oauth_endpoint")
     require(profile["attach"][0]["options"]["endpoint"] == values["POLARIS_URI"], "task_dbt_catalog_endpoint")
     require(profile["settings"]["max_temp_directory_size"] == "1048576B", "task_dbt_cap")
-    require(profile["settings"]["temp_directory"] == values["HAI_DUCKDB_TEMP_DIRECTORY"], "task_dbt_scratch")
+    require(
+        profile["config_options"]["temp_directory"] == values["HAI_DUCKDB_TEMP_DIRECTORY"] and "temp_directory" not in profile["settings"], "task_dbt_scratch"
+    )
     require(profile["config_options"]["extension_directory"] == EXTENSION_DIRECTORY, "task_dbt_extension_directory")
     require(profile["config_options"]["autoinstall_known_extensions"] is False, "task_dbt_no_extension_download")
 
