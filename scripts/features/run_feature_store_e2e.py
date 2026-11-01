@@ -167,7 +167,7 @@ def pin_cases(report: Report) -> None:
             "E02",
             "A1",
             "the pin of the head gold set names every gold table and is immutable on a retry after the head moved",
-            retried == record and len(record["snapshot_set"]) == 70,
+            retried == record and len(record["snapshot_set"]) == 71,
         )
         report.case(
             "E02",

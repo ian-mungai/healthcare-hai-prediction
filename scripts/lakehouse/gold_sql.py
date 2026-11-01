@@ -50,7 +50,7 @@ Matcher = Callable[[Json, "Scope"], "Value | None"]
 
 UNKNOWN = "<unknown>"
 # The models whose unknown member may carry null natural key parts (gold contract unknown_member rule).
-NULL_SENTINEL_MODELS = frozenset({"dim_measure", "dim_date"})
+NULL_SENTINEL_MODELS = frozenset({"dim_measure", "dim_date", "dim_hospital_owner_history"})
 ARITHMETIC = frozenset({"+", "-", "*", "/", "%", "//", "**", "add", "subtract", "multiply", "divide", "mod"})
 BOOLEAN_TYPES = frozenset(
     {"OPERATOR_IS_NULL", "OPERATOR_IS_NOT_NULL", "OPERATOR_NOT", "COMPARE_IN", "COMPARE_NOT_IN", "COMPARE_BETWEEN", "COMPARE_NOT_BETWEEN"}
@@ -101,6 +101,7 @@ DIMENSION_KEYS = {
     "dim_enrollment": KeySpec(("enrollment_id",)),
     "dim_footnote": CODE_LIST,
     "dim_hospital": KeySpec(("ccn",)),
+    "dim_hospital_owner_history": KeySpec(("ccn", "associate_id_owner", "role_code", "valid_from")),
     "dim_measure": KeySpec(("fact", "measure_key", "value_column"), edition=EDITION_COLUMN),
     "dim_owner_organization": KeySpec(("associate_id",)),
     "dim_owner_role": CODE_LIST,
