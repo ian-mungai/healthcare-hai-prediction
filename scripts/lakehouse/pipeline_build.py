@@ -26,6 +26,12 @@ from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_sett
 IMPORT_SQL = 'create or replace table main."{table}" as select * from read_parquet(?)'
 
 
+def layer_selection(layer: str) -> list[str]:
+    """The dbt selection of a layer build: the seeds and the layer's models with what they depend on. The build marker hook of dbt/macros/build_marker_hooks.sql
+    recognises this selection of silver as the whole layer, so a change here is a change there."""
+    return ["resource_type:seed", "+path:models/silver" if layer == "silver" else "path:models/gold"]
+
+
 def build_target(layer: str, mode: str) -> str:
     """Select bounded profiles when configured and native task credentials for real silver."""
     bounded = bool(duckdb_temp_settings())
@@ -236,8 +242,7 @@ def main() -> int:
                 "--profiles-dir",
                 str(args.project),
                 "--select",
-                "resource_type:seed",
-                ("+path:models/silver" if args.layer == "silver" else "path:models/gold"),
+                *layer_selection(args.layer),
                 "--indirect-selection",
                 "cautious",
                 *(["--exclude", "tag:features"] if args.layer == "gold" else []),
