@@ -700,11 +700,16 @@ def good_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
+def edit_task(path: Path, change: Callable[[dict[str, Any]], object]) -> None:
+    """Change the one task of a saved describe output."""
+    edit(path, lambda document: change(document["tasks"][0]))
+
+
 def guard_cases(work: Path) -> dict[str, bool]:
     """A good run still passes when its task has a guard container: ECS stops the guard when the last phase ends, so its exit code is 0, 143 (SIGTERM), 137
     (SIGKILL) or none, and a task definition from before the guard has no guard at all."""
     checks: dict[str, bool] = {}
-    variants: dict[str, Callable[[dict[str, Any]], None]] = {
+    variants: dict[str, Callable[[dict[str, Any]], object]] = {
         "exit 143": lambda task: task["containers"][-1].update(exitCode=143),
         "exit 137": lambda task: task["containers"][-1].update(exitCode=137),
         "no exit code": lambda task: task["containers"][-1].pop("exitCode"),
@@ -714,7 +719,7 @@ def guard_cases(work: Path) -> dict[str, bool]:
     for layer in acceptance.LAYERS:
         for number, (label, change) in enumerate(variants.items()):
             env, _ = scenario(work, layer, f"guard variant {'abcdefgh'[number]}")
-            edit(env.root / "describe.json", lambda d, change=change: change(d["tasks"][0]))
+            edit_task(env.root / "describe.json", change)
             code, failed, _ = accept(env)
             checks[f"{layer}: a good run whose guard is {label} passes"] = code == 0 and not failed
             checks[f"{layer}: the task check passes with a guard that is {label}"] = (
