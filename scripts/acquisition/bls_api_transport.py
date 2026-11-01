@@ -16,7 +16,10 @@ from scripts.acquisition.bls_api_contract import digest, request_for
 from scripts.acquisition.collector_state import CollectorState, QuotaExceeded, StateFile
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, read_json, require
-from scripts.acquisition.transport import https_connection, require_approved
+from scripts.acquisition.transport import connect_within, https_connection, require_approved
+
+SEND_SECONDS = 30
+READ_SECONDS = 60
 
 
 class QuotaPause(ValueError):
@@ -80,8 +83,15 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     parsed = urlsplit(plan["endpoint"])
     connection = https_connection(parsed.netloc, timeout=60)
     try:
+        if send_window is not None:
+            # One deadline covers the lookup, the connection and TLS. The window is checked again last, and the send has its own whole-call timeout.
+            connect_within(connection, send_window())
+            send_window()
+            connection.sock.settimeout(SEND_SECONDS)
         body = json.dumps(request_for(batch) | {"registrationkey": credential}).encode()
         connection.request("POST", parsed.path, body=body, headers={"Content-Type": "application/json", "Accept": "application/json"})
+        if send_window is not None:
+            connection.sock.settimeout(READ_SECONDS)
         response = connection.getresponse()
         controls.response_status(response)
         if response.status == 429:

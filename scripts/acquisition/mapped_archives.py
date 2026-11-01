@@ -10,7 +10,7 @@ from pathlib import Path
 from scripts.acquisition.archive_review import expand_archive, is_zip_container
 from scripts.acquisition.dataset_layout import dataset_id
 from scripts.acquisition.source_registry import canonical_hash
-from scripts.acquisition.transport import CaptureError
+from scripts.acquisition.transport import CaptureError, canonical_url
 
 
 def expand_tree(path: Path, output: Path, digest: str, *, max_bytes: int = 1024**3, max_members: int = 10000, max_depth: int = 5) -> dict:
@@ -51,7 +51,7 @@ def mapped_storage_entries(receipt_path: Path, receipt: dict, registry: dict, ma
         mapping.get("registry_sha256") != canonical_hash(registry)
         or source_id not in mapping["source_ids"]
         or lineage.get("route_id") not in mapping["route_ids"]
-        or receipt["acquisition"]["requested_url"] != mapping["url"]
+        or canonical_url(receipt["acquisition"]["requested_url"]) != canonical_url(mapping["url"])
         or mapping["release_date"] != receipt["release"]["release_date"]
         or mapping["collection_root"] != f"{route['publisher']}/{route['collection']}"
     ):

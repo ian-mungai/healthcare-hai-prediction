@@ -47,7 +47,16 @@ from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canonical_hash, load_registry, read_json, require
 from scripts.acquisition.storage_controls import route_denied
-from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure, on_raw_route
+from scripts.acquisition.transport import (
+    APPROVED_HOSTS_APPROVAL_VARIABLE,
+    APPROVED_HOSTS_VARIABLE,
+    CaptureError,
+    Limits,
+    canonical_url,
+    download,
+    known_failure,
+    on_raw_route,
+)
 
 ACTIVE = ("api", "direct_download", "approved_manual")
 BYTE_CAP = 128 * 2**30
@@ -574,35 +583,28 @@ def file_unit(unit: dict, run: Run) -> dict:
     return stored_outcome(unit, run, fields, [result]) if result.complete else fields
 
 
-def address(url: str) -> tuple[str, str, str, str]:
-    """A route's address without the spellings a host ignores: letter case of the scheme and host, a default port and a fragment."""
-    parts = urllib.parse.urlsplit(url.strip())
-    host = (parts.hostname or "").lower()
-    return parts.scheme.lower(), host, parts.path, parts.query
-
-
 def queue_approved_registry(unit: dict, registry: dict) -> dict:
     """The registry the storage check reads for a queue unit. A route the registry names keeps its own identity and restrictions, in any source and under any
     spelling. Only a route the registry does not name takes the frozen queue's approval: most stored captures came from routes the current registry no longer
     names and their old registries are not catalogued, the owner reviewed the queue, its digest binds the run and the hosts file limits its hosts."""
-    wanted = address(unit["url"])
-    named = [route for source in registry["sources"] for route in source.get("file_routes", []) if address(route.get("url", "")) == wanted]
+    wanted = canonical_url(unit["url"])
+    named = [route for source in registry["sources"] for route in source.get("file_routes", []) if canonical_url(route.get("url") or "") == wanted]
     if any(route_denied(route) for route in named):
         raise CaptureError("The registry denies this route, so the frozen queue cannot approve it.")
     view = copy.deepcopy(registry)
     sources = [item for item in view["sources"] if item["source_id"] == unit["source_id"]]
     require(len(sources) == 1, "The queue unit's source is not in the registry")
     source = sources[0]
-    if not any(address(route.get("url", "")) == wanted for route in source.get("file_routes", [])):
+    if not any(canonical_url(route.get("url") or "") == wanted for route in source.get("file_routes", [])):
         alias = {"route_id": f"frozen_queue_{digest(unit['url'].encode())[:16]}", "url": unit["url"]}
         source["file_routes"] = [*source.get("file_routes", []), alias]
     return view
 
 
 def route_id_of(unit: dict, registry: dict) -> str:
-    wanted = address(unit["url"])
+    wanted = canonical_url(unit["url"])
     source = next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])
-    return str(next(route["route_id"] for route in source["file_routes"] if address(route.get("url", "")) == wanted))
+    return str(next(route["route_id"] for route in source["file_routes"] if canonical_url(route.get("url") or "") == wanted))
 
 
 def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict) -> Path:
@@ -738,16 +740,10 @@ def stored_outcome(unit: dict, run: Run, fields: dict, results: list[Any]) -> di
 
 
 def validate_restored(run: Run) -> None:
-    """A restored outcome counts only for a unit of this queue. A claimed capture must bind to the unit and its comparison must hold on the stored bytes."""
-    units = {unit["snapshot_id"]: unit for unit in accepted(run).units() if unit["disposition"] in ACTIVE}
+    """Every restored outcome passes the one check the owner's verifier also runs."""
+    units = restored_outcomes.active_units(run)
     for path in sorted((run.state_root / "outcomes").glob("*.json")):
-        record = read_json(path)
-        unit = units.get(path.stem)
-        if unit is None or record.get("snapshot_id") != path.stem or record.get("source_id") != unit["source_id"]:
-            raise RegistryError("Restored outcome does not belong to this queue")
-        if record.get("outcome") not in STORED_OUTCOMES:
-            continue
-        restored_outcomes.recheck(unit, run, record, run.task_storage)
+        restored_outcomes.check_record(path.stem, read_json(path), units, run, run.task_storage)
 
 
 def page_unit(unit: dict, run: Run) -> dict:

@@ -136,6 +136,12 @@ def approved_prior(environment: Mapping[str, str]) -> dict[str, str] | None:
     return reference
 
 
+def records_only(archive: tarfile.TarFile) -> bool:
+    """A saved state holds plain record files, each once. The task and the owner's verifier both refuse anything else."""
+    members = archive.getmembers()
+    return all(member.isfile() and SAVED.fullmatch(member.name) for member in members) and len({member.name for member in members}) == len(members)
+
+
 def restore_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> str | None:
     """Unpack exactly the approved prior state into an empty state root, or nothing. A digest that differs or a member that is not a record stops the job."""
     reference = approved_prior(environment)
@@ -148,7 +154,7 @@ def restore_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> 
     if hashlib.sha256(body).hexdigest() != reference["sha256"]:
         raise PublisherError("The prior state differs from its approved digest.")
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
-        if not all(member.isfile() and SAVED.fullmatch(member.name) for member in archive.getmembers()):
+        if not records_only(archive):
             raise PublisherError("The saved state holds a file that is not a record.")
         state_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         archive.extractall(state_root, filter="data")

@@ -138,9 +138,17 @@ class Reply:
 
 
 def connection_class(answer: Reply | Exception, sent: list[dict]) -> type:
+    class Sock:
+        def settimeout(self, _value: float) -> None:
+            return None
+
     class Connection:
         def __init__(self, netloc: str, timeout: float) -> None:
             self.netloc = netloc
+            self.sock = Sock()
+
+        def connect(self) -> None:
+            return None
 
         def request(self, method: str, path: str, body: bytes | None = None, headers: dict | None = None) -> None:
             sent.append({"host": self.netloc, "path": path, "body": body or b"", "headers": headers or {}})

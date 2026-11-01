@@ -10,6 +10,7 @@ import os
 import re
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -143,6 +144,36 @@ def require_approved(url: str) -> None:
         raise CaptureError("The host is not on the approved hosts file.")
 
 
+UNRESERVED = re.compile(r"%([0-9A-Fa-f]{2})")
+UNRESERVED_CHARACTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
+def _encoded_form(text: str) -> str:
+    def one(match: re.Match[str]) -> str:
+        character = chr(int(match[1], 16))
+        return character if character in UNRESERVED_CHARACTERS else f"%{match[1].upper()}"
+
+    return urllib.parse.quote(UNRESERVED.sub(one, text), safe="!$&'()*+,;=:@/?%~-._")
+
+
+def canonical_url(url: str) -> str:
+    """The one form every route comparison uses. A host reads these spellings as one address: percent-encoded unreserved characters, the case of the scheme and
+    host, a default port, dot segments, a fragment and a host's trailing dot. A repeated or trailing slash is folded too, as a match can only add a denial."""
+    parts = urllib.parse.urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    host = urllib.parse.unquote(parts.hostname or "").lower().rstrip(".")
+    port = "" if parts.port in (None, DEFAULT_PORTS.get(scheme)) else f":{parts.port}"
+    segments: list[str] = []
+    for segment in _encoded_form(parts.path).split("/"):
+        if segment == "..":
+            if segments:
+                segments.pop()
+        elif segment not in {"", "."}:
+            segments.append(segment)
+    return urllib.parse.urlunsplit((scheme, host + port, "/" + "/".join(segments), _encoded_form(parts.query), ""))
+
+
 def public_addresses(host: str, port: int) -> list[str]:
     """Return the addresses a name resolves to, refusing the name when any answer is not a public address."""
     addresses = [str(info[4][0]).split("%")[0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
@@ -156,6 +187,32 @@ def public_addresses(host: str, port: int) -> list[str]:
     return addresses
 
 
+def addresses_within(host: str, port: int, seconds: float) -> list[str]:
+    """Resolve a name on a thread, because the system's lookup takes no timeout. A lookup still running at the deadline is abandoned and connects to nothing."""
+    answer: list[Any] = []
+
+    def resolve() -> None:
+        try:
+            answer.append(public_addresses(host, port))
+        except (OSError, CaptureError) as error:
+            answer.append(error)
+
+    worker = threading.Thread(target=resolve, name="bounded-lookup", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if not answer:
+        raise TimeoutError("The name lookup did not finish before the deadline.")
+    if isinstance(answer[0], Exception):
+        raise answer[0]
+    return answer[0]
+
+
+def connect_within(connection: Any, seconds: float) -> None:
+    """Open a connection with one absolute limit across the name lookup, the TCP connection and each TLS step."""
+    connection.resolve_seconds, connection.timeout = seconds, seconds
+    connection.connect()
+
+
 REAL_HTTPS_CONNECTION = http.client.HTTPSConnection
 
 
@@ -165,10 +222,11 @@ class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
     def __init__(self, *args: Any, context: ssl.SSLContext | None = None, source_address: tuple[str, int] | None = None, **kwargs: Any) -> None:
         self.tls_context = context if context is not None else ssl.create_default_context()
         self.bound_source = source_address
+        self.resolve_seconds: float | None = None
         super().__init__(*args, context=self.tls_context, source_address=source_address, **kwargs)
 
     def connect(self) -> None:
-        address = public_addresses(self.host, self.port)[0]
+        address = (public_addresses(self.host, self.port) if self.resolve_seconds is None else addresses_within(self.host, self.port, self.resolve_seconds))[0]
         sock = socket.create_connection((address, self.port), self.timeout, self.bound_source)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock = self.tls_context.wrap_socket(sock, server_hostname=self.host)

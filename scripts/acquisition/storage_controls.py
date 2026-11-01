@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scripts.acquisition.api_fallbacks import api_specification, check_bls, check_il_page, il_page_url
 from scripts.acquisition.source_registry import canonical_hash, read_json
-from scripts.acquisition.transport import CaptureError
+from scripts.acquisition.transport import CaptureError, canonical_url
 
 DENIED_ROUTE_STATUSES = frozenset({"access_failed", "HTTP_403_file_route_unverified"})
 
@@ -82,7 +82,7 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
         return
     if mode == "file":
         routes = [route for route in source["file_routes"] if route["route_id"] == lineage.get("route_id")]
-        if len(routes) != 1 or routes[0]["url"] != receipt["acquisition"]["requested_url"]:
+        if len(routes) != 1 or canonical_url(routes[0]["url"]) != canonical_url(receipt["acquisition"]["requested_url"]):
             raise CaptureError("Storage requires the receipt's exact approved file route.")
         if route_denied(routes[0]):
             raise CaptureError("Discovery indexes and failed routes cannot be promoted to data uploads.")
@@ -97,7 +97,7 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
             expected_periods=lineage.get("expected_periods"),
         )
     url, body = api_specification(source, plan)
-    if url != receipt["acquisition"]["requested_url"] or (body or {}) != request:
+    if canonical_url(url) != canonical_url(receipt["acquisition"]["requested_url"]) or (body or {}) != request:
         raise CaptureError("API receipt parameters differ from the approved request.")
     if evidence_only:
         return
@@ -113,10 +113,10 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
     for page, artifact in enumerate(artifacts, 1):
         payload = read_json(root / artifact["storage_path"])
         if mode == "bls_api":
-            if len(artifacts) != 1 or check_bls(payload, plan) is not None or requests[page - 1]["requested_url"] != url:
+            if len(artifacts) != 1 or check_bls(payload, plan) is not None or canonical_url(requests[page - 1]["requested_url"]) != canonical_url(url):
                 raise CaptureError("BLS response does not cover the explicit approved request.")
         else:
-            if requests[page - 1]["requested_url"] != il_page_url(page) or (page > 1 and following is None):
+            if canonical_url(requests[page - 1]["requested_url"]) != canonical_url(il_page_url(page)) or (page > 1 and following is None):
                 raise CaptureError("Illinois page sequence differs from its request lineage.")
             baseline, following = check_il_page(payload, page, baseline, seen)
     if following is not None:

@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import logging
+import urllib.parse
 import zipfile
 from functools import partial
 from pathlib import Path
@@ -472,3 +473,174 @@ def test_only_a_route_the_registry_does_not_name_takes_the_frozen_queue_approval
     check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "an unnamed route stores")
     receipt = json.loads(bucket.objects[(harness.outcome(run, unit["snapshot_id"]) or {})["stored"]["receipt"]["key"]][1])
     check(json.loads(receipt["lineage"]["extraction_or_query"])["route_id"].startswith("frozen_queue_"), "the unnamed route carries the queue approval")
+
+
+def drop_data(bucket: TaskS3, run: harness.Run, unit: dict) -> None:
+    """The reviewer's forgery: the manifest loses its data entry and the data object is gone."""
+    stored = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    item = stored["manifests"][0]
+    document = json.loads(bucket.objects[item["key"]][1])
+    for entry in document["objects"]:
+        if entry["role"] == "data":
+            del bucket.objects[entry["object"]["key"]]
+    forged = encoded_json(document | {"objects": [entry for entry in document["objects"] if entry["role"] != "data"]})
+    rewrite_outcome(run, unit, outcome="changed_needs_review", stored={"receipt": stored["receipt"], "manifests": [forge(bucket, item, forged)]})
+
+
+def test_an_unchanged_file_relabelled_changed_with_its_data_removed_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    drop_data(bucket, run, unit)
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_an_unchanged_file_relabelled_changed_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    rewrite_outcome(run, unit, outcome="changed_needs_review")
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_a_receipt_that_no_longer_lists_its_data_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, b"a,b\n3,4\n")
+    harness.execute(run)
+    stored = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    document = json.loads(bucket.objects[stored["receipt"]["key"]][1])
+    forged = encoded_json(document | {"artifacts": []})
+    new = forge(bucket, stored["receipt"], forged)
+    manifest = json.loads(bucket.objects[stored["manifests"][0]["key"]][1])
+    for entry in manifest["objects"]:
+        if entry["storage_path"] == "receipt.json":
+            entry["object"] = entry["object"] | {"sha256": new["sha256"], "byte_count": new["byte_count"]}
+    rewrite_outcome(run, unit, stored={"receipt": new, "manifests": [forge(bucket, stored["manifests"][0], encoded_json(manifest))]})
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def test_an_archive_that_lost_a_reviewed_member_stops_the_run_under_either_label(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    fresh = archive({"one.csv": b"a,b\n9,9\n", "two.csv": b"c\n1\n", "notes.txt": b"notes\n"})
+    run, unit = reviewed_archive_run(monkeypatch, tmp_path, bucket, fresh)
+    harness.execute(run)
+    stored = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    forged_items = []
+    for item in stored["manifests"]:
+        document = json.loads(bucket.objects[item["key"]][1])
+        kept = [entry for entry in document["objects"] if "one.csv" not in entry.get("archive_member", "")]
+        forged_items.append(forge(bucket, item, encoded_json(document | {"objects": kept})))
+    rewrite_outcome(run, unit, stored={"receipt": stored["receipt"], "manifests": forged_items})
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def respell(url: str, kind: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    first = parts.path[1]
+    changes = {
+        "percent": parts._replace(path=f"/%{ord(first):02x}{parts.path[2:]}"),
+        "percent upper": parts._replace(path=f"/%{ord(first):02X}{parts.path[2:]}"),
+        "host case": parts._replace(scheme="HTTPS", netloc=parts.netloc.upper()),
+        "default port": parts._replace(netloc=f"{parts.netloc}:443"),
+        "dot segment": parts._replace(path=f"/./x/..{parts.path}"),
+        "encoded dots": parts._replace(path=f"/%2e/x/%2E%2E{parts.path}"),
+        "trailing dot": parts._replace(netloc=f"{parts.netloc}."),
+        "fragment": parts._replace(fragment="part"),
+        "repeated slash": parts._replace(path=f"/{parts.path}"),
+    }
+    return urllib.parse.urlunsplit(changes[kind])
+
+
+SPELLINGS = ["percent", "percent upper", "host case", "default port", "dot segment", "encoded dots", "trailing dot", "fragment", "repeated slash"]
+
+
+@pytest.mark.parametrize("kind", SPELLINGS)
+def test_a_denied_route_under_any_spelling_stays_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: denying_registry(unit | {"url": respell(unit["url"], kind)}, status="access_failed"))
+    check(harness.execute(run)["outcomes"] == {"blocked": 1} and not bucket.objects, f"{kind} erased the denial")
+
+
+@pytest.mark.parametrize("kind", SPELLINGS)
+def test_an_allowed_route_under_any_spelling_keeps_its_own_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: denying_registry(unit | {"url": respell(unit["url"], kind)}))
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, f"{kind}: an allowed named route stores")
+    receipt = json.loads(bucket.objects[(harness.outcome(run, unit["snapshot_id"]) or {})["stored"]["receipt"]["key"]][1])
+    check(json.loads(receipt["lineage"]["extraction_or_query"])["route_id"] == "named_route", "no alias replaces a named route")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("https://a.gov/%73ites/x", "https://a.gov/sites/x"),
+        ("HTTPS://A.GOV/x", "https://a.gov/x"),
+        ("https://a.gov:443/x", "https://a.gov/x"),
+        ("http://a.gov:80/x", "http://a.gov/x"),
+        ("https://a.gov/a/../x", "https://a.gov/x"),
+        ("https://a.gov/%2E%2e/x", "https://a.gov/x"),
+        ("https://a.gov/%7Eme", "https://a.gov/~me"),
+        ("https://a.gov/a%2fb", "https://a.gov/a%2Fb"),
+        ("https://a.gov/x?a=%62", "https://a.gov/x?a=b"),
+        ("https://a.gov", "https://a.gov/"),
+        ("https://a.gov/x#y", "https://a.gov/x"),
+        ("https://a.gov/caf\u00e9", "https://a.gov/caf%C3%A9"),
+        ("https://a.gov./x", "https://a.gov/x"),
+    ],
+)
+def test_equivalent_spellings_share_one_canonical_form(left: str, right: str) -> None:
+    check(transport.canonical_url(left) == transport.canonical_url(right), f"{left} and {right} differ")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("https://a.gov/a%2Fb", "https://a.gov/a/b"),
+        ("https://a.gov/x", "https://b.gov/x"),
+        ("https://a.gov:8443/x", "https://a.gov/x"),
+        ("http://a.gov/x", "https://a.gov/x"),
+        ("https://a.gov/x?a=1", "https://a.gov/x?a=2"),
+        ("https://a.gov/X", "https://a.gov/x"),
+    ],
+)
+def test_different_addresses_keep_different_canonical_forms(left: str, right: str) -> None:
+    check(transport.canonical_url(left) != transport.canonical_url(right), f"{left} and {right} were merged")
+
+
+def test_a_manifest_cannot_mark_an_object_outside_raw_as_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    stored = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    item = stored["manifests"][0]
+    document = json.loads(bucket.objects[item["key"]][1])
+    for entry in document["objects"]:
+        if entry["role"] == "data":
+            old = entry["object"]
+            moved = "cms/stored/datasets/old.csv"
+            bucket.objects[moved] = bucket.objects[old["key"]]
+            entry["object"] = old | {"key": moved, "stored_capture": True}
+    rewrite_outcome(run, unit, stored={"receipt": stored["receipt"], "manifests": [forge(bucket, item, encoded_json(document))]})
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+@pytest.mark.parametrize(("left", "right"), [("https://%61.gov/x", "https://a.gov/x"), ("https://a.gov/%2573", "https://a.gov/%2573")])
+def test_a_host_is_decoded_once_and_a_double_encoding_is_not_collapsed(left: str, right: str) -> None:
+    check(transport.canonical_url(left) == transport.canonical_url(right), f"{left} and {right} differ")
+    check(transport.canonical_url("https://a.gov/%2573") != transport.canonical_url("https://a.gov/s"), "one decoding only")
+
+
+def test_a_registry_route_with_no_address_decides_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    registry = copy.deepcopy(load_registry())
+    next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])["file_routes"].append({"route_id": "blank", "url": None})
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: copy.deepcopy(registry))
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "a blank route blocks nothing")

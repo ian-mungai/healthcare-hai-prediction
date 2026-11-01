@@ -609,6 +609,12 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
 
             class Connection:
                 def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                    self.sock = self
+
+                def settimeout(self, _value: float) -> None:
+                    pass
+
+                def connect(self) -> None:
                     pass
 
                 def request(self, _method: str, _path: str, body: bytes = b"", headers: dict | None = None) -> None:

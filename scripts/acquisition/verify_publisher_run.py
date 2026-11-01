@@ -22,8 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition import publisher_run, restored_outcomes
 from scripts.acquisition import redownload as harness
-from scripts.acquisition import restored_outcomes
 from scripts.acquisition.s3_store import AwsCli
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError
 
@@ -40,19 +40,23 @@ def stored_at(client: Any, item: dict) -> datetime:
 
 def check_state(run: Any, body: bytes, since: datetime, until: datetime, client: Any) -> dict:
     """Check every outcome in one saved state and report by unit ID. No unit stops the check."""
-    units = {unit["snapshot_id"]: unit for unit in harness.accepted(run).units()}
+    units = restored_outcomes.active_units(run)
     report: dict[str, Any] = {"outcomes": 0, "verified": 0, "not_verified": [], "outside_window": []}
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as saved:
+        if not publisher_run.records_only(saved):
+            report["not_verified"].append("saved state")
+            return report
         for member in saved.getmembers():
             reader = saved.extractfile(member)
             if reader is None or not member.name.startswith("outcomes/"):
                 continue
-            record, identity = json.loads(reader.read()), Path(member.name).stem
+            identity = Path(member.name).stem
             report["outcomes"] += 1
-            if record.get("outcome") not in restored_outcomes.CLAIMS:
-                continue
             try:
-                receipt = restored_outcomes.recheck(units[identity], run, record, client)
+                record = json.loads(reader.read())
+                receipt = restored_outcomes.check_record(identity, record, units, run, client)
+                if receipt is None:
+                    continue
                 times = (stored_at(client, record["stored"]["receipt"]), retrieved_at(receipt))
             except (RegistryError, KeyError, ValueError, TypeError, OSError):
                 report["not_verified"].append(identity)

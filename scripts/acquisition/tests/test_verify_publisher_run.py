@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import tarfile
@@ -123,3 +124,60 @@ def test_the_command_line_reports_and_exits_by_what_it_found(monkeypatch: pytest
     check(unit["snapshot_id"] in capsys.readouterr().out, "it names the unit")
     with pytest.raises(SystemExit):
         verifier.main([*named, "--state-sha256", "0" * 64, "--since", SINCE.isoformat(), "--until", UNTIL.isoformat()], run.task_storage, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"snapshot_id": "another_unit"}, {"source_id": "OTHER_SOURCE"}, {"mode": "other"}, {"route": "other"}, {"outcome": "verified"}],
+    ids=["snapshot", "source", "mode", "route", "unknown label"],
+)
+def test_the_verifier_and_the_task_refuse_the_same_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: dict) -> None:
+    bucket = Stamped(SINCE + timedelta(hours=1))
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    monkeypatch.setattr(verifier, "retrieved_at", lambda _receipt: SINCE + timedelta(hours=1))
+    path = run.state_root / "outcomes" / f"{unit['snapshot_id']}.json"
+    path.write_text(json.dumps(json.loads(path.read_text()) | change))
+    report = checked(run, SINCE)
+    check(report["not_verified"] == [unit["snapshot_id"]] and report["verified"] == 0, f"the verifier passed it: {report}")
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(dataclasses.replace(run, cache={}))
+
+
+def test_an_outcome_for_a_unit_outside_the_queue_is_named(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = Stamped(SINCE + timedelta(hours=1))
+    run, _unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    monkeypatch.setattr(verifier, "retrieved_at", lambda _receipt: SINCE + timedelta(hours=1))
+    (run.state_root / "outcomes" / "not_in_the_queue.json").write_text(json.dumps({"snapshot_id": "not_in_the_queue", "source_id": "X", "outcome": "blocked"}))
+    check("not_in_the_queue" in checked(run, SINCE)["not_verified"], "a record of no queued unit is named")
+
+
+def test_a_relabelled_unit_with_its_data_removed_fails_the_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts.acquisition.tests.test_task_raw_store import drop_data
+
+    bucket = Stamped(SINCE + timedelta(hours=1))
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    drop_data(bucket, run, unit)
+    monkeypatch.setattr(verifier, "retrieved_at", lambda _receipt: SINCE + timedelta(hours=1))
+    check(checked(run, SINCE)["not_verified"] == [unit["snapshot_id"]], "the reviewer's forgery is named")
+
+
+@pytest.mark.parametrize("kind", ["nested", "link", "repeat"])
+def test_a_state_the_task_would_refuse_fails_the_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str) -> None:
+    bucket = Stamped(SINCE + timedelta(hours=1))
+    run, _unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as saved:
+        names = {"nested": ["outcomes/a/b.json"], "link": ["outcomes/a.json"], "repeat": ["outcomes/a.json", "outcomes/a.json"]}[kind]
+        for name in names:
+            info = tarfile.TarInfo(name)
+            if kind == "link":
+                info.type, info.linkname = tarfile.SYMTYPE, "../secret"
+                saved.addfile(info)
+            else:
+                info.size = 2
+                saved.addfile(info, io.BytesIO(b"{}"))
+    report = verifier.check_state(run, buffer.getvalue(), SINCE, UNTIL, run.task_storage)
+    check(report["not_verified"] == ["saved state"], f"the whole state is named: {report}")

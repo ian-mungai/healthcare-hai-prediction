@@ -8,6 +8,8 @@ import http.client
 import io
 import json
 import tarfile
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -158,6 +160,105 @@ def test_a_request_too_late_for_its_reservation_is_not_sent(monkeypatch: pytest.
     check(len(entries(cloud)) == 1, "the entry remains")
 
 
+class FakeSocket:
+    def __init__(self, sent: list[bytes]) -> None:
+        self.sent = sent
+        self.timeouts: list[float] = []
+
+    def setsockopt(self, *_args: Any) -> None:
+        return None
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+    def sendall(self, body: bytes) -> None:
+        self.sent.append(body)
+
+    def makefile(self, *_args: Any, **_kwargs: Any) -> io.BytesIO:
+        return io.BytesIO(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 31\r\n\r\n{"status": "REQUEST_SUCCEEDED"}')
+
+    def close(self) -> None:
+        return None
+
+
+class FakeContext:
+    def __init__(self, on_wrap: Any = None) -> None:
+        self.on_wrap = on_wrap
+
+    def wrap_socket(self, sock: Any, server_hostname: str) -> Any:
+        if self.on_wrap is not None:
+            self.on_wrap()
+        return sock
+
+
+def real_path(monkeypatch: pytest.MonkeyPatch, on_lookup: Any = None, on_wrap: Any = None) -> tuple[list[bytes], list[Any]]:
+    """The real connection class with the network underneath replaced, as the review's delayed lookup did."""
+    sent: list[bytes] = []
+    dialled: list[Any] = []
+
+    def lookup(host: str, port: int, **_options: Any) -> list:
+        if on_lookup is not None:
+            on_lookup()
+        return [(2, 1, 6, "", ("8.8.8.8", port))]
+
+    def dial(address: Any, timeout: float, source: Any = None) -> FakeSocket:
+        dialled.append(timeout)
+        return FakeSocket(sent)
+
+    monkeypatch.setattr(transport.socket, "getaddrinfo", lookup)
+    monkeypatch.setattr(transport.socket, "create_connection", dial)
+    monkeypatch.setattr(transport.ssl, "create_default_context", lambda: FakeContext(on_wrap))
+    monkeypatch.delenv("HAI_CAPTURE_ROOT", raising=False)
+    return sent, dialled
+
+
+def test_a_slow_name_lookup_past_the_window_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The review's model: the lookup returns at T plus 11 minutes."""
+    now = [NOW]
+    sent, dialled = real_path(monkeypatch, on_lookup=lambda: now.__setitem__(0, NOW + timedelta(minutes=11)))
+    client = task_role.TaskKeys("bls_api_v2", ENV, Ledger().factory, clock=lambda: now[0])
+    with pytest.raises(bls.QuotaPause):
+        bls.request_live(PLAN, BATCH, cast(AwsCli, client))
+    check(sent == [], "nothing was sent after the window")
+
+
+def test_a_slow_tls_handshake_past_the_window_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [NOW]
+    sent, _dialled = real_path(monkeypatch, on_wrap=lambda: now.__setitem__(0, NOW + timedelta(minutes=6)))
+    client = task_role.TaskKeys("bls_api_v2", ENV, Ledger().factory, clock=lambda: now[0])
+    with pytest.raises(bls.QuotaPause):
+        bls.request_live(PLAN, BATCH, cast(AwsCli, client))
+    check(sent == [], "nothing was sent after the window")
+
+
+def test_a_lookup_that_never_returns_gives_up_at_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = threading.Event()
+    almost = NOW + task_role.BLS_SEND_LIMIT - timedelta(seconds=0.2)
+    times = [NOW, almost]
+    sent, dialled = real_path(monkeypatch, on_lookup=lambda: release.wait(30))
+    client = task_role.TaskKeys("bls_api_v2", ENV, Ledger().factory, clock=lambda: times[-1] if client.reserved_at else NOW)
+    started = time.monotonic()
+    try:
+        with pytest.raises(bls.RetryableRequest):
+            bls.request_live(PLAN, BATCH, cast(AwsCli, client))
+    finally:
+        release.set()
+    check(time.monotonic() - started < 10, "the wait ended at the deadline")
+    check(sent == [] and dialled == [], "no connection was made")
+
+
+def test_a_connection_in_time_uses_its_remaining_time_and_sends_with_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent, dialled = real_path(monkeypatch)
+    client = task_role.TaskKeys("bls_api_v2", ENV, Ledger().factory, clock=lambda: NOW)
+    bls.request_live(PLAN, BATCH, cast(AwsCli, client))
+    check(len(sent) >= 1 and dialled[0] <= task_role.BLS_SEND_LIMIT.total_seconds(), f"sent {len(sent)}, connect timeout {dialled}")
+
+
+def test_the_window_covers_the_latest_send() -> None:
+    latest = task_role.BLS_SEND_LIMIT + timedelta(seconds=bls.SEND_SECONDS)
+    check(timedelta(hours=24) + latest <= task_role.BLS_WINDOW, "an entry outlasts a day after its latest send")
+
+
 def test_two_tasks_racing_for_the_last_slot_cannot_both_win() -> None:
     cloud = Ledger(earlier=449)
     cloud.race = [f"{PREFIX}{450:010d}.json"]
@@ -225,6 +326,11 @@ def prior(cloud: Ledger, body: bytes, name: str = "state.tar.gz") -> str:
     return json.dumps({"key": key, "version_id": "v1", "sha256": hashlib.sha256(body).hexdigest()})
 
 
+def prior_cloud(body: bytes) -> tuple[Ledger, str]:
+    cloud = Ledger()
+    return cloud, prior(cloud, body)
+
+
 def environment(tmp_path: Path, prior_state: str = "") -> dict[str, str]:
     return ENV | {"PUBLISHER_QUEUE_SHA256": QUEUE, "PUBLISHER_PRIOR_STATE": prior_state, "PUBLISHER_WORKSPACE": str(tmp_path), "RUN_ID": "r"}
 
@@ -268,6 +374,18 @@ def test_an_unusable_prior_state_reference_is_refused(tmp_path: Path, change: di
 def test_a_state_holding_anything_but_records_is_refused_even_with_the_right_digest(tmp_path: Path, name: str) -> None:
     cloud = Ledger()
     named = prior(cloud, state_archive({"run.json": b"{}", name: b"x"}))
+    with pytest.raises(publisher_run.PublisherError, match="record"):
+        publisher_run.restore_state(cloud, tmp_path / "state", environment(tmp_path, named))
+
+
+def test_a_state_that_repeats_a_record_is_refused_even_with_the_right_digest(tmp_path: Path) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for body in (b"{}", b'{"outcome": "exact_match"}'):
+            info = tarfile.TarInfo("outcomes/unit.json")
+            info.size = len(body)
+            archive.addfile(info, io.BytesIO(body))
+    cloud, named = prior_cloud(buffer.getvalue())
     with pytest.raises(publisher_run.PublisherError, match="record"):
         publisher_run.restore_state(cloud, tmp_path / "state", environment(tmp_path, named))
 

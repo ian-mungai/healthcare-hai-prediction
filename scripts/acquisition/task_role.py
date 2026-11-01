@@ -31,7 +31,7 @@ CHUNK = 1024 * 1024
 BLS_LEDGER_PREFIX = f"{RAW_ROOT}run3_ledger/bls/"
 BLS_ENTRY = re.compile(rf"{re.escape(BLS_LEDGER_PREFIX)}([0-9]{{10}})\.json")
 # An entry stays counted for a day after the latest moment its request can reach the publisher. A task sends nothing later than the send limit after it
-# reserved, and the bound covers the connection and send timeouts of that last moment and a small clock difference between the task and the store.
+# reserved, and the bound covers the send timeout of that last moment and a small clock difference between the task and the store.
 BLS_SEND_LIMIT = timedelta(minutes=5)
 BLS_SEND_BOUND = timedelta(minutes=5)
 BLS_WINDOW = timedelta(hours=24) + BLS_SEND_LIMIT + BLS_SEND_BOUND
@@ -110,10 +110,12 @@ class TaskKeys:
             raise QuotaPause("BLS request ledger is unavailable; no request was made") from None
         raise QuotaPause("BLS request ledger stayed contended; no request was made")
 
-    def require_send_window(self) -> None:
-        """Refuse a request too late for its reservation. The entry stays spent, so the budget only errs on the safe side."""
-        if self.reserved_at is None or self.clock() - self.reserved_at > BLS_SEND_LIMIT:
+    def require_send_window(self) -> float:
+        """The seconds left to send this request. A request too late for its reservation is refused and its entry stays spent."""
+        left = (BLS_SEND_LIMIT - (self.clock() - self.reserved_at)).total_seconds() if self.reserved_at is not None else 0.0
+        if left <= 0:
             raise QuotaPause("BLS request is too late for its reservation; it was not sent")
+        return left
 
     def _reserve_once(self, s3: Any, identity: str, limit: int) -> bool:
         named = {"Bucket": self.environment["DATA_BUCKET_NAME"], "ExpectedBucketOwner": self.environment["EXPECTED_ACCOUNT_ID"]}
