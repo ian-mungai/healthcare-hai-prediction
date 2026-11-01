@@ -12,13 +12,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse.ecs_engine import duckdb_temp_settings
 
-CAP_SENTENCE = "max_temp_directory_size"
+# DuckDB 1.5.6 words the failure as "Out of Memory Error: failed to offload data block of size 256.0 KiB (99.8 MiB/100.0 MiB used)." and then, on the next line,
+# "This limit was set by the 'max_temp_directory_size' setting." Another out-of-memory error ends differently, and a quoted copy in SQL has no sizes.
+CAP_ERROR = re.compile(
+    r"Out of Memory Error: failed to offload data block of size [\d.]+ [KMGT]?i?B \([\d.]+ [KMGT]?i?B/[\d.]+ [KMGT]?i?B used\)\.\s+"
+    r"This limit was set by the 'max_temp_directory_size' setting\."
+)
 
 
 def options(extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -75,5 +81,6 @@ def shell_profile(database: Path, locked: bool) -> str:
 
 
 def cap_reached(text: str) -> bool:
-    """Whether the output of a phase says that DuckDB stopped at the byte cap. DuckDB names the setting only when the cap is what stopped the query."""
-    return "This limit was set by the" in text and CAP_SENTENCE in text
+    """Whether the output of a phase carries DuckDB's own error for the byte cap: the offload failure with the sizes in use, followed at once by the sentence
+    that names the setting. SQL text or a table name that quotes the sentence is not that error."""
+    return CAP_ERROR.search(text) is not None
