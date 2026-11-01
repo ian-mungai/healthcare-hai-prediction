@@ -178,7 +178,8 @@ jobs:
     runs-on: ubuntu-24.04
     # Measured job wall time on main (3 runs, Oct 28 2026): max 25.3 min, mean 24.9 min. The reuse, shard and gate stage cases of the CI groups E2E moved to the job
     # CI Reuse and Gate E2E; this job runs only the selection cases of that E2E.
-    timeout-minutes: 30
+    # Runs on main reached 26 minutes on Oct 31 2026 and two runs were cancelled at 30, so the limit is 45.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
