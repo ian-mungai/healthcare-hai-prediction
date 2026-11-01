@@ -1358,6 +1358,7 @@
     "scripts/lakehouse/run_bronze_diagnostics_e2e.py",
     "scripts/lakehouse/run_bronze_e2e.py",
     "scripts/lakehouse/run_bronze_run_e2e.py",
+    "scripts/lakehouse/run_build_marker_cases.py",
     "scripts/lakehouse/run_catalog_authority_defects.py",
     "scripts/lakehouse/run_catalog_journal_defects.py",
     "scripts/lakehouse/run_catalog_journal_e2e.py",
