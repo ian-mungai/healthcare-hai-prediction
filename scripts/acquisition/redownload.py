@@ -721,10 +721,8 @@ def validate_restored(run: Run) -> None:
     for path in sorted((run.state_root / "outcomes").glob("*.json")):
         record = read_json(path)
         unit = units.get(path.stem)
-        require(
-            unit is not None and record.get("snapshot_id") == path.stem and record.get("source_id") == unit["source_id"],
-            "Restored outcome does not belong to this queue",
-        )
+        if unit is None or record.get("snapshot_id") != path.stem or record.get("source_id") != unit["source_id"]:
+            raise RegistryError("Restored outcome does not belong to this queue")
         if record.get("outcome") not in STORED_OUTCOMES:
             continue
         stored = record.get("stored")
