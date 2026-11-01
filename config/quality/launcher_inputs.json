@@ -741,6 +741,7 @@
     "dbt/models/silver/intermediate/int_hgi_hospital_releases.sql",
     "dbt/models/silver/intermediate/int_hhs_capacity_weeks.sql",
     "dbt/models/silver/intermediate/int_hospital_enrollment_rows.sql",
+    "dbt/models/silver/intermediate/int_hospital_owner_periods.sql",
     "dbt/models/silver/intermediate/int_hospital_owner_rows.sql",
     "dbt/models/silver/intermediate/int_hpsa_components.sql",
     "dbt/models/silver/intermediate/int_hsa_zip_cases.sql",

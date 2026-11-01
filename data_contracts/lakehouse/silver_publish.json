@@ -152,6 +152,14 @@
           "enrollment_key"
         ]
       },
+      "int_hospital_owner_periods": {
+        "merge_key": [
+          "ccn",
+          "associate_id_owner",
+          "role_code",
+          "valid_from"
+        ]
+      },
       "int_hospital_owner_rows": {
         "merge_key": [
           "owner_row_key"

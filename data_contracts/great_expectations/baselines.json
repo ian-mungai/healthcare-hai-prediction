@@ -320,6 +320,7 @@
     "int_change_of_ownership_rows": "documented grain change: the row count differs from the beab859 build",
     "int_gv_county_values": "documented grain change: the row count differs from the beab859 build",
     "int_hai_window_holds": "a hold model may be empty in a real build",
+    "int_hospital_owner_periods": "new model: no real build count exists yet",
     "int_hud_zip_county_holds": "a hold model may be empty in a real build",
     "int_impact_holds": "a hold model may be empty in a real build",
     "int_silver_build_marker": "the marker holds one row per build",

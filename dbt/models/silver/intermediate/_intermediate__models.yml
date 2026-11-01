@@ -532,6 +532,35 @@ models:
         description: File checksum, CCN and DRG code.
         data_tests: [unique, not_null]
 
+  - name: int_hospital_owner_periods
+    description: >
+      One row per hospital CCN, organisation owner associate ID and role code per continuous period of the monthly owner releases (type 2 history).
+      Grain: ccn, associate_id_owner, role_code and valid_from. One missing release is bridged and counted; two or more end the period. Recomputed from every
+      release on each build. Organisation owners only, with no name, contact or share.
+    meta:
+      classification: Confidential
+    columns:
+      - name: ccn
+        description: The hospital CCN of the owner row's enrollment.
+        data_tests: [not_null]
+      - name: associate_id_owner
+        description: The owner organisation's 10-digit associate ID.
+        data_tests: [not_null]
+      - name: role_code
+        description: The owner role code as published.
+        data_tests: [not_null]
+      - name: valid_from
+        description: Period end of the first release that lists the owner in the role.
+        data_tests: [not_null]
+      - name: valid_to
+        description: Exclusive end of the period. Null while the period is open.
+      - name: is_current
+        description: True while the latest release still lists the owner in the role.
+        data_tests: [not_null]
+      - name: bridged_releases
+        description: The number of single missing releases the period covers.
+        data_tests: [not_null]
+
   - name: int_hospital_owner_rows
     description: >
       One row per organisation owner row and owner file (release), with the release label and catalog period from the
