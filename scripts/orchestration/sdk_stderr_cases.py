@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -24,13 +24,34 @@ from orchestration.ecs_api import EcsApi, WorkerConfig
 from orchestration.worker_stderr import StderrReader
 from scripts.orchestration.sdk_standins import Scenario, WorkerStandin
 from scripts.process import TimeoutExpired, run_command
-from scripts.process_group import group_state, process_snapshot
+from scripts.process_group import OwnedProcess, group_state, process_snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 PARAMS = {"cluster": "synthetic", "tasks": ["synthetic_task"], "include": ["TAGS"]}
 FILE_CAP = 8 * 1024 * 1024
 TRUNCATION_MARKER = b"\n[stderr truncated]\n"
 SOCKET_PATH_LIMIT = 100
+DIAGNOSTIC_COUNT_LIMIT = 1024
+GROUP_STATES = frozenset({"alive", "gone", "denied"})
+READER_FAILURES = frozenset({"worker_stderr_start_failed", "worker_stderr_read_failed", "worker_stderr_write_failed", "worker_stderr_deadline"})
+REPLY_ERROR_KINDS = frozenset({"service", "throttle", "network", "bad_request", "deadline", "worker_died", "protocol", "shutdown"})
+
+
+class StderrCleanupUnconfirmed(RuntimeError):
+    """Retain bounded observations without changing the failed cleanup result."""
+
+    def __init__(self, record: dict[str, Any]) -> None:
+        super().__init__("synthetic_stderr_cleanup_unconfirmed")
+        self.record = record
+
+
+def _closed_code(value: object, allowed: Collection[str]) -> str:
+    return value if isinstance(value, str) and value in allowed else "unknown"
+
+
+def _reply_outcome(reply: dict[str, Any]) -> dict[str, Any]:
+    kind = reply.get("error", {}).get("kind")
+    return {"ok": reply.get("ok") is True, "error_kind": None if kind is None else _closed_code(kind, REPLY_ERROR_KINDS)}
 
 
 class HeldStderr:
@@ -120,7 +141,7 @@ def _worker(folder: Path, *, prelude: str = "", body: bytes = b"", gate: Path | 
     return script.resolve()
 
 
-def _join_readers(handles: Any) -> bool:
+def _join_readers(handles: Sequence[OwnedProcess]) -> bool:
     deadline = time.monotonic() + 1
     for handle in handles:
         reader = handle.stderr_reader
@@ -128,8 +149,40 @@ def _join_readers(handles: Any) -> bool:
             reader.finish(deadline=deadline)
             if reader._thread.ident is not None:
                 reader._thread.join(timeout=max(0.0, deadline - time.monotonic()))
-    if not all(handle.stderr_reader is not None and not handle.stderr_reader.is_alive and group_state(handle.pgid) == "gone" for handle in handles):
-        raise RuntimeError("synthetic_stderr_cleanup_unconfirmed")
+    for index, handle in enumerate(handles):
+        reader = handle.stderr_reader
+        alive = reader.is_alive if reader is not None else None
+        group = group_state(handle.pgid) if reader is not None and not alive else None
+        if reader is not None and not alive and group == "gone":
+            continue
+        subsequent: dict[str, Any] = {
+            "pid": handle.pid if type(handle.pid) is int and 0 < handle.pid <= 2**31 - 1 else None,
+            "pgid": handle.pgid if type(handle.pgid) is int and 0 < handle.pgid <= 2**31 - 1 else None,
+            "state": _closed_code(handle.state, {"signalling", "reap_only", "read_only"}),
+            "last_stop": _closed_code(handle.last_stop, {"owned", "confirmed", "survivor", "worker_unproven", "released_by_owner"}),
+            "reader_eof": reader.eof is True if reader is not None else None,
+            "reader_failure": _closed_code(reader.failure, READER_FAILURES) if reader is not None and reader.failure is not None else None,
+        }
+        if group is None:
+            try:
+                subsequent["group_state"] = _closed_code(group_state(handle.pgid), GROUP_STATES)
+            except (OSError, ValueError, RuntimeError):
+                subsequent["group_state"] = "probe_failed"
+        raise StderrCleanupUnconfirmed(
+            {
+                "failed_predicate": "reader_present" if reader is None else "reader_stopped" if alive else "group_gone",
+                "handle_count": min(len(handles), DIAGNOSTIC_COUNT_LIMIT),
+                "handle_count_capped": len(handles) > DIAGNOSTIC_COUNT_LIMIT,
+                "handle_index": min(index, DIAGNOSTIC_COUNT_LIMIT),
+                "handle_index_capped": index > DIAGNOSTIC_COUNT_LIMIT,
+                "deciding": {
+                    "reader_present": reader is not None,
+                    "reader_alive": alive,
+                    "group_state": _closed_code(group, GROUP_STATES) if group is not None else "not_probed",
+                },
+                "subsequent": subsequent,
+            }
+        )
     return True
 
 
@@ -157,7 +210,19 @@ def idle_case(folder: Path) -> dict[str, Any]:
         finally:
             cleaned = api.close(deadline=time.monotonic() + 5)
         checks["aged_pool_close_confirmed"] = cleaned["confirmed"]
-        checks["aged_pool_groups_absent"] = _join_readers(api.handles)
+        try:
+            checks["aged_pool_groups_absent"] = _join_readers(api.handles)
+        except StderrCleanupUnconfirmed as error:
+            error.record["idle_case"] = {
+                "checks": dict(checks),
+                "replies": {"first": _reply_outcome(first), "second": _reply_outcome(second)},
+                "close": {
+                    "confirmed": cleaned["confirmed"] is True,
+                    "survivor_count": min(len(cleaned.get("survivors", [])), DIAGNOSTIC_COUNT_LIMIT),
+                    "released_by_owner_count": min(len(cleaned.get("released_by_owner", [])), DIAGNOSTIC_COUNT_LIMIT),
+                },
+            }
+            raise
         checks["aged_pool_ledger_closed"] = not api.ledger.open_entries(deadline=time.monotonic() + 1)
         fresh = EcsApi(WorkerConfig("synthetic", test_endpoint=peer.endpoint), registry)
         try:

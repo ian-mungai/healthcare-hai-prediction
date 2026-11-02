@@ -339,6 +339,7 @@ combine_feature_columns() { run_group lakehouse_features lakehouse_features_comb
 # The work items: one per group, and for the gold layer one per selected unit. An alone item runs by itself, before the others.
 alone_items=" lakehouse_gold_writer_setup "
 alone=()
+exclusive=()
 shared=()
 for group in ${run_groups[@]+"${run_groups[@]}"}; do
   if [[ "$group" == "launcher" || "$group" == "acquisition" || "$group" == "repository_hooks" ]]; then
@@ -371,6 +372,12 @@ for group in ${run_groups[@]+"${run_groups[@]}"}; do
     done
     continue
   fi
+  if [[ "$group" == "orchestration_checks" ]]; then
+    item="orchestration_checks_sdk_runtime"
+    printf -v "item_group_$item" '%s' "$group"
+    printf -v "item_entry_$item" '%s' "$item"
+    exclusive+=("$item")
+  fi
   if [[ "$group" != "lakehouse_gold" ]]; then
     printf -v "item_group_$group" '%s' "$group"
     shared+=("$group")
@@ -394,7 +401,8 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
 fi
 
 if [[ "$part" == "all" ]] && is_selected repository_hooks; then
-  shared+=(hook_privacy hook_documentation hook_code hook_samples)
+  shared+=(hook_privacy hook_documentation hook_code)
+  exclusive+=(hook_samples)
 fi
 
 run_timed_item() {
@@ -440,6 +448,15 @@ fi
 if ((${#failed[@]})); then
   printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
   exit 1
+fi
+if ((${#exclusive[@]})); then
+  for item in "${exclusive[@]}"; do
+    run_items "$item"
+    if ((${#failed[@]})); then
+      printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
+      exit 1
+    fi
+  done
 fi
 if ((${#shared[@]})); then
   run_items "${shared[@]}"
