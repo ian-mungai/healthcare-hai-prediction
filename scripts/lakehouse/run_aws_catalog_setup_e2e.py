@@ -1332,6 +1332,9 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
         changes = [item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH]
         return {
             "the step stops": code == 1,
+            "the refusal identifies the principal lock": err.startswith(
+                f"aws catalog setup principal (credentials): another update of principal {setup.PRINCIPALS['reader']} did not finish within "
+            ),
             "it stops near its own deadline": took < 0.5,
             "no role, namespace or assignment was sent": not changes and not polaris.principal_roles,
             "no pair name was read": not [name for _action, name in ssm.requests() if name in pairs],

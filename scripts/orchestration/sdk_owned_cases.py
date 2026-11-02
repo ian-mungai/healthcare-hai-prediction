@@ -12,6 +12,7 @@ import stat
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -95,6 +96,9 @@ class _World:
         self.members = {self.pid: "R", **({self.pid + 1: "R"} if child else {})}
         self.events: list[tuple[str, bool, bool, int]] = []
         self.scans = 0
+        self.scan_seconds = 0.0
+        self.scan_deadlines: list[float] = []
+        self.scan_witnesses: list[bool] = []
         self.waits = 0
         self.reaped = False
         self.denied_signals = False
@@ -144,6 +148,9 @@ class _World:
 
     def snapshot(self, deadline: float, witness: str | None = None) -> process_group.Snapshot:
         self.scans += 1
+        self.scan_deadlines.append(deadline)
+        self.scan_witnesses.append(witness is not None)
+        self.clock.now += min(self.scan_seconds, max(0.0, deadline - self.clock.now))
         if self.scan_failures > 0:
             self.scan_failures -= 1
             return process_group.Snapshot("unreadable")
@@ -166,7 +173,8 @@ class _World:
         snapshot = self.snapshot(deadline)
         return {member.pid: member.state for member in snapshot.members} if snapshot.status == "seen" else None
 
-    def stop(self, budget: float = 0.3) -> dict[str, Any]:
+    @contextlib.contextmanager
+    def observations(self) -> Iterator[None]:
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(self.module.time, "monotonic", side_effect=self.clock.monotonic))
             stack.enter_context(patch.object(self.module.time, "sleep", side_effect=self.clock.sleep))
@@ -177,6 +185,10 @@ class _World:
                 stack.enter_context(patch.object(self.module, "process_snapshot", side_effect=self.snapshot))
             else:
                 stack.enter_context(patch.object(self.module, "_members", side_effect=self.member_states))
+            yield
+
+    def stop(self, budget: float = 0.3) -> dict[str, Any]:
+        with self.observations():
             result = self.module.stop_owned(self.handle, self.clock.now + budget)
         return {"status": result.status, "confirmed": result.confirmed} if _is_host(self.module) else dict(result)
 
@@ -478,7 +490,7 @@ def _witness_cases() -> dict[str, bool]:
         and world.scans == scans
         and not any(event[0] == "signal" for event in world.events)
     )
-    for failure in ("denied", "timed_out"):
+    for failure in ("denied",):
         world = _World(process_group)
         world.failed_scan = failure
         first = world.stop()
@@ -512,6 +524,176 @@ def _witness_cases() -> dict[str, bool]:
     checks["missing_leader_row_does_not_claim_actual_reap"] = (
         not result["confirmed"] and world.handle.state == "reap_only" and not world.reaped and not any(event[0] == "signal" for event in world.events)
     )
+    return checks
+
+
+def _scan_timeout_cases() -> dict[str, bool]:
+    checks = {}
+    world = _World(process_group)
+    world.failed_scan = "timed_out"
+    world.scan_seconds = 2.0
+    deadline = world.clock.now + 4.0
+    first = world.stop(budget=deadline - world.clock.now)
+    first_state = world.handle.state
+    checks["initial_timeout_is_unconfirmed_without_signal_or_same_call_rescan"] = (
+        not first["confirmed"]
+        and not world.reaped
+        and world.scans == 1
+        and world.clock.now == 102.0
+        and not any(event[0] == "signal" for event in world.events)
+    )
+    checks["initial_timeout_retains_fresh_scan_eligibility"] = first_state == "signalling"
+    world.failed_scan = None
+    world.scan_seconds = 0.01
+    before = world.scans
+    second = world.stop(budget=deadline - world.clock.now)
+    checks["initial_timeout_later_witnessed_scan_stops_same_handle"] = (
+        second["confirmed"]
+        and world.reaped
+        and world.handle.state == "read_only"
+        and world.scans > before
+        and world.scan_witnesses[before]
+        and [event[3] for event in world.events if event[0] == "signal"] == [signal.SIGSTOP, signal.SIGKILL]
+        and all(event[1] and not event[2] for event in world.events if event[0] == "signal")
+    )
+    checks["initial_timeout_recovery_keeps_the_original_absolute_deadline"] = world.scan_deadlines == [deadline] * world.scans and world.clock.now <= deadline
+    counts = world.scans, world.waits, len(world.events)
+    world.handle.pgid += 100
+    late = world.stop(budget=deadline - world.clock.now)
+    checks["initial_timeout_recovered_handle_never_signals_a_reused_group"] = (
+        late["status"] == "refused_reaped" and (world.scans, world.waits, len(world.events)) == counts
+    )
+    for proof in ("denied", "missing_leader", "missing_witness"):
+        world = _World(process_group)
+        world.failed_scan = "timed_out"
+        deadline = world.clock.now + 0.3
+        world.stop(budget=deadline - world.clock.now)
+        world.failed_scan = "denied" if proof == "denied" else None
+        world.missing_leader = proof == "missing_leader"
+        world.lost_witness = proof == "missing_witness"
+        refused = world.stop(budget=deadline - world.clock.now)
+        checks[f"initial_timeout_fresh_{proof}_refuses_signals"] = (
+            not refused["confirmed"]
+            and world.scans == 2
+            and world.scan_witnesses[-1]
+            and world.handle.state == "reap_only"
+            and not any(event[0] == "signal" for event in world.events)
+        )
+        world.failed_scan = None
+        world.missing_leader = world.lost_witness = False
+        count = world.scans
+        refused = world.stop(budget=deadline - world.clock.now)
+        checks[f"initial_timeout_fresh_{proof}_cannot_later_regain_authority"] = (
+            not refused["confirmed"] and world.handle.state == "reap_only" and world.scans == count and not any(event[0] == "signal" for event in world.events)
+        )
+    world = _World(process_group)
+    world.failed_scan = "timed_out"
+    world.scan_seconds = 2.0
+    deadline = world.clock.now + 4.0
+    first = world.stop(budget=deadline - world.clock.now)
+    second = world.stop(budget=deadline - world.clock.now)
+    checks["initial_timeout_fresh_timeout_spends_only_the_remaining_budget"] = (
+        not first["confirmed"]
+        and not second["confirmed"]
+        and world.scans == 2
+        and world.clock.now == deadline
+        and world.handle.state == "signalling"
+        and world.scan_deadlines == [deadline, deadline]
+        and not any(event[0] == "signal" for event in world.events)
+    )
+    counts = world.scans, world.waits, len(world.events)
+    expired = world.stop(budget=deadline - world.clock.now)
+    checks["initial_timeout_expiry_never_restarts_a_scan_or_reap_budget"] = (
+        not expired["confirmed"] and world.clock.now == deadline and (world.scans, world.waits, len(world.events)) == counts
+    )
+    world = _World(process_group, child=False)
+    world.failed_scan = "timed_out"
+    world.members[world.pid] = "Z"
+    reaped = world.stop()
+    counts = world.scans, world.waits, len(world.events)
+    world.failed_scan = None
+    late = world.stop()
+    checks["initial_timeout_keeps_nonblocking_reap_and_its_irrevocable_boundary"] = (
+        reaped["confirmed"]
+        and world.reaped
+        and world.handle.state == "read_only"
+        and late["status"] == "refused_reaped"
+        and (world.scans, world.waits, len(world.events)) == counts
+        and not any(event[0] == "signal" for event in world.events)
+    )
+    return checks
+
+
+def _scan_timeout_tick_case(folder: Path) -> dict[str, bool]:
+    from orchestration.worker_pool import Worker
+
+    checks = {}
+    world = _World(process_group)
+    world.failed_scan = "timed_out"
+    world.scan_seconds = 2.0
+    with patch("orchestration.worker_recovery.process_snapshot", return_value=process_group.Snapshot("seen")):
+        api = EcsApi(WorkerConfig("synthetic", pooled=False), folder)
+    world.handle.session = world.handle.owner = api.session
+    api.ledger.append_spawn(world.handle.spawn_record(), deadline=time.monotonic() + 1)
+    worker = Worker(world.handle, "control", None, world.clock.now, True)
+    api.pool.workers.append(worker)
+
+    def stop(handle: process_group.OwnedProcess, deadline: float) -> process_group.StopResult:
+        if handle is not world.handle:
+            raise ValueError("synthetic_timeout_handle_mismatch")
+        with world.observations():
+            return process_group.stop_owned(handle, deadline)
+
+    with (
+        patch.object(time, "monotonic", side_effect=world.clock.monotonic),
+        patch("orchestration.worker_pool.stop_owned", side_effect=stop),
+        patch("orchestration.worker_pool.group_state", return_value="gone"),
+        patch.object(api.pool, "acquire", return_value=worker),
+        patch("orchestration.ecs_api.write_frame", return_value=None),
+        patch("orchestration.ecs_api.read_frame", side_effect=TimeoutError("synthetic_response_deadline")),
+        patch.object(api.recovery, "refresh_closures", return_value=False),
+        patch.object(api.recovery, "sweep", return_value=[]),
+    ):
+        try:
+            deadline = world.clock.now + 4.0
+            reply = api.call("describe_tasks", {"cluster": "synthetic", "tasks": ["synthetic"], "include": ["TAGS"]}, deadline=deadline)
+            original = json.dumps(reply, sort_keys=True)
+            checks["initial_timeout_call_reports_failed_cleanup_before_tick"] = (
+                reply.get("ok") is False
+                and reply.get("error", {}).get("kind") == "worker_died"
+                and reply.get("error", {}).get("code") == "worker_cleanup_unconfirmed"
+                and worker.status == "unproven"
+                and not worker.cleaned
+                and api.dispatch_paused
+            )
+            count = world.scans
+            world.failed_scan = None
+            world.scan_seconds = 0.01
+            api.tick(deadline=deadline)
+            checks["initial_timeout_tick_retries_the_same_handle_with_fresh_witness"] = (
+                world.scans > count
+                and world.scan_witnesses[count]
+                and world.scan_deadlines[count:] == [deadline] * (world.scans - count)
+                and world.clock.now <= deadline
+                and world.handle.confirmed
+                and worker.cleaned
+                and worker.status == "closed"
+                and not api.dispatch_paused
+            )
+            checks["initial_timeout_successful_tick_never_rewrites_the_failed_call"] = (
+                reply.get("ok") is False
+                and reply.get("error", {}).get("code") == "worker_cleanup_unconfirmed"
+                and json.dumps(reply, sort_keys=True) == original
+            )
+            counts = world.scans, world.waits, len(world.events)
+            api.tick(deadline=deadline)
+            checks["initial_timeout_later_tick_has_no_signal_or_reap_after_reaping"] = (
+                world.handle.state == "read_only" and (world.scans, world.waits, len(world.events)) == counts
+            )
+        finally:
+            world.members = {world.pid: "Z"}
+            world.failed_scan = None
+            api.close(deadline=world.clock.now + 1)
     return checks
 
 
@@ -731,6 +913,8 @@ def owned_cases(folder: Path) -> dict[str, bool]:
         **_exit_cases(),
         **_tick_with_dying_leaders_case(folder / "tick_dying"),
         **_witness_cases(),
+        **_scan_timeout_cases(),
+        **_scan_timeout_tick_case(folder / "scan_timeout_tick"),
         **_disposition_cases(supervisor, folder / "stderr"),
         **_changed_disposition_case(supervisor, folder / "changed_disposition"),
         **_first_frame_case(folder / "frame"),

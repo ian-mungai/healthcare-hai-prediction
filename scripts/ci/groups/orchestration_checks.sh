@@ -4,10 +4,13 @@
 # CI_TIMING_FILE from the dispatcher beside the exported environment. This file defines functions only: the guard scripts/quality/ci_group_files.py checks it.
 # shellcheck disable=SC2154,SC2329
 
-orchestration_checks() {
+orchestration_checks_sdk_runtime() {
   timed "orchestration_checks: SDK worker fixtures" "$python_bin" -B -m scripts.orchestration.sdk_worker_cases --check-fixtures --fixtures "$repo_root/data_contracts/orchestration/examples/sdk_worker_cases" --revision "$(git rev-parse HEAD)" --output "$quality_output/sdk_worker_cases/report.json"
   timed "orchestration_checks: SDK lifecycle cases" "$python_bin" -B -m scripts.orchestration.sdk_lifecycle_cases --fixtures "$repo_root/data_contracts/orchestration/examples/sdk_worker_cases" --output "$quality_output/sdk_lifecycle_cases/report.json"
   timed "orchestration_checks: SDK runtime cases" "$python_bin" -B -m scripts.orchestration.sdk_runtime_cases --mode native --cases all --output "$quality_output/sdk_runtime_cases/report.json"
+}
+
+orchestration_checks() {
   timed "orchestration_checks: SDK source mutations" "$python_bin" -B -m scripts.orchestration.sdk_static_mutations --output "$quality_output/sdk_static_mutations/report.json"
   timed "orchestration_checks: catalog transport cases" "$python_bin" -B -m scripts.orchestration.catalog_transport_cases --mutations --output "$quality_output/catalog_transport_cases/report.json"
   if [[ "$(uname -s)" == Linux ]]; then

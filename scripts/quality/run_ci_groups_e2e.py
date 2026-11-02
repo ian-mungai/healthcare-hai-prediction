@@ -2507,6 +2507,221 @@ def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
     ]
 
 
+SCHEDULING_PROBE = """
+import hashlib
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+def observe(label: str, argv: list[str], action: Callable[[], Any]) -> Any:
+    folder = Path(os.environ["SCHEDULING_EVENTS"])
+    settings = json.loads((folder / "settings").read_text())
+    exclusive, peers = settings["exclusive"], settings["peers"]
+    def marker(name: str, state: str) -> Path:
+        return folder / (hashlib.sha256(name.encode()).hexdigest() + "." + state)
+    def await_markers(wanted: list[Path]) -> bool:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if all(path.exists() for path in wanted):
+                return True
+            time.sleep(0.01)
+        return False
+    started = time.monotonic_ns()
+    marker(label, "started").touch()
+    met = True
+    if label in exclusive:
+        await_markers([marker(peers[0], "started")])
+    elif label in peers:
+        met = await_markers([marker(name, "started") for name in [*exclusive, *peers]])
+        marker(label, "ready").touch()
+        met = await_markers([marker(name, "ready") for name in peers]) and met
+    result = action()
+    ended = time.monotonic_ns()
+    code = result["exit"] if isinstance(result, dict) else int(result)
+    row = {"label": label, "argv": argv, "start": started, "end": ended, "barrier_met": met, "exit": code}
+    (folder / f"{os.getpid()}_{started}.json").write_text(json.dumps(row))
+    return result
+
+if __name__ == "__main__":
+    label = sys.argv[1]
+    raise SystemExit(observe(label, sys.argv[2:], lambda: 3 if label == os.environ.get("SCHEDULING_FAIL") else 0))
+"""
+SDK_LABELS = (
+    "orchestration_checks: SDK worker fixtures",
+    "orchestration_checks: SDK lifecycle cases",
+    "orchestration_checks: SDK runtime cases",
+)
+ORCHESTRATION_COMMANDS = (
+    (
+        "scripts.orchestration.sdk_worker_cases",
+        "-B",
+        "--check-fixtures",
+        "--fixtures",
+        "@fixtures@",
+        "--revision",
+        "@revision@",
+        "--output",
+        "@quality@/sdk_worker_cases/report.json",
+    ),
+    ("scripts.orchestration.sdk_lifecycle_cases", "-B", "--fixtures", "@fixtures@", "--output", "@quality@/sdk_lifecycle_cases/report.json"),
+    ("scripts.orchestration.sdk_runtime_cases", "-B", "--mode", "native", "--cases", "all", "--output", "@quality@/sdk_runtime_cases/report.json"),
+    ("scripts.orchestration.sdk_static_mutations", "-B", "--output", "@quality@/sdk_static_mutations/report.json"),
+    ("scripts.orchestration.catalog_transport_cases", "-B", "--mutations", "--output", "@quality@/catalog_transport_cases/report.json"),
+    (
+        "scripts.orchestration.sdk_supervisor_cases",
+        "-B",
+        "--mode",
+        "native" if sys.platform.startswith("linux") else "static",
+        "--source-smoke",
+        "--output",
+        "@quality@/sdk_supervisor_cases/report.json",
+    ),
+    ("scripts.orchestration.run_lineage_e2e",),
+    ("scripts.orchestration.run_ecs_target_e2e", "--proof", "S"),
+    ("scripts.orchestration.run_ecs_target_e2e", "--proof", "D"),
+    ("scripts.orchestration.task_guard_cases",),
+    ("scripts.orchestration.run_ecs_broker_e2e",),
+    ("scripts.lakehouse.run_layer_run_e2e",),
+    ("scripts.lakehouse.run_bronze_run_e2e",),
+    ("scripts.orchestration.run_lineage_completion_e2e",),
+    ("scripts.orchestration.run_lineage_amendment_e2e",),
+    ("scripts.orchestration.run_publish_contracts",),
+    ("scripts.orchestration.run_pipeline_light",),
+    ("scripts.orchestration.run_stack_e2e",),
+    ("scripts.orchestration.run_broker_e2e",),
+    ("scripts.orchestration.run_ecs_preparation", "--out", "@quality@/ecs_preparation"),
+    ("scripts.orchestration.run_supervisor_e2e",),
+    ("scripts.orchestration.run_transform_broker_e2e",),
+    ("scripts.serving.run_serving_checks", "-B", "--output", "@quality@/serving_checks"),
+    ("scripts.streamlit_app.run_streamlit_checks", "-B", "--output", "@quality@/streamlit_checks"),
+    ("scripts.orchestration.offline_checks", "--no-image"),
+    ("scripts.orchestration.run_failing_first", "--check"),
+)
+
+
+def scheduling_probe(root: Path, events: Path, exclusive: list[str], peers: list[str]) -> Path:
+    events.mkdir(parents=True)
+    (events / "settings").write_text(json.dumps({"exclusive": exclusive, "peers": peers}))
+    probe = root / "scheduling_probe.py"
+    probe.write_text(SCHEDULING_PROBE)
+    return probe
+
+
+def scheduling_rows(events: Path) -> list[dict[str, Any]]:
+    return sorted((json.loads(path.read_text()) for path in events.glob("*.json")), key=lambda row: row["start"])
+
+
+def intervals_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return left["start"] < right["end"] and right["start"] < left["end"]
+
+
+def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = False, fail_sdk: bool = False) -> dict[str, Any]:
+    """Run the dispatcher with native event stand-ins, unchanged orchestration commands and two shared workers that must rendezvous."""
+    name = f"dispatcher_scheduling_{part}_{'no_sdk' if no_sdk else 'sdk_failure' if fail_sdk else 'success'}"
+    events = out / f"{name}_events"
+    exclusive = ([] if no_sdk else [SDK_LABELS[0]]) + (["repository hooks: samples"] if part == "all" else [])
+    peers = ["probe: python_lint", "probe: configuration_checks"]
+    probe = scheduling_probe(work, events, exclusive, peers)
+    quality = out / f"{name}_quality"
+    timing = (ROOT / TIMING).read_text().replace("timed() {", "scheduling_timed() {", 1)
+    timing += '\ntimed() { local label="$1"; shift; scheduling_timed "$label" "$python_bin" "$SCHEDULING_PROBE" "$label" "$@"; }\n'
+    entries = (*CORE[:1], *CORE[2:], "lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")
+
+    def prepare(tree: Path) -> None:
+        bodies = {entry: f'  timed "probe: {entry}" /usr/bin/true' for entry in entries}
+        for suite in ("store", "sources", "columns", "combine"):
+            bodies[f"lakehouse_features_{suite}"] = f'  timed "probe: lakehouse_features_{suite} ${{1:-}}" /usr/bin/true'
+        stub_functions(tree, bodies)
+        acquisition = tree / "scripts/acquisition/run_checks.sh"
+        acquisition.write_text(
+            acquisition.read_text() + '\n"$PYTHON_BIN" "$SCHEDULING_PROBE" "probe: acquisition ${ACQUISITION_PART:-} ${ACQUISITION_SHARD:-}"\n'
+        )
+        if no_sdk:
+            path = tree / "monitoring/scheduling_probe.py"
+            path.parent.mkdir(exist_ok=True)
+            path.write_text("synthetic = True\n")
+            git(tree, "add", "monitoring/scheduling_probe.py")
+
+    try:
+        code, log = dry_run(
+            work,
+            out,
+            name,
+            {
+                "CI_SCOPE": "staged" if no_sdk else "full",
+                "CI_PART": part,
+                "SCHEDULING_EVENTS": str(events),
+                "SCHEDULING_PROBE": str(probe),
+                "SCHEDULING_FAIL": SDK_LABELS[2] if fail_sdk else "",
+                "QUALITY_ARTIFACT_DIR": str(quality),
+            },
+            prepare=prepare,
+            timing=timing,
+        )
+    finally:
+        probe.unlink(missing_ok=True)
+    rows = scheduling_rows(events)
+    sdk = [row for row in rows if row["label"] in SDK_LABELS]
+    ordinary = [row for row in rows if not row["label"].startswith("gates:") and row not in sdk]
+    shared = [
+        row
+        for row in ordinary
+        if not row["label"].startswith("launcher E2E") and row["label"] not in {"probe: lakehouse_gold_writer_setup", "repository hooks: samples"}
+    ]
+    samples = [row for row in rows if row["label"] == "repository hooks: samples"]
+    sdk_span = {"start": min(row["start"] for row in sdk), "end": max(row["end"] for row in sdk)} if sdk else None
+    wanted: list[list[str]] = []
+    for module, *arguments in ORCHESTRATION_COMMANDS[:3] if fail_sdk else ORCHESTRATION_COMMANDS:
+        flags = [arguments.pop(0)] if arguments[:1] == ["-B"] else []
+        expanded = [
+            argument.replace("@quality@", str(quality))
+            .replace("@revision@", git(work, "rev-parse", "HEAD").strip())
+            .replace("@fixtures@", str(work / "data_contracts/orchestration/examples/sdk_worker_cases"))
+            for argument in arguments
+        ]
+        wanted.append([str(PYTHON), *flags, "-m", module, *expanded])
+    actual = [row["argv"] for row in rows if row["label"].startswith("orchestration_checks:")]
+    labels = [row["label"].strip() for row in rows if not row["label"].startswith(("gates:", "orchestration_checks:"))]
+    expected = [f"probe: {entry}" for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "configuration_checks"])]
+    if part == "all":
+        expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
+        expected += ["probe: lakehouse_features_store", "probe: lakehouse_features_combine sources/8", "probe: lakehouse_features_combine columns/4"]
+        expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in (("sources", 8), ("columns", 4)) for index in range(1, count + 1)]
+        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "samples")]
+        expected += [f"launcher E2E shard {index}/2" for index in (1, 2)]
+        expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)] + ["probe: acquisition combine"]
+    peer_rows = [row for row in rows if row["label"] in peers]
+    writer = [row for row in rows if row["label"] == "probe: lakehouse_gold_writer_setup"]
+    summary = (out / f"{name}_summary.md").read_text()
+    checks = {
+        "intended_exit": code != 0 if fail_sdk else code == 0,
+        "sdk_commands_exactly_once_with_unchanged_argv": actual == ([] if no_sdk else wanted),
+        "selected_commands_exactly_once": True if fail_sdk else sorted(labels) == sorted(expected),
+        "sdk_has_no_peer_overlap": sdk_span is None or all(not intervals_overlap(sdk_span, row) for row in ordinary),
+        "samples_has_no_peer_overlap": all(not intervals_overlap(sample, row) for sample in samples for row in rows if row is not sample),
+        "exclusive_items_run_in_order": not samples or sdk_span is not None and sdk_span["end"] <= samples[0]["start"],
+        "gold_writer_precedes_sdk": not writer or sdk_span is not None and writer[0]["end"] <= sdk_span["start"],
+        "shared_work_follows_exclusive_items": not samples or all(samples[0]["end"] <= row["start"] for row in shared),
+        "remaining_shared_workers_overlap": fail_sdk or len(peer_rows) == 2 and all(row["barrier_met"] for row in peer_rows) and intervals_overlap(*peer_rows),
+        "sdk_failure_is_preserved": not fail_sdk
+        or re.search(r"^\| orchestration_checks: SDK runtime cases \| .* \| 3 \|$", summary, re.MULTILINE) is not None
+        and PASS_LINES["all"] not in log,
+    }
+    return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code, "events": rows, "output": log[-500:]}
+
+
+def dispatcher_scheduling_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    return [
+        dispatcher_scheduling_case(work, out, "core"),
+        dispatcher_scheduling_case(work, out, "all"),
+        dispatcher_scheduling_case(work, out, "core", no_sdk=True),
+        dispatcher_scheduling_case(work, out, "core", fail_sdk=True),
+    ]
+
+
 STUB_UNIT = """#!/usr/bin/env bash
 # Stand-in for a CI command: logs its start and end with the time to a file, and sleeps.
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
@@ -2698,6 +2913,7 @@ def speed_real_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     cases += mirror_cases(work, out)
     cases += variable_cases(work, out)
     cases += model_metadata_cases(work, out)
+    cases += dispatcher_scheduling_cases(work, out)
     return cases
 
 
@@ -3029,7 +3245,9 @@ def local_plan_of(log: str) -> dict[str, Any]:
     groups: set[str] = {"launcher"} if "TIMED launcher E2E" in log else set()
     units: set[str] = set()
     for item in items:
-        if item.startswith("lakehouse_gold_"):
+        if item == "orchestration_checks_sdk_runtime":
+            groups.add("orchestration_checks")
+        elif item.startswith("lakehouse_gold_"):
             groups.add("lakehouse_gold")
             units.add(item.removeprefix("lakehouse_gold_"))
         elif item.startswith("lakehouse_features_"):
@@ -3715,7 +3933,7 @@ def pre_push_repo(
         root = scratch / f"{name}_{suffix}"
     for folder in ("config/quality", "scripts/quality", "scripts/acquisition", ".github/workflows", "orchestration"):
         (root / folder).mkdir(parents=True, exist_ok=True)
-    (root / ".venv").symlink_to(ROOT / ".venv")
+    (root / ".venv").symlink_to(PYTHON.parent.parent)
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     if timeout is not None:
         config["pre_push"]["timeout_seconds"] = {"range": timeout, "full": timeout}
@@ -3776,6 +3994,113 @@ def pre_push_calls(root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
+PRE_PUSH_SCHEDULING_OBSERVER = """
+from scheduling_probe import observe as scheduling_observe
+scheduling_original_run_step = run_step
+def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
+    return scheduling_observe(step["name"], step["argv"], lambda: scheduling_original_run_step(root, output, step))
+"""
+
+
+def pre_push_scheduling_case(scratch: Path, scope: str, fail_local: bool = False, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Measure complete step-worker intervals through the CLI, including the serial hook worker and native command stand-ins."""
+    name = f"pre_push_scheduling_{scope}_{'local_failure' if fail_local else 'success'}"
+
+    def observed(source: str) -> str:
+        source = mutate(source) if mutate else source
+        return source.replace('\nif __name__ == "__main__":', PRE_PUSH_SCHEDULING_OBSERVER + '\nif __name__ == "__main__":', 1)
+
+    root = pre_push_repo(scratch, name, ("scripts/acquisition/example.py", "README.md"), mutate=observed)
+    events = root / "events"
+    scheduling_probe(root, events, ["local_ci"], ["commit_messages", "removed_names"])
+    arguments = ("--full",) if scope == "full" else ()
+    planned = pre_push_plan(root, arguments)
+    code, out, error = pre_push(
+        root,
+        "run",
+        extra={
+            "SCHEDULING_EVENTS": str(events),
+            "STUB_EXIT_RUN_CI": "3" if fail_local else "0",
+            "STUB_INDEX_LOCK": str(root / "index.lock"),
+            "STUB_HOLD": "0.2",
+        },
+        arguments=arguments,
+    )
+    report = latest_report(root)
+    rows = scheduling_rows(events)
+    executed_plan = report.get("plan") or {}
+    steps = executed_plan.get("steps", [])
+    names = [step["name"] for step in steps]
+    local = [row for row in rows if row["label"] == "local_ci"]
+    peers = [row for row in rows if row["label"] in names and row["label"] != "local_ci"]
+    pair = [row for row in peers if row["label"] in {"commit_messages", "removed_names"}]
+    serial = [row for row in peers if row["label"] == "acquisition" or row["label"].startswith("hooks_") or row["label"] == "osv_scanner"]
+    reported = report.get("results", [])
+    wanted_names = ["local_ci"] if fail_local else names
+    commands = {step["name"]: step["argv"] for step in steps}
+    calls = pre_push_calls(root)
+    hook_calls = [call for call in calls if call["stub"] == "ci_hooks"]
+    acquisition = [call for call in calls if call["stub"] == "acquisition"]
+    expected_serial = [step["name"] for step in steps if step["kind"] in {"pre_commit", "ci_hooks"}]
+    checks = {
+        "real_scope_and_non_small_plan": planned["scope"] == scope
+        and executed_plan.get("scope") == scope
+        and (scope == "full" or "acquisition" in names and len(hook_calls) == (0 if fail_local else 4)),
+        "executed_plan_matches_cli_plan": json.dumps(steps, sort_keys=True).replace(executed_plan.get("output", "<missing>"), "<output>")
+        == json.dumps(planned["steps"], sort_keys=True).replace(planned.get("output", "<missing>"), "<output>"),
+        "intended_exit": code != 0 if fail_local else code == 0,
+        "local_ci_has_no_peer_worker_overlap": len(local) == 1 and all(not intervals_overlap(local[0], peer) for peer in peers),
+        "local_ci_runs_before_every_peer": len(local) == 1 and all(local[0]["end"] <= peer["start"] for peer in peers),
+        "planned_commands_run_once": sorted(row["label"] for row in rows if row["label"] in names) == sorted(wanted_names)
+        and all(row["argv"] == commands[row["label"]] for row in [*local, *peers]),
+        "reported_rows_preserve_plan_order": [row["name"] for row in reported] == wanted_names,
+        "remaining_nonlocal_workers_overlap": fail_local or len(pair) == 2 and all(row["barrier_met"] for row in pair) and intervals_overlap(*pair),
+        "hook_worker_preserves_serial_order": [row["label"] for row in serial] == ([] if fail_local else expected_serial)
+        and all(left["end"] <= right["start"] for left, right in zip(serial, serial[1:], strict=False)),
+        "acquisition_and_hook_results_preserved": fail_local
+        or scope == "full"
+        or len(acquisition) == 1
+        and acquisition[0]["collided"] is False
+        and all(call["collided"] is False for call in hook_calls),
+        "early_local_failure_stops_admission_and_stays_failed": not fail_local
+        or not peers
+        and len(reported) == 1
+        and reported[0]["exit"] == 3
+        and "FAIL local_ci" in out
+        and "pre-push: all steps passed" not in out,
+    }
+    return {
+        "case": name,
+        "passed": all(checks.values()),
+        "checks": checks,
+        "exit": code,
+        "events": rows,
+        "planned": steps,
+        "reported": reported,
+        "output": (out + error)[-500:],
+    }
+
+
+def pre_push_no_peer_case(scratch: Path) -> dict[str, Any]:
+    """Run the real step executor with the plan's sole local step, an edge the full CLI always adds OSV beside."""
+    root = pre_push_repo(scratch, "pre_push_no_peer")
+    output = root / "single_step_output"
+    output.mkdir()
+    program = (
+        "import json,sys\nfrom pathlib import Path\nfrom scripts.quality.pre_push import plan,run_steps\n"
+        "root=Path.cwd()\nchosen=plan(root,full=True)\nlocal=[step for step in chosen['steps'] if step['kind']=='run_ci']\n"
+        "rows=run_steps(root,root/'single_step_output',local)\nsys.stdout.write(json.dumps(rows)+'\\n')\n"
+    )
+    run = run_command(str(PYTHON), ["-B", "-c", program], cwd=root, env={**os.environ, "STUB_LOG": str(root / "stub.log")}, timeout=30)
+    rows = json.loads(run.stdout.splitlines()[-1]) if run.returncode == 0 and run.stdout.splitlines() else []
+    return {
+        "case": "pre_push_local_ci_without_peers",
+        "passed": run.returncode == 0 and len(rows) == 1 and rows[0]["name"] == "local_ci" and rows[0]["exit"] == 0,
+        "exit": run.returncode,
+        "output": run.stderr[-500:],
+    }
+
+
 def escalation_case(scratch: Path, name: str, path: str, want_scope: str, timeout: int | None = None) -> dict[str, Any]:
     root = pre_push_repo(scratch, name, path)
     plan = pre_push_plan(root)
@@ -3783,33 +4108,9 @@ def escalation_case(scratch: Path, name: str, path: str, want_scope: str, timeou
 
 
 def hook_partition_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    """The acquisition hook and the hook partitions share one worktree and its index lock, so they run one after the other beside the other steps.
-
-    Both pre-commit paths (the acquisition hook, which ``pre-commit run`` starts after its ``git write-tree``, and the partitions) take a lock file like
-    ``index.lock`` in their stand-ins and exit 128 when it exists; the ``local_ci`` stand-in waits for that lock to be held.
-    The range reaches the acquisition hook.
-    """
-    root = pre_push_repo(scratch, "pre_push_hook_partitions", ("scripts/acquisition/example.py", "README.md"), mutate=mutate)
-    lock = root / "index.lock"
-    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "5", "STUB_WAIT_FOR_LOCK": str(lock)}, timeout=300)
-    calls = pre_push_calls(root)
-    hooks = [call for call in calls if call["stub"] == "ci_hooks"]
-    acquisition = [call for call in calls if call["stub"] == "acquisition"]
-    ci = [call["overlap"] for call in calls if call["stub"] == "run_ci"]
-    groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
-    collided = [call["argv"][call["argv"].index("--group") + 1] for call in hooks if call["collided"]]
-    acquisition_collided = [call["collided"] for call in acquisition]
-    return {
-        "case": "pre_push_hook_partitions_run_one_after_the_other",
-        "passed": code == 0 and len(hooks) == len(groups) and not collided and len(acquisition) == 1 and acquisition_collided == [False] and ci == ["true"],
-        "exit": code,
-        "partitions": len(hooks),
-        "collided": collided,
-        "acquisition_runs": len(acquisition),
-        "acquisition_collided": acquisition_collided,
-        "local_ci_saw_the_lock_held": ci,
-        "output": (out + error)[-300:],
-    }
+    result = pre_push_scheduling_case(scratch, "range", mutate=mutate)
+    result["case"] = "pre_push_hook_partitions_run_one_after_the_other"
+    return result
 
 
 def hook_failure_case(scratch: Path) -> dict[str, Any]:
@@ -4183,7 +4484,10 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
     results.append(
         {
             "case": "pre_push_failure_is_reported",
-            "passed": code != 0 and "local_ci" in out + error and len(hook_calls) == len(config["hook_groups"]),
+            "passed": code != 0
+            and "FAIL local_ci" in out
+            and not hook_calls
+            and [row["name"] for row in latest_report(root).get("results", [])] == ["local_ci"],
             "exit": code,
             "output": (out + error)[-400:],
         }
@@ -4202,6 +4506,12 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
         }
     )
     results += [hook_partition_case(scratch), hook_failure_case(scratch), hook_deadline_case(scratch)]
+    results += [
+        pre_push_scheduling_case(scratch, "full"),
+        pre_push_scheduling_case(scratch, "range", fail_local=True),
+        pre_push_scheduling_case(scratch, "full", fail_local=True),
+        pre_push_no_peer_case(scratch),
+    ]
     results += gate_release_cases(scratch) + run_ci_release_cases(scratch)
     serial_jobs = 'jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])'
     serial_kinds = 'SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})'

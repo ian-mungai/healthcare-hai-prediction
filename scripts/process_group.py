@@ -304,12 +304,15 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                 if time.monotonic() >= deadline:
                     handle.last_stop = "worker_unproven" if handle.state == "reap_only" else "survivor"
                     return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
+                initial_scan_timed_out = False
                 if handle.state == "signalling":
                     snapshot = process_snapshot(deadline, handle.witness)
                     members = snapshot.group(handle.pgid)
                     live = tuple(member for member in members if not _dying(member.state))
                     leader = next((member for member in members if member.pid == handle.pid), None)
-                    if snapshot.status != "seen" or leader is None or (live and not any(member.witness for member in members)):
+                    if snapshot.status == "timed_out":
+                        initial_scan_timed_out = True
+                    elif snapshot.status != "seen" or leader is None or (live and not any(member.witness for member in members)):
                         handle.state = "reap_only"
                     elif live:
                         if _portable.signal_group(handle.pgid, signal.SIGSTOP) == "gone":
@@ -321,7 +324,7 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                         if rescanned.status != "seen" or not any(member.witness for member in rescanned.group(handle.pgid)):
                             _portable.signal_group(handle.pgid, signal.SIGCONT)
                             handle.state = "reap_only"
-                ready_to_reap = handle.state == "reap_only"
+                ready_to_reap = initial_scan_timed_out or handle.state == "reap_only"
                 dying_leader = False
                 while not ready_to_reap and time.monotonic() < deadline:
                     snapshot = process_snapshot(deadline)
@@ -360,8 +363,9 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                     if not dying_leader or time.monotonic() >= grace_end:
                         break
                     time.sleep(min(EXIT_POLL_SECONDS, max(0.0, grace_end - time.monotonic()), max(0.0, deadline - time.monotonic())))
-                handle.last_stop = "worker_unproven" if handle.state == "reap_only" else "survivor"
-                status = "refused_unproven" if handle.state == "reap_only" else "survivor"
+                unproven = initial_scan_timed_out or handle.state == "reap_only"
+                handle.last_stop = "worker_unproven" if unproven else "survivor"
+                status = "refused_unproven" if unproven else "survivor"
                 return StopResult(status, handle.pid, handle.pgid, False)
         finally:
             handle.lock.release()

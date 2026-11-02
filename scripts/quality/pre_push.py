@@ -308,16 +308,24 @@ def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Run the steps at once, except the pre-commit steps (the acquisition hook and the hook partitions).
-
-    Pre-commit takes the worktree's index lock, so one worker runs those steps one after the other.
-    """
+    """Run local CI exclusively, then parallel peers with one serialized pre-commit worker."""
+    planned = steps
+    completed = []
+    for step in steps:
+        if step["kind"] == "run_ci":
+            result = run_step(root, output, step)
+            completed.append(result)
+            if result["exit"] != 0:
+                return completed
+    steps = [step for step in steps if step["kind"] != "run_ci"]
     serial = [step for step in steps if step["kind"] in SERIAL_KINDS]
     jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
-    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in finished for row in job}
-    return [rows[step["name"]] for step in steps]
+    finished = []
+    if jobs:
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
+    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in [completed, *finished] for row in job}
+    return [rows[step["name"]] for step in planned]
 
 
 def release(root: Path, started: float, registry: str = "") -> dict[str, Any]:

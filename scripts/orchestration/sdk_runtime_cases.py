@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -182,6 +183,63 @@ class NativeCleanupUnconfirmed(RuntimeError):
             self.record["during"] = {"error_type": type(during).__name__, "message": str(during)[:ERROR_TEXT_LIMIT]}
 
 
+def _failed_close_observation(api: Any, cleanup: dict[str, Any]) -> dict[str, Any]:
+    from scripts.orchestration.sdk_stderr_cases import READER_FAILURES, _closed_code
+    from scripts.process_group import group_state
+
+    failed = {row["pid"] for row in cleanup["survivors"]}
+    workers = [worker for worker in api.pool.workers if worker.handle.pid in failed]
+    rows = []
+    for worker in workers[:8]:
+        handle = worker.handle
+        current_pgid = None
+        try:
+            current_pgid = os.getpgid(handle.pid)
+            pid_state = "present"
+        except ProcessLookupError:
+            pid_state = "absent"
+        except PermissionError:
+            pid_state = "denied"
+        except OSError:
+            pid_state = "unavailable"
+        reader = handle.stderr_reader
+        reader_state: dict[str, Any] = {"present": reader is not None}
+        if reader is not None:
+            reader_state.update(
+                eof=reader.eof is True,
+                complete=reader.complete is True,
+                alive=reader.is_alive is True,
+                failure=None if reader.failure is None else _closed_code(reader.failure, READER_FAILURES),
+            )
+        rows.append(
+            {
+                "pid": handle.pid,
+                "pgid": handle.pgid,
+                "pid_state": pid_state,
+                "current_pgid": current_pgid,
+                "group_state": _closed_code(group_state(handle.pgid), {"alive", "gone", "denied"}),
+                "state": _closed_code(handle.state, {"signalling", "reap_only", "read_only"}),
+                "last_stop": _closed_code(handle.last_stop, {"owned", "confirmed", "survivor", "worker_unproven", "released_by_owner"}),
+                "status": _closed_code(worker.status, {"busy", "idle", "retiring", "stopping", "closed", "unproven", "owner_released"}),
+                "confirmed": handle.confirmed is True,
+                "cleaned": worker.cleaned is True,
+                "stopping": worker.stopping is True,
+                "owner_released": worker.owner_released is True,
+                "pipes_closed": handle.pipes_closed is True,
+                "exit_observed": handle.exit_observed is True,
+                "reader": reader_state,
+            }
+        )
+    return {
+        "status": "partial" if len(workers) > 8 else "observed",
+        "worker_count": min(len(workers), 1024),
+        "count_capped": len(workers) > 1024,
+        "truncated": len(workers) > 8,
+        "stop_threads_alive": min(sum(thread.is_alive() for thread in api.pool.stop_threads), 1024),
+        "workers": rows,
+    }
+
+
 @contextlib.contextmanager
 def _owned_api(config: Any, registry: Path) -> Iterator[Any]:
     from orchestration.ecs_api import EcsApi
@@ -193,7 +251,12 @@ def _owned_api(config: Any, registry: Path) -> Iterator[Any]:
         during = sys.exc_info()[1]
         cleanup = api.close(deadline=time.monotonic() + 10)
         if not cleanup["confirmed"]:
-            raise NativeCleanupUnconfirmed(registry, cleanup, during)
+            failure = NativeCleanupUnconfirmed(registry, cleanup, during)
+            try:
+                failure.record["after_close"] = _failed_close_observation(api, cleanup)
+            except BaseException:
+                failure.record["after_close"] = {"status": "unavailable"}
+            raise failure
 
 
 def _request_fixture(root: Path, operation: str) -> dict[str, Any]:
@@ -429,6 +492,88 @@ def pool_cases(folder: Path) -> list[dict[str, Any]]:
         finally:
             api.close(deadline=time.monotonic() + 10)
     return results
+
+
+def scan_timeout_cases(folder: Path) -> list[dict[str, Any]]:
+    """Inject one process-list timeout, then require fresh native proof to stop the same owned worker."""
+    from orchestration.ecs_api import WorkerConfig
+    from orchestration.worker_protocol import write_frame
+    from scripts import process_group
+    from scripts.orchestration.sdk_stderr_cases import _worker
+
+    scratch = Path(tempfile.mkdtemp(prefix="sdk_scan_timeout_", dir=folder))
+    checks: dict[str, bool] = {}
+    handle: process_group.OwnedProcess | None = None
+    scans: list[bool] = []
+    signals: list[tuple[int, bool, bool]] = []
+    fresh_proof = False
+    real_snapshot = process_group.process_snapshot
+    real_signal = process_group._portable.signal_group
+
+    def observe_snapshot(deadline: float, witness: str | None = None, witnesses: Any = None) -> process_group.Snapshot:
+        nonlocal fresh_proof
+        snapshot = real_snapshot(deadline, witness, witnesses)
+        if witness is not None:
+            fresh_proof = False
+            if handle is not None and witness == handle.witness and snapshot.status == "seen":
+                leader_pid = handle.pid
+                fresh_proof = any(member.pid == leader_pid and member.witness for member in snapshot.group(handle.pgid))
+            scans.append(fresh_proof)
+        return snapshot
+
+    def observe_signal(group: int, number: int) -> str:
+        if handle is None or group != handle.pgid:
+            raise ValueError("synthetic_scan_timeout_group_mismatch")
+        signals.append((number, fresh_proof, handle.state == "read_only"))
+        return str(real_signal(group, number))
+
+    with _owned_api(WorkerConfig("synthetic", worker=_worker(scratch), test_endpoint="http://127.0.0.1:1"), scratch / "registry") as api:
+        try:
+            reply = api.call("describe_tasks", _request_fixture(ROOT, "describe_tasks"), deadline=time.monotonic() + 4)
+            if len(api.handles) != 1:
+                raise RuntimeError("synthetic_scan_timeout_requires_one_owned_worker")
+            handle = api.handles[0]
+            initial = process_group.process_snapshot(time.monotonic() + 2, handle.witness)
+            leader_pid = handle.pid
+            checks["native_timeout_fixture_has_a_live_owned_worker"] = (
+                reply.get("ok") is True
+                and handle.state == "signalling"
+                and initial.status == "seen"
+                and any(member.pid == leader_pid and member.witness for member in initial.group(handle.pgid))
+                and process_group.group_state(handle.pgid) == "alive"
+            )
+            deadline = time.monotonic() + 4
+            with (
+                patch.object(process_group, "process_snapshot", side_effect=observe_snapshot),
+                patch.object(process_group._portable, "signal_group", side_effect=observe_signal),
+            ):
+                with patch.object(process_group, "run_command", side_effect=process_group.TimeoutExpired("ps", 2.0)):
+                    first = process_group.stop_owned(handle, deadline)
+                checks["native_initial_timeout_has_no_signal_or_same_call_rescan"] = (
+                    not first.confirmed and not signals and scans == [False] and handle.state != "read_only"
+                )
+                checks["native_initial_timeout_retains_fresh_scan_eligibility"] = handle.state == "signalling"
+                count = len(scans)
+                second = process_group.stop_owned(handle, deadline)
+                checks["native_timeout_later_fresh_proof_stops_and_reaps"] = (
+                    second.confirmed
+                    and handle.state == "read_only"
+                    and len(scans) > count
+                    and scans[count]
+                    and [number for number, _, _ in signals] == [signal.SIGSTOP, signal.SIGKILL]
+                    and all(proven and not reaped for _, proven, reaped in signals)
+                )
+                checks["native_timeout_recovery_keeps_original_deadline_and_failure"] = time.monotonic() <= deadline and not first.confirmed
+                counts = len(scans), len(signals)
+                late = process_group.stop_owned(handle, deadline)
+                checks["native_timeout_reaped_handle_has_no_later_scan_or_signal"] = late.status == "refused_reaped" and counts == (len(scans), len(signals))
+        finally:
+            if handle is not None and handle.state != "read_only":
+                with contextlib.suppress(OSError, TimeoutError):
+                    write_frame(handle.stdin, {"synthetic_finish": True}, time.monotonic() + 1)
+            cleanup = api.close(deadline=time.monotonic() + 5)
+        checks["native_timeout_fixture_cleanup_confirmed"] = cleanup["confirmed"] and _check_absence(api)
+    return [{"case": "initial_scan_timeout_recovery", "checks": checks, "injection": "initial stop process-list command raises TimeoutExpired"}]
 
 
 def concurrency_cases(folder: Path) -> list[dict[str, Any]]:
@@ -1031,6 +1176,7 @@ def main() -> int:
             "deadlines",
             "retries",
             "pool",
+            "scan_timeout",
             "concurrency",
             "recovery",
             "stray_clients",
@@ -1064,6 +1210,8 @@ def main() -> int:
     )
     baseline_threads = {thread.ident for thread in threading.enumerate()}
     if args.mode == "native":
+        from scripts.orchestration.sdk_stderr_cases import StderrCleanupUnconfirmed, executable_cases, failure_cases, file_cap_case, idle_case
+
         args.output.parent.mkdir(parents=True, exist_ok=True)
         scratch = tempfile.mkdtemp(prefix="worker_cases_", dir=args.output.parent)
         folder = Path(scratch)
@@ -1087,6 +1235,7 @@ def main() -> int:
                 rows.extend(stray_client_cases())
             for name, single_function in (
                 ("pool", pool_cases),
+                ("scan_timeout", scan_timeout_cases),
                 ("concurrency", concurrency_cases),
                 ("recovery", recovery_cases),
                 ("isolation", isolation_cases),
@@ -1096,8 +1245,6 @@ def main() -> int:
             ):
                 if args.cases in {"all", name}:
                     rows.extend(single_function(folder))
-            from scripts.orchestration.sdk_stderr_cases import executable_cases, failure_cases, file_cap_case, idle_case
-
             if args.cases in {"all", "reader_failures"}:
                 rows.extend(failure_cases(folder))
             if args.cases in {"all", "reader_idle"}:
@@ -1107,6 +1254,16 @@ def main() -> int:
             if args.cases in {"all", "executables"}:
                 rows.extend(executable_cases(folder))
             rows.append({"case": "thread_cleanup", "checks": {"no_new_threads": {thread.ident for thread in threading.enumerate()} <= baseline_threads}})
+        except StderrCleanupUnconfirmed as error:
+            rows.append(
+                {
+                    "case": "native_case_error",
+                    "checks": {"completed": False},
+                    "error_type": "RuntimeError",
+                    "message": "synthetic_stderr_cleanup_unconfirmed",
+                    "evidence": error.record,
+                }
+            )
         except NativeCleanupUnconfirmed as error:
             rows.append({"case": "cleanup_unconfirmed", "checks": {"confirmed": False}, "evidence": error.record})
         except (OSError, ValueError, RuntimeError, TimeoutError, EOFError, KeyError, TypeError, KeyboardInterrupt) as error:
