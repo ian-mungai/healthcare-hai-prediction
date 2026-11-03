@@ -1378,6 +1378,33 @@ kept["exists"] = Path(kept.get("root", "/nonexistent")).exists()
 """
 )
 
+# Review finding 4: the body of a LaunchPool block ends with a SystemExit (what an alarm handler raises) while a job hangs for 25 s. The pool must cancel its
+# jobs, wait for them only for CANCEL_WAIT_SECONDS (set to 2 here) and raise LaunchesNotStopped, which names the unfinished job and chains the SystemExit.
+POOL_EXIT_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import time
+release = threading.Event()
+result = {}
+def hang():
+    release.wait(25)
+began = time.monotonic()
+with mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 2.0, create=True):
+    try:
+        with process.LaunchPool(max_workers=1) as pool:
+            pool.submit(hang)
+            time.sleep(0.3)
+            raise SystemExit(3)
+    except BaseException as error:
+        result["raised"] = type(error).__name__
+        result["message"] = str(error)[:300]
+        result["chained_from"] = type(error.__cause__).__name__
+result["seconds"] = round(time.monotonic() - began, 1)
+(folder / "result.json").write_text(json.dumps(result))
+release.set()
+"""
+)
+
 
 def run_round6_runner(scratch: Scratch, code: str, plant: str = "", seconds: float = 40.0) -> tuple[dict[str, Any], int | None, str]:
     """Run a fix round 6 runner in a session of its own; return what it recorded, its exit status and its standard error."""
@@ -1568,6 +1595,20 @@ def serial_runner_stops(base: Path) -> dict[str, Any]:
                 shutil.rmtree(folder, ignore_errors=True)
 
     return case("serial_runner_stops_at_an_unconfirmed_stop", base, body)
+
+
+def pool_exit_on_system_exit(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, POOL_EXIT_RUNNER, "", seconds=60)
+        return {
+            "pool_raised_the_unconfirmed_cleanup_failure": result.get("raised") == "LaunchesNotStopped",
+            "failure_is_chained_from_the_system_exit": result.get("chained_from") == "SystemExit",
+            "failure_names_the_unfinished_job": "still running" in result.get("message", ""),
+            "drain_was_bounded": 0 < result.get("seconds", 99.0) < 10.0,
+            "seconds_seen": result.get("seconds", -1.0),
+        }
+
+    return case("pool_exit_on_system_exit_cancels_and_bounds_the_drain", base, body)
 
 
 def pool_timeout_report(base: Path, plant: str = "") -> dict[str, Any]:
@@ -1894,6 +1935,7 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "unconfirmed_stop_survives_a_swallowing_caller": swallowing_caller,
     "pool_reports_an_unconfirmed_timeout_stop": pool_timeout_report,
     "pool_blocks_work_after_an_unconfirmed_stop": pool_admission_blocked,
+    "pool_exit_on_system_exit_cancels_and_bounds_the_drain": pool_exit_on_system_exit,
     "serial_runner_stops_at_an_unconfirmed_stop": serial_runner_stops,
     "interrupted_listing_leaves_no_lister": interrupted_listing,
     "alarm_during_the_stop_is_named": alarm_during_the_stop,
