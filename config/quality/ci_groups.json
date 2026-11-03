@@ -165,6 +165,7 @@
     ],
     "terraform_checks": [
       "^infra/",
+      "^\\.github/scripts/",
       "^scripts/quality/(static_checks|install_tools)\\.py$",
       "^config/quality_tools\\.json$",
       "^scripts/ci/groups/terraform_checks\\.sh$"

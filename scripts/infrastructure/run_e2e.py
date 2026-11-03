@@ -986,7 +986,7 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
     step, result = evidence.run("render_for_saved_plan", shell_renderer, workspace)
     evidence.check(step, "render_succeeded", result.returncode == 0 and not result.stderr)
     stack = workspace / "infra" / "iam"
-    copy_variable_files(evidence, stack, PREPARATION_VARIABLE_FILES)
+    copy_variable_files(evidence, stack, (*PREPARATION_VARIABLE_FILES, "github_oidc_variables.tf"))
     terraform_environment = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1"}
     terraform = ["terraform", f"-chdir={stack}"]
     plan_arguments = ["plan", "-input=false", "-lock=false", f"-var=admin_profile={ADMIN}", "-var=example_extra_input=example_value"]
@@ -999,6 +999,7 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
         "accept_saved_plan_with_defaults", [*check_plan, "--check-plan", str(stack / "defaults.tfplan")], workspace, terraform_environment
     )
     evidence.check(step, "committed_defaults_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
+    check_committed_default_plans(evidence, workspace, renderer)
     override = "example-overridden-name"
     evidence.redactions[override] = "<REDACTED_OVERRIDE>"
     (stack / "override.auto.tfvars.json").write_text(json.dumps({"bls_secret_name": override}), encoding="utf-8")
@@ -1050,6 +1051,81 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
     evidence.check(step, "value_not_echoed", "example_value" not in result.stdout + result.stderr)
 
 
+def check_committed_default_plans(evidence: Evidence, workspace: Path, renderer: list[str]) -> None:
+    """Plan both OIDC fixture defaults through the wrapper and reject contrary saved plans using real providerless Terraform."""
+    name = "github_oidc_enabled"
+    stack = workspace / "infra/iam"
+    variable_file = stack / "github_oidc_variables.tf"
+    original = variable_file.read_text(encoding="utf-8")
+    default_value = re.search(r'^variable "github_oidc_enabled" \{[^}]*?^\s*default\s*=\s*(false|true)\s*$', original, re.M)
+    if default_value is None:
+        raise CheckFailed("The committed OIDC variable must declare a boolean default before the fixture changes it")
+    start, end = default_value.span(1)
+    tools = workspace / "oidc_tools"
+    tools.mkdir()
+    for tool in ("terraform", "dirname"):
+        (tools / tool).symlink_to(Path(evidence.environment["PATH"]) / tool)
+    identity_called = workspace / "oidc_identity_called"
+    identity_arguments = ["sts", "get-caller-identity", "--profile", PROFILE, "--region", FIXTURE["AWS_REGION"], "--output", "json", "--no-cli-pager"]
+    identity = {"Account": FIXTURE["AWS_ACCOUNT_ID"], "Arn": f"arn:aws:iam::{FIXTURE['AWS_ACCOUNT_ID']}:user/{PROFILE}"}
+    (tools / "aws").write_text(
+        f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+        f"if sys.argv[1:] != {identity_arguments!r}: sys.exit('Unexpected synthetic identity command')\n"
+        f"Path({str(identity_called)!r}).write_text('verified')\n"
+        f"sys.stdout.write({json.dumps(identity)!r})\n",
+        encoding="utf-8",
+    )
+    (tools / "aws").chmod(0o700)
+    environment = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1", "PATH": str(tools)}
+    terraform = ["terraform", f"-chdir={stack}"]
+    wrapper = ["/bin/bash", "scripts/infrastructure/terraform.sh", "--iam", "--admin-profile", ADMIN]
+    check_plan = [*renderer, "--stack", "iam", "--admin-profile", ADMIN, "--check"]
+    try:
+        for default in (False, True):
+            label = f"oidc_committed_default_{str(default).lower()}"
+            variable_file.write_text(original[:start] + str(default).lower() + original[end:], encoding="utf-8")
+            identity_called.unlink(missing_ok=True)
+            saved = stack / f"{label}.tfplan"
+            step, result = evidence.run(label + "_wrapper_plan", [*wrapper, "plan", f"-out={saved.name}"], workspace, environment)
+            evidence.check(step, "providerless_wrapper_plan_succeeded", result.returncode == 0 and saved.is_file())
+            evidence.check(step, "synthetic_project_identity_checked", identity_called.is_file() and identity_called.read_text() == "verified")
+            for output in ("deployment.auto.tfvars.json", "preparation.auto.tfvars.json"):
+                evidence.check(step, f"{output}_omits_activation_flag", name not in json.loads((stack / output).read_text()))
+            step, result = evidence.run(label + "_show", [*terraform, "show", "-json", str(saved)], workspace, environment)
+            evidence.check(step, "saved_plan_inspected", result.returncode == 0)
+            document = json.loads(result.stdout)
+            evidence.check(step, "saved_value_matches_fixture_default", document["variables"][name]["value"] is default)
+            evidence.check(step, "declared_default_matches_fixture", document["configuration"]["root_module"]["variables"][name]["default"] is default)
+            step, result = evidence.run(label + "_accept", [*check_plan, "--check-plan", str(saved)], workspace, environment)
+            evidence.check(step, "committed_default_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
+            overridden = stack / f"{label}_override.tfplan"
+            step, result = evidence.run(
+                label + "_override_plan",
+                [
+                    *terraform,
+                    "plan",
+                    "-input=false",
+                    "-lock=false",
+                    f"-var=admin_profile={ADMIN}",
+                    f"-var={name}={str(not default).lower()}",
+                    f"-out={overridden.name}",
+                ],
+                workspace,
+                environment,
+            )
+            evidence.check(step, "contrary_plan_succeeded", result.returncode == 0 and overridden.is_file())
+            message = f"Saved plan input {name} is not its committed default"
+            for entry, command in (
+                ("renderer", [*check_plan, "--check-plan", str(overridden)]),
+                ("wrapper", [*wrapper, "apply", str(overridden)]),
+            ):
+                step, result = evidence.run(label + f"_{entry}_reject", command, workspace, environment)
+                evidence.check(step, "override_refused_by_saved_plan_guard", result.returncode == 2 and message in result.stderr and not result.stdout)
+    finally:
+        variable_file.write_text(original, encoding="utf-8")
+    evidence.check(step, "fixture_default_restored", variable_file.read_text(encoding="utf-8") == original)
+
+
 def platform_plan(values: dict[str, Any], defaults: dict[str, Any] | None = None, **changes: Any) -> dict[str, Any]:
     """Build a synthetic saved-plan document with the selected stack's declared variables and committed defaults."""
     declared: dict[str, dict[str, Any]] = {name: {} for name in values}
@@ -1064,6 +1140,15 @@ def platform_plan(values: dict[str, Any], defaults: dict[str, Any] | None = None
         else:
             plan[key] = value
     return plan
+
+
+def iam_attachment_violations(names: set[str]) -> set[str]:
+    """Find attachment types that can change a user or group policy or membership."""
+    return {
+        name
+        for name in names
+        if name != "aws_iam_role_policy_attachment" and re.search(r"(user|group)_?(policy|membership|attachment)|policy_attachment", name)
+    }
 
 
 def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
@@ -1165,6 +1250,19 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
     def resource_types(stack: str) -> set[str]:
         return {match[1] for path in (REPO_ROOT / "infra" / stack).glob("*.tf") for match in declared.finditer(path.read_text(encoding="utf-8"))}
 
+    for kind, refused in (
+        ("aws_iam_role_policy_attachment", False),
+        ("aws_iam_policy_attachment", True),
+        ("aws_iam_user_policy_attachment", True),
+        ("aws_iam_group_policy_attachment", True),
+        ("aws_iam_user_policy", True),
+        ("aws_iam_group_policy", True),
+        ("aws_iam_group_membership", True),
+        ("aws_iam_user_group_membership", True),
+        ("aws_iam_role_policy_attachments_exclusive", True),
+    ):
+        evidence.check(evidence.report["steps"][-1], f"iam_attachment_scope_{kind}", bool(iam_attachment_violations({kind})) == refused)
+
     platform_types, iam_types = resource_types("platform"), resource_types("iam")
     step = evidence.report["steps"][-1]
     evidence.check(step, "platform_stack_declares_only_what_the_project_profile_may_create", platform_types <= PLATFORM_RESOURCE_TYPES)
@@ -1175,7 +1273,7 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
     evidence.check(
         step,
         "iam_stack_attaches_nothing_to_users_or_groups",
-        not {name for name in iam_types if re.search(r"(user|group)_?(policy|membership|attachment)|policy_attachment", name)},
+        not iam_attachment_violations(iam_types),
     )
 
 

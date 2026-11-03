@@ -3,8 +3,10 @@
 A flag that a Terraform stack declares is useless to the owner when the wrapper refuses to render it. Each row of the table below names one input of one stack
 with a reviewed value and a value of the wrong type. For every row the renderer must accept the reviewed value from a file bound to its digest and write it,
 must refuse the wrong type and an unreviewed name, and must leave the input out of a default render. For every boolean row the saved-plan check must accept a
-plan that carries the reviewed value and refuse a plan that enables it without the reviewed file. A completeness check reads the variables of the stacks and the
-owner steps of the documents, so a new flag that no row covers fails the run. Run from the repository root:
+plan that carries the reviewed value and refuse a plan that enables it without the reviewed file. Committed-default rows keep the preparation contract closed.
+Their cases accept either reviewed code default and reject saved-plan overrides through the renderer and wrapper. Real Terraform cases in run_e2e also plan both
+fixture defaults. A completeness check reads the stack variables and document owner steps. An input without either coverage route fails the run.
+Run from the repository root:
 ``.venv/bin/python -m scripts.infrastructure.run_activation_inputs_e2e --out <new folder>``.
 """
 
@@ -309,6 +311,7 @@ ROWS: list[Row] = [
         ),
     ),
 ]
+COMMITTED_DEFAULTS = [Row("iam", "github_oidc_enabled", True, "true", False)]
 # Inputs that no row needs, with the reason. The storage retention flags have their own wrapper options and cases in run_e2e.
 EXEMPT = {
     "mlflow_retention_enabled": "wrapper option --mlflow-retention, covered by run_e2e",
@@ -318,8 +321,9 @@ EXEMPT = {
     "job_writer_e2e_prepared": "required key of the committed IAM preparation file",
 }
 TOOL = (
-    f"#!{sys.executable}\nimport os, sys\n"
+    f"#!{sys.executable}\nimport json, os, sys\n"
     "args = sys.argv[1:]\n"
+    "with open(os.environ['STANDIN_CALLS'], 'a') as log:\n    log.write(json.dumps(args) + '\\n')\n"
     "if 'output' in args:\n    sys.stdout.write(open(os.environ['STANDIN_OUTPUTS']).read())\n"
     "elif 'show' in args:\n    sys.stdout.write(open(os.environ['STANDIN_PLAN']).read())\n"
 )
@@ -348,13 +352,13 @@ def added_names(text: str) -> list[str]:
 
 
 def completeness() -> dict[str, bool]:
-    """Every boolean input and every input an owner step sets has a row or a stated reason to have none."""
-    covered = {(row.stack, row.name) for row in ROWS}
+    """Every activation has preparation-file coverage, committed-default coverage or a stated reason for exemption."""
+    covered = {(row.stack, row.name) for row in (*ROWS, *COMMITTED_DEFAULTS)}
     declared = {stack: variables_of(directory) for stack, directory in STACKS.items()}
     checks: dict[str, bool] = {}
     for stack, names in declared.items():
         missing = sorted(name for name, kind in names.items() if kind == "bool" and (stack, name) not in covered and name not in EXEMPT)
-        checks[f"every boolean input of {stack} has a row ({missing})"] = not missing
+        checks[f"every boolean input of {stack} has preparation or committed-default coverage ({missing})"] = not missing
     platform = (ROOT / "infra/platform/variables.tf").read_text()
     for variable, expected in (("ecr_repositories", PLATFORM_DEFAULT_REPOSITORIES), ("log_groups", PLATFORM_DEFAULT_LOG_GROUPS)):
         block = re.search(rf'variable "{variable}" \{{.*?default\s*=\s*\[(.*?)\]', platform, re.S)
@@ -383,10 +387,10 @@ def completeness() -> dict[str, bool]:
         text = path.read_text()
         walked |= {m.group(1) for m in re.finditer(r"`([a-z][a-z0-9_]*)(?:\.[a-z_]+)? = ", text)}
         walked |= {m.group(1) for m in re.finditer(r"(?:set|add|names?|with) `([a-z][a-z0-9_]+)`", text)}
-    owner_inputs = sorted(name for name in walked & everything if not any(name in names for names in [{row.name for row in ROWS}]) and name not in EXEMPT)
+    owner_inputs = sorted(name for name in walked & everything if name not in {name for _, name in covered} and name not in EXEMPT)
     secretish = {name for name in owner_inputs if name.endswith("_name")}
     owner_inputs = [name for name in owner_inputs if name not in secretish]
-    checks[f"every input an owner step sets has a row ({owner_inputs})"] = not owner_inputs
+    checks[f"every input an owner step sets has preparation or committed-default coverage ({owner_inputs})"] = not owner_inputs
     return checks
 
 
@@ -418,6 +422,7 @@ class Workspace:
         (self.tools / "dirname").symlink_to("/usr/bin/dirname")
         (self.tools / "bash").symlink_to("/bin/bash")
         self.plan = self.root / "standin_plan.json"
+        self.calls = self.root / "terraform_calls.jsonl"
         self.outputs = self.root / "standin_outputs.json"
         self.outputs.write_text(json.dumps({name: {"value": value} for name, value in SERVICES_FOUNDATION.items()}))
         for stack in ("services",):
@@ -427,7 +432,14 @@ class Workspace:
 
     def environment(self) -> dict[str, str]:
         base = {key: value for key, value in os.environ.items() if not key.startswith(("AWS_", "TF_"))}
-        return {**base, "PATH": str(self.tools), "STANDIN_PLAN": str(self.plan), "STANDIN_OUTPUTS": str(self.outputs), "PYTHON_BIN": sys.executable}
+        return {
+            **base,
+            "PATH": str(self.tools),
+            "STANDIN_PLAN": str(self.plan),
+            "STANDIN_OUTPUTS": str(self.outputs),
+            "STANDIN_CALLS": str(self.calls),
+            "PYTHON_BIN": sys.executable,
+        }
 
     def reviewed(self, stack: str, variables: dict[str, Any], digest: str | None = None) -> list[str]:
         """Write the reviewed file for a stack and return the renderer arguments that name it and its digest."""
@@ -465,15 +477,15 @@ class Workspace:
             return run_command(sys.executable, ["-m", "scripts.infrastructure.render_jobs_config", *arguments], cwd=self.root, env=environment, timeout=60)
         return run_command(sys.executable, ["-m", "scripts.infrastructure.render_platform_config", *arguments], cwd=self.root, env=environment, timeout=60)
 
-    def wrapper(self, stack: str, variables: dict[str, Any] | None) -> Any:
-        """The wrapper in plan mode, which renders the inputs, verifies the stand-in identity and then runs the stand-in terraform."""
+    def wrapper(self, stack: str, variables: dict[str, Any] | None, *arguments: str) -> Any:
+        """Run the wrapper with an inert identity command and Terraform command log. The default action is plan."""
         options = {"iam": ["--iam", "--admin-profile", ADMIN], "platform": ["--platform"], "services": ["--services"], "jobs": ["--jobs"]}[stack]
         if stack == "iam":
             self.command(stack, variables)
         elif variables is not None:
             options += self.reviewed(stack, variables)
         (self.root / ".env").write_text(self.environment_file.read_text())
-        line = " ".join(shlex.quote(item) for item in ["scripts/infrastructure/terraform.sh", *options, "plan"])
+        line = " ".join(shlex.quote(item) for item in ["scripts/infrastructure/terraform.sh", *options, *(arguments or ("plan",))])
         (self.root / "call_wrapper.sh").write_text(f"#!/bin/bash\nexec bash {line}\n")
         return run_command("bash", ["call_wrapper.sh"], cwd=self.root, env=self.environment() | {"PYTHON_BIN": sys.executable}, timeout=60)
 
@@ -483,6 +495,9 @@ class Workspace:
 
     def clear(self, stack: str) -> None:
         (self.root / OUTPUTS[stack]).unlink(missing_ok=True)
+
+    def called(self) -> list[list[str]]:
+        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
 
 def plan_document(rendered: dict[str, Any], flags_off: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -568,6 +583,67 @@ def digest_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
+def committed_default_cases(workspace: Workspace, row: Row) -> dict[str, bool]:
+    """Check a committed-default route through the real renderer and wrapper with synthetic saved plans and inert commands."""
+    stack, name = row.stack, row.name
+    label = f"{stack} {name} committed default"
+    checks: dict[str, bool] = {}
+    workspace.clear(stack)
+    result = workspace.run(stack, None)
+    deployment_path = workspace.root / STACKS[stack] / "deployment.auto.tfvars.json"
+    deployment = json.loads(deployment_path.read_text())
+    preparation = workspace.written(stack) or {}
+    checks[f"{label}: rendering leaves activation to the committed default"] = result.returncode == 0 and name not in deployment and name not in preparation
+    workspace.calls.unlink(missing_ok=True)
+    result = workspace.wrapper(stack, None)
+    directory = f"-chdir={workspace.root / STACKS[stack]}"
+    checks[f"{label}: wrapper plan reaches terraform without an activation override"] = result.returncode == 0 and workspace.called() == [
+        [directory, "plan", "-input=false", f"-var=admin_profile={ADMIN}"]
+    ]
+    for default in (False, True):
+        prefix = f"{label} {str(default).lower()}"
+        plan = plan_document({**deployment, **preparation}, {name: default}, {"admin_profile": ADMIN})
+        workspace.plan.write_text(json.dumps(plan))
+        result = workspace.run(stack, None, "--check-plan", str(workspace.plan))
+        checks[f"{prefix}: the renderer accepts the matching saved plan"] = result.returncode == 0 and "Rendered private Terraform inputs" in result.stdout
+        workspace.calls.unlink(missing_ok=True)
+        result = workspace.wrapper(stack, None, "apply", str(workspace.plan))
+        show = [directory, "show", "-json", str(workspace.plan)]
+        checks[f"{prefix}: wrapper apply checks the plan before reaching terraform apply"] = result.returncode == 0 and workspace.called() == [
+            show,
+            [directory, "apply", "-input=false", str(workspace.plan)],
+        ]
+        checks[f"{prefix}: wrapper rendering keeps the activation out of both input files"] = name not in json.loads(
+            deployment_path.read_text()
+        ) and name not in (workspace.written(stack) or {})
+        plan["variables"][name]["value"] = not default
+        workspace.plan.write_text(json.dumps(plan))
+        message = f"Saved plan input {name} is not its committed default"
+        result = workspace.run(stack, None, "--check-plan", str(workspace.plan))
+        checks[f"{prefix}: the renderer refuses an override of the committed default"] = (
+            result.returncode == 2 and message in result.stderr and not result.stdout
+        )
+        workspace.calls.unlink(missing_ok=True)
+        result = workspace.wrapper(stack, None, "apply", str(workspace.plan))
+        checks[f"{prefix}: wrapper refuses the override before terraform apply"] = (
+            result.returncode == 2 and message in result.stderr and not result.stdout and workspace.called() == [show]
+        )
+    for value in (row.default, row.good, row.bad):
+        workspace.clear(stack)
+        result = workspace.run(stack, {name: value})
+        message = "The IAM preparation file must hold the four inputs"
+        checks[f"{label}: preparation input {value!r} is refused by the closed contract"] = (
+            result.returncode == 2 and message in result.stderr and workspace.written(stack) is None
+        )
+        workspace.calls.unlink(missing_ok=True)
+        result = workspace.wrapper(stack, {name: value})
+        checks[f"{label}: wrapper refuses preparation input {value!r} before terraform"] = (
+            result.returncode == 2 and message in result.stderr and workspace.written(stack) is None and not workspace.called()
+        )
+    workspace.command(stack, None)
+    return checks
+
+
 def wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     """One activation per stack through terraform.sh itself: it renders the reviewed value and then reaches the stand-in terraform."""
     checks: dict[str, bool] = {}
@@ -597,6 +673,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["plans"] = plans
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
+        results["committed_defaults"] = {name: ok for row in COMMITTED_DEFAULTS for name, ok in committed_default_cases(workspace, row).items()}
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     return results

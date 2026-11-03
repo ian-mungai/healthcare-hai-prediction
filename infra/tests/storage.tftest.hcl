@@ -375,3 +375,290 @@ run "reject_legacy_user_profile" {
 
   expect_failures = [var.aws_profile]
 }
+
+# Terraform state of the stacks lives in this bucket under terraform_state/<stack>/. Everything below is off by default.
+run "state_prefix_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 3 &&
+      length(jsondecode(aws_s3_bucket_policy.tls.policy).Statement) == 1
+    )
+    error_message = "With the flag off the lifecycle rules and the bucket policy must stay as they are."
+  }
+}
+
+run "state_prefix_rule_expires_replaced_versions_only" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = (
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      alltrue([
+        for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+        one(rule.filter).prefix == "terraform_state/" &&
+        one(rule.noncurrent_version_expiration).noncurrent_days == 90 &&
+        one(rule.expiration).expired_object_delete_marker == true &&
+        length(rule.abort_incomplete_multipart_upload) == 0
+        if rule.id == "expire_replaced_state_versions"
+      ])
+    )
+    error_message = "Replaced state versions expire after 90 days under terraform_state/ only. Current state objects never expire."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      (length(rule.expiration) == 0 || one(rule.expiration).expired_object_delete_marker == true) &&
+      (length(rule.noncurrent_version_expiration) == 0 || one(rule.filter).prefix != "")
+      if rule.id != "expire_replaced_state_versions"
+    ])
+    error_message = "No other rule may expire a current object, and no other rule may expire versions of the whole bucket."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      !startswith("terraform_state/", one(rule.filter).prefix) || rule.id == "expire_replaced_state_versions" || one(rule.filter).prefix == "terraform_state/"
+      if rule.id != "abort_incomplete_uploads"
+    ])
+    error_message = "No rule except the state rule may cover the state prefix."
+  }
+}
+
+run "state_keys_belong_to_the_project_user_and_ci_only" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_s3_bucket_policy.tls.policy).Statement[0].Sid == "DenyInsecureTransport" &&
+      alltrue([
+        for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+        join(",", sort(tolist(statement.Resource))) == join(",", sort([
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/jobs/terraform.tfstate",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/platform/terraform.tfstate",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/services/terraform.tfstate",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/storage/terraform.tfstate"
+        ]))
+        if statement.Sid == "ProjectUserUsesItsStateKeys"
+      ]) &&
+      alltrue([
+        for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+        statement.Principal.AWS == "arn:aws:iam::111111111111:user/example_project_dev"
+        if statement.Effect == "Allow"
+      ])
+    )
+    error_message = "The project user may use the storage, platform, services and jobs state keys and no other key."
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_s3_bucket_policy.tls.policy, "terraform_state/iam/terraform.tfstate\"") ||
+      length([for s in jsondecode(aws_s3_bucket_policy.tls.policy).Statement : s if s.Effect == "Allow" && strcontains(jsonencode(s.Resource), "terraform_state/iam/")]) == 0
+    )
+    error_message = "No allow may name the iam stack's state."
+  }
+}
+
+run "every_other_principal_is_denied_the_state_prefix" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement.Sid == "DenyStatePrefixToEveryoneElse" &&
+      statement.Effect == "Deny" &&
+      statement.Principal == "*" &&
+      statement.Action == "s3:*" &&
+      join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_state/*" &&
+      join(",", sort(tolist(statement.Condition.ArnNotLike["aws:PrincipalArn"]))) == join(",", sort([
+        "arn:aws:iam::111111111111:user/example_project_dev",
+        "arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev",
+        "arn:aws:iam::111111111111:role/example_project_gh_terraform_apply_dev",
+        "arn:aws:iam::111111111111:role/example_admin"
+      ]))
+    ])
+    error_message = "Only the project user, the two Terraform CI roles and the named administrator may touch terraform_state/. Every lakehouse, job, feature and Athena principal is denied by name-free exclusion."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement.Sid == "DenyIamStateToProjectIdentities" &&
+      statement.Effect == "Deny" &&
+      join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_state/iam/*" &&
+      length(statement.Condition.ArnLike["aws:PrincipalArn"]) == 3
+    ])
+    error_message = "The project user and the two CI roles must be denied the iam stack's state."
+  }
+}
+
+run "state_needs_a_named_administrator" {
+  command = plan
+
+  variables {
+    terraform_state_enabled = true
+  }
+
+  expect_failures = [aws_s3_bucket_policy.tls]
+}
+
+run "access_logging_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_s3_bucket.logs) == 0 &&
+      length(aws_s3_bucket_logging.data) == 0 &&
+      length(aws_s3_bucket_policy.logs) == 0
+    )
+    error_message = "With the flag off the stack must plan no logging bucket and no logging setting on the project bucket."
+  }
+}
+
+run "logging_bucket_is_private_encrypted_tls_only_and_expires_logs" {
+  command = plan
+
+  variables {
+    access_logging_enabled           = true
+    access_logging_reader_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket.logs[0].bucket == "example-project-ci-bucket-logs" &&
+      aws_s3_bucket.logs[0].force_destroy == false &&
+      aws_s3_bucket.logs[0].tags["DataClassification"] == "Confidential" &&
+      aws_s3_bucket_public_access_block.logs[0].block_public_acls &&
+      aws_s3_bucket_public_access_block.logs[0].block_public_policy &&
+      aws_s3_bucket_public_access_block.logs[0].ignore_public_acls &&
+      aws_s3_bucket_public_access_block.logs[0].restrict_public_buckets &&
+      one(one(aws_s3_bucket_server_side_encryption_configuration.logs[0].rule).apply_server_side_encryption_by_default).sse_algorithm == "AES256" &&
+      one(aws_s3_bucket_ownership_controls.logs[0].rule).object_ownership == "BucketOwnerEnforced"
+    )
+    error_message = "The logging bucket must be private, encrypted with SSE-S3 (the only kind a log destination supports) and own its objects."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.logs[0].rule :
+      one(rule.expiration).days == 30 && length(rule.noncurrent_version_expiration) == 0 && one(rule.filter).prefix == "data_bucket_logs/"
+      if rule.id == "expire_access_logs"
+    ]) && length(aws_s3_bucket_lifecycle_configuration.logs[0].rule) == 2
+    error_message = "Access logs expire 30 days after delivery, and incomplete uploads are aborted."
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket_logging.data[0].target_prefix == "data_bucket_logs/" &&
+      aws_s3_bucket_logging.data[0].bucket == aws_s3_bucket.data.id
+    )
+    error_message = "The project bucket must deliver its access logs to the logging bucket under data_bucket_logs/."
+  }
+}
+
+run "log_delivery_is_scoped_to_the_project_bucket" {
+  command = plan
+
+  variables {
+    access_logging_enabled           = true
+    access_logging_reader_principals = ["role/example_admin"]
+  }
+
+  override_resource {
+    target          = aws_s3_bucket.logs[0]
+    override_during = plan
+    values = {
+      arn = "arn:aws:s3:::example-project-ci-bucket-logs"
+    }
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.logs[0].policy).Statement :
+      statement.Sid == "AllowLogDeliveryFromTheProjectBucket" &&
+      statement.Effect == "Allow" &&
+      statement.Principal.Service == "logging.s3.amazonaws.com" &&
+      statement.Action == "s3:PutObject" &&
+      statement.Resource == "arn:aws:s3:::example-project-ci-bucket-logs/data_bucket_logs/*" &&
+      statement.Condition.ArnLike["aws:SourceArn"] == "arn:aws:s3:::example-project-ci-bucket" &&
+      statement.Condition.StringEquals["aws:SourceAccount"] == "111111111111"
+    ])
+    error_message = "The log delivery service may write under data_bucket_logs/ only for the project bucket of this account."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.logs[0].policy).Statement :
+      statement.Sid == "DenyInsecureTransport" && statement.Effect == "Deny" && statement.Condition.Bool["aws:SecureTransport"] == "false"
+    ])
+    error_message = "The logging bucket must refuse plain HTTP."
+  }
+}
+
+run "only_the_owner_admin_path_reads_the_logs" {
+  command = plan
+
+  variables {
+    access_logging_enabled           = true
+    access_logging_reader_principals = ["role/example_admin"]
+  }
+
+  override_resource {
+    target          = aws_s3_bucket.logs[0]
+    override_during = plan
+    values = {
+      arn = "arn:aws:s3:::example-project-ci-bucket-logs"
+    }
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.logs[0].policy).Statement :
+      statement.Sid == "DenyLogReadsToEveryoneElse" &&
+      statement.Effect == "Deny" &&
+      statement.Principal == "*" &&
+      join(",", sort(tolist(statement.Action))) == "s3:GetObject,s3:GetObjectAttributes,s3:GetObjectTagging,s3:GetObjectVersion" &&
+      join(",", tolist(statement.Condition.ArnNotLike["aws:PrincipalArn"])) == "arn:aws:iam::111111111111:role/example_admin"
+    ])
+    error_message = "Every principal except the named administrator path must be denied reading and listing the logs."
+  }
+}
+
+run "logging_needs_a_named_reader" {
+  command = plan
+
+  variables {
+    access_logging_enabled = true
+  }
+
+  expect_failures = [aws_s3_bucket_policy.logs]
+}
+
+run "logging_bucket_name_must_fit" {
+  command = plan
+
+  variables {
+    access_logging_enabled           = true
+    access_logging_reader_principals = ["role/example_admin"]
+    data_bucket_name                 = "example-project-ci-bucket-name-that-is-already-long-for-a-su"
+  }
+
+  expect_failures = [aws_s3_bucket.logs]
+}

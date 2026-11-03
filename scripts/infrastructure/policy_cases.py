@@ -69,6 +69,16 @@ WRITER = f"arn:aws:iam::{A}:role/healthcare_hai_prediction_lakehouse_writer"
 ATHENA_READER = f"arn:aws:iam::{A}:role/{P}_athena_reader_{E}"
 PROJECT_NAME_ROLES = (f"arn:aws:iam::{A}:role/{P}_lakehouse_reader", f"arn:aws:iam::{A}:role/{P}_lakehouse_writer")
 BUCKET = f"arn:aws:s3:::{B}"
+LOGS_BUCKET = f"arn:aws:s3:::{B}-logs"
+LOGS_WITHOUT = ("ListBucketVersions", "ListBucketMultipartUploads")
+LOGS_WRITES = (
+    "PutLifecycleConfiguration",
+    "PutEncryptionConfiguration",
+    "PutBucketPublicAccessBlock",
+    "PutBucketOwnershipControls",
+    "PutBucketPolicy",
+    "PutBucketTagging",
+)
 PARAMETERS = (
     "airflow_api_secret_key",
     "airflow_db_password",
@@ -327,6 +337,13 @@ def bucket_requests() -> list[Request]:
     )
     found = [request(f"s3:{action}", BUCKET, region=None) for action in bucket_actions]
     found.append(request("s3:CreateBucket", BUCKET, region=None, extra={"s3:LocationConstraint": R}))
+    # The logging bucket of the access logs: the configuration reads, the six settings the storage stack applies and its creation. Nothing else.
+    found += [
+        request(f"s3:{action}", LOGS_BUCKET, region=None) for action in bucket_actions if action.startswith(("Get", "List")) and action not in LOGS_WITHOUT
+    ]
+    found += [request(f"s3:{action}", LOGS_BUCKET, region=None) for action in LOGS_WRITES]
+    found.append(request("s3:CreateBucket", LOGS_BUCKET, region=None, extra={"s3:LocationConstraint": R}))
+    found.append(request("s3:PutBucketLogging", BUCKET, region=None))
     found += [request(f"s3:{action}", f"{BUCKET}/raw/x", region=None) for action in object_actions]
     found += [
         request(f"s3:{action}", f"{BUCKET}/lakehouse/silver/x", region=None)
@@ -372,6 +389,28 @@ def single_copy_cases() -> Iterator[Case]:
         yield s3_case(f"no {action} outside lakehouse", action, "other/x", True, False)
     yield s3_case("lakehouse tables are managed", "DeleteObject", "lakehouse/silver/t/data/x.parquet", False, True)
     yield s3_case("no whole-bucket object write", "PutObject", "unlisted/x", False, False)
+
+
+def logging_bucket_cases() -> Iterator[Case]:
+    """The logging bucket may be created and configured, and the project bucket may send its access logs there. Nothing else follows."""
+    other = f"{BUCKET}-other"
+    for action in ("PutBucketLogging", "PutBucketVersioning", "PutBucketAcl", "DeleteBucket", "PutReplicationConfiguration"):
+        yield Case(f"logging bucket: {action} refused", request(f"s3:{action}", LOGS_BUCKET, region=None), False)
+    for action in ("GetObject", "GetObjectVersion", "PutObject", "DeleteObject", "PutObjectTagging", "AbortMultipartUpload"):
+        yield Case(f"logging bucket: {action} on a log object refused", request(f"s3:{action}", f"{LOGS_BUCKET}/data_bucket_logs/x", region=None), False)
+    yield Case("logging bucket: object keys cannot be listed with versions", request("s3:ListBucketVersions", LOGS_BUCKET, region=None), False)
+    yield Case("logging: DeleteBucket on the project bucket refused", request("s3:DeleteBucket", BUCKET, region=None), False)
+    yield Case("logging: PutBucketLogging on another bucket refused", request("s3:PutBucketLogging", other, region=None), False)
+    yield Case("logging: PutBucketLogging on every bucket refused", request("s3:PutBucketLogging", "arn:aws:s3:::*", region=None), False)
+    yield Case(
+        "logging bucket: CreateBucket in another region",
+        request("s3:CreateBucket", LOGS_BUCKET, region=None, extra={"s3:LocationConstraint": "us-east-1"}),
+        False,
+    )
+    yield Case("logging bucket: CreateBucket without a region", request("s3:CreateBucket", LOGS_BUCKET, region=None), False)
+    yield Case("logging bucket: CreateBucket with another name", request("s3:CreateBucket", other, region=None, extra={"s3:LocationConstraint": R}), False)
+    yield Case("logging bucket: settings on another bucket", request("s3:PutBucketPolicy", other, region=None), False)
+    yield Case("logging bucket: the project bucket keeps its own settings", request("s3:PutBucketPolicy", BUCKET, region=None), True)
 
 
 def s3_case(label: str, action: str, key: str, header: bool, allowed: bool) -> Case:
@@ -1579,6 +1618,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from scope_cases(operations)
     yield from scope_cases({"s3": bucket_requests()})
     yield from single_copy_cases()
+    yield from logging_bucket_cases()
     yield from tag_cases()
     yield from container_instance_cases()
     yield from session_cases()
@@ -1757,6 +1797,30 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
 
     def roles_wildcard(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sts", "AssumeLakehouseRolesOnly")["Resource"] = f"arn:aws:iam::{A}:role/*"
+
+    def logging_any_bucket(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "s3", "SetAccessLoggingOnApprovedBucket")["Resource"] = "arn:aws:s3:::*"
+
+    def logging_on_logging_bucket(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "s3", "SetAccessLoggingOnApprovedBucket")
+        statement["Resource"] = [statement["Resource"], f"arn:aws:s3:::{B}-logs"]
+
+    def logging_bucket_objects(documents: dict[str, dict[str, Any]]) -> None:
+        documents["healthcare_hai_prediction_s3_policy"]["Statement"].append(
+            {"Sid": "ReadLogs", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": f"arn:aws:s3:::{B}-logs/*"}
+        )
+
+    def logging_bucket_any_region(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "s3", "CreateApprovedBucketInApprovedRegion")["Condition"]
+
+    def logging_bucket_delete(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "s3", "ManageLogBucketSecurity")["Action"].append("s3:DeleteBucket")
+
+    def logging_bucket_versioning(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "s3", "ManageLogBucketSecurity")["Action"].append("s3:PutBucketVersioning")
+
+    def logging_bucket_wildcard(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "s3", "ManageLogBucketSecurity")["Resource"] = f"arn:aws:s3:::{B}-*"
 
     def athena_roles_wildcard(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sts", "AssumeAthenaReaderOnly")["Resource"] = f"arn:aws:iam::{A}:role/*"
@@ -2151,6 +2215,13 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "parameter path read": ("forbidden ssm:GetParametersByPath", parameter_path_read),
         "write access to the read-only administrator password": ("parameter: overwrite the Airflow administrator password", admin_password_write),
         "sts AssumeRole on every role": ("AssumeRole administrator", roles_wildcard),
+        "the logging setting is allowed on every bucket": ("logging: PutBucketLogging on every bucket", logging_any_bucket),
+        "the logging setting is allowed on the logging bucket": ("logging bucket: PutBucketLogging refused", logging_on_logging_bucket),
+        "the logging bucket gets object reads": ("logging bucket: GetObject on a log object refused", logging_bucket_objects),
+        "the logging bucket may be created in any region": ("logging bucket: CreateBucket in another region", logging_bucket_any_region),
+        "the logging bucket may be deleted": ("logging bucket: DeleteBucket refused", logging_bucket_delete),
+        "the logging bucket gets versioning": ("logging bucket: PutBucketVersioning refused", logging_bucket_versioning),
+        "the logging bucket settings reach a name pattern": ("logging bucket: settings on another bucket", logging_bucket_wildcard),
         "the Athena statement reaches every role": ("AssumeRole administrator", athena_roles_wildcard),
         "the Athena statement reaches every Athena role": ("AssumeRole another athena role", athena_role_prefix),
         "the Athena statement reaches the reader of every environment": ("AssumeRole athena_reader of another environment", athena_any_environment),
