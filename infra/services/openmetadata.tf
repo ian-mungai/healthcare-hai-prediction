@@ -79,7 +79,7 @@ locals {
         { name = "nofile", softLimit = 65536, hardLimit = 65536 },
       ]
       healthCheck = {
-        command     = ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:${local.om_search_port}/_cluster/health?wait_for_status=yellow&timeout=5s"]
+        command     = ["CMD", "curl", "--fail", "--silent", "--max-time", "8", "http://127.0.0.1:${local.om_search_port}/_cluster/health?wait_for_status=yellow&timeout=5s"]
         interval    = 15
         timeout     = 10
         retries     = 10
@@ -120,7 +120,7 @@ locals {
         { containerPort = local.om_admin_port, hostPort = local.om_admin_port, protocol = "tcp" },
       ]
       healthCheck = {
-        command     = ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:${local.om_admin_port}/healthcheck"]
+        command     = ["CMD", "curl", "--fail", "--silent", "--max-time", "8", "http://127.0.0.1:${local.om_admin_port}/healthcheck"]
         interval    = 30
         timeout     = 10
         retries     = 10

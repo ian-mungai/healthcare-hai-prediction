@@ -67,7 +67,7 @@ run "flag_off_plans_nothing_new_and_keeps_every_limit" {
 
   assert {
     condition = (
-      !contains(keys(aws_ecs_task_definition.service), "openmetadata") && !contains(keys(aws_ecs_service.service), "openmetadata")
+      !contains(keys(aws_ecs_task_definition.service), "openmetadata") && !contains(keys(aws_ecs_service.catalog), "openmetadata")
       && !contains(keys(aws_ecs_task_definition.one_shot), "openmetadata_bootstrap")
     )
     error_message = "With the flag off the stack plans no OpenMetadata task, service or one-shot."
@@ -118,7 +118,7 @@ run "flag_on_adds_one_service_and_one_bootstrap_task" {
   command = plan
 
   assert {
-    condition     = contains(keys(aws_ecs_service.service), "openmetadata") && contains(keys(aws_ecs_task_definition.service), "openmetadata") && contains(keys(aws_ecs_task_definition.one_shot), "openmetadata_bootstrap")
+    condition     = contains(keys(aws_ecs_service.catalog), "openmetadata") && !contains(keys(aws_ecs_service.service), "openmetadata") && contains(keys(aws_ecs_task_definition.service), "openmetadata") && contains(keys(aws_ecs_task_definition.one_shot), "openmetadata_bootstrap")
     error_message = "The flag adds the openmetadata service, its task definition and the openmetadata_bootstrap one-shot."
   }
 
@@ -162,6 +162,26 @@ run "flag_on_adds_one_service_and_one_bootstrap_task" {
   assert {
     condition     = output.service_names["openmetadata"] == "example_project_dev_openmetadata"
     error_message = "The service name follows the project naming."
+  }
+}
+
+run "health_checks_are_exec_form_and_bounded" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for index in [0, 2] : (
+        jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[index].healthCheck.command[0] == "CMD"
+        && length([for argument in jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[index].healthCheck.command : argument if startswith(argument, "http://127.0.0.1:")]) == 1
+        && contains(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[index].healthCheck.command, "--max-time")
+      )
+    ])
+    error_message = "The OpenSearch and server health checks run curl in CMD form with the whole URL as one argument and a bounded curl timeout."
+  }
+
+  assert {
+    condition     = contains(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[0].healthCheck.command, "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s")
+    error_message = "The OpenSearch URL, with its unquoted-in-shell ampersand, is a single argument."
   }
 }
 
@@ -562,10 +582,10 @@ run "every_resource_carries_the_project_tag" {
 
   assert {
     condition = (
-      aws_ecs_service.service["openmetadata"].tags["Project"] == "example_project"
+      aws_ecs_service.catalog["openmetadata"].tags["Project"] == "example_project"
       && aws_ecs_task_definition.service["openmetadata"].tags["Project"] == "example_project"
       && aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].tags["Project"] == "example_project"
-      && aws_ecs_service.service["openmetadata"].propagate_tags == "TASK_DEFINITION"
+      && aws_ecs_service.catalog["openmetadata"].propagate_tags == "TASK_DEFINITION"
     )
     error_message = "The new service and task definitions carry the Project tag and propagate it to their tasks."
   }
