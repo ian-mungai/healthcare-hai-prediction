@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import http.client
 import io
 import json
 import os
@@ -67,6 +68,7 @@ class Polaris:
         self.assigned: dict[str, set[str]] = {}
         self.issued: list[str] = []
         self.calls: list[tuple[str, str]] = []
+        self.strays: list[tuple[str, str]] = []
         self.faults: set[str] = set()
         self.lock = threading.Lock()
         stand_in = self
@@ -87,7 +89,8 @@ class Polaris:
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length) if length else b""
                 with stand_in.lock:
-                    stand_in.calls.append((self.command, self.path))
+                    # The client under test always names the realm. A request without it is a local program probing loopback ports.
+                    (stand_in.calls if self.headers.get("Polaris-Realm") == "POLARIS" else stand_in.strays).append((self.command, self.path))
                 status, body, drop = stand_in.answer(self.command, self.path, self.headers, raw)
                 if drop:
                     self.close_connection = True
@@ -597,6 +600,20 @@ def case_profile_refused(_: Path) -> dict[str, bool]:
         code, out, err = run_main(["check"], services)
         OUTPUTS.append(out + err)
         return {"the tool stops": code == 1, "the error names the profile": "(profile)" in err, "no AWS client was made": not session.called}
+
+
+def case_stray_request(_: Path) -> dict[str, bool]:
+    """A local program that probes loopback ports can reach the stand-in: the request is answered and recorded as a stray, not as a catalog request."""
+    with world() as (_ssm, polaris, _root):
+        connection = http.client.HTTPConnection("127.0.0.1", polaris.port, timeout=5)
+        connection.request("GET", "/")
+        status = connection.getresponse().status
+        connection.close()
+        return {
+            "the stray request is answered": status == 400,
+            "it is not counted as a catalog request": not polaris.calls,
+            "it is recorded as a stray": polaris.strays == [("GET", "/")],
+        }
 
 
 def case_check_metadata(_: Path) -> dict[str, bool]:
@@ -1500,6 +1517,7 @@ CASES: dict[str, Case] = {
     "real_relay": case_real_relay,
     "transport_folder_private": case_transport_folder_private,
     "profile_refused": case_profile_refused,
+    "stray_request": case_stray_request,
     "check_metadata": case_check_metadata,
     "check_project_policy": case_check_project_policy,
     "features_needs_the_administrator": case_features_needs_the_administrator,
