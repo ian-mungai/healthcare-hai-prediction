@@ -47,9 +47,9 @@ from typing import Any
 from unittest import mock
 
 from scripts.features import feature_schema as schema_module
-from scripts.features import features_input, features_publish
+from scripts.features import features_input, features_publish, features_publish_cases
 from scripts.lakehouse import feature_columns as columns
-from scripts.lakehouse import gold_publish
+from scripts.lakehouse import gold_publish, publish_case_report
 from scripts.lakehouse.gold_publish_record import PublishError
 from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
@@ -1386,7 +1386,7 @@ def publish_offline(report: Report, report_folder: Path) -> None:
     try:
         session.start()
         ran = session.job("features_publish_e2e", "suite", ["--stamp", report_folder.name], SUITE_SECONDS)
-        cases = json.loads((report_folder / "cases_all.json").read_text()) if (report_folder / "cases_all.json").is_file() else []
+        cases = publish_case_report.read_cases(report_folder / "cases_all.json", list(features_publish_cases.CASES))
         report.case("E06a", "A8", "the case suite ran in the Spark image", ran.ok, exit=ran.exit_code)
         for item in cases:
             report.case(
@@ -1399,13 +1399,13 @@ def publish_offline(report: Report, report_folder: Path) -> None:
             )
     finally:
         cleanup = session.close()
-    report.case(
-        "E06a",
-        "RS4",
-        "the session left no launcher and no container",
-        not (cleanup.get("launcher_left") or cleanup.get("containers_left") or cleanup.get("errors")),
-        cleanup=cleanup,
-    )
+        report.case(
+            "E06a",
+            "RS4",
+            "the session left no launcher and no container",
+            not (cleanup.get("launcher_left") or cleanup.get("containers_left") or cleanup.get("errors")),
+            cleanup=cleanup,
+        )
 
 
 # ----------------------------------------------------------------------------------------------------

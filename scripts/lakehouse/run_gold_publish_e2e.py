@@ -52,6 +52,8 @@ from scripts.lakehouse import (
     launcher_cleanup,
     polaris_writer,
     principal_credentials,
+    publish_case_report,
+    run_gold_publish_cases,
     run_lock,
     silver_writer_setup,
 )
@@ -923,9 +925,9 @@ def writer_setup(report: Path) -> list[dict[str, Any]]:
 def local_iceberg(session: Session, report: Path) -> list[dict[str, Any]]:
     """The Iceberg check job; the steps read its report."""
     result = session.job("gold_publish_e2e", "iceberg", ["--case", "iceberg_check", "--stamp", report.name], SUITE_SECONDS)
-    cases = json.loads((report / "cases_iceberg_check.json").read_text()) if (report / "cases_iceberg_check.json").is_file() else []
+    cases = publish_case_report.read_cases(report / "cases_iceberg_check.json", ["iceberg_check"])
     versions = json.loads((report / "iceberg_versions.json").read_text()) if (report / "iceberg_versions.json").is_file() else {}
-    checks = cases[0]["checks"] if cases else {}
+    checks = cases[0]["checks"]
     return [
         step("the job ran", result.ok, exit=result.exit_code, reason=result.reason, tail=(result.stdout + result.stderr)[-300:]),
         step("Spark and Iceberg versions", bool(versions), **versions),
@@ -938,7 +940,7 @@ def suite(session: Session, report: Path, selected: list[str] | None = None) -> 
     chosen = ["--case", *selected] if selected else []
     ran = session.job("gold_publish_e2e", "suite", [*chosen, "--stamp", report.name], SUITE_SECONDS)
     name = f"cases_{'_'.join(selected)}.json" if selected else "cases_all.json"
-    cases = json.loads((report / name).read_text()) if (report / name).is_file() else []
+    cases = publish_case_report.read_cases(report / name, selected or [name for name in run_gold_publish_cases.CASES if name != "readback"])
     out = [step("the case suite ran in the Spark image", ran.ok, exit=ran.exit_code, tail=(ran.stdout + ran.stderr)[-300:])]
     out += [step(f"case {item['case']}", item["status"] == "pass", checks=item["checks"], error=item["error"]) for item in cases]
     return out
@@ -1109,11 +1111,11 @@ def publish_offline(session: Session, report: Path) -> list[dict[str, Any]]:
         )
     )
     readback = session.job("gold_publish_e2e", "readback", ["--case", "readback", "--stamp", report.name], SUITE_SECONDS)
-    readback_cases = json.loads((report / "cases_readback.json").read_text()) if (report / "cases_readback.json").is_file() else []
+    readback_cases = publish_case_report.read_cases(report / "cases_readback.json", ["readback"])
     steps.append(step("readback in the Spark image: the catalog the five containers wrote equals the export", readback.ok, exit=readback.exit_code))
-    steps += [step(f"readback: {name}", ok) for name, ok in (readback_cases[0]["checks"] if readback_cases else {}).items()]
+    steps += [step(f"readback: {name}", ok) for name, ok in readback_cases[0]["checks"].items()]
     suite = session.job("gold_publish_e2e", "suite", ["--stamp", report.name], SUITE_SECONDS)
-    cases = json.loads((report / "cases_all.json").read_text()) if (report / "cases_all.json").is_file() else []
+    cases = publish_case_report.read_cases(report / "cases_all.json", [name for name in run_gold_publish_cases.CASES if name != "readback"])
     steps.append(step("the case suite ran in the Spark image", suite.ok, exit=suite.exit_code, tail=(suite.stdout + suite.stderr)[-300:]))
     for item in cases:
         steps.append(step(f"case {item['case']}", item["status"] == "pass", checks=item["checks"], error=item["error"]))
