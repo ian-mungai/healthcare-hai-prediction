@@ -1,10 +1,12 @@
-"""E2E of the owner's first layer run in docs/aws_broker.md: the order of the steps, the flags each step names and every printed command against its parser.
+"""E2E of the owner's first layer run in config/aws/owner_command_lists.json: the order of the steps, the flags each step names and every printed command
+against its parser.
 
     .venv/bin/python -m scripts.infrastructure.run_owner_list_e2e --out <new folder>
 
-The commands come from the "Silver first run", "Gold after silver" and "Features after gold" sections. Each runs through the parser of its real program with
-synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing argument or a wrong option fails here and not on the owner's first run. The
-reviewed jobs file that each list describes passes the real renderer through the real wrapper. Nothing calls AWS or Docker."""
+The commands come from the "Silver first run", "Gold after silver" and "Features after gold" lists of that file (the text moved out of the tracked
+documents). Each runs through the parser of its real program with synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing
+argument or a wrong option fails here and not on the owner's first run. The reviewed jobs file that each list describes passes the real renderer
+through the real wrapper. Nothing calls AWS or Docker."""
 
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ from scripts.infrastructure.run_activation_inputs_e2e import (
 )
 from scripts.process import run_command
 
-DOCUMENT = ROOT / "docs/aws_broker.md"
+OWNER_LISTS = ROOT / "config/aws/owner_command_lists.json"
 SILVER, GOLD, FEATURES = "Silver first run", "Gold after silver", "Features after gold"
 IAM_FLAGS = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True, "job_features_image_prepared": True}
 STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs")
@@ -279,7 +281,7 @@ def mutant_checks(text: str, folder: Path) -> dict[str, bool]:
 
 
 def run(output: Path) -> dict[str, dict[str, bool]]:
-    text = DOCUMENT.read_text()
+    text = "".join(f"## {heading}\n{body}" for heading, body in json.loads(OWNER_LISTS.read_text()).items())
     with tempfile.TemporaryDirectory(prefix="owner_list_") as folder:
         results = {"structure": structure_checks(text), "commands": command_checks(text, Path(folder)), "mutants": mutant_checks(text, Path(folder))}
     output.mkdir(parents=True)
