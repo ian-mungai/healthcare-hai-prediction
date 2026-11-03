@@ -862,6 +862,41 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
     for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
         if "steps.range.outputs." in value:
             context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
+    # The scope step and the check range step of the plan job run for real: the scope is range for a pull request and full for every other event, and the
+    # file based checks get an empty range outside a pull request.
+    scope_exits = {}
+    for step_id in ("scope", "checkrange"):
+        plan_step = next((step for step in steps if step.get("id") == step_id), None)
+        scope_exits[step_id] = 1
+        if plan_step:
+            step_env = {name: workflow_value(value, context) for name, value in plan_step.get("env", {}).items()}
+            step_output = repo / ".git" / f"{label}_{step_id}_output"
+            script = repo / ".git" / "plan_step.sh"
+            script.write_text("set -eo pipefail\n" + plan_step["run"])
+            result = run_command("bash", [str(script)], cwd=repo, env={**environment, "GITHUB_OUTPUT": str(step_output), **step_env}, timeout=120)
+            scope_exits[step_id] = result.returncode
+            if step_output.exists():
+                context.update(
+                    {f"steps.{step_id}.outputs.{key}": value for line in step_output.read_text().splitlines() for key, value in [line.split("=", 1)]}
+                )
+    for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
+        if "steps.scope.outputs." in value or "steps.checkrange.outputs." in value:
+            context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
+    file_based = {
+        f"{job}.{index}"
+        for job, definition in workflow["jobs"].items()
+        if job != "plan"
+        for index, step in enumerate(definition.get("steps", []))
+        if "check_start" in str(step.get("env", {}).get("RANGE_START", ""))
+    }
+    scopes = {
+        f"{job}.{index}": workflow_value(str(step["env"]["CI_SCOPE"]), context)
+        for job, definition in workflow["jobs"].items()
+        if job != "plan"
+        for index, step in enumerate(definition.get("steps", []))
+        if "CI_SCOPE" in step.get("env", {})
+    }
+    wanted_scope = "range" if event == "pull_request" else "full"
     consumers = {
         f"{job}.{index}": {name: workflow_value(step["env"][name], context) for name in ("RANGE_START", "RANGE_END")}
         for job, definition in workflow["jobs"].items()
@@ -887,7 +922,18 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
     selected = json.loads(result.stdout) if result.returncode == 0 else {}
     checks = {
         "plan_passes": plan_exit == 0,
-        "all_consumers_use_the_expected_range": bool(consumers) and all(env == {"RANGE_START": want_start, "RANGE_END": head} for env in consumers.values()),
+        "scope_and_check_range_steps_pass": all(code == 0 for code in scope_exits.values()),
+        "commit_checks_use_the_real_range": bool(consumers)
+        and all(env == {"RANGE_START": want_start, "RANGE_END": head} for name, env in consumers.items() if name not in file_based),
+        # The hook partitions and the acquisition tests read the files of the range in a pull request and every file in a full run.
+        "file_based_checks_use_the_check_range": len(file_based) == 3
+        and all(
+            consumers[name] == ({"RANGE_START": want_start, "RANGE_END": head} if event == "pull_request" else {"RANGE_START": "", "RANGE_END": ""})
+            for name in file_based
+        ),
+        # Pull requests are path selected; a push to main and a manual run are full runs, and no run is scheduled.
+        "every_group_job_runs_the_scope_of_the_event": len(scopes) >= 8 and all(value == wanted_scope for value in scopes.values()),
+        "no_scheduled_trigger": "schedule" not in (workflow.get(True) or workflow.get("on") or {}),
         "check_has_the_expected_result": check_exit == want_exit and want_marker in log,
         "selector_passes": result.returncode == 0,
     }
