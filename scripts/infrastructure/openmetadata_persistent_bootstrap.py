@@ -118,6 +118,8 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
         session = base.login(api, base.FACTORY_LOGIN_VALUE)
         if not session:
             return fail("neither the stored administrator password nor the default one logs in")
+        # OpenMetadata 2.0.7 UserResource: POST /v1/users/login Base64-decodes the password (base.login encodes it); PUT /v1/users/changePassword passes the
+        # ChangePasswordRequest fields to BasicAuthenticator.changeUserPwdWithOldPwd as they are, so these three fields are plain text.
         body = {"username": "admin", "oldPassword": base.FACTORY_LOGIN_VALUE, "newPassword": secret, "confirmPassword": secret, "requestType": "SELF"}
         if base.call("PUT", f"{api}/v1/users/changePassword", body, session)[0] != 200:
             return fail("the administrator password change was refused")

@@ -17,6 +17,7 @@ import json
 import sys
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -107,6 +108,16 @@ class World:
             self.pipelines[f"hai_events.{spec['job']}"] = {"name": spec["job"], "extension": {"runId": spec["id"], "snapshotState": "complete"}}
 
 
+def entity_id(fqn: str) -> str:
+    """The UUID string OpenMetadata gives an entity; the stand-in derives it from the fully qualified name."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, fqn))
+
+
+def reference(fqn: str, kind: str, name: str | None = None) -> dict[str, Any]:
+    """An entity reference as OpenMetadata 2.0.7 answers it."""
+    return {"id": entity_id(fqn), "type": kind, "name": name or fqn.rsplit(".", 1)[-1], "fullyQualifiedName": fqn}
+
+
 @contextlib.contextmanager
 def servers(world: World) -> Iterator[tuple[str, str]]:
     class Marquez(BaseHTTPRequestHandler):
@@ -134,10 +145,21 @@ def servers(world: World) -> Iterator[tuple[str, str]]:
                 if fqn not in world.tables:
                     return self.send(404, {})
                 mine = [edge for edge in world.edges if fqn in edge[:2]]
-                names = sorted({fqn, *(end for edge in mine for end in edge[:2])})
-                nodes = [{"id": f"id:{name}", "fullyQualifiedName": name, "type": "table"} for name in names]
-                edges = [{"fromEntity": {"id": f"id:{a}"}, "toEntity": {"id": f"id:{b}"}, "lineageDetails": {"pipeline": {"name": job}}} for a, b, job in mine]
-                return self.send(200, {"entity": {"id": f"id:{fqn}", "fullyQualifiedName": fqn}, "nodes": nodes, "upstreamEdges": [], "downstreamEdges": edges})
+                names = sorted({end for edge in mine for end in edge[:2]} - {fqn})
+                # The shape of OpenMetadata 2.0.7 type/entityLineage.json: the primary entity is `entity` and absent from `nodes`; an edge names its two
+                # entities by UUID string; the pipeline of an edge is an entity reference.
+                nodes = [reference(name, "table") for name in names]
+
+                def edge_of(a: str, b: str, job: str) -> dict[str, Any]:
+                    return {
+                        "fromEntity": entity_id(a),
+                        "toEntity": entity_id(b),
+                        "lineageDetails": {"source": "OpenLineage", "pipeline": reference(f"hai_events.{job}", "pipeline", job)},
+                    }
+
+                upstream = [edge_of(*edge) for edge in mine if edge[1] == fqn]
+                downstream = [edge_of(*edge) for edge in mine if edge[0] == fqn]
+                return self.send(200, {"entity": reference(fqn, "table"), "nodes": nodes, "upstreamEdges": upstream, "downstreamEdges": downstream})
             if path.startswith("/api/v1/pipelines/name/"):
                 pipeline = world.pipelines.get(path.rsplit("/", 1)[1])
                 return self.send(200, pipeline) if pipeline else self.send(404, {})

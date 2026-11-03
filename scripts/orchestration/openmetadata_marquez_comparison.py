@@ -131,7 +131,12 @@ def marquez_view(marquez: Client, run_ids: list[str]) -> dict[str, Any]:
     return {"jobs": jobs, "datasets": datasets, "edges": edges, "missing": missing}
 
 
-def openmetadata_view(om: Client, names: set[str], jobs: set[str], template: str) -> dict[str, Any]:
+def openmetadata_view(om: Client, names: set[str], jobs: set[str], template: str, pipeline_template: str) -> dict[str, Any]:
+    """Jobs, datasets and edges OpenMetadata holds for the named datasets.
+
+    The shape is OpenMetadata 2.0.7 ``type/entityLineage.json``. ``entity`` is the primary table and is not repeated in ``nodes``. An edge names its
+    two tables by UUID string in ``fromEntity`` and ``toEntity``. The pipeline of an edge is an entity reference under ``lineageDetails.pipeline``.
+    """
     found: set[str] = set()
     edges: set[tuple[str, str, str]] = set()
     for name in sorted(names):
@@ -139,10 +144,15 @@ def openmetadata_view(om: Client, names: set[str], jobs: set[str], template: str
         if status != 200 or not isinstance(body, dict):
             continue
         found.add(name)
-        by_id = {str(node.get("id")): name_from_fqn(template, str(node.get("fullyQualifiedName", ""))) for node in body.get("nodes", [])}
+        by_id = {
+            str(node.get("id")): name_from_fqn(template, str(node.get("fullyQualifiedName", "")))
+            for node in [body.get("entity") or {}, *body.get("nodes", [])]
+            if isinstance(node, dict)
+        }
         for edge in [*body.get("upstreamEdges", []), *body.get("downstreamEdges", [])]:
-            job = str(((edge.get("lineageDetails") or {}).get("pipeline") or {}).get("name", ""))
-            source, target = by_id.get(str((edge.get("fromEntity") or {}).get("id"))), by_id.get(str((edge.get("toEntity") or {}).get("id")))
+            pipeline = (edge.get("lineageDetails") or {}).get("pipeline") or {}
+            job = str(pipeline.get("name") or name_from_fqn(pipeline_template.replace("{job}", "{name}"), str(pipeline.get("fullyQualifiedName", ""))))
+            source, target = by_id.get(str(edge.get("fromEntity"))), by_id.get(str(edge.get("toEntity")))
             if job in jobs and source and target:
                 edges.add((source, target, job))
     return {"jobs": {edge[2] for edge in edges}, "datasets": found | {end for edge in edges for end in edge[:2]}, "edges": edges}
@@ -171,7 +181,7 @@ def compare_run(run_id: str, rows: list[dict[str, Any]], marquez: Client, om: Cl
     declared = {name for row in complete for part in dataset_names(row["event"]) for name in part}
     native = sorted({str(row["event"]["run"]["runId"]) for row in complete})
     expected = marquez_view(marquez, native)
-    seen = openmetadata_view(om, declared | expected["datasets"], jobs | expected["jobs"], templates[0])
+    seen = openmetadata_view(om, declared | expected["datasets"], jobs | expected["jobs"], templates[0], templates[1])
     unresolved = sorted({name for row in rows if row["om_state"] == 2 for name in (row["om_result"] or {}).get("unresolved", [])})
     source = identity_source(om, jobs, run_id, complete, templates[1])
     row: dict[str, Any] = {
