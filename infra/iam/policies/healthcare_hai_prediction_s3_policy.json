@@ -5,7 +5,10 @@
       "Sid": "CreateApprovedBucketInApprovedRegion",
       "Effect": "Allow",
       "Action": "s3:CreateBucket",
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}-logs"
+      ],
       "Condition": {
         "StringEquals": {
           "s3:LocationConstraint": "${AWS_REGION}"
@@ -36,7 +39,10 @@
         "s3:GetLifecycleConfiguration",
         "s3:GetReplicationConfiguration"
       ],
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}-logs"
+      ]
     },
     {
       "Sid": "ManageApprovedBucketSecurity",
@@ -51,6 +57,25 @@
         "s3:PutBucketTagging"
       ],
       "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+    },
+    {
+      "Sid": "SetAccessLoggingOnApprovedBucket",
+      "Effect": "Allow",
+      "Action": "s3:PutBucketLogging",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+    },
+    {
+      "Sid": "ManageLogBucketSecurity",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketTagging"
+      ],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}-logs"
     },
     {
       "Sid": "InspectApprovedAcquisitionBucket",

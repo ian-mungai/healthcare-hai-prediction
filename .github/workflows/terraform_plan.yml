@@ -1,0 +1,98 @@
+name: Terraform plan
+
+# Read-only plans for pull requests of this repository. Off until the owner sets the repository variable OIDC_DELIVERY_ENABLED to
+# true (project guide: OIDC delivery). The job never runs for a pull request from a fork, and the plan role trusts no other event. It plans
+# without a state lock and prints no plan and no value: only each changed resource address and its action reach the job summary.
+on:
+  pull_request:
+    paths:
+      - "infra/platform/**"
+      - "infra/services/**"
+      - "infra/jobs/**"
+      - ".github/workflows/terraform_plan.yml"
+
+permissions: {}
+
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan ${{ matrix.stack }}
+    if: ${{ vars.OIDC_DELIVERY_ENABLED == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [platform, services, jobs]
+    env:
+      STACK: ${{ matrix.stack }}
+      STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_INPUTS: ${{ secrets.TERRAFORM_INPUTS_JSON }}
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - name: Checkout the pull request head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Refuse a stack that still keeps local state
+        run: |
+          test -f "infra/$STACK/backend.tf" || { echo "infra/$STACK has no backend.tf: the state move has not happened for this stack." >&2; exit 1; }
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.16.1"
+          terraform_wrapper: false
+
+      - name: Mask the stack inputs and read the project profile
+        id: inputs
+        run: bash .github/scripts/mask_inputs.sh
+
+      - name: Assume the plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TERRAFORM_PLAN }}
+          aws-profile: ${{ steps.inputs.outputs.profile }}
+          output-env-credentials: true
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gh_plan_pull_request
+          mask-aws-account-id: true
+
+      - name: Plan without a lock
+        run: |
+          set -euo pipefail
+          quiet() {
+            local code=0
+            "$@" > "$RUNNER_TEMP/terraform.log" 2>&1 || code=$?
+            if [[ $code -ne 0 ]]; then
+              echo "Step failed with exit code $code. Its output stays out of the public log." >&2
+              return "$code"
+            fi
+          }
+          printf '%s' "$STACK_INPUTS" > "infra/$STACK/ci.tfvars.json"
+          quiet terraform -chdir="infra/$STACK" init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION" || exit 1
+          quiet terraform -chdir="infra/$STACK" validate -no-color || exit 1
+          code=0
+          terraform -chdir="infra/$STACK" plan -input=false -lock=false -var-file=ci.tfvars.json -detailed-exitcode -out=plan.bin > "$RUNNER_TEMP/terraform.log" 2>&1 || code=$?
+          if [[ $code -ne 0 && $code -ne 2 ]]; then
+            echo "Plan failed with exit code $code. Its output stays out of the public log." >&2
+            exit 1
+          fi
+          terraform -chdir="infra/$STACK" show -json plan.bin 2> "$RUNNER_TEMP/terraform.log" > "$RUNNER_TEMP/plan.json" || { echo "Reading the plan failed. Its output stays out of the public log." >&2; exit 1; }
+          {
+            echo "### Plan summary for $STACK"
+            echo '```'
+            bash .github/scripts/plan_digest.sh summary < "$RUNNER_TEMP/plan.json"
+            echo '```'
+            if [[ $code -eq 0 ]]; then echo "No change."; fi
+          } >> "$GITHUB_STEP_SUMMARY"

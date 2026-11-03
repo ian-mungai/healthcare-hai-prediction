@@ -1,0 +1,174 @@
+name: Terraform apply
+
+# Applies the platform, services or jobs stack from main. Off until the owner sets the repository variable OIDC_DELIVERY_ENABLED to
+# true (project guide: OIDC delivery). Two environments gate it: the plan job runs in terraform-plan, and the apply job waits for the owner
+# in terraform-apply (required reviewer, main branch only). The apply job plans again and applies only when its summary of changes
+# equals the summary the owner saw in the plan job. Nothing prints a plan or a value.
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: The stack to apply
+        type: choice
+        required: true
+        options:
+          - platform
+          - services
+          - jobs
+
+permissions: {}
+
+concurrency:
+  group: terraform-apply-${{ inputs.stack }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan before approval
+    if: ${{ vars.OIDC_DELIVERY_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: terraform-plan
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+    env:
+      STACK: ${{ inputs.stack }}
+      STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_INPUTS: ${{ secrets.TERRAFORM_INPUTS_JSON }}
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Refuse a stack that still keeps local state
+        run: |
+          test -f "infra/$STACK/backend.tf" || { echo "infra/$STACK has no backend.tf: the state move has not happened for this stack." >&2; exit 1; }
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.16.1"
+          terraform_wrapper: false
+
+      - name: Mask the stack inputs and read the project profile
+        id: inputs
+        run: bash .github/scripts/mask_inputs.sh
+
+      - name: Assume the plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TERRAFORM_PLAN }}
+          aws-profile: ${{ steps.inputs.outputs.profile }}
+          output-env-credentials: true
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gh_plan_main
+          mask-aws-account-id: true
+
+      - name: Plan without a lock and summarize
+        id: plan
+        run: |
+          set -euo pipefail
+          quiet() {
+            local code=0
+            "$@" > "$RUNNER_TEMP/terraform.log" 2>&1 || code=$?
+            if [[ $code -ne 0 ]]; then
+              echo "Step failed with exit code $code. Its output stays out of the public log." >&2
+              return "$code"
+            fi
+          }
+          printf '%s' "$STACK_INPUTS" > "infra/$STACK/ci.tfvars.json"
+          quiet terraform -chdir="infra/$STACK" init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION" || exit 1
+          quiet terraform -chdir="infra/$STACK" validate -no-color || exit 1
+          quiet terraform -chdir="infra/$STACK" plan -input=false -lock=false -var-file=ci.tfvars.json -out=plan.bin || exit 1
+          terraform -chdir="infra/$STACK" show -json plan.bin 2> "$RUNNER_TEMP/terraform.log" > "$RUNNER_TEMP/plan.json" || { echo "Reading the plan failed. Its output stays out of the public log." >&2; exit 1; }
+          plan_digest="$(bash .github/scripts/plan_digest.sh digest < "$RUNNER_TEMP/plan.json")"
+          echo "plan_digest=$plan_digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Changes to approve for $STACK"
+            echo "The digest below covers every value, every output and every input of the plan. Values are never printed."
+            echo '```'
+            bash .github/scripts/plan_digest.sh summary < "$RUNNER_TEMP/plan.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply after approval
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: terraform-apply
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STACK: ${{ inputs.stack }}
+      STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_INPUTS: ${{ secrets.TERRAFORM_INPUTS_JSON }}
+      APPROVED_PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.16.1"
+          terraform_wrapper: false
+
+      - name: Mask the stack inputs and read the project profile
+        id: inputs
+        run: bash .github/scripts/mask_inputs.sh
+
+      - name: Assume the apply role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TERRAFORM_APPLY }}
+          aws-profile: ${{ steps.inputs.outputs.profile }}
+          output-env-credentials: true
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gh_apply_main
+          mask-aws-account-id: true
+
+      - name: Plan again and refuse a changed plan
+        run: |
+          set -euo pipefail
+          quiet() {
+            local code=0
+            "$@" > "$RUNNER_TEMP/terraform.log" 2>&1 || code=$?
+            if [[ $code -ne 0 ]]; then
+              echo "Step failed with exit code $code. Its output stays out of the public log." >&2
+              return "$code"
+            fi
+          }
+          printf '%s' "$STACK_INPUTS" > "infra/$STACK/ci.tfvars.json"
+          quiet terraform -chdir="infra/$STACK" init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION" || exit 1
+          quiet terraform -chdir="infra/$STACK" plan -input=false -lock-timeout=300s -var-file=ci.tfvars.json -out=plan.bin || exit 1
+          terraform -chdir="infra/$STACK" show -json plan.bin 2> "$RUNNER_TEMP/terraform.log" > "$RUNNER_TEMP/plan.json" || { echo "Reading the plan failed. Its output stays out of the public log." >&2; exit 1; }
+          bash .github/scripts/plan_digest.sh verify "$APPROVED_PLAN_DIGEST" < "$RUNNER_TEMP/plan.json" || { echo "Run the workflow again after the owner approves the new plan." >&2; exit 1; }
+
+      - name: Apply the saved plan
+        run: |
+          set -euo pipefail
+          quiet() {
+            local code=0
+            "$@" > "$RUNNER_TEMP/terraform.log" 2>&1 || code=$?
+            if [[ $code -ne 0 ]]; then
+              echo "Step failed with exit code $code. Its output stays out of the public log." >&2
+              return "$code"
+            fi
+          }
+          quiet terraform -chdir="infra/$STACK" apply -input=false -lock-timeout=300s plan.bin || exit 1

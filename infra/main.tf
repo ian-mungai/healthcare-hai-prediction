@@ -12,11 +12,10 @@ provider "aws" {
   }
 }
 
-# Approved acquisition-stage deferral of server access logging (checkov CKV_AWS_18); review before additional user or service
-# access, production or newly approved sensitive-data use.
+# Server access logging is configured in logging.tf (aws_s3_bucket_logging.data) and is off until the owner turns it on. trivy reads the
+# default (off), so its finding stays ignored until that default is true; checkov reads the resource and needs no skip.
 #trivy:ignore:AWS-0089
 resource "aws_s3_bucket" "data" {
-  #checkov:skip=CKV_AWS_18:Approved acquisition-stage deferral; review before additional user or service access, production or newly approved sensitive-data use.
   #checkov:skip=CKV2_AWS_62:Approved acquisition-stage deferral; review when an event consumer is implemented.
   #checkov:skip=CKV_AWS_144:Approved acquisition-stage deferral; review recovery requirements and destination before production.
   #checkov:skip=CKV_AWS_145:Approved acquisition-stage SSE-S3 use; review KMS with coordinated ingestion and IAM migration before production.
@@ -105,6 +104,29 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
+  # Terraform state lives under terraform_state/<stack>/ (project guide: remote state move). Only replaced versions expire, after 90 days. The
+  # current state object never expires, and no other rule covers this prefix.
+  dynamic "rule" {
+    for_each = var.terraform_state_enabled ? [1] : []
+
+    content {
+      id     = "expire_replaced_state_versions"
+      status = "Enabled"
+
+      filter {
+        prefix = "terraform_state/"
+      }
+
+      noncurrent_version_expiration {
+        noncurrent_days = 90
+      }
+
+      expiration {
+        expired_object_delete_marker = true
+      }
+    }
+  }
+
   # Athena writes query results here, and they hold rows of the Public research data. Current results expire after 7 days, replaced versions after 1 day. S3 lets
   # a rule carry either days or the delete-marker cleanup, so the markers of expired results stay. The prefix is exact: no other key matches it. The rule changes
   # the live lifecycle configuration, so it exists only while the owner sets athena_retention_enabled; a default plan leaves it out.
@@ -173,11 +195,61 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
   }
 }
 
+# Terraform state sits in this bucket under terraform_state/<stack>/terraform.tfstate, with its lock file beside it. Only the project user
+# (every stack except iam), the two Terraform CI roles (through their own role policies) and the named administrator (the iam stack)
+# may touch the prefix. The Deny below names who may, so a lakehouse, job, feature or Athena principal stays out even if a policy of
+# theirs holds a wildcard that reaches the prefix.
+locals {
+  state_prefix        = "terraform_state"
+  state_project_user  = "arn:aws:iam::${var.expected_account_id}:user/${var.aws_profile}"
+  state_admin_arns    = [for name in var.terraform_state_admin_principals : "arn:aws:iam::${var.expected_account_id}:${name}"]
+  state_ci_roles      = [for name in ["gh_terraform_plan", "gh_terraform_apply"] : "arn:aws:iam::${var.expected_account_id}:role/${var.project_name}_${name}_${var.environment}"]
+  state_user_stacks   = ["storage", "platform", "services", "jobs"]
+  state_user_keys     = [for stack in local.state_user_stacks : "${aws_s3_bucket.data.arn}/${local.state_prefix}/${stack}/terraform.tfstate"]
+  state_user_lock_key = [for key in local.state_user_keys : "${key}.tflock"]
+  state_statements = [for statement in [
+    {
+      Sid       = "ProjectUserUsesItsStateKeys"
+      Effect    = "Allow"
+      Principal = { AWS = local.state_project_user }
+      Action    = ["s3:GetObject", "s3:PutObject"]
+      Resource  = local.state_user_keys
+    },
+    {
+      Sid       = "ProjectUserHoldsItsStateLocks"
+      Effect    = "Allow"
+      Principal = { AWS = local.state_project_user }
+      Action    = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+      Resource  = local.state_user_lock_key
+    },
+    {
+      Sid       = "DenyStatePrefixToEveryoneElse"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = ["${aws_s3_bucket.data.arn}/${local.state_prefix}/*"]
+      Condition = {
+        ArnNotLike = { "aws:PrincipalArn" = concat([local.state_project_user], local.state_ci_roles, local.state_admin_arns) }
+      }
+    },
+    {
+      Sid       = "DenyIamStateToProjectIdentities"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = ["${aws_s3_bucket.data.arn}/${local.state_prefix}/iam/*"]
+      Condition = {
+        ArnLike = { "aws:PrincipalArn" = concat([local.state_project_user], local.state_ci_roles) }
+      }
+    }
+  ] : statement if var.terraform_state_enabled]
+}
+
 resource "aws_s3_bucket_policy" "tls" {
   bucket = aws_s3_bucket.data.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Sid       = "DenyInsecureTransport"
       Effect    = "Deny"
       Principal = "*"
@@ -191,6 +263,13 @@ resource "aws_s3_bucket_policy" "tls" {
           "aws:SecureTransport" = "false"
         }
       }
-    }]
+    }], local.state_statements)
   })
+
+  lifecycle {
+    precondition {
+      condition     = !var.terraform_state_enabled || length(var.terraform_state_admin_principals) > 0
+      error_message = "Name the administrator principal that applies the IAM stack in terraform_state_admin_principals before turning the state prefix on."
+    }
+  }
 }

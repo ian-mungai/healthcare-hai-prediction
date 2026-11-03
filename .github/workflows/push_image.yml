@@ -1,0 +1,73 @@
+name: Push image
+
+# Builds one image of infra/services/images.json on an arm64 runner and pushes it to its ECR repository by an unique tag. Off until
+# the owner sets the repository variable OIDC_DELIVERY_ENABLED to true (project guide: OIDC delivery). The image-push environment holds the
+# owner's approval for each push of a new digest. Only images of kind build run here. Mirrors and source builds stay with the
+# push_images plan until that tool has a mode that reads the registry from the environment instead of an AWS profile.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: The image name in infra/services/images.json
+        type: string
+        required: true
+      repository:
+        description: The ECR repository name, such as the project prefix, the image and the environment joined by underscores
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: push-image-${{ inputs.image }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: Build and push
+    if: ${{ vars.OIDC_DELIVERY_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment: image-push
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE: ${{ inputs.image }}
+      REPOSITORY: ${{ inputs.repository }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Check the image entry
+        run: |
+          [[ "$IMAGE" =~ ^[a-z0-9_]+$ && "$REPOSITORY" =~ ^[a-z0-9_]+$ ]] || { echo "Use lowercase letters, digits and underscores only." >&2; exit 1; }
+          jq -e --arg name "$IMAGE" '.images[$name] | select(.kind == "build")' infra/services/images.json > /dev/null || { echo "Only an image of kind build runs here." >&2; exit 1; }
+
+      - name: Assume the image push role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_IMAGE_PUSH }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gh_image_push
+          mask-aws-account-id: true
+
+      - name: Build and push by an unique tag
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "::add-mask::$registry"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" > /dev/null
+          context="$(jq -r --arg name "$IMAGE" '.images[$name].context' infra/services/images.json)"
+          tag="$(jq -r --arg name "$IMAGE" '.images[$name].tag' infra/services/images.json)-${GITHUB_SHA::12}"
+          mapfile -t extra < <(jq -r --arg name "$IMAGE" '.images[$name].build_contexts // {} | to_entries[] | "--build-context=\(.key)=\(.value)"' infra/services/images.json)
+          docker buildx build --platform linux/arm64 --provenance=false "${extra[@]}" --tag "$registry/$REPOSITORY:$tag" --push "$context"
+          digest="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids "imageTag=$tag" --query 'imageDetails[0].imageDigest' --output text)"
+          {
+            echo "### Pushed $IMAGE"
+            echo "Digest to record with push_images record: \`$IMAGE=$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

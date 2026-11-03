@@ -60,8 +60,34 @@ variable "expected_account_id" {
   }
 }
 
+variable "terraform_state_enabled" {
+  description = "Allow Terraform state under terraform_state/ in this bucket: a lifecycle rule for replaced state versions and bucket policy statements for the project user. Off by default. The owner turns it on in a reviewed commit before the state move."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "athena_retention_enabled" {
   description = "Add the rule that expires Athena query results under athena/results/ after 7 days and their replaced versions after 1 day. Off by default, because the rule changes the live lifecycle configuration of the data bucket; the owner sets it in the apply step that prepares the Athena mirror."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "terraform_state_admin_principals" {
+  description = "The administrator that applies the IAM stack, which keeps its state under terraform_state/iam/, as role/NAME or user/NAME. The account comes from expected_account_id, so no account ID is written here. Required when terraform_state_enabled is true."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for name in var.terraform_state_admin_principals : can(regex("^(user|role)/[A-Za-z0-9_+=,.@/-]+$", name)) && !can(regex("[0-9]{12}", name))])
+    error_message = "Use role/NAME or user/NAME with no wildcard, no full ARN and no 12-digit account ID."
+  }
+}
+
+variable "access_logging_enabled" {
+  description = "Deliver server access logs of the project bucket to a logging bucket of this stack, with a 30-day expiry. Off by default. Needs the project profile to hold the logging permissions first (project guide: access logging)."
   type        = bool
   default     = false
   nullable    = false
@@ -72,4 +98,16 @@ variable "mlflow_retention_enabled" {
   type        = bool
   default     = false
   nullable    = false
+}
+
+variable "access_logging_reader_principals" {
+  description = "The owner's administrator path, the only principals that may read the logs, as role/NAME or user/NAME. The account comes from expected_account_id. Required when access_logging_enabled is true."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for name in var.access_logging_reader_principals : can(regex("^(user|role)/[A-Za-z0-9_+=,.@/-]+$", name)) && !can(regex("[0-9]{12}", name))])
+    error_message = "Use role/NAME or user/NAME with no wildcard, no full ARN and no 12-digit account ID."
+  }
 }

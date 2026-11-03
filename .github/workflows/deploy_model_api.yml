@@ -1,0 +1,60 @@
+name: Deploy model API
+
+# Rolls the model API service to a task definition revision and waits until the service is stable. Off until the owner sets the
+# repository variable OIDC_DELIVERY_ENABLED to true (project guide: OIDC delivery). The model-api-deploy environment holds the owner's
+# approval. The service, cluster and task roles come from the branch that builds the model API: the deploy role can update only the
+# services named in github_oidc_deploy_services, so a name that stack does not list fails closed at AWS.
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: The ECS service name, as listed in github_oidc_deploy_services
+        type: string
+        required: true
+      task_definition:
+        description: The task definition to run, as family:revision
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: deploy-model-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Roll the service
+    if: ${{ vars.OIDC_DELIVERY_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: model-api-deploy
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SERVICE: ${{ inputs.service }}
+      TASK_DEFINITION: ${{ inputs.task_definition }}
+      CLUSTER: ${{ vars.ECS_CLUSTER_NAME }}
+    steps:
+      - name: Check the inputs
+        run: |
+          [[ "$SERVICE" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Use an exact service name." >&2; exit 1; }
+          [[ "$TASK_DEFINITION" =~ ^[A-Za-z0-9_-]+:[0-9]+$ ]] || { echo "Use family:revision." >&2; exit 1; }
+          [[ "$CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Set the repository variable ECS_CLUSTER_NAME." >&2; exit 1; }
+
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gh_deploy_model_api
+          mask-aws-account-id: true
+
+      - name: Roll the service and wait with a deadline
+        run: |
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$TASK_DEFINITION" --output text --query 'service.serviceName' > /dev/null
+          timeout 1500 aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          running="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].runningCount' --output text)"
+          [[ "$running" -ge 1 ]] || { echo "No task runs after the deploy." >&2; exit 1; }
+          echo "Service $SERVICE runs $running task(s) of $TASK_DEFINITION." >> "$GITHUB_STEP_SUMMARY"
