@@ -21,12 +21,14 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from scripts.process import TimeoutExpired, clear_git_environment, run_command
 from scripts.quality.hook_stage import hook_stage
@@ -323,17 +325,96 @@ def future_source_cases() -> list[Case]:
     ]
 
 
-def repository_label_problems(root: Path = ROOT) -> list[str]:
-    """Research data is Public (decision 158): name every Confidential label and confidential_columns entry left on this repository's own files."""
-    problems = []
-    tracked = run_command("git", ["ls-files", "dbt/*.yml"], cwd=root, check=True).stdout.split()
-    for relative in [*tracked, *REPOSITORY_LABEL_FILES]:
-        for number, line in enumerate((root / relative).read_text().splitlines(), 1):
-            if any(name in line for name in OUTSIDE_PUBLIC_SCOPE):
-                continue
-            if "Confidential" in line or "confidential_columns" in line:
-                problems.append(f"{relative}:{number}: {line.strip()[:90]}")
+CONFIDENTIAL_KEYS = ("confidential_columns", "confidential_columns_reason", "proposed_confidential_columns")
+
+
+def entry_problem(path: str, kind: str, name: str, meta: Any, outside: Collection[str]) -> list[str]:
+    """One dbt source table or model entry: a research entry (not named in outside) may not be Confidential or list confidential columns."""
+    meta = meta if isinstance(meta, dict) else {}
+    if name in outside:
+        return []
+    found = [f"classification {meta['classification']}"] if meta.get("classification") == "Confidential" else []
+    found += [key for key in CONFIDENTIAL_KEYS if key in meta]
+    return [f"{path}: {kind} {name}: {', '.join(found)}"] if found else []
+
+
+def label_problems(files: dict[str, str], outside: Collection[str] = OUTSIDE_PUBLIC_SCOPE) -> list[str]:
+    """Research data is Public (decision 158): name every research entry that still carries a Confidential label.
+
+    ``outside`` lists the complete entries of future sources outside the Public scope (collection, bronze table, source table and model names). They keep
+    their Confidential labels, and the model metadata check enforces those. Publish contracts hold one class for the whole layer and must say Public.
+    """
+    problems: list[str] = []
+    for path, text in files.items():
+        if path.endswith(".yml"):
+            document = yaml.safe_load(text) or {}
+            sources, models = document.get("sources"), document.get("models")
+            for source in sources if isinstance(sources, list) else []:
+                for table in source.get("tables") or []:
+                    problems += entry_problem(path, "source", table.get("name"), table.get("meta"), outside)
+            for model in models if isinstance(models, list) else []:
+                problems += entry_problem(path, "model", model.get("name"), model.get("meta"), outside)
+        elif path == BRONZE_MAP:
+            document = json.loads(text)
+            rules = [("collection", name, rule, name) for name, rule in document["classification"]["collections"].items()]
+            rules += [("loader table", name, rule, name) for name, rule in (document["classification"].get("loader_tables") or {}).items()]
+            rules += [("table", entry["table"], entry["classification"], entry.get("collection")) for entry in document["tables"] if "classification" in entry]
+            problems += [
+                f"{path}: bronze {kind} {name}: class Confidential"
+                for kind, name, rule, group in rules
+                if rule.get("class") == "Confidential" and name not in outside and group not in outside
+            ]
+        elif json.loads(text).get("classification") != "Public":
+            problems.append(f"{path}: contract classification is not Public")
     return problems
+
+
+def repository_label_problems(root: Path = ROOT, outside: Collection[str] = OUTSIDE_PUBLIC_SCOPE) -> list[str]:
+    """The label guard over this repository's tracked dbt properties, bronze table map and publish contracts."""
+    tracked = run_command("git", ["ls-files", "dbt/*.yml"], cwd=root, check=True).stdout.split()
+    return label_problems({relative: (root / relative).read_text() for relative in [*tracked, *REPOSITORY_LABEL_FILES]}, outside)
+
+
+def guard_files(research_class: str, contract_class: str = "Public") -> dict[str, str]:
+    """A small repository image for the label guard: one research entry of each kind in research_class and one complete future Confidential source."""
+    future = "future/restricted"
+    future_bronze = {"class": "Confidential", "reason": "Synthetic restricted source.", "exception": "Synthetic"}
+    bronze = {
+        "classification": {"collections": {"pub/coll": {"class": research_class, "reason": "A public file."}, future: future_bronze}},
+        "tables": [{"table": "raw_public", "collection": "pub/coll"}, {"table": FUTURE_SOURCE, "collection": future}],
+    }
+    sources = (
+        "version: 2\nsources:\n  - name: bronze\n    tables:\n"
+        f"      - name: raw_public\n        meta:\n          classification: {research_class}\n"
+        f"      - name: {FUTURE_SOURCE}\n        meta:\n          classification: Confidential\n          confidential_columns: [secret_value]\n"
+    )
+    models = (
+        "version: 2\nmodels:\n"
+        + model_entry("stg_raw_public", research_class)
+        + model_entry("stg_raw_future_restricted", "Confidential")
+        + model_entry("int_future_restricted", "Confidential")
+    )
+    return {
+        BRONZE_MAP: json.dumps(bronze),
+        SOURCES: sources,
+        STAGING: models,
+        "data_contracts/lakehouse/silver_publish.json": json.dumps({"classification": contract_class}),
+    }
+
+
+def guard_cases() -> list[tuple[str, bool]]:
+    """The label guard accepts a complete future Confidential source and still rejects a Confidential research entry (decision 158)."""
+    outside = frozenset({"future/restricted", FUTURE_SOURCE, "stg_raw_future_restricted", "int_future_restricted"})
+    clean = label_problems(guard_files("Public"), outside)
+    leaked = label_problems(guard_files("Confidential"), outside)
+    without_exception = label_problems(guard_files("Public"), frozenset())
+    contract = label_problems(guard_files("Public", contract_class="Confidential"), outside)
+    return [
+        ("guard_future_source_passes", clean == []),
+        ("guard_research_entries_fail", len(leaked) == 3 and all("raw_public" in line or "stg_raw_public" in line or "pub/coll" in line for line in leaked)),
+        ("guard_future_source_without_exception_fails", len(without_exception) >= 4),
+        ("guard_contract_label_fails", len(contract) == 1 and "silver_publish.json" in contract[0]),
+    ]
 
 
 def onc_read(table: str, sql: str, class_name: str = "Public", reason: str | None = ALL_COLUMNS_REASON, *, all_columns: bool = True) -> dict[str, str]:
@@ -1674,6 +1755,9 @@ def main() -> int:
     if unknown:
         sys.stderr.write(f"unknown cases: {', '.join(unknown)}\n")
         return 1
+    guards = [] if args.case else guard_cases()
+    for name, passed in guards:
+        sys.stdout.write(f"{'ok' if passed else 'WRONG':<6} {name}\n")
     leftover = [] if args.case else repository_label_problems()
     for line in leftover[:12]:
         sys.stdout.write(f"WRONG  repository_labels_public {line}\n")
@@ -1718,11 +1802,12 @@ def main() -> int:
         "passed": len(results) - failures,
         "total": len(results),
         "repository_label_problems": len(leftover),
+        "guard_cases": dict(guards),
         "cases": results,
     }
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"{report['passed']} of {report['total']} cases behaved as expected; report {out / 'report.json'}\n")
-    return int(bool(failures) or not stable or scanner_exit != 0 or bool(leftover))
+    return int(bool(failures) or not stable or scanner_exit != 0 or bool(leftover) or not all(passed for _, passed in guards))
 
 
 if __name__ == "__main__":
