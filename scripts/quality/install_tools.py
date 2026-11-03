@@ -120,7 +120,7 @@ def publish(path: Path, content: bytes, mode: int) -> None:
 def install(manifest: Path, destination: Path, archives: Path | None, tools: list[str] | None = None) -> None:
     """Validate every asset before publishing binaries and deterministic receipts."""
     config = json.loads(manifest.read_text(encoding="utf-8"))
-    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb", "osv-scanner", "zizmor", "typos"}
+    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb", "osv-scanner", "zizmor", "typos", "uv"}
     names = set(config["tools"])
     other_installers = {name for name, tool in config["tools"].items() if "installer" in tool}
     if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - other_installers:

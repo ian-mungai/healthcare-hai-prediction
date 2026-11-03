@@ -535,7 +535,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": bls_contract.code_hashes(),
-        "dependency_sha256": bls_contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_hcai_util_e2e --output {args.output}",
         "boundary": "Synthetic three-hospital workbooks served by a fake opener through the real downloader (no signed redirect); fake versioned S3.",
         "cleanup": "Temporary folder removed on exit.",

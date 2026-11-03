@@ -8,7 +8,7 @@
     "^config/quality/ci_groups\\.json$",
     "^\\.github/(workflows|actions)/",
     "^\\.pre-commit-config\\.yaml$",
-    "^requirements[^/]*\\.txt$",
+    "^uv\\.lock$",
     "^pyproject\\.toml$"
   ],
   "passive": [
@@ -53,7 +53,7 @@
       "^services/",
       "^features/",
       "^scripts/quality/(model_metadata|run_model_metadata_e2e|dbt_manifest_labels|label_guard_fixtures)\\.py$",
-      "^scripts/quality/(install_sqlfluff\\.py|sqlfluff/requirements\\.txt)$",
+      "^scripts/quality/(install_sqlfluff|lock_env)\\.py$",
       "^docker-compose\\.yaml$",
       "^scripts/ci/groups/lakehouse_bronze\\.sh$"
     ],
@@ -260,6 +260,7 @@
       "removed-names",
       "unused-code",
       "unused-dependencies",
+      "dependency-lock",
       "orphan-files",
       "terraform-unused",
       "sqlfluff",
@@ -286,7 +287,8 @@
       "osv-scanner"
     ],
     "samples": [
-      "test-checks"
+      "test-checks",
+      "test-lock"
     ]
   },
   "hooks_run_by_groups": {

@@ -740,13 +740,13 @@ def case_compose_service(fixture: Fixture, scratch: Path) -> Checks:
     """E01 (LB30): the launcher's image lookup finds the feature-store service, shaped like the quality service and with no network of its own."""
     service = importlib.import_module("yaml").safe_load((ROOT / "docker-compose.yaml").read_text())["services"].get("feature-store", {})
     return {
-        "image": service.get("image") == "hai-feature-store:feast0.66.0",
+        "image": service.get("image") == "hai-feature-store:feast0.67.0",
         "build": service.get("build") == {"context": "./services/feature_store", "additional_contexts": {"hai": "./services/hai"}},
         "profiles": service.get("profiles") == ["query"],
         "no_network": service.get("network_mode") == "none",
         "working_dir": service.get("working_dir") == "/workspace",
         "nothing_else": set(service) == {"image", "build", "profiles", "network_mode", "working_dir"},
-        "launcher_lookup": launcher.ComposeModel(ROOT / "docker-compose.yaml").image("feature-store") == "hai-feature-store:feast0.66.0",
+        "launcher_lookup": launcher.ComposeModel(ROOT / "docker-compose.yaml").image("feature-store") == "hai-feature-store:feast0.67.0",
     }
 
 

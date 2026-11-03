@@ -135,7 +135,7 @@ def graph_cases() -> dict[str, Any]:
 
 def normalized(name: str) -> str:
     """A distribution name in the form the constraints file and the metadata share."""
-    return name.lower().replace("_", "-")
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def release_packages() -> dict[str, str]:
@@ -147,7 +147,7 @@ def release_packages() -> dict[str, str]:
 def constraints(tools: dict[str, str]) -> dict[str, Any]:
     """Installed versions against the constraints file and the release pins. ``tools`` are the official image's build tools (pip and uv) at the versions
     its build records, read from the image's own environment. Every installed distribution must be in one of the three sets; nothing is exempt by prefix."""
-    pins = {match.group(1).lower().replace("_", "-"): match.group(2) for line in CONSTRAINTS.read_text().splitlines() if (match := PIN.match(line))}
+    pins = {normalized(match.group(1)): match.group(2) for line in CONSTRAINTS.read_text().splitlines() if (match := PIN.match(line))}
     release = release_packages()
     installed = {normalized(str(dist.metadata["Name"])): dist.version for dist in metadata.distributions()}
     differing = {

@@ -1903,7 +1903,7 @@ def main() -> int:
     args = parser.parse_args()
     clear_git_environment()
     if not PRE_COMMIT.exists():
-        sys.stderr.write("setup missing: create .venv from requirements.txt (README, Install)\n")
+        sys.stderr.write("setup missing: create .venv from the host group of uv.lock (README, Install)\n")
         return 1
     cases = [case for case in make_cases() if not args.case or case.name in args.case]
     unknown = sorted(set(args.case) - {case.name for case in cases})

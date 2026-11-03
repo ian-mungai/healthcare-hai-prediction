@@ -1,22 +1,51 @@
 {
+  "tools": {
+    "pytest-cov": "tool: coverage for the acquisition gate",
+    "ruff": "tool: formatter and linter run by pre-commit",
+    "mypy": "tool: type checker run by pre-commit",
+    "pre-commit": "tool: hook runner",
+    "checkov": "tool: Terraform policy scan",
+    "types-jsonschema": "tool: type stubs for MyPy",
+    "types-defusedxml": "tool: type stubs for MyPy (defusedxml)",
+    "boto3-stubs": "tool: type stubs for MyPy (boto3, matches boto3)",
+    "botocore-stubs": "tool: type stubs for MyPy (botocore, matches botocore)",
+    "types-awscrt": "tool: required by botocore-stubs",
+    "types-s3transfer": "tool: required by boto3-stubs",
+    "pyyaml": "dynamic: imported by name in repo_checks.load_yaml (front-matter check) and package_fixture.check; pre-commit installs the same version.",
+    "vulture": "tool: unused-code check",
+    "deptry": "tool: unused-dependencies check",
+    "yamllint": "tool: YAML source checks through scripts/quality/lint_sources.py"
+  },
+  "direct_groups": [
+    "host"
+  ],
   "host": {
-    "requirements": ["requirements.txt"],
+    "groups": [
+      "host"
+    ],
     "provided": {
       "hai_bootstrap": "the first-party services/hai/bootstrap sources exposed as hai_bootstrap by the runner image; the host uses services.hai.bootstrap",
-      "dbt": "the pinned dbt-core and dbt-duckdb of .tools/sqlfluff, which scripts/lakehouse/run_duckdb_spill_cases.py runs under (.tools/sqlfluff/bin/python); .venv has neither",
-    "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json",
+      "dbt": "the pinned dbt-core and dbt-duckdb of the sqlfluff group (.tools/sqlfluff), which scripts/lakehouse/run_duckdb_spill_cases.py runs under (.tools/sqlfluff/bin/python); .venv has neither",
+      "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json",
       "referencing": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json"
     }
   },
   "runtimes": {
     "review": {
-      "reason": "Schema-review tools run on the host with .review_dependencies on PYTHONPATH (requirements-review.txt header).",
-      "requirements": ["requirements.txt", "requirements-review.txt"],
-      "code": ["scripts/review/*.py"]
+      "reason": "Schema-review tools run on the host with .review_dependencies on PYTHONPATH (the review group of pyproject.toml).",
+      "groups": [
+        "host",
+        "review"
+      ],
+      "code": [
+        "scripts/review/*.py"
+      ]
     },
     "spark": {
       "reason": "The lakehouse jobs that scripts/lakehouse/catalog.py runs in the Spark image, the gold publish steps and their case suite, and the modules only they use.",
-      "requirements": ["services/lakehouse/spark/requirements.txt"],
+      "groups": [
+        "spark"
+      ],
       "code": [
         "scripts/lakehouse/bronze.py",
         "scripts/lakehouse/checksums.py",
@@ -37,56 +66,106 @@
     },
     "analytics": {
       "reason": "The DuckDB UI relay runs in the analytics image.",
-      "requirements": ["services/analytics/requirements.txt"],
-      "code": ["scripts/lakehouse/pipeline_build.py", "services/analytics/*.py"],
+      "groups": [
+        "analytics"
+      ],
+      "code": [
+        "scripts/lakehouse/pipeline_build.py",
+        "services/analytics/*.py"
+      ],
       "provided": {
-        "dbt": "the module of dbt-core, pinned in services/analytics/requirements.txt; the host environment does not install dbt-core, so deptry cannot map the module to its package"
+        "dbt": "the module of dbt-core, pinned in the analytics group of uv.lock; the host environment does not install dbt-core, so deptry cannot map the module to its package"
       }
     },
     "quality": {
       "reason": "Great Expectations validation of the silver build file (scripts/lakehouse/silver.py validate starts it) and the gold publish export of the sealed copy run in the quality image.",
-      "requirements": ["services/quality/requirements.txt"],
-      "code": ["scripts/lakehouse/gold_export.py", "scripts/lakehouse/gold_reconcile.py", "scripts/lakehouse/silver_quality.py"]
+      "groups": [
+        "quality"
+      ],
+      "code": [
+        "scripts/lakehouse/gold_export.py",
+        "scripts/lakehouse/gold_reconcile.py",
+        "scripts/lakehouse/silver_quality.py"
+      ]
     },
     "orchestration": {
       "reason": "The DAG files, the in-image checks and the metadata dump run inside the Airflow image that services/orchestration/Dockerfile builds from the official image (Airflow plan section 11.1).",
-      "requirements": ["services/orchestration/requirements.txt"],
-      "code": ["dags/*.py", "orchestration/dag_runtime.py", "orchestration/ecs_launch_provider.py", "orchestration/training_contract.py", "scripts/orchestration/in_image_checks.py", "scripts/orchestration/db_dump.py", "services/lineage/provider_transport.py", "services/lineage/db_dump.py", "tests/orchestration/fixtures/combined_dag.py"],
+      "groups": [
+        "orchestration"
+      ],
+      "code": [
+        "dags/*.py",
+        "orchestration/dag_runtime.py",
+          "orchestration/ecs_launch_provider.py",
+        "orchestration/training_contract.py",
+        "scripts/orchestration/in_image_checks.py",
+        "scripts/orchestration/db_dump.py",
+        "services/lineage/provider_transport.py",
+        "services/lineage/db_dump.py",
+        "tests/orchestration/fixtures/combined_dag.py"
+      ],
       "provided": {
         "airflow": "the official Airflow image pinned by digest in services/orchestration/Dockerfile",
-        "psycopg2": "the PostgreSQL driver of the official Airflow image (psycopg2-binary in its constraints file)",
-        "openlineage": "the provider and client in the pinned official Airflow image constraints"
+        "psycopg2": "the PostgreSQL driver of the official Airflow image (psycopg2-binary in the orchestration group of uv.lock)",
+        "openlineage": "the provider and client in the orchestration group of uv.lock"
       }
     },
     "feature_store": {
-      "reason": "The Feast repository and the Feast, online-store and historical-read jobs run in the Feast image (services/feature_store/Dockerfile). Until the hash-pinned lock requirements.txt exists, the approved versions in requirements.in are the runtime's requirements; switch to the lock at lock review.",
-      "requirements": ["services/feature_store/requirements.in"],
-      "code": ["feature_store/*.py"]
+      "reason": "The Feast repository and the Feast, online-store and historical-read jobs run in the Feast image (services/feature_store/Dockerfile). The feature_store group of uv.lock pins them with hashes.",
+      "groups": [
+        "feature_store"
+      ],
+      "code": [
+        "feature_store/*.py"
+      ]
     },
     "serving": {
-      "reason": "The model API runs in the image that services/model_api/Dockerfile builds. The hash-pinned lock requirements.txt is compiled with services/model_api/compile_lock.sh from requirements.in.",
-      "requirements": ["services/model_api/requirements.txt"],
-      "code": ["scripts/serving/api.py", "scripts/serving/api_image_cases.py", "scripts/serving/iceberg_sink.py", "scripts/serving/main.py", "scripts/serving/mlflow_loader.py"]
+      "reason": "The model API runs in the image that services/model_api/Dockerfile builds. The model_api group of uv.lock pins its packages with hashes.",
+      "groups": [
+        "model_api"
+      ],
+      "code": [
+        "scripts/serving/api.py",
+        "scripts/serving/api_image_cases.py",
+        "scripts/serving/iceberg_sink.py",
+        "scripts/serving/main.py",
+        "scripts/serving/mlflow_loader.py"
+      ]
     },
     "streamlit_page": {
-      "reason": "The Streamlit page runs in the image that services/streamlit/Dockerfile builds. The hash-pinned lock requirements.txt is compiled with services/streamlit/compile_lock.sh from requirements.in. The client, the words and the stand-in use the standard library only.",
-      "requirements": ["services/streamlit/requirements.txt"],
-      "code": ["scripts/streamlit_app/app.py", "scripts/streamlit_app/app_cases.py"]
+      "reason": "The Streamlit page runs in the image that services/streamlit/Dockerfile builds. The streamlit group of uv.lock pins its packages with hashes. The client, the words and the stand-in use the standard library only.",
+      "groups": [
+        "streamlit"
+      ],
+      "code": [
+        "scripts/streamlit_app/app.py",
+        "scripts/streamlit_app/app_cases.py"
+      ]
     },
     "sqlfluff": {
       "reason": "A tool environment (.tools/sqlfluff) with no project code.",
-      "requirements": ["scripts/quality/sqlfluff/requirements.txt"],
+      "groups": [
+        "sqlfluff"
+      ],
       "code": []
     },
     "dvc": {
       "reason": "A tool environment (.tools/dvc) with no project code: the pinned DVC and its S3 remote for the training baseline.",
-      "requirements": ["scripts/quality/dvc/requirements.txt", "scripts/quality/dvc/build_requirements.txt"],
+      "groups": [
+        "dvc"
+      ],
       "code": []
     },
     "drift": {
-      "reason": "The drift check runs in the drift image (services/drift) with Evidently, DuckDB and jsonschema, installed from the hash-pinned lock.",
-      "requirements": ["services/drift/requirements.txt"],
-      "code": ["monitoring/drift_check.py", "monitoring/drift_config.py", "monitoring/evidently_report.py"]
+      "reason": "The drift check runs in the drift image (services/drift) with Evidently, DuckDB and jsonschema, installed from the drift group of uv.lock.",
+      "groups": [
+        "drift"
+      ],
+      "code": [
+        "monitoring/drift_check.py",
+        "monitoring/drift_config.py",
+        "monitoring/evidently_report.py"
+      ]
     }
   }
 }

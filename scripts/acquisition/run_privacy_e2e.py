@@ -151,7 +151,7 @@ def main() -> None:
             "completed_at_utc": datetime.now(UTC).isoformat(),
             "python_version": sys.version,
             "platform": sys.platform,
-            "requirements_sha256": fingerprint(Path(__file__).resolve().parents[2] / "requirements.txt")[0],
+            "requirements_sha256": fingerprint(Path(__file__).resolve().parents[2] / "uv.lock")[0],
             "project_configuration_sha256": fingerprint(Path(__file__).resolve().parents[2] / "pyproject.toml")[0],
             "runner_sha256": fingerprint(Path(__file__))[0],
             "cases": cases,
@@ -163,7 +163,7 @@ def main() -> None:
             if Path(__file__).with_name("abstract_public_business_csv.py").exists()
             else None,
             "reproduce": [sys.executable, "-m", "scripts.acquisition.run_privacy_e2e", "--output", "<new_directory>"],
-            "prerequisites": ["Run from the repository root with the project .venv and pinned requirements.txt dependencies."],
+            "prerequisites": ["Run from the repository root with the project .venv and pinned uv.lock dependencies."],
             "reset": "Use a new output directory; existing evidence is preserved.",
             "tested_boundary": "Synthetic CSV files through the actual abstraction CLI subprocess to output files and manifests.",
             "untested_boundaries": ["Publisher retrieval", "AWS identity and S3 storage", "Unknown free-text personal information"],

@@ -42,6 +42,7 @@ from orchestration import launcher
 from orchestration.graph import ALL_SUCCESS, PIPELINE_CHAINS, TaskNode, reference_graph, validate_transform_graph
 from scripts.orchestration.broker import BrokerError, load_templates
 from scripts.process import run_command
+from scripts.quality import lock_env
 from scripts.quality.repo_checks import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -105,7 +106,7 @@ def compose_problems(text: str, platform: dict[str, Any]) -> list[str]:
 
 
 def constraints_problems(data: bytes, platform: dict[str, Any]) -> list[str]:
-    """The constraints file must be the recorded release file."""
+    """The pin list that the orchestration group of uv.lock generates must be the recorded one (its pins are the release's constraints file)."""
     found = hashlib.sha256(data).hexdigest()
     wanted = platform["airflow"]["constraints"]["sha256"]
     return [] if found == wanted else [f"constraints SHA-256 {found} is not the recorded {wanted}"]
@@ -482,7 +483,7 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
         docker = dockerfile_problems((ROOT / platform["airflow"]["dockerfile"]).read_text(), platform)
         results["Dockerfile builds the pinned base plus the entrypoint and the labels, nothing installed"] = {"ok": not docker, "problems": docker}
         constraints = constraints_problems((ROOT / platform["airflow"]["constraints"]["path"]).read_bytes(), platform)
-        results["constraints file is the recorded release file"] = {"ok": not constraints, "problems": constraints}
+        results["constraints pin list of the orchestration lock group is the recorded one"] = {"ok": not constraints, "problems": constraints}
         try:
             templates = load_templates()
             results["broker templates validate against their schema and the launcher's table"] = {"ok": True, "templates": sorted(templates["templates"])}
@@ -534,6 +535,7 @@ def main() -> int:
     cli.add_argument("--no-image", action="store_true", help="skip the checks that need the launcher and the built image")
     cli.add_argument("--only", action="append", choices=SECTIONS, default=[], help="run only these sections (the failing-first logs use it)")
     args = cli.parse_args()
+    lock_env.write_pins()
     started = datetime.now(UTC)
     platform = json.loads(PLATFORM_FILE.read_text())
     sections = set(args.only or SECTIONS) - ({"image"} if args.no_image else set())

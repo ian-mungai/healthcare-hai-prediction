@@ -93,14 +93,13 @@ OLD_CLASS = "Legacy" + "Loader"
 OLD_KEY = "retention" + "_days"
 OLD_VARIABLE = "bucket" + "_label"
 OLD_MODEL = "stg" + "_orders"
-# Not pinned by any runtime's requirements file that the scratch repository copies.
+# Not pinned by any dependency group that the scratch repository copies.
 OLD_PACKAGE = "hum" + "anize"
 OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
 FOLDER_NAME = "run" + "books"
 OLD_NOTES = "old" + "_notes.md"
-# No requirements file under scripts/ may pin this name, even as a transitive pin: the scratch repository copies those files and would then
-# count the sample import as declared.
+# No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
@@ -113,19 +112,50 @@ COPIED_ALLOWED = (
     "unused-code scripts/* -- check scripts copied into the scratch repository\n"
     "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
 )
-# A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
-# jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
+SIX = "si" + "x"
+
+
+def lock_files(groups: dict[str, tuple[dict[str, str], dict[str, str]]]) -> dict[str, str]:
+    """A pyproject.toml and a hand-written uv.lock for groups of ``(declared pins, transitive pins)``: uv export reads them with no network."""
+    names = sorted(groups)
+    declared = "".join(f"{group} = [{', '.join(f'"{name}=={version}"' for name, version in groups[group][0].items())}]\n" for group in names)
+    conflicts = ", ".join(f'{{ group = "{group}" }}' for group in names)
+    pyproject = f'[project]\nname = "hai-prediction"\nversion = "0.0.0"\nrequires-python = "==3.12.*"\ndependencies = []\n\n[dependency-groups]\n{declared}'
+    pyproject += f"\n[tool.uv]\npackage = false\nconflicts = [[{conflicts}]]\n"
+    lock = 'version = 1\nrevision = 3\nrequires-python = "==3.12.*"\nconflicts = [[\n'
+    lock += "".join(f'    {{ package = "hai-prediction", group = "{group}" }},\n' for group in names)
+    lock += ']]\n\n[[package]]\nname = "hai-prediction"\nversion = "0.0.0"\nsource = { virtual = "." }\n\n[package.dev-dependencies]\n'
+    for group in names:
+        lock += f"{group} = [\n" + "".join(f'    {{ name = "{name}" }},\n' for name in groups[group][0]) + "]\n"
+    lock += "\n[package.metadata]\n\n[package.metadata.requires-dev]\n"
+    for group in names:
+        lock += f"{group} = [" + ", ".join(f'{{ name = "{name}", specifier = "=={version}" }}' for name, version in groups[group][0].items()) + "]\n"
+    pins = {name: version for group in names for name, version in {**groups[group][1], **groups[group][0]}.items()}
+    for name in sorted(pins):
+        links = [other for group in names if name in groups[group][0] for other in groups[group][1]]
+        lock += f'\n[[package]]\nname = "{name}"\nversion = "{pins[name]}"\nsource = {{ registry = "https://pypi.org/simple" }}\n'
+        lock += "dependencies = [\n" + "".join(f'    {{ name = "{other}" }},\n' for other in sorted(set(links))) + "]\n" if links else ""
+        lock += (
+            f'wheels = [\n    {{ url = "https://files.pythonhosted.org/packages/aa/{name}-{pins[name]}-py3-none-any.whl", hash = "sha256:{"a" * 64}" }},\n]\n'
+        )
+    return {"pyproject.toml": pyproject, "uv.lock": lock}
+
+
+# A runtime map with an image whose lock group pins a package and a transitive pin, and a package the image provides. The host provides
+# jsonschema as the real map does, because the scratch repository holds the launcher, which imports it. The map names the dependency
+# groups, the one direct group and the tools; a tool is used as a command, so nothing imports it.
 RUNTIME_MAP = "config/quality/dependency_runtimes.json"
 PROVIDED_MODULE = "spark" + "lib"
 RUNTIME_MAP_SOURCE = (
-    '{"host": {"requirements": ["requirements.txt"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}, '
-    '"runtimes": {"image": {"requirements": ["image/requirements.txt"], '
+    '{"tools": {"ruff": "tool: formatter run by pre-commit"}, "direct_groups": ["host"], '
+    '"host": {"groups": ["host"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}, '
+    '"runtimes": {"image": {"groups": ["image"], '
     f'"code": ["image/*.py"], "provided": {{"{PROVIDED_MODULE}": "the image\'s own distribution"}}}}}}}}\n'
 )
+HOST_MAP = '{"direct_groups": ["host"], "host": {"groups": ["host"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}}\n'
 RUNTIME_SAMPLE = {
     RUNTIME_MAP: RUNTIME_MAP_SOURCE,
-    "requirements.txt": "ruff==0.16.3  # tool: formatter run by pre-commit\n",
-    "image/requirements.txt": f"{UNUSED_PACKAGE}==0.9.0 \\\n    --hash=sha256:{'a' * 64}\nsix==1.17.0 \\\n    --hash=sha256:{'b' * 64}\n",
+    **lock_files({"host": ({"ruff": "0.16.3"}, {}), "image": ({UNUSED_PACKAGE: "0.9.0"}, {SIX: "1.17.0"})}),
     ".cleanup_allowlist": COPIED_ALLOWED,
 }
 # Cleanup checks: a sample that must block must also print its finding, so a failure for another reason cannot pass.
@@ -316,8 +346,8 @@ CASES = [
         "dependency removed, import remains",
         "removed-names",
         False,
-        committed={"requirements.txt": f"{OLD_PACKAGE}==2.9.0\n", "app/dates.py": f"import {OLD_MODULE}\n"},
-        files={"requirements.txt": "\n"},
+        committed={"pyproject.toml": f'[dependency-groups]\nhost = [\n  "{OLD_PACKAGE}==2.9.0",\n]\n', "app/dates.py": f"import {OLD_MODULE}\n"},
+        files={"pyproject.toml": "[dependency-groups]\nhost = []\n"},
     ),
     Case(
         "cleanup allowlist entry without a reason",
@@ -358,7 +388,8 @@ CASES = [
         "unused-dependencies",
         True,
         {
-            "requirements.txt": f"{UNUSED_PACKAGE}==0.9.0\nruff==0.16.3  # tool: formatter run by pre-commit\n",
+            **lock_files({"host": ({UNUSED_PACKAGE: "0.9.0"}, {})}),
+            RUNTIME_MAP: HOST_MAP,
             "app/table.py": f"import {UNUSED_PACKAGE}\n",
             ".cleanup_allowlist": COPIED_ALLOWED,
         },
@@ -367,13 +398,13 @@ CASES = [
         "dependency nothing imports",
         "unused-dependencies",
         False,
-        {"requirements.txt": f"{UNUSED_PACKAGE}==0.9.0\n", ".cleanup_allowlist": COPIED_ALLOWED},
+        {**lock_files({"host": ({UNUSED_PACKAGE: "0.9.0"}, {})}), RUNTIME_MAP: HOST_MAP, ".cleanup_allowlist": COPIED_ALLOWED},
     ),
     Case(
         "import missing from requirements",
         "unused-dependencies",
         False,
-        {"requirements.txt": "\n", "app/table.py": f"import {UNUSED_PACKAGE}\n", ".cleanup_allowlist": COPIED_ALLOWED},
+        {**lock_files({"host": ({}, {})}), RUNTIME_MAP: HOST_MAP, "app/table.py": f"import {UNUSED_PACKAGE}\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
     Case(
         "image package imported by image code",
@@ -669,7 +700,7 @@ CASES = [
 # Privacy cases must be blocked for their intended cause, shown by file, line and type.
 BLOCK_REASONS = {
     "function nothing calls": f"app/util.py:4: unused function '{STALE_HELPER}'",
-    "dependency nothing imports": f"requirements.txt: {UNUSED_PACKAGE} is declared but nothing imports it",
+    "dependency nothing imports": f"pyproject.toml: {UNUSED_PACKAGE} is declared but nothing imports it",
     "import missing from requirements": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "file nothing references": f"docs/{OLD_NOTES}: no other tracked file references it",
     "unused Terraform variable": f'infra/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
@@ -1572,7 +1603,7 @@ def main() -> int:
     clear_git_environment()
     cases = CASES[:1] if args.hook_probe else CASES
     if not PRE_COMMIT.exists() or not (ROOT / ".tools" / "bin" / "gitleaks").exists():
-        sys.stderr.write("setup missing: create .venv from requirements.txt and run scripts/quality/install_tools.py (README, Install)\n")
+        sys.stderr.write("setup missing: create .venv from the host group of uv.lock and run scripts/quality/install_tools.py (README, Install)\n")
         return 1
     failures = 0
     for case in cases:

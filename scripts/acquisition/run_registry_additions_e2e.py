@@ -951,7 +951,7 @@ def main() -> None:
             "completed_at_utc": datetime.now(UTC).isoformat(),
             "python_version": sys.version,
             "platform": sys.platform,
-            "requirements_sha256": fingerprint(REPO_ROOT / "requirements.txt")[0],
+            "requirements_sha256": fingerprint(REPO_ROOT / "uv.lock")[0],
             "project_configuration_sha256": fingerprint(REPO_ROOT / "pyproject.toml")[0],
             "runner_sha256": fingerprint(Path(__file__))[0],
             "boundary_implementation_sha256": fingerprint(Path(__file__).with_name("registry_additions_boundary.py"))[0],

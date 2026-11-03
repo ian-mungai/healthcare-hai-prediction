@@ -514,7 +514,7 @@ class Evidence:
         self.report["duration_seconds"] = round(time.perf_counter() - self.started, 6)
         self.report["process_count"] = len(self.report["steps"])
         self.report["assertion_count"] = sum(len(step["assertions"]) for step in self.report["steps"])
-        self.report["requirements_sha256"] = sha256((REPO_ROOT / "requirements.txt").read_bytes())
+        self.report["requirements_sha256"] = sha256((REPO_ROOT / "uv.lock").read_bytes())
         self.report["prerequisites"] = "Project Python 3.12 environment with pinned requirements; real bash and dirname. No cloud credentials needed."
         self.report["limits"] = (
             "Configuration processes and pre-deployment guards only. No Terraform deployment or live AWS identity verified. The host boot"

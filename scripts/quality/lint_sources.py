@@ -490,7 +490,7 @@ def lint(check: str) -> int:
         version = run_command(program, ["-m", "yamllint", "--version"], cwd=ROOT, timeout=30)
         pinned = json.loads((ROOT / "config/quality_tools.json").read_text())["tools"]["yamllint"]["version"]
         if version.returncode or version.stdout.strip() != f"yamllint {pinned}":
-            raise ValueError(f"requirements.txt:1: yamllint {pinned} is required in the project environment.")
+            raise ValueError(f"pyproject.toml:1: yamllint {pinned} is required in the project environment.")
         return call(program, ["-m", "yamllint", "--strict", "--config-file", str(ROOT / ".yamllint"), "--", *selected])
     program = native(check)
     arguments = ["--norc"] if check == "shellcheck" else ["-oneline"] if check == "actionlint" else []

@@ -182,7 +182,7 @@
     "import-linter": {
       "version": "2.15",
       "installer": "scripts/quality/install_lint_tools.py",
-      "requirements": "scripts/quality/lint_requirements/import_linter.txt",
+      "group": "import_linter",
       "executable": ".tools/import-linter/bin/lint-imports"
     },
     "typos": {
@@ -209,8 +209,26 @@
     "check-jsonschema": {
       "version": "0.39.0",
       "installer": "scripts/quality/install_lint_tools.py",
-      "requirements": "scripts/quality/lint_requirements/check_jsonschema.txt",
+      "group": "check_jsonschema",
       "executable": ".tools/check-jsonschema/bin/check-jsonschema"
+    },
+    "uv": {
+      "version": "0.13.7",
+      "checksum_source": "https://github.com/astral-sh/uv/releases/download/0.13.7/sha256.sum",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-apple-darwin.tar.gz",
+          "sha256": "81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731",
+          "format": "tar.gz",
+          "member": "uv-aarch64-apple-darwin/uv"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83",
+          "format": "tar.gz",
+          "member": "uv-x86_64-unknown-linux-gnu/uv"
+        }
+      }
     }
   }
 }

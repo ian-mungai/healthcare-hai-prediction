@@ -517,7 +517,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": api_contract.collector_code_hashes(STORE_ENTRY),
-        "dependency_sha256": api_contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": api_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_hud_xlsx_e2e --output {args.output}",
         "boundary": "Synthetic workbooks written to a temporary folder with real macOS origin attributes; fake versioned S3; no live HUD or AWS access.",
         "cleanup": "Temporary folder removed on exit.",

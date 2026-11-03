@@ -1,6 +1,8 @@
 # Training image: the model libraries of scripts/training, the MLflow client and DVC 3.67.1 with its S3 remote in its own environment at /opt/dvc.
 # The code is not in the image. The first container of the task fetches the run's code archive (fetch_code.py) and links /opt/dvc into it.
-# The base image is pinned by digest and the wheels by hash. Build for Apple silicon: docker build --platform linux/arm64 (see services/training/compile_lock.sh).
+# The base image is pinned by digest and the wheels by hash. Build for Apple silicon: docker build --platform linux/arm64
+# requirements.txt, dvc_requirements.txt and dvc_build_requirements.txt are generated from the lock before each build: .venv/bin/python -m scripts.quality.lock_env images
+# (the training and dvc groups of uv.lock; Git ignores the files).
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
 # The OpenMP runtime that the XGBoost and scikit-learn wheels load.
@@ -13,12 +15,10 @@ COPY requirements.txt /opt/training/requirements.txt
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/training/requirements.txt
 
-# dvc is the scripts/quality/dvc named build context that images.json passes. It holds the DVC pins that scripts/quality/install_dvc.py installs. One package,
-# antlr4-python3-runtime, is built from its hashed source archive after the hashed build tool is installed, as that script does.
-# hadolint ignore=DL3022
-COPY --from=dvc build_requirements.txt /opt/dvc_build/build_requirements.txt
-# hadolint ignore=DL3022
-COPY --from=dvc requirements.txt /opt/dvc_build/requirements.txt
+# The dvc files hold the DVC pins that scripts/quality/install_dvc.py installs. One package, antlr4-python3-runtime, is built from its hashed source archive
+# after the hashed build tool is installed, as that script does.
+COPY dvc_build_requirements.txt /opt/dvc_build/build_requirements.txt
+COPY dvc_requirements.txt /opt/dvc_build/requirements.txt
 RUN python -m venv /opt/dvc \
     && /opt/dvc/bin/pip install --no-cache-dir --require-hashes -r /opt/dvc_build/build_requirements.txt \
     && /opt/dvc/bin/pip install --no-cache-dir --require-hashes --no-build-isolation -r /opt/dvc_build/requirements.txt

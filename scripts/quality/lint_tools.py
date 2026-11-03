@@ -31,8 +31,7 @@ RULE = "docs/quality_checks.md (Linters beside lint_sources)"
 TFLINT_CONFIG = ROOT / ".tflint.hcl"
 TRIVY_SKIPS = ("--skip-files", "**/*.tfvars.json", "--skip-files", "**/*.tfvars", "--skip-files", "**/terraform.tfstate*", "--skip-dirs", "**/.terraform")
 SCHEMA_MAP = "config/quality/json_schemas.json"
-REQUIREMENT_FILE = re.compile(r"(?:^|/)requirements[^/]*\.txt$")
-CONSTRAINT_FILES = ("services/orchestration/constraints-3.12.txt",)  # A pip constraints file; OSV-Scanner reads it as a requirements file.
+DEPENDENCY_FILE = re.compile(r"(?:^|/)(?:uv\.lock|requirements[^/]*\.txt)$")  # The single lock; a stray requirements file anywhere stays covered.
 
 
 @dataclass(frozen=True)
@@ -145,19 +144,17 @@ def trivy_config() -> int:
 
 
 def osv_scanner() -> int:
-    """OSV-Scanner on the tracked requirements files and the orchestration constraints file; it queries osv.dev, so it needs the network."""
+    """OSV-Scanner on the tracked dependency lock (every group of uv.lock) and any tracked requirements file; it queries osv.dev, so it needs the network."""
     binary = program("osv-scanner")
-    files = [name for name in paths(tracked=True) if REQUIREMENT_FILE.search(name)]
+    files = [name for name in paths(tracked=True) if DEPENDENCY_FILE.search(name)]
     arguments = ["scan", "source", "--no-resolve", "--format", "json"]
     for name in files:
         arguments += ["-L", name]
-    for name in CONSTRAINT_FILES:
-        arguments += ["-L", f"requirements.txt:{name}"]
     with tempfile.TemporaryDirectory(prefix="hai_osv_") as folder:
         output = Path(folder) / "report.json"
         result = run_command(binary, [*arguments, "--output-file", str(output)], cwd=ROOT, timeout=300)
         if result.returncode not in {0, 1} or not output.is_file():
-            raise ValueError(f"requirements.txt:1: osv-scanner failed ({result.returncode}); it needs network access to osv.dev: {result.stderr[-1500:]}")
+            raise ValueError(f"uv.lock:1: osv-scanner failed ({result.returncode}); it needs network access to osv.dev: {result.stderr[-1500:]}")
         document = json.loads(output.read_text(encoding="utf-8"))
     issues = []
     for entry in document.get("results", []):
@@ -172,7 +169,7 @@ def osv_scanner() -> int:
                     f"{package['name']} {package['version']} has {len(ids)} known vulnerabilities ({ids[0]} and others)",
                 )
             )
-    sys.stdout.write(f"osv-scanner: {len(files) + len(CONSTRAINT_FILES)} files scanned\n")
+    sys.stdout.write(f"osv-scanner: {len(files)} files scanned\n")
     return report("osv-scanner", issues)
 
 

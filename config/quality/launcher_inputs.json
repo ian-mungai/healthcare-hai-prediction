@@ -8,7 +8,8 @@
     "dbt/packages.yml",
     "dbt/package-lock.yml",
     "orchestration",
-    "services/hai"
+    "services/hai",
+    "uv.lock"
   ],
   "ignored_reads": [
     {
@@ -435,7 +436,8 @@
     "orchestration",
     "scripts/acquisition",
     "scripts/lakehouse",
-    "services/hai"
+    "services/hai",
+    "uv.lock"
   ],
   "files": [
     ".dvc/config",
@@ -1475,7 +1477,6 @@
     "services/lineage/provider_events.py",
     "services/mlflow/docker-compose.mlflow.yaml",
     "services/orchestration/Dockerfile",
-    "services/orchestration/constraints-3.12.txt",
     "services/orchestration/docker-compose.orchestration.yaml",
     "services/orchestration/egress_proxy.json",
     "services/training/docker-compose.training.yaml"

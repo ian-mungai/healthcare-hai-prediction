@@ -507,7 +507,7 @@ def main() -> None:
         "status": "passed" if passed else "failed",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "code_sha256": contract.collector_code_hashes(),
-        "dependency_sha256": contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": contract.digest(Path("uv.lock").read_bytes()),
         "scenarios": scenarios,
     }
     write_once(args.output, encoded_json(report))

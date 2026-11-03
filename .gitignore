@@ -16,6 +16,12 @@ htmlcov/
 # Pinned quality-tool binaries installed by scripts/quality/install_tools.py
 .tools/
 
+# Image requirement files generated from uv.lock by scripts/quality/lock_env.py images before each image build
+/services/*/requirements.txt
+/services/lakehouse/spark/requirements.txt
+/services/training/dvc_*requirements.txt
+/services/orchestration/constraints-3.12.txt
+
 # Agent and workspace files. Also in the global Git ignore; repeated here so fresh clones and CI stay safe.
 .agent_handoff/
 /.documentation_review.json

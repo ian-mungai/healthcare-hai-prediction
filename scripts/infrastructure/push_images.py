@@ -323,6 +323,8 @@ def plan(config: dict[str, Any], urls: dict[str, str], profile: str, region: str
     lines = [f"# Every image is {PLATFORM}. Run these from the repository root; the profile is named on each AWS command."]
     for registry in sorted(registries):
         lines.append(f"aws ecr get-login-password --profile {profile} --region {region} | docker login --username AWS --password-stdin {registry}")
+    if any(image["kind"] == "build" for image in chosen.values()):
+        lines.append(".venv/bin/python -m scripts.quality.lock_env images   # writes the Git-ignored requirement files the Dockerfiles copy, from uv.lock")
     clones: dict[str, str] = {}
     for name, image in chosen.items():
         lines.append("")

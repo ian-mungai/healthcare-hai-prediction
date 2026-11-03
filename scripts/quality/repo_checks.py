@@ -88,8 +88,10 @@ MODULE_NAMES = {
 }
 VULTURE_CONFIDENCE = 60  # Unused functions, classes and variables; lower levels flag dynamic uses vulture cannot see.
 DEPTRY_CODES = {"DEP001", "DEP002", "DEP003"}  # Missing, unused and transitive-only dependencies.
-RUNTIME_MAP = "config/quality/dependency_runtimes.json"  # Each runtime's requirements files, the code it runs and what it provides.
-TOOL_COMMENT = re.compile(r"#\s*(?:tool|dynamic):\s*\S")  # A requirement used as a command or imported dynamically, with why.
+RUNTIME_MAP = "config/quality/dependency_runtimes.json"  # Each runtime's dependency groups, the code it runs and what it provides.
+PYPROJECT_REQUIREMENT = re.compile(
+    r"""^\s*"([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*[=<>!~;@]"""
+)  # A quoted requirement line of a pyproject.toml group.
 # Files every repository may hold without another file naming them.
 WELL_KNOWN_FILES = {
     "README.md",
@@ -105,6 +107,7 @@ WELL_KNOWN_FILES = {
     "VERSION",
     "requirements.txt",
     "pyproject.toml",
+    "uv.lock",
     "package.json",
     "package-lock.json",
     "ruff.toml",
@@ -273,10 +276,10 @@ class Finding:
 
 @dataclass
 class Runtime:
-    """One place code runs: its requirements files, the tracked Python files it runs and the modules it gets outside pip."""
+    """One place code runs: its dependency groups, the tracked Python files it runs and the modules it gets outside pip."""
 
     name: str
-    requirements: list[str]
+    groups: list[str]
     files: list[str]
     provided: dict[str, str]
 
@@ -567,11 +570,13 @@ def config_key(line: str) -> str | None:
 
 
 def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
-    """Return the lower-case package names in requirements files."""
+    """Return the canonical package names in requirements files and in the quoted requirement lines of pyproject.toml."""
     names = set()
     for path, lines in lines_by_file.items():
         if re.search(r"(^|/)requirements[^/]*\.(txt|in)$", path):
-            names |= {match.group(1).lower() for line in lines if (match := REQUIREMENT.match(line))}
+            names |= {re.sub(r"[-_.]+", "-", match.group(1).lower()) for line in lines if (match := REQUIREMENT.match(line))}
+        elif Path(path).name == "pyproject.toml":
+            names |= {re.sub(r"[-_.]+", "-", match.group(1).lower()) for line in lines if (match := PYPROJECT_REQUIREMENT.match(line))}
     return names
 
 
@@ -649,21 +654,29 @@ def unused_code() -> list[Finding]:
     return findings
 
 
-def load_runtimes(python_files: list[str], requirements: list[str]) -> tuple[list[Runtime], list[Finding]]:
-    """Read the runtime map: each runtime's requirements files, the code it runs and the packages it gets outside pip.
+def load_runtimes(python_files: list[str], groups: list[str]) -> tuple[list[Runtime], list[Finding], dict[str, str], set[str]]:
+    """Read the runtime map: each runtime's dependency groups, the code it runs and the packages it gets outside pip.
 
-    The host runtime takes every tracked Python file no other runtime claims. Without a map, one host runtime reads
-    every requirements file. A malformed map, or a requirements file that does not exist, stops the check.
+    The host runtime takes every tracked Python file no other runtime claims. Without a map, one host runtime reads every group, each as declared
+    directly. The map also names the ``tools`` (requirements used as commands or imported dynamically, with why) and the ``direct_groups`` whose
+    dependencies are declared directly in pyproject.toml; every other group is a lock, so its transitive packages count as declared and only its
+    missing imports are reported. A malformed map, or a group pyproject.toml does not declare, stops the check.
     """
+    from scripts.quality import lock_env
+
     if not Path(RUNTIME_MAP).is_file():
-        return [Runtime("host", requirements, python_files, {})], []
+        return [Runtime("host", groups, python_files, {})], [], {}, set(groups)
     config = json.loads(Path(RUNTIME_MAP).read_text())
-    if set(config) - {"host", "runtimes"} or not isinstance(config.get("runtimes", {}), dict) or "requirements" not in config.get("host", {}):
-        raise SystemExit(f"{RUNTIME_MAP}: expected 'host' with 'requirements' and an optional 'runtimes' object")
+    if (
+        set(config) - {"host", "runtimes", "tools", "direct_groups"}
+        or not isinstance(config.get("runtimes", {}), dict)
+        or "groups" not in config.get("host", {})
+    ):
+        raise SystemExit(f"{RUNTIME_MAP}: expected 'host' with 'groups', an optional 'runtimes' object, 'tools' and 'direct_groups'")
     runtimes, findings, claimed = [], [], set()
     for name, entry in config.get("runtimes", {}).items():
-        if set(entry) - {"requirements", "code", "provided", "reason"} or not entry.get("requirements") or "code" not in entry:
-            raise SystemExit(f"{RUNTIME_MAP}: runtime {name} needs 'requirements' and 'code' and allows only 'provided' and 'reason'")
+        if set(entry) - {"groups", "code", "provided", "reason"} or not entry.get("groups") or "code" not in entry:
+            raise SystemExit(f"{RUNTIME_MAP}: runtime {name} needs 'groups' and 'code' and allows only 'provided' and 'reason'")
         files = []
         for pattern in entry["code"]:
             matched = [path for path in python_files if fnmatch.fnmatch(path, pattern)]
@@ -672,28 +685,53 @@ def load_runtimes(python_files: list[str], requirements: list[str]) -> tuple[lis
                 findings.append(Finding(RUNTIME_MAP, f"runtime {name}: {pattern} matches no tracked Python file", CLEANUP_RULE, fix))
             files += [path for path in matched if path not in files]
         claimed |= set(files)
-        runtimes.append(Runtime(name, entry["requirements"], files, entry.get("provided", {})))
+        runtimes.append(Runtime(name, entry["groups"], files, entry.get("provided", {})))
     host = config["host"]
-    if set(host) - {"requirements", "provided"}:
-        raise SystemExit(f"{RUNTIME_MAP}: host allows only 'requirements' and 'provided'")
-    runtimes.insert(0, Runtime("host", host["requirements"], [path for path in python_files if path not in claimed], host.get("provided", {})))
+    if set(host) - {"groups", "provided"}:
+        raise SystemExit(f"{RUNTIME_MAP}: host allows only 'groups' and 'provided'")
+    runtimes.insert(0, Runtime("host", host["groups"], [path for path in python_files if path not in claimed], host.get("provided", {})))
     for runtime in runtimes:
-        for path in runtime.requirements:
-            if not Path(path).is_file():
-                raise SystemExit(f"{RUNTIME_MAP}: runtime {runtime.name} names {path}, which does not exist")
-    return runtimes, findings
+        for group in runtime.groups:
+            if group not in groups:
+                raise SystemExit(f"{RUNTIME_MAP}: runtime {runtime.name} names group {group}, which pyproject.toml does not declare")
+    return runtimes, findings, {lock_env.normalize(name): why for name, why in config.get("tools", {}).items()}, set(config.get("direct_groups", []))
 
 
-def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> list[dict[str, Any]]:
-    """Run deptry on one runtime's files only, copied into a scratch folder, against that runtime's requirements."""
+def direct_names(group: str) -> list[str]:
+    """The package names a group of pyproject.toml declares itself, with no transitive package."""
+    from scripts.quality import lock_env
+
+    specs = tomllib.loads(Path("pyproject.toml").read_text())["dependency-groups"][group]
+    return sorted({lock_env.normalize(match.group(0)) for spec in specs if isinstance(spec, str) and (match := re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", spec))})
+
+
+def group_names(group: str, direct: set[str]) -> list[str]:
+    """The names deptry reads for one group: its own declarations when it is direct, else every package the lock pins for it."""
+    from scripts.quality import lock_env
+
+    return direct_names(group) if group in direct else sorted(lock_env.versions(lock_env.export(group, Path.cwd())))
+
+
+def write_listings(folder: Path, groups: list[str], direct: set[str]) -> dict[str, str]:
+    """Write one package-name file per group for deptry; return each file's path with the source it reports (pyproject.toml or uv.lock)."""
+    written: dict[str, str] = {}
+    for group in groups:
+        listing = folder / f"requirements-{group}.txt"
+        listing.write_text("\n".join(group_names(group, direct)) + "\n")
+        written[listing.resolve().as_posix()] = "pyproject.toml" if group in direct else "uv.lock"
+    return written
+
+
+def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str], direct: set[str]) -> list[dict[str, Any]]:
+    """Run deptry on one runtime's files only, copied into a scratch folder, against the packages of that runtime's groups."""
     with tempfile.TemporaryDirectory(prefix="deptry_") as scratch:
         root = Path(scratch) / "code"
         for path in runtime.files:
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             (root / path).write_bytes(Path(path).read_bytes())
         report_path = Path(scratch) / "deptry.json"
-        requirement_files = ",".join(str(Path(path).resolve()) for path in runtime.requirements)
-        args = [str(root), "--requirements-files", requirement_files, "--json-output", str(report_path), "--no-ansi"]
+        names = write_listings(Path(scratch), runtime.groups, direct)
+        args = [str(root), "--requirements-files", ",".join(names), "--json-output", str(report_path), "--no-ansi"]
         args += [flag for name in first_party for flag in ("--known-first-party", name)]
         ignores = [f"DEP002={'|'.join(sorted(exempt))}"] if exempt else []
         if runtime.provided:
@@ -704,8 +742,7 @@ def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> li
         if not report_path.exists():
             raise SystemExit(f"deptry failed for runtime {runtime.name} ({result.returncode}): {result.stderr[-2000:]}")
         issues: list[dict[str, Any]] = json.loads(report_path.read_text())
-        names = {str(Path(path).resolve()): path for path in runtime.requirements}
-        for issue in issues:  # Report repository paths: requirements files by name, code relative to the scratch copy.
+        for issue in issues:  # Report repository paths: the dependency lists by their source, code relative to the scratch copy.
             location = Path(issue["location"]["file"])
             absolute = location if location.is_absolute() else root / location
             if str(absolute.resolve()) in names:
@@ -718,43 +755,42 @@ def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> li
 def unused_dependencies() -> list[Finding]:
     """Every declared dependency is imported and every imported package is declared by the runtime that runs it (deptry).
 
-    Each runtime in the runtime map is checked on its own code with its own requirements files. A requirement used as
-    a command or imported dynamically carries ``# tool: <use>`` or ``# dynamic: <where>``. A lock file (``--hash=``
-    pins) also pins transitive packages, so only its missing imports are reported. A requirements file two runtimes
-    share reports a package as unused only when every one of them leaves it unused.
+    Each runtime in the runtime map is checked on its own code with the dependency groups it names. A requirement used as
+    a command or imported dynamically is listed under ``tools`` in the map. A lock group pins transitive packages too, so only its
+    missing imports are reported. A direct group two runtimes share reports a package as unused only when every one of them leaves it unused.
     """
+    from scripts.quality import lock_env
+
     globs, findings = allowed_paths("unused-dependencies")
-    requirements = [p for p in git("ls-files").splitlines() if re.search(r"(^|/)requirements[^/]*\.txt$", p) and Path(p).is_file()]
     python_files = [p for p in git("ls-files", "*.py").splitlines() if not re.match(r"(e2e|data)/", p) and Path(p).is_file()]
-    if not requirements:
+    groups = lock_env.groups(Path.cwd()) if Path("pyproject.toml").is_file() else []
+    if not groups:
         return findings
-    runtimes, map_findings = load_runtimes(python_files, requirements)
+    runtimes, map_findings, tools, direct = load_runtimes(python_files, groups)
     findings += map_findings
-    exempt = {
-        m.group(1).lower() for p in requirements for line in Path(p).read_text().splitlines() if TOOL_COMMENT.search(line) and (m := REQUIREMENT.match(line))
-    }
+    exempt = set(tools)
     # Module names, package folders and top-level folders (scripts is a namespace package with no __init__.py).
     first_party = sorted({Path(p).stem for p in python_files} | {part for p in python_files for part in Path(p).parts[:-1]})
-    locked = {path for runtime in runtimes for path in runtime.requirements if "--hash=" in Path(path).read_text()}
     unused: dict[tuple[str, str], int] = {}
-    readers = {path: sum(1 for runtime in runtimes if path in runtime.requirements and runtime.files) for path in requirements}
+    readers = sum(1 for runtime in runtimes if runtime.files and direct & set(runtime.groups))
     for runtime in runtimes:
         if not runtime.files:
             continue  # A tool environment with no project code, such as the SQLFluff tools.
-        for issue in run_deptry(runtime, first_party, exempt):
+        for issue in run_deptry(runtime, first_party, exempt, direct):
             code, module, location = issue["error"]["code"], issue["module"], issue["location"]
             if code not in DEPTRY_CODES or any(fnmatch.fnmatch(location["file"], glob) for glob in globs):
                 continue
             if code == "DEP002":
-                if location["file"] not in locked:
+                if location["file"] == "pyproject.toml":
                     unused[(location["file"], module)] = unused.get((location["file"], module), 0) + 1
                 continue
-            fix = f"pin it in {runtime.requirements[-1]} (runtime {runtime.name}), list it under provided in {RUNTIME_MAP}, or replace the import"
+            group = runtime.groups[-1]
+            fix = f"declare it in the {group} group of pyproject.toml and lock it, list it under provided in {RUNTIME_MAP}, or replace the import"
             problem = f"{module} is imported but runtime {runtime.name} does not declare it"
             findings.append(Finding(f"{location['file']}:{location['line']}", problem, f"{POLICY}: declared dependencies", fix))
     for (path, module), count in sorted(unused.items()):
-        if count == readers.get(path, 1):
-            fix = "remove it, or mark the line '# tool: <use>' or '# dynamic: <where>' when it is not imported directly"
+        if count == readers:
+            fix = f"remove it, or list it under tools in {RUNTIME_MAP} when it is not imported directly"
             findings.append(Finding(path, f"{module} is declared but nothing imports it", CLEANUP_RULE, fix))
     return findings
 

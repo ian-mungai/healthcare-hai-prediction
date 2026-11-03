@@ -1,5 +1,5 @@
 # Pre-commit checks for this repository; docs/quality_checks.md lists what each one enforces.
-# Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
+# Every hook is local and pinned: pre-commit, Ruff and MyPy come from the host group of uv.lock in .venv, gitleaks, TFLint and uv
 # from scripts/quality/install_tools.py in .tools. Install once with `.venv/bin/pre-commit install`: default_install_hook_types covers all three hook types.
 # Then run `.venv/bin/python -m scripts.quality.pre_push install-shim` once: the pre-push run is a Git config hook (Git 2.54 or newer) that Git starts for
 # every push with the whole push input, whatever reference pre-commit hands its own hooks. The local_ci_pushed hook below only refuses a push without it.
@@ -65,6 +65,14 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [manual]
+      - id: dependency-lock
+        # pyproject.toml declares every dependency in one group per image or tool; uv.lock pins every group with hashes. The check needs no network.
+        name: The dependency lock matches pyproject.toml and its own rules (uv)
+        entry: .venv/bin/python -m scripts.quality.lock_env check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock|scripts/quality/lock_env\.py|config/quality_tools\.json)$
+        stages: [manual]
       - id: orphan-files
         name: Every file referenced by another
         entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files
@@ -112,7 +120,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.lint_sources sql
         language: system
         pass_filenames: false
-        files: (\.sql$|^\.sqlfluff$|^scripts/quality/(lint_sources\.py$|sqlfluff/))
+        files: (\.sql$|^\.sqlfluff$|^uv\.lock$|^scripts/quality/(lint_sources|install_sqlfluff)\.py$)
         stages: [manual]
       - id: ruff
         name: Every nonignored Python source passes Ruff and formatting
@@ -194,11 +202,11 @@ repos:
         stages: [pre-commit, manual]
       - id: osv-scanner
         # Queries osv.dev, so it needs the network and runs at the pre-push stage (pre-commit run osv-scanner --hook-stage pre-push --all-files) and in the hosted manual stage.
-        name: Pinned requirements have no unreviewed known vulnerabilities (OSV-Scanner)
+        name: The dependency lock has no unreviewed known vulnerabilities (OSV-Scanner)
         entry: .venv/bin/python -m scripts.quality.lint_tools osv-scanner
         language: system
         pass_filenames: false
-        files: ^(.*requirements[^/]*\.txt|services/orchestration/constraints-3\.12\.txt|\.linter_allowlist|config/quality_tools\.json)$
+        files: ^(uv\.lock|.*requirements[^/]*\.txt|\.linter_allowlist|config/quality_tools\.json)$
         stages: [pre-push, manual]
       - id: zizmor
         # Offline audits only (the online ones need a GitHub token).
@@ -237,7 +245,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.model_metadata
         language: system
         pass_filenames: false
-        files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|sqlfluff/requirements\.txt)))$
+        files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|lock_env\.py)|uv\.lock|pyproject\.toml))$
         stages: [manual]
       - id: documentation-review
         name: All documentation reviewed for the staged revision
@@ -280,7 +288,14 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff|install_dvc))\.py|scripts/quality/(markdownlint|sqlfluff|dvc)/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff|install_dvc|lock_env))\.py|scripts/quality/markdownlint/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        stages: [manual]
+      - id: test-lock
+        name: The lock exports are pinned with hashes and its checks block their planted defects
+        entry: .venv/bin/python -m scripts.quality.run_lock_e2e
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock|scripts/quality/(lock_env|run_lock_e2e)\.py|config/quality_tools\.json)$
         stages: [manual]
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence

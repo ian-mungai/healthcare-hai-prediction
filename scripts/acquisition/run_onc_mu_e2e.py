@@ -330,7 +330,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": bls_contract.code_hashes(),
-        "dependency_sha256": bls_contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_onc_mu_e2e --output {args.output}",
         "boundary": "Synthetic 12-row file served by a fake opener through the real downloader; fake versioned S3; no live healthit.gov or AWS.",
         "cleanup": "Temporary folder removed on exit.",

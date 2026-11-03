@@ -1,6 +1,6 @@
-# Streamlit page image: the thin client of the model API. Build from the repository root, for Apple silicon, after the owner compiles the lock with
-# services/streamlit/compile_lock.sh:
+# Streamlit page image: the thin client of the model API. Build from the repository root, for Apple silicon:
 #   docker build --platform linux/arm64 -f services/streamlit/Dockerfile .
+# services/streamlit/requirements.txt is generated from the lock before each build: .venv/bin/python -m scripts.quality.lock_env images (the streamlit group of uv.lock; Git ignores the file).
 # The base image is pinned by digest and the wheels by hash; nothing is fetched at run time. The image holds only the files the page imports: no model, no feature
 # store code and no lake access. It runs as an unprivileged user on a read-only root file system with a temporary folder mounted at /tmp.
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3

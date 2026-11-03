@@ -1044,7 +1044,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": bls_contract.code_hashes(),
-        "dependency_sha256": bls_contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_redownload_e2e --output {args.output}",
         "boundary": (
             "Synthetic stored captures and queue; fake publisher opener and fake collectors; "

@@ -340,7 +340,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": contract.collector_code_hashes(),
-        "dependency_sha256": bls_contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_census_acs_detailed_e2e --output {args.output}",
         "boundary": "Synthetic dictionaries, 3,100-county responses and comparison exports; fake keyed request and fake versioned S3; no live Census or AWS.",
         "cleanup": "Temporary folder removed on exit.",

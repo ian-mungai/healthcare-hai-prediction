@@ -29,6 +29,7 @@ from typing import Any
 from unittest import mock
 
 from scripts.lakehouse import bronze, bronze_metadata, bronze_pin, bronze_run
+from scripts.quality import lock_env
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 RUN = "20261030T010203Z-0a1b2c3d"
@@ -584,7 +585,7 @@ def image_packages(requirements: str) -> set[str]:
 def case_the_spark_image_has_every_package_the_driver_imports(case: Case) -> None:
     needed = third_party_imports("scripts.lakehouse.bronze_run")
     require({"boto3", "pdfplumber", "openpyxl", "xlrd", "pyreadstat", "pyspark"} <= set(needed), sorted(needed))
-    requirements = (IMAGE / "requirements.txt").read_text()
+    requirements = lock_env.export("spark")
     require("/opt/spark/python" in (IMAGE / "Dockerfile").read_text(), "the image must put pyspark on PYTHONPATH")
     missing = sorted(set(needed) - image_packages(requirements))
     require(not missing, f"the Spark image does not install {missing}")
