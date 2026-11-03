@@ -15,7 +15,10 @@
 locals {
   github_issuer       = "token.actions.githubusercontent.com"
   github_subject_base = "repo:${var.github_repository}"
-  github_provider_arn = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
+  # Every delivery role carries the project role boundary that the administrator creates at bootstrap, the same policy name that the
+  # other roles of this stack use. The boundary policy must exist before the owner applies this file with the flag on.
+  github_role_boundary_arn = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_role_boundary"
+  github_provider_arn      = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
 
   # The stacks that continuous delivery may plan and apply. The IAM stack and the storage stack stay with the owner.
   github_state_stacks = ["platform", "services", "jobs"]
@@ -72,13 +75,58 @@ locals {
 
   # The plan role reads: describe, list and get actions of the approved list, less every action that returns a secret value, log
   # content, an image layer or a listing of the data bucket's versions and uploads. Object reads are excluded by prefix (s3:GetObject*).
-  # State is read by key below. A refresh of the storage stack reads bucket configuration and heads the bucket (s3:ListBucket), and
-  # the stack has no object resource, so no object read needs an exception.
-  github_plan_unreadable = ["secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord", "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"]
-  github_plan_actions = sort([
-    for action in local.approved_actions : action
-    if can(regex("^[a-z0-9]+:(Describe|List|Get|BatchGet)", action)) && !contains(local.github_plan_unreadable, action) && !startswith(action, "s3:GetObject")
+  # Each read keeps the resources and the conditions of the approved statement that allows it, so a list or describe action reaches
+  # only the project's own repositories, buckets, cluster and the like, and a statement that the project policies limit by tag keeps
+  # its tag condition. Only the region condition is added. State is read by key below. A refresh of the storage stack reads bucket
+  # configuration and heads the bucket (s3:ListBucket), and the stack has no object resource, so no object read needs an exception.
+  github_plan_unreadable       = ["secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord", "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"]
+  github_policy_shared_secrets = [var.census_secret_name, var.bls_secret_name, var.hud_secret_name, var.jev_secret_name]
+  github_plan_read_statements = flatten([
+    for file in sort(tolist(local.approved_policy_files)) : [
+      for statement in jsondecode(
+        replace(
+          replace(
+            replace(
+              replace(
+                replace(file("${path.module}/policies/${file}"), "$${AWS_REGION}", var.aws_region),
+                "$${AWS_ACCOUNT_ID}", var.expected_account_id
+              ),
+              "$${PROJECT_NAME}", var.project_name
+            ),
+            "$${ENVIRONMENT}", var.environment
+          ),
+          "$${DATA_BUCKET_NAME}", var.data_bucket_name
+        )
+        ).Statement : {
+        Sid    = "Read${regex("_([a-z0-9]+)_policy\\.json$", file)[0]}${statement.Sid}"
+        Effect = "Allow"
+        Action = sort([
+          for action in distinct(flatten([statement.Action])) : action
+          if can(regex("^[a-z0-9]+:(Describe|List|Get|BatchGet)", action)) && !contains(local.github_plan_unreadable, action) && !startswith(action, "s3:GetObject")
+        ])
+        Resource = flatten([
+          for resource in flatten([statement.Resource]) :
+          strcontains(resource, "$${SHARED_SECRET_NAME}") ? [for name in local.github_policy_shared_secrets : replace(resource, "$${SHARED_SECRET_NAME}", name)] : [resource]
+        ])
+        Condition = merge(try(statement.Condition, {}), {
+          StringEquals = merge(try(statement.Condition.StringEquals, {}), { "aws:RequestedRegion" = var.aws_region })
+        })
+      }
+      if statement.Effect == "Allow" && !can(statement.NotResource) && length([
+        for action in distinct(flatten([statement.Action])) : action
+        if can(regex("^[a-z0-9]+:(Describe|List|Get|BatchGet)", action)) && !contains(local.github_plan_unreadable, action) && !startswith(action, "s3:GetObject")
+      ]) > 0
+    ]
   ])
+  github_plan_actions = sort(distinct(flatten([for statement in local.github_plan_read_statements : statement.Action])))
+
+  # Actions that the project policies allow on every resource. The plan role may read an action on every resource only if it is one of these.
+  approved_wildcard_actions = toset(flatten([
+    for file in local.approved_policy_files : [
+      for statement in jsondecode(file("${path.module}/policies/${file}")).Statement :
+      flatten([statement.Action]) if statement.Effect == "Allow" && contains(flatten([try(statement.Resource, [])]), "*")
+    ]
+  ]))
 
   github_state_read = [
     {
@@ -152,19 +200,13 @@ locals {
     terraform_plan = concat(
       [
         {
-          Sid       = "ReadProjectRegion"
-          Effect    = "Allow"
-          Action    = local.github_plan_actions
-          Resource  = ["*"]
-          Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }
-        },
-        {
           Sid         = "NeverReadObjectsExceptStateKeys"
           Effect      = "Deny"
           Action      = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes", "s3:GetObjectTagging"]
           NotResource = [for key in local.github_state_keys : "${local.github_state_bucket}/${key}"]
         }
       ],
+      local.github_plan_read_statements,
       local.github_state_read
     )
 
@@ -223,6 +265,7 @@ resource "aws_iam_role" "github" {
   name                 = format(local.platform_name, "gh_${each.key}")
   description          = each.value.description
   max_session_duration = 3600
+  permissions_boundary = local.github_role_boundary_arn
   assume_role_policy   = local.github_trust[each.key]
 }
 
@@ -276,5 +319,13 @@ output "github_oidc_storage_refresh_gaps" {
   value = sort(tolist(setunion(
     setsubtract(local.github_storage_refresh_actions, toset(local.github_plan_actions)),
     setintersection(local.github_storage_refresh_actions, local.github_plan_denied_actions)
+  )))
+}
+
+output "github_oidc_plan_wildcard_actions_outside_approved" {
+  description = "Actions that the plan role may read on every resource but no project policy allows on every resource. Must be empty."
+  value = sort(tolist(setsubtract(
+    toset(flatten([for statement in local.github_plan_read_statements : statement.Action if contains(statement.Resource, "*")])),
+    local.approved_wildcard_actions
   )))
 }

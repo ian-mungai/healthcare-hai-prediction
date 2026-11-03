@@ -483,3 +483,104 @@ run "plan_role_returns_configuration_never_content" {
     error_message = "The plan role may describe, list and get configuration. It must hold no action that returns console output, logs, passwords, secret values or image layers."
   }
 }
+
+run "plan_role_keeps_the_resources_of_the_approved_statements" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  # ecr:ListImages and s3:ListBucket were allowed on every repository and bucket of the account. They must reach only the project's own.
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : [
+        for resource in tolist(statement.Resource) : resource != "*"
+      ]
+      if statement.Effect == "Allow" && anytrue([for action in tolist(statement.Action) : startswith(action, "ecr:") || startswith(action, "s3:")])
+    ]))
+    error_message = "No ECR or S3 read of the plan role may name every resource. A list reaches only the project repositories and buckets."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      contains(tolist(statement.Action), "ecr:ListImages") &&
+      join(",", sort(tolist(statement.Resource))) == "arn:aws:ecr:us-west-2:111111111111:repository/example_project_*_dev"
+      if statement.Effect == "Allow"
+    ])
+    error_message = "ecr:ListImages must reach only the project repositories (the prefix, any image and the environment) of this account and region."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : [
+        for resource in tolist(statement.Resource) : contains(["arn:aws:s3:::example-data-bucket", "arn:aws:s3:::example-data-bucket-logs"], resource)
+      ]
+      if statement.Effect == "Allow" && contains(tolist(statement.Action), "s3:ListBucket")
+    ]))
+    error_message = "s3:ListBucket may reach only the project data bucket and its logging bucket."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : [
+        for resource in tolist(statement.Resource) : !strcontains(resource, ":222222222222:") && !strcontains(resource, "other-bucket")
+      ]
+      if statement.Effect == "Allow"
+    ]))
+    error_message = "No allowed resource of the plan role may name another account or a bucket of the project's neighbours."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      statement.Condition.StringEquals["aws:RequestedRegion"] == "us-west-2"
+      if statement.Effect == "Allow" && !contains(["ReadStateObjects", "ListStateKeys"], statement.Sid)
+    ])
+    error_message = "Every derived read of the plan role stays in the project region."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      contains(tolist(statement.Action), "dlm:GetLifecyclePolicy") && statement.Condition.StringEquals["aws:ResourceTag/Project"] == "example_project"
+      if statement.Effect == "Allow"
+    ])
+    error_message = "A read that the project policy limits by resource tag must keep its tag condition."
+  }
+
+  assert {
+    condition     = length(replace(aws_iam_role_policy.github["terraform_plan"].policy, " ", "")) < 10240
+    error_message = "A role's inline policy may not pass the 10,240 character limit of IAM."
+  }
+}
+
+run "plan_role_wildcard_reads_match_the_approved_wildcards" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition     = length(output.github_oidc_plan_wildcard_actions_outside_approved) == 0
+    error_message = "An action the plan role may read on every resource must be one that a project policy already allows on every resource."
+  }
+}
+
+run "every_delivery_role_carries_the_project_role_boundary" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role.github) == 4 &&
+      alltrue([for role in values(aws_iam_role.github) : role.permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_role_boundary"])
+    )
+    error_message = "The push, deploy, plan and apply roles must all carry the project role boundary."
+  }
+}
