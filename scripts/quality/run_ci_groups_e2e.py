@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from scripts.lakehouse import feature_shards
 from scripts.process import clear_git_environment, find_program, run_command
 from scripts.quality import ci_groups, core_commands
 from scripts.quality import pre_push as pre_push_module
@@ -106,6 +107,7 @@ COPIED = (
     "scripts/quality/ci_groups.py",
     "scripts/quality/core_commands.py",
     "config/quality/core_commands.json",
+    "config/quality/feature_case_costs.json",
     "scripts/quality/ci_main_passes.py",
     "scripts/quality/launcher_inputs.py",
     "scripts/quality/source_reads.py",
@@ -166,6 +168,7 @@ REQUIREMENTS = "7a967b2"
 ZERO = "0" * 40
 MISSING = "0123456789abcdef0123456789abcdef01234567"
 MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
+FEATURE_COUNTS = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))["feature_shards"]
 LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold", "lakehouse_features"]
 CORE = [
     "python_lint",
@@ -2023,6 +2026,46 @@ def change_parts(root: Path, remove: str = "", repeat: str = "") -> None:
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
+# The saved cost of each feature case in seconds (config/quality/feature_case_costs.json) and the shard counts it is balanced for (owner decision 163).
+FEATURE_SHARD_PLAN = {"sources": (16, 450.0), "columns": (4, 100.0)}
+
+
+def feature_weight_cases() -> list[dict[str, Any]]:
+    """The feature shards balance the saved case costs: each case runs in one shard, a case without a cost still runs once, and no shard is over the bound."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))["feature_shards"]
+    results: list[dict[str, Any]] = []
+    for suite, (count, bound) in FEATURE_SHARD_PLAN.items():
+        name = f"feature_{suite}_shards_are_weighted_by_the_saved_costs"
+        try:
+            costs = json.loads((ROOT / "config/quality/feature_case_costs.json").read_text(encoding="utf-8"))[suite]
+            names = feature_shards.names_of(suite)
+            shards = [feature_shards.select(names, f"{index}/{count}", suite=suite) for index in range(1, count + 1)]
+            flat = [case for shard in shards for case in shard]
+            loads = [round(sum(costs[case] for case in shard), 1) for shard in shards]
+            extra = [*names, "a_new_case_without_a_saved_cost"]
+            with_new = [case for index in range(1, count + 1) for case in feature_shards.select(extra, f"{index}/{count}", suite=suite)]
+            expensive = [index for index, shard in enumerate(shards) if any(costs[case] >= 30 for case in shard)]
+            heavy = [case for case in names if costs[case] >= 30]
+            results.append(
+                {
+                    "case": name,
+                    "passed": config[suite] == count
+                    and sorted(flat) == sorted(names)
+                    and sorted(with_new) == sorted(extra)
+                    and set(costs) == set(names)
+                    and max(loads) <= bound
+                    and (suite != "columns" or (len(heavy) == 4 and len(expensive) == 4)),
+                    "configured_count": config[suite],
+                    "cases": len(names),
+                    "heaviest_shard_seconds": max(loads),
+                    "lightest_shard_seconds": min(loads),
+                }
+            )
+        except Exception as error:
+            results.append({"case": name, "passed": False, "error": f"{type(error).__name__}: {error}"})
+    return results
+
+
 WORKER_KINDS = (
     # The SDK runtime commands of the offline orchestration group run alone before the other items (pull request 72 splits them from the group's own item).
     "orchestration_checks_sdk_runtime",
@@ -2072,7 +2115,7 @@ def unit_refusal_case(work: Path, out: Path) -> dict[str, Any]:
 def feature_combination_cases(scratch: Path) -> list[dict[str, Any]]:
     """Use synthetic case outcomes to exercise the real combiner's complete membership and candidate checks."""
     results = []
-    for suite, count in (("sources", 8), ("columns", 4)):
+    for suite, count in FEATURE_COUNTS.items():
         plan = run_command(str(PYTHON), ["-m", "scripts.lakehouse.feature_shards", "plan", "--suite", suite, "--count", str(count)], cwd=ROOT, timeout=60)
         if plan.returncode != 0:
             results.append({"case": f"feature_{suite}_combine_plan", "passed": False, "error": plan.stderr[-400:]})
@@ -2220,9 +2263,9 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
         ("bronze", "bronze", "", False),
         ("silver", "silver", "", False),
         ("gold", "gold", "", False),
-        ("source_shard", "feature_sources", "2/8", False),
+        ("source_shard", "feature_sources", "2/16", False),
         ("column_shard", "feature_columns", "2/4", False),
-        ("failed_shard", "feature_sources", "2/8", True),
+        ("failed_shard", "feature_sources", "2/16", True),
         ("parallel", "features", "", False),
     ):
         tree = scratch / f"output_{label}"
@@ -2548,7 +2591,7 @@ def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
         shutil.copytree(base, tree)
         if label == "feature_shard_failure":
             path = tree / GROUP_FILES / "lakehouse_features.sh"
-            text = path.read_text().replace('  local shard="${1:?}"', '  local shard="${1:?}"\n  if [[ "$shard" == 2/8 ]]; then return 3; fi', 1)
+            text = path.read_text().replace('  local shard="${1:?}"', '  local shard="${1:?}"\n  if [[ "$shard" == 2/16 ]]; then return 3; fi', 1)
             path.write_text(text)
         if label == "hook_failure":
             path = tree / "scripts/run_ci.sh"
@@ -2606,7 +2649,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     inventory = json.loads((ROOT / "config/quality/feature_cases.json").read_text())
     workflow = workflow_document()
     results: list[dict[str, Any]] = []
-    for suite, count in (("sources", 8), ("columns", 4)):
+    for suite, count in FEATURE_COUNTS.items():
         all_code, names, all_error = feature_listing(suite)
         shards: list[list[str]] = []
         for index in range(1, count + 1):
@@ -2683,6 +2726,7 @@ def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
         *acquisition_script_cases(),
         *timeout_cases(),
         *core_command_cases(),
+        *feature_weight_cases(),
     ]
 
 

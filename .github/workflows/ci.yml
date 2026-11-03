@@ -360,16 +360,18 @@ jobs:
           retention-days: 14
 
   feature_sources:
-    name: Feature Sources (Shard ${{ matrix.shard }} of 8)
+    name: Feature Sources (Shard ${{ matrix.shard }} of 16)
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 22.7 min (shard 1), shards 16.6 to 22.7 min.
-    timeout-minutes: 30
+    # Measured job wall time with eight shards on main (3 runs, Oct 28 2026): max 22.7 min (shard 1, 1037 s of cases), shards 16.6 to 22.7 min, so about 325 s of setup
+    # and gates. The sixteen shards are packed by the saved case costs (config/quality/feature_case_costs.json): at most 440 s of cases in a shard.
+    # Wall time: 12.8 min, estimate: 440 s of cases plus 325 s of setup and gates. Resize from the first complete hosted run.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

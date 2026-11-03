@@ -111,52 +111,100 @@
       "basis": "estimate, offline feature store gates"
     },
     {
-      "job": "Feature Sources (Shard 1 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 1 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 2 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 2 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 3 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 3 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 4 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 4 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 5 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 5 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 6 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 6 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 7 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 7 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
-      "job": "Feature Sources (Shard 8 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 8 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 9 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 10 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 11 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 12 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 13 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 14 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 15 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 16 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates"
     },
     {
       "job": "Feature Columns (Shard 1 of 4)",

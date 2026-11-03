@@ -238,7 +238,7 @@
   "launcher_shards": 2,
   "launcher_shard_seconds": 1500,
   "feature_shards": {
-    "sources": 8,
+    "sources": 16,
     "columns": 4
   },
   "hook_groups": {
@@ -376,8 +376,8 @@
       "minutes": 30
     },
     "lakehouse_features_sources": {
-      "job": "Feature Sources (Shard 1 of 8)",
-      "minutes": 30
+      "job": "Feature Sources (Shard 1 of 16)",
+      "minutes": 20
     },
     "lakehouse_features_columns": {
       "job": "Feature Columns (Shard 1 of 4)",
