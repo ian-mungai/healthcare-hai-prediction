@@ -5665,6 +5665,107 @@ def deletions_case(scratch: Path, mutate: Callable[[str], str] | None = None) ->
     }
 
 
+def temp_branch_refused_case(
+    scratch: Path,
+    case: str,
+    name: str,
+    setup: Callable[[Path], None],
+    arguments: tuple[str, ...],
+    refused_ref: str,
+    mutate: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """A push that names a ``temp/`` branch as its local or its remote reference is refused whole: nothing is pushed and no check runs."""
+
+    def check(root: Path, code: int, text: str) -> dict[str, bool]:
+        return {
+            "refused": code != 0 and "temp/" in text,
+            "nothing_pushed": not any(ref.startswith("refs/heads/") and ref != "refs/heads/main" for ref in remote_refs(root)),
+            "no_check_ran": runs_of(root) == 0,
+            "names_the_reference": refused_ref in text,
+        }
+
+    return push_case(scratch, case, name, setup, arguments, check, mutate)
+
+
+def temp_local_branch(root: Path) -> None:
+    probe_git(root, "checkout", "--quiet", "-b", "temp/work")
+
+
+def temp_branch_at_head_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch, "pre_push_temp_branch_at_head_is_refused", "gate_temp_head", temp_local_branch, ("origin", "temp/work"), "refs/heads/temp/work", mutate
+    )
+
+
+def temp_local_name_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_temp_branch_pushed_under_another_remote_name_is_refused",
+        "gate_temp_local_name",
+        temp_local_branch,
+        ("origin", "temp/work:refs/heads/feature"),
+        "refs/heads/temp/work",
+        mutate,
+    )
+
+
+def temp_remote_name_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_branch_pushed_to_a_temp_remote_name_is_refused",
+        "gate_temp_remote_name",
+        lambda root: None,
+        ("origin", "topic:refs/heads/temp/other"),
+        "refs/heads/temp/other",
+        mutate,
+    )
+
+
+def temp_known_commit_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    def seed(root: Path) -> None:
+        probe_git(root, "branch", "temp/known", "main")
+
+    return temp_branch_refused_case(
+        scratch, "pre_push_temp_branch_at_origin_main_is_refused", "gate_temp_known", seed, ("origin", "temp/known"), "refs/heads/temp/known", mutate
+    )
+
+
+def temp_head_alias_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_head_on_a_temp_branch_is_refused",
+        "gate_temp_head_alias",
+        temp_local_branch,
+        ("origin", "HEAD:refs/heads/feature"),
+        "refs/heads/temp/work",
+        mutate,
+    )
+
+
+def temp_with_head_ref_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    def seed(root: Path) -> None:
+        probe_git(root, "branch", "temp/work", "HEAD")
+
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_temp_branch_with_the_head_ref_refuses_both",
+        "gate_temp_with_head",
+        seed,
+        ("origin", "topic", "temp/work"),
+        "refs/heads/temp/work",
+        mutate,
+    )
+
+
+def temp_deletion_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Deleting a temp/ branch on the remote publishes nothing, so it stays allowed (the cleanup of a branch that was pushed before the rule)."""
+    root = gate_repo(scratch, "gate_temp_deletion", mutate=mutate)
+    probe_git(root, "push", "--quiet", "--no-verify", "origin", "main:refs/heads/temp/old")
+    code, text = git_push(root, ("origin", ":temp/old"))
+    checks = {"deletion_allowed": code == 0, "remote_branch_removed": "refs/heads/temp/old" not in remote_refs(root), "no_check_ran": runs_of(root) == 0}
+    return {"case": "pre_push_temp_branch_deletion_is_allowed", "passed": all(checks.values()), "checks": checks, "exit": code, "output": text[-300:]}
+
+
 def tree_tag_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
     def tag_a_tree(root: Path) -> None:
         probe_git(root, "tag", "--annotate", "--message", "tree", "treetag", "main^{tree}")
@@ -6048,6 +6149,13 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         known_then_unknown_case,
         several_refs_case,
         deletions_case,
+        temp_branch_at_head_case,
+        temp_local_name_case,
+        temp_remote_name_case,
+        temp_known_commit_case,
+        temp_head_alias_case,
+        temp_with_head_ref_case,
+        temp_deletion_case,
         tree_tag_case,
         up_to_date_case,
         tracked_change_ref_case,
@@ -6064,11 +6172,22 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
     results = [case(scratch) for case in real]
     planted = [
         ("shim_without_the_gate", unknown_ref_case, SHIM_COMMAND_LINE, SHIM_COMMAND_LINE.replace("run --hook", "check-shim")),
-        ("first_ref_only", known_then_unknown_case, "for ref, sha in updates:", "for ref, sha in updates[:1]:"),
+        ("first_ref_only", known_then_unknown_case, "for ref, sha, local in updates:", "for ref, sha, local in updates[:1]:"),
         ("known_rule_dropped", new_branch_known_case, 'if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:', "if False:"),
         ("known_rule_for_tags_dropped", annotated_tag_known_case, 'if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:', "if False:"),
         ("any_commit_checked", unknown_ref_case, 'return "refused", f"is neither in origin/main nor', 'return "checked", f"is neither in origin/main nor'),
         ("deletion_refused", deletions_case, 'if not sha.strip("0"):', "if False:"),
+        ("temp_check_dropped", temp_branch_at_head_case, "if named:", "if False:"),
+        ("temp_known_commit_allowed", temp_known_commit_case, "if named:", 'if named and decision != "known":'),
+        ("temp_remote_name_unchecked", temp_remote_name_case, "for name in (remote_ref, local_ref):", "for name in (local_ref,):"),
+        ("temp_local_name_unchecked", temp_local_name_case, "for name in (remote_ref, local_ref):", "for name in (remote_ref,):"),
+        ("temp_head_alias_unresolved", temp_head_alias_case, 'if local_ref == "HEAD":', "if False:"),
+        (
+            "temp_deletion_refused",
+            temp_deletion_case,
+            'named = temporary(root, ref, local) if decision != "deleted" else ""',
+            "named = temporary(root, ref, local)",
+        ),
         ("tag_not_peeled", annotated_tag_head_case, 'f"{name}^{{commit}}"', "name"),
         ("nothing_to_check_still_checks", up_to_date_case, 'if not any(row["decision"] == "checked" for row in decisions):', "if False:"),
         ("known_ref_not_recorded", new_branch_known_case, "record(output, None, [], decisions)", "pass"),

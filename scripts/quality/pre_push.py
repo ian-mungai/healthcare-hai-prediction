@@ -25,8 +25,10 @@ that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKI
 The checks read the working tree, so ``run`` refuses a head that is not the checked-out commit and tracked files that differ from it (staged or unstaged).
 The hook form, ``run --hook``, is the gate of every push. ``install-shim`` registers it as a Git config hook (Git 2.54 or newer; Git starts it before the
 hooks-directory hook, for every push, with the whole input on standard input), so the gate does not depend on the reference pre-commit hands its hooks. It
-judges each updated reference: a deletion is allowed; a reference whose commit is already in ``origin/main`` is allowed with nothing to check and is recorded
-in ``report.json``; a reference at the checked-out commit is checked; any other reference refuses the push. The ``local_ci_pushed`` pre-commit hook runs
+judges each updated reference: a deletion is allowed; a reference that names a ``temp/`` branch (as its remote name, its local name or ``HEAD`` on
+such a branch) is refused whatever its commit, because temporary code never reaches GitHub; a reference whose commit is already in ``origin/main`` is
+allowed with nothing to check and is recorded in ``report.json``; a reference at the checked-out commit is checked; any other reference refuses the push.
+The ``local_ci_pushed`` pre-commit hook runs
 ``check-shim``, which refuses a push when the Git config hook is missing, disabled or changed.
 
     .venv/bin/python -m scripts.quality.pre_push install-shim
@@ -66,6 +68,7 @@ SHIM_COMMAND = ".venv/bin/python -m scripts.quality.pre_push run --hook"
 MINIMUM_GIT = (2, 54)
 INSTALL_HINT = ".venv/bin/python -m scripts.quality.pre_push install-shim"
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+TEMP_PREFIX = "refs/heads/temp/"
 SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
 # The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
 OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
@@ -391,16 +394,16 @@ def release_line(released: dict[str, Any]) -> str:
     )
 
 
-def parse_updates(text: str) -> list[tuple[str, str]]:
-    """The (remote reference, local object) pairs of a pre-push input; a deletion has an all-zero object."""
-    updates: list[tuple[str, str]] = []
+def parse_updates(text: str) -> list[tuple[str, str, str]]:
+    """The (remote reference, local object, local reference) triples of a pre-push input; a deletion has an all-zero object."""
+    updates: list[tuple[str, str, str]] = []
     for line in text.splitlines():
         if not line.strip():
             continue
         fields = line.split()
         if len(fields) != 4 or not SHA.fullmatch(fields[1]):
             raise ValueError(f"unreadable line in the push input: {line!r}")
-        updates.append((fields[2], fields[1]))
+        updates.append((fields[2], fields[1], fields[0]))
     return updates
 
 
@@ -418,11 +421,25 @@ def judge(root: Path, sha: str, current: str) -> tuple[str, str]:
     return "refused", f"is neither in origin/main nor the checked-out commit {current[:12]}"
 
 
-def decide(root: Path, updates: list[tuple[str, str]]) -> list[dict[str, str]]:
+def temporary(root: Path, remote_ref: str, local_ref: str) -> str:
+    """The ``temp/`` branch a pushed reference names, as its remote name, its local name or the checked-out branch behind ``HEAD``; empty when none."""
+    if local_ref == "HEAD":
+        code, branch = git(root, "symbolic-ref", "-q", "HEAD")
+        local_ref = branch if code == 0 else local_ref
+    for name in (remote_ref, local_ref):
+        if name.startswith(TEMP_PREFIX):
+            return name
+    return ""
+
+
+def decide(root: Path, updates: list[tuple[str, str, str]]) -> list[dict[str, str]]:
     current = resolve_commit(root, "HEAD")
     rows = []
-    for ref, sha in updates:
+    for ref, sha, local in updates:
         decision, reason = judge(root, sha, current)
+        named = temporary(root, ref, local) if decision != "deleted" else ""
+        if named:
+            decision, reason = "refused", f"names the temp/ branch {named}; temporary code stays on a local branch and is never pushed"
         rows.append({"ref": ref, "sha": sha, "decision": decision, "reason": reason})
     return rows
 
