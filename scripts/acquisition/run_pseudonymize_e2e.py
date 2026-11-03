@@ -758,6 +758,31 @@ def check_scrub_mixed_possessive(run: Run) -> None:
     ensure(contract["scrubbed_cells"] == 3, f"mixed possessive count differs: {contract['scrubbed_cells']}")
 
 
+TEXT_WORD_ROWS = [
+    ["1", "", "Zelda Na", "Plain Co"],
+    ["2", "", "Yara Quimby", "Plain Co"],
+    ["3", "", "Wren D''Arcy", "Plain Co"],
+    ["4", "", "J.R. Vale", "Plain Co"],
+    ["5", "", "O'S", "Plain Co"],
+    ["6", "", "", "Zelda Na Clinic"],
+    ["7", "", "", "Yara Unknown Quimby Clinic"],
+    ["8", "", "", "Wren D''Arcy Clinic"],
+    ["9", "", "", "J..R. Vale Clinic"],
+    ["10", "", "", "O'S's Clinic"],
+]
+
+
+def check_scrub_text_words(run: Run) -> None:
+    """Text words keep words that are empty markers in identity fields, accept repeated connectors and strip one possessive, without widening."""
+    folder = run.case_dir("scrub_text_words")
+    source = write_csv(folder / "in.csv", SCRUB_HEADERS, TEXT_WORD_ROWS)
+    contract = module.transform(source, folder / "derivative", SCRUB_POLICY, "v1", reader_for(KEYS))
+    notes = [r["NOTE"] for r in table(folder / "derivative")]
+    expected = ["Plain Co"] * 5 + [module.REPLACEMENT, "Yara Unknown Quimby Clinic", module.REPLACEMENT, module.REPLACEMENT, module.REPLACEMENT]
+    ensure(notes == expected, f"text word scrub differs: {notes}")
+    ensure(contract["scrubbed_cells"] == 4, f"text word count differs: {contract['scrubbed_cells']}")
+
+
 def check_known_answer(run: Run) -> None:
     """The pseudonym equals an independently computed HMAC and the fixed known answer of the independent tool."""
     rows = table(run.derivative("known_answer"))
@@ -1038,6 +1063,7 @@ def main() -> None:
         check_discriminator,
         check_scrub,
         check_scrub_mixed_possessive,
+        check_scrub_text_words,
         check_known_answer,
         check_isolation,
         check_sdk_logging,

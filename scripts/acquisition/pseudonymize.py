@@ -61,8 +61,9 @@ MIN_NAME_CHARACTERS = 2
 NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not available", "not applicable", "[redacted]"})
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
-POSSESSIVE = re.compile(r"(?<=[^\W_])['‘’ʼ`´]s(?![^\W_])")
-TEXT_TOKEN = re.compile(r"[^\W_]+(?:['‘’ʼ`´.][^\W_]+)*")
+TEXT_CONNECTORS = "'‘’ʼ`´."
+TEXT_TOKEN = re.compile(r"[^\W_]+(?:['‘’ʼ`´.]+[^\W_]+)*")
+POSSESSIVE_END = re.compile(r"['‘’ʼ`´]s$")
 TREATMENTS = ("keep", "drop", "scrub_names")
 KINDS = {"id": "authoritative_id", "name": "name_match_only"}
 POLICY_FIELDS = {"policy_id", "policy_version", "source_id", "normalization_version", "headers", "treatments", "pseudonyms", "max_bytes", "min_rows"}
@@ -329,23 +330,33 @@ def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:
                 yield "".join(c for c in parts[0] if c.isalnum())
 
 
-def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
-    """True when the text holds any known person's whole name, of one word or more, as consecutive words.
+def text_word(token: str) -> str:
+    """One word of free text for name matching: connectors removed, every word kept (unlike identity normalization, which treats some words as empty)."""
+    return token.translate(APOSTROPHES)
 
-    Each word of the text is matched as written or without a possessive ending, so a possessive on any word of a name does not hide it. Word order
-    stays exact. Combining marks are dropped first, so a case fold that adds one (for example a dotted capital I) cannot split a word.
+
+def index_names(names: set[tuple[str, ...]]) -> dict[str, list[tuple[str, ...]]]:
+    """Known name word sequences grouped by their first word, built once per transformation."""
+    index: dict[str, list[tuple[str, ...]]] = {}
+    for name in names:
+        index.setdefault(name[0], []).append(name)
+    return index
+
+
+def contains_name(text: str, index: dict[str, list[tuple[str, ...]]]) -> bool:
+    """True when the text holds any known person's whole name, of one word or more, as consecutive words in order.
+
+    Each word is matched as written or with one possessive ending removed, after combining marks are dropped and connectors deleted. Text words are
+    never discarded, so a word that is an empty marker in an identity field (for example "na") still has to match.
     """
     plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(text)) if not unicodedata.combining(c))
-    options = []
-    for token in TEXT_TOKEN.findall(plain):
-        forms = {normalize_name(token), normalize_name(POSSESSIVE.sub("", token))} - {""}
-        if forms:
-            options.append(forms)
-    for size in range(1, longest + 1):
-        for start in range(len(options) - size + 1):
-            window = options[start : start + size]
-            if any(len(name) == size and all(part in forms for part, forms in zip(name, window, strict=True)) for name in names):
-                return True
+    options = [{text_word(token), text_word(POSSESSIVE_END.sub("", token))} - {""} for token in TEXT_TOKEN.findall(plain)]
+    for start, forms in enumerate(options):
+        for first in forms:
+            for name in index.get(first, ()):
+                window = options[start : start + len(name)]
+                if len(window) == len(name) and all(part in alternatives for part, alternatives in zip(name, window, strict=True)):
+                    return True
     return False
 
 
@@ -453,7 +464,7 @@ def transform(source: Path, output: Path, policy: dict, key_version: str, reader
     scrubbing = any(t["treatment"] == "scrub_names" for t in treatments.values())
     if scrubbing:
         refuse_short_values(names, identifiers)
-    names_longest, identifiers_longest = max((len(n) for n in names), default=0), max((len(i) for i in identifiers), default=0)
+    name_index, identifiers_longest = index_names(names), max((len(i) for i in identifiers), default=0)
     kept = [h for h in headers if treatments[h]["treatment"] != "drop"]
     statistics: dict[str, Any] = {
         "rows": 0,
@@ -480,7 +491,7 @@ def transform(source: Path, output: Path, policy: dict, key_version: str, reader
                 elif (
                     rule["treatment"] == "scrub_names"
                     and cell
-                    and (contains_name(cell, names, names_longest) or contains_identifier(cell, identifiers, identifiers_longest))
+                    and (contains_name(cell, name_index) or contains_identifier(cell, identifiers, identifiers_longest))
                 ):
                     cell = REPLACEMENT
                     statistics["scrubbed"] += 1
