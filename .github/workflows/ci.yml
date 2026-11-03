@@ -33,6 +33,9 @@ jobs:
       reuse: ${{ steps.reuse.outputs.reuse }}
       range_start: ${{ steps.range.outputs.start }}
       range_end: ${{ steps.range.outputs.end }}
+      scope: ${{ steps.scope.outputs.scope }}
+      check_start: ${{ steps.checkrange.outputs.start }}
+      check_end: ${{ steps.checkrange.outputs.end }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -52,6 +55,28 @@ jobs:
             RANGE_START="$(git merge-base "$RANGE_START" "$RANGE_END")"
           fi
           printf 'start=%s\nend=%s\n' "$RANGE_START" "$RANGE_END" >> "$GITHUB_OUTPUT"
+
+      # A pull request is path selected: its range of changed paths selects the check groups. A push to main and a manual run are full runs (owner decision 162), and
+      # no run is scheduled.
+      - name: Choose the scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then scope=range; else scope=full; fi
+          printf 'scope=%s\n' "$scope" >> "$GITHUB_OUTPUT"
+
+      # The hook partitions and the acquisition tests are file based: given a range they check the files it changed, given none they check every file. A pull request gives
+      # them its range and every other event gives none. The commit message checks keep the real range (range_start and range_end), because they read commits.
+      - name: Choose the range that the file based checks read
+        id: checkrange
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+          RANGE_START: ${{ steps.range.outputs.start }}
+          RANGE_END: ${{ steps.range.outputs.end }}
+        run: |
+          if [[ "$SCOPE" == "range" ]]; then start="$RANGE_START"; end="$RANGE_END"; else start=""; end=""; fi
+          printf 'start=%s\nend=%s\n' "$start" "$end" >> "$GITHUB_OUTPUT"
 
       - name: Decide whether the merged pull request result is reused
         id: reuse
@@ -97,7 +122,7 @@ jobs:
       - name: Run the quick gates (privacy, secrets, documentation, writing, Markdown and source gates)
         env:
           CI_PART: gates
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
@@ -158,8 +183,8 @@ jobs:
 
       - name: Run this complete partition of the manual hooks
         env:
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
+          RANGE_START: ${{ needs.plan.outputs.check_start }}
+          RANGE_END: ${{ needs.plan.outputs.check_end }}
         run: .venv/bin/python -m scripts.quality.ci_hooks --group '${{ matrix.group }}' --from "$RANGE_START" --to "$RANGE_END"
 
       - name: Retain hook evidence
@@ -198,7 +223,7 @@ jobs:
       - name: Run local CI without the launcher E2E
         env:
           CI_PART: core
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/configuration
@@ -242,7 +267,7 @@ jobs:
       - name: Run the CI groups reuse and gate stage E2Es
         env:
           CI_PART: reuse_gate
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
@@ -289,7 +314,7 @@ jobs:
         env:
           CI_PART: ${{ matrix.part }}
           CI_UNITS: ${{ matrix.units }}
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
@@ -334,7 +359,7 @@ jobs:
         env:
           CI_PART: feature_sources
           FEATURE_SHARD: ${{ matrix.shard }}/8
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
@@ -376,7 +401,7 @@ jobs:
         env:
           CI_PART: feature_columns
           FEATURE_SHARD: ${{ matrix.shard }}/4
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
@@ -423,10 +448,11 @@ jobs:
       - name: Select feature evidence for the checked range
         id: selection
         env:
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: |
-          plan="$(.venv/bin/python -m scripts.quality.ci_groups plan --scope range --part features --from "$RANGE_START" --to "$RANGE_END" --format shell)"
+          plan="$(.venv/bin/python -m scripts.quality.ci_groups plan --scope "$CI_SCOPE" --part features --from "$RANGE_START" --to "$RANGE_END" --format shell)"
           printf '%s\n' "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
           if [[ $'\n'"$plan"$'\n' == *$'\nrun lakehouse_features\n'* ]]; then
             echo 'run=true' >> "$GITHUB_OUTPUT"
@@ -482,7 +508,7 @@ jobs:
           CI_PART: gold
           CI_UNITS: model_metadata_e2e
           MODEL_METADATA_WORKERS: auto
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
@@ -522,7 +548,7 @@ jobs:
       - name: Run one launcher E2E shard
         env:
           CI_PART: launcher
-          CI_SCOPE: range
+          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           LAUNCHER_SHARD: ${{ matrix.shard }}/2
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
@@ -586,8 +612,8 @@ jobs:
         env:
           ACQUISITION_PART: shard
           ACQUISITION_SHARD: ${{ matrix.shard }}/4
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
+          RANGE_START: ${{ needs.plan.outputs.check_start }}
+          RANGE_END: ${{ needs.plan.outputs.check_end }}
         run: bash scripts/acquisition/run_checks_ci.sh
 
       - name: Retain the shard manifest and coverage data
@@ -661,6 +687,6 @@ jobs:
         env:
           ACQUISITION_PART: combine
           ACQUISITION_SHARD_COUNT: "4"
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
+          RANGE_START: ${{ needs.plan.outputs.check_start }}
+          RANGE_END: ${{ needs.plan.outputs.check_end }}
         run: bash scripts/acquisition/run_checks_ci.sh

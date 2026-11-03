@@ -1810,7 +1810,7 @@ def feature_split_cases() -> list[dict[str, Any]]:
                 and definition.get("if") == "${{ needs.plan.outputs.reuse != 'true' }}"
                 and len(steps) == 1
                 and steps[0].get("env", {}).get("CI_PART") == f"feature_{suite}"
-                and steps[0].get("env", {}).get("CI_SCOPE") == "range"
+                and steps[0].get("env", {}).get("CI_SCOPE") == "${{ needs.plan.outputs.scope }}"
                 and steps[0].get("env", {}).get("RANGE_START") == "${{ needs.plan.outputs.range_start }}"
                 and steps[0].get("env", {}).get("RANGE_END") == "${{ needs.plan.outputs.range_end }}"
                 and plan_outputs.get("range_start") == "${{ steps.range.outputs.start }}"
@@ -4515,7 +4515,8 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
         "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
         "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
         "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
-        "env_values": local.get("env", {}).get("CI_SCOPE") == hosted_env["CI_SCOPE"]
+        "env_values": local.get("env", {}).get("CI_SCOPE") == "range"
+        and hosted_env["CI_SCOPE"] == "${{ needs.plan.outputs.scope }}"
         and local.get("env", {}).get("RANGE_START") == base
         and local.get("env", {}).get("RANGE_END") == head,
         "no_part": "CI_PART" not in local.get("env", {}),
