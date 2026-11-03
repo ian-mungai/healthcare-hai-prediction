@@ -40,6 +40,7 @@ MAX_RECORDS = 10000
 REQUEST_KEYS = ("request_version", "template", "run_id", "mode", "attempt", "dag_id", "task_id", "dag_run_id")
 SELECTOR_KEY = "input_run_id"
 LOG = logging.getLogger(__name__)
+OPENMETADATA_ROUTE = "/api/v1/openlineage/lineage"
 
 
 class LineageError(ValueError):
@@ -261,6 +262,12 @@ class Outbox:
         self.connection.execute(
             "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, sequence INTEGER NOT NULL, acked INTEGER NOT NULL DEFAULT 0)"
         )
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
+        if "om_state" not in columns:
+            self.connection.execute("ALTER TABLE events ADD COLUMN om_state INTEGER NOT NULL DEFAULT 0")
+        if "om_result" not in columns:
+            self.connection.execute("ALTER TABLE events ADD COLUMN om_result TEXT")
+        self.connection.commit()
         self.connection.execute("CREATE TABLE IF NOT EXISTS sweep_cursors (root TEXT PRIMARY KEY, cursor TEXT)")
         self.connection.execute("CREATE TABLE IF NOT EXISTS provider_runs (caller TEXT PRIMARY KEY, link TEXT NOT NULL)")
         self.connection.execute(
@@ -406,17 +413,25 @@ class Outbox:
         return json.loads(row[0]) if row is not None else None
 
     def pending(self, limit: int) -> list[tuple[str, str]]:
-        """Return at most limit pending event identities and immutable JSON payloads."""
+        """Return at most limit event identities and immutable JSON payloads that Marquez has not acknowledged."""
+        return self._pending("marquez", limit)
+
+    def pending_openmetadata(self, limit: int) -> list[tuple[str, str]]:
+        """Return at most limit event identities and payloads that OpenMetadata has not answered."""
+        return self._pending("openmetadata", limit)
+
+    def _pending(self, receiver: str, limit: int) -> list[tuple[str, str]]:
+        """Select the events one receiver has not answered, in event order, holding back events whose native callbacks are still deferred."""
         if not 1 <= limit <= MAX_RECORDS:
             raise LineageError("outbox limit must be between 1 and 10000")
         return list(
             self.connection.execute(
-                "SELECT e.id,e.payload FROM events e WHERE e.acked=0 AND NOT EXISTS "
+                "SELECT e.id,e.payload FROM events e WHERE (CASE ? WHEN 'marquez' THEN e.acked ELSE e.om_state END)=0 AND NOT EXISTS "
                 "(SELECT 1 FROM provider_events p WHERE p.flushed=0 "
                 "AND json_extract(p.envelope,'$.event.run.runId')=json_extract(e.payload,'$.run.runId')) "
                 "ORDER BY julianday(json_extract(e.payload,'$.eventTime')), "
                 "CASE json_extract(e.payload,'$.eventType') WHEN 'START' THEN 0 WHEN 'RUNNING' THEN 1 ELSE 2 END, e.rowid LIMIT ?",
-                (limit,),
+                (receiver, limit),
             )
         )
 
@@ -451,6 +466,124 @@ class Outbox:
                     break
         pending = self.connection.execute("SELECT COUNT(*) FROM events WHERE acked=0").fetchone()[0]
         return {"delivered": delivered, "pending": pending}
+
+    def deliver_openmetadata(
+        self, host: str, port: int, credential: str, *, limit: int = 100, deadline_seconds: float = 30, timeout: float = 3
+    ) -> dict[str, Any]:
+        """Send pending events to the OpenMetadata lineage API on loopback and record its created and unresolved edge counts for each event.
+
+        A reply with a body is recorded: state 1 when no dataset was unresolved, state 2 when OpenMetadata named unresolved datasets or the body could not
+        be read. State 2 events wait for ``replay_unresolved``. A refusal, an outage or a timeout leaves the event pending, stops the pass and is reported
+        in the result; none of them raises for an HTTP answer. The credential is only sent, never stored.
+        """
+        if host not in ("127.0.0.1", "::1") or not 1 <= port <= 65535 or not 0 < timeout <= 30 or not 0 < deadline_seconds <= 300 or not credential:
+            raise LineageError("OpenMetadata delivery needs loopback, a valid port, a credential and bounded positive timeouts")
+        deadline = time.monotonic() + deadline_seconds
+        delivered = 0
+        outcome: dict[str, Any] = {}
+        with self.queries_until(deadline):
+            for event_id, payload in self.pending_openmetadata(limit):
+                if deadline - time.monotonic() <= 0:
+                    break
+                with self.connection:
+                    self.connection.execute("BEGIN IMMEDIATE")
+                    row = self.connection.execute("SELECT om_state FROM events WHERE id=?", (event_id,)).fetchone()
+                    if row[0]:
+                        continue
+                    try:
+                        status, reply = post_openmetadata(host, port, payload, credential, min(deadline, time.monotonic() + timeout))
+                    except OSError as error:
+                        outcome["om_error"] = type(error).__name__
+                        break
+                    answered = openmetadata_answer(status, reply)
+                    if answered is None:
+                        outcome["om_http"] = status
+                        break
+                    state, result = answered
+                    self.connection.execute("UPDATE events SET om_state=?, om_result=? WHERE id=?", (state, canonical(result), event_id))
+                    delivered += 1
+        pending = self.connection.execute("SELECT COUNT(*) FROM events WHERE om_state=0").fetchone()[0]
+        return {"om_delivered": delivered, "om_pending": pending, **outcome}
+
+    def replay_unresolved(self) -> int:
+        """Queue every event whose datasets OpenMetadata could not resolve, so the next pass sends it again after the tables are ingested."""
+        with self.connection:
+            return self.connection.execute("UPDATE events SET om_state=0 WHERE om_state=2").rowcount
+
+    def openmetadata_report(self) -> dict[str, Any]:
+        """What OpenMetadata answered so far: events delivered and pending, created edges, and the unresolved events and datasets."""
+        delivered = pending = edges = unresolved_events = 0
+        unresolved: set[str] = set()
+        for state, result in self.connection.execute("SELECT om_state,om_result FROM events"):
+            if state == 0:
+                pending += 1
+                continue
+            delivered += 1
+            recorded = json.loads(result)
+            edges += recorded["edges_created"]
+            if state == 2:
+                unresolved_events += 1
+                unresolved.update(recorded["unresolved"])
+        return {
+            "events": delivered + pending,
+            "delivered": delivered,
+            "pending": pending,
+            "edges_created": edges,
+            "unresolved_events": unresolved_events,
+            "unresolved_datasets": sorted(unresolved),
+        }
+
+
+def openmetadata_answer(status: int, reply: bytes) -> tuple[int, dict[str, Any]] | None:
+    """The state and result to record for one OpenMetadata reply, or None when the event must stay pending (outage, refused credential, server error)."""
+    if status not in (200, 400):
+        return None
+    try:
+        body = json.loads(reply)
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        if status == 400:
+            return None
+        return 2, {"http": status, "edges_created": 0, "unresolved": [], "unreadable": True}
+    created = body.get("lineageEdgesCreated", 0)
+    named = body.get("unresolvedDatasets") or []
+    unresolved = sorted(item if isinstance(item, str) else canonical(item) for item in named) if isinstance(named, list) else [canonical(named)]
+    result = {"http": status, "status": str(body.get("status", "")), "edges_created": created if type(created) is int else 0, "unresolved": unresolved}
+    return (2 if unresolved or status == 400 else 1), result
+
+
+def http_post(host: str, port: int, route: str, payload: str, deadline: float, extra_headers: str = "") -> tuple[int, bytes]:
+    """POST JSON to a loopback address and return the status and at most 64 KiB of the body; the deadline covers connect, send and reply."""
+    data = payload.encode()
+    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    lines = [f"POST {route} HTTP/1.1", f"Host: {authority}", "Content-Type: application/json", f"Content-Length: {len(data)}", "Connection: close"]
+    header = "\r\n".join(lines) + "\r\n" + extra_headers + "\r\n"
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("lineage delivery deadline passed")
+    response = b""
+    with socket.create_connection((host, port), timeout=remaining) as connection:
+        connection.sendall(header.encode() + data)
+        while len(response) < 65536:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("lineage delivery deadline passed")
+            connection.settimeout(remaining)
+            chunk = connection.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+    head, _, body = response.partition(b"\r\n\r\n")
+    status = head.split(b"\r\n", 1)[0].split(b" ")
+    if len(status) < 2 or status[0] not in (b"HTTP/1.0", b"HTTP/1.1") or not status[1].isdigit():
+        return 0, b""
+    return int(status[1]), body
+
+
+def post_openmetadata(host: str, port: int, payload: str, credential: str, deadline: float) -> tuple[int, bytes]:
+    """Send one event to the OpenMetadata OpenLineage route with the caller's bot credential."""
+    return http_post(host, port, OPENMETADATA_ROUTE, payload, deadline, f"Authorization: Bearer {credential}\r\n")
 
 
 def post_event(host: str, port: int, payload: str, deadline: float) -> bool:
@@ -605,11 +738,16 @@ class CompletionWorker:
         interval_seconds: float = 5,
         pass_seconds: float = 10,
         limit: int = 1000,
+        openmetadata_port: int | None = None,
+        openmetadata_token: str | None = None,
     ) -> None:
         if not 0 < interval_seconds <= 60 or not 0 < pass_seconds <= 60 or not 1 <= limit <= MAX_RECORDS:
             raise LineageError("lineage worker needs bounded interval, pass and batch limits")
         if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
             raise LineageError("lineage worker needs a valid local API port")
+        if openmetadata_port is not None and (type(openmetadata_port) is not int or not 1024 <= openmetadata_port <= 65535 or not openmetadata_token):
+            raise LineageError("OpenMetadata delivery needs a valid local API port and the caller's bot credential")
+        self.openmetadata_port, self.openmetadata_token = openmetadata_port, openmetadata_token
         self.records, self.provider, self.outbox = records, provider, outbox
         self.port, self.interval_seconds, self.pass_seconds, self.limit = port, interval_seconds, pass_seconds, limit
         self.stopping = threading.Event()
@@ -645,6 +783,14 @@ class CompletionWorker:
             outcome["record_cycle"] = box.record_cycle()
             if self.port is not None:
                 outcome.update(box.deliver("127.0.0.1", self.port, limit=self.limit, deadline_seconds=remaining()))
+            if self.openmetadata_port is not None and self.openmetadata_token:
+                # An OpenMetadata problem is reported in the outcome and never fails the pass, so Marquez delivery and collection continue.
+                try:
+                    outcome.update(
+                        box.deliver_openmetadata("127.0.0.1", self.openmetadata_port, self.openmetadata_token, limit=self.limit, deadline_seconds=remaining())
+                    )
+                except (OSError, LineageError) as error:
+                    outcome["om_error"] = type(error).__name__
         return outcome
 
     def run(self) -> None:
