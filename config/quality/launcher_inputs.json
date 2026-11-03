@@ -436,8 +436,7 @@
     "orchestration",
     "scripts/acquisition",
     "scripts/lakehouse",
-    "services/hai",
-    "uv.lock"
+    "services/hai"
   ],
   "files": [
     ".dvc/config",
@@ -1479,6 +1478,7 @@
     "services/orchestration/Dockerfile",
     "services/orchestration/docker-compose.orchestration.yaml",
     "services/orchestration/egress_proxy.json",
-    "services/training/docker-compose.training.yaml"
+    "services/training/docker-compose.training.yaml",
+    "uv.lock"
   ]
 }
