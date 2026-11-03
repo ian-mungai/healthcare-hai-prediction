@@ -39,7 +39,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher
-from orchestration.graph import ALL_SUCCESS, TaskNode, reference_graph, validate_transform_graph
+from orchestration.graph import ALL_SUCCESS, PIPELINE_CHAINS, TaskNode, reference_graph, validate_transform_graph
 from scripts.orchestration.broker import BrokerError, load_templates
 from scripts.process import run_command
 from scripts.quality.repo_checks import load_yaml
@@ -365,6 +365,54 @@ def lint() -> dict[str, dict[str, Any]]:
     return results
 
 
+def image_graph_names() -> set[str]:
+    """Read the image producer's literal case registry without importing Airflow."""
+    module = ast.parse((ROOT / IN_IMAGE).read_text())
+    functions = [node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "graph_cases"]
+    if len(functions) != 1:
+        raise ValueError("graph_cases declaration is unavailable")
+    registries = [
+        node.value
+        for node in functions[0].body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "cases" and isinstance(node.value, ast.Dict)
+    ]
+    if len(registries) != 1 or any(not isinstance(key, ast.Constant) or not isinstance(key.value, str) for key in registries[0].keys):
+        raise ValueError("graph_cases inventory must have literal names")
+    return {key.value for key in registries[0].keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+
+
+def image_report_problem(report: dict[str, Any]) -> str:
+    for name in ("dags", "graph_cases", "transform_graph", "constraints"):
+        if not isinstance(report.get(name), dict):
+            return f"IN_IMAGE report is missing the {name} mapping"
+    expected = image_graph_names()
+    if set(report["graph_cases"]) != expected:
+        missing = ", ".join(sorted(expected - set(report["graph_cases"]))) or "none"
+        return f"graph_cases inventory differs; missing {missing}"
+    if any(not isinstance(row, dict) or type(row.get("ok")) is not bool for row in report["graph_cases"].values()):
+        return "graph_cases report requires Boolean verdicts"
+    transform = report["transform_graph"]
+    if type(transform.get("present")) is not bool or not isinstance(transform.get("violations"), list):
+        return "transform graph report is incomplete"
+    if not transform["present"]:
+        pipelines = report.get("pipeline_graphs")
+        if not isinstance(pipelines, dict) or set(pipelines) != set(PIPELINE_CHAINS):
+            missing = ", ".join(sorted(set(PIPELINE_CHAINS) - set(pipelines or {}))) if isinstance(pipelines, dict) else ", ".join(PIPELINE_CHAINS)
+            return f"pipeline_graphs inventory differs; missing {missing or 'none'}"
+        if any(not isinstance(row, dict) or type(row.get("present")) is not bool or not isinstance(row.get("violations"), list) for row in pipelines.values()):
+            return "pipeline_graphs report is incomplete"
+    dags, pins = report["dags"], report["constraints"]
+    if not isinstance(dags.get("import_errors"), dict) or not isinstance(dags.get("dag_ids"), list):
+        return "IN_IMAGE DAG report is incomplete"
+    if not isinstance(pins.get("differing"), dict) or not isinstance(pins.get("unpinned"), list) or not isinstance(pins.get("build_tools"), dict):
+        return "IN_IMAGE constraints report is incomplete"
+    if not isinstance(pins.get("release", {}), dict) or not isinstance(pins.get("release_problems", []), list):
+        return "IN_IMAGE constraints release fields are malformed"
+    if any(not isinstance(tool, dict) or type(tool.get("ok")) is not bool for tool in pins["build_tools"].values()):
+        return "IN_IMAGE build_tools report requires Boolean verdicts"
+    return ""
+
+
 def in_image(platform: dict[str, Any], test_registry: str | None) -> dict[str, Any]:
     """The checks that need the built image, as launcher requests: its description, then the finite in-image check on no network."""
     client = launcher.load_client(test_registry)
@@ -383,7 +431,15 @@ def in_image(platform: dict[str, Any], test_registry: str | None) -> dict[str, A
     lines = [line for line in result.stdout.splitlines() if line.startswith("IN_IMAGE ")]
     if not result.ok or not lines:
         return {"error": (result.stderr or result.stdout)[-1000:], "reason": result.reason, "exit_code": result.exit_code, "image": description}
-    loaded: dict[str, Any] = json.loads(lines[-1].removeprefix("IN_IMAGE "))
+    if len(lines) != 1:
+        return {"error": "expected exactly one IN_IMAGE report", "image": description}
+    try:
+        loaded = json.loads(lines[0].removeprefix("IN_IMAGE "))
+        problem = image_report_problem(loaded) if isinstance(loaded, dict) else "IN_IMAGE report must be an object"
+    except (OSError, SyntaxError, ValueError) as error:
+        return {"error": f"IN_IMAGE report refused: {type(error).__name__}", "image": description}
+    if problem:
+        return {"error": problem, "image": description}
     loaded["image"] = description
     return loaded
 
@@ -444,20 +500,20 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
             found = image_problems(image["image"], platform)
             results["image labels, user and top layers"] = {"ok": not found, "problems": found}
             dags = image["dags"]
-            results["every DAG file imports in the image with no error or cycle"] = {"ok": not dags["import_errors"] and bool(dags["dag_ids"]), **dags}
+            results["every DAG file imports in the image with no error or cycle"] = {**dags, "ok": not dags["import_errors"] and bool(dags["dag_ids"])}
             results.update({f"graph (Airflow objects): {name}": case for name, case in image["graph_cases"].items()})
             transform = image["transform_graph"]
             if transform["present"]:
-                results["transform_dag passes the graph validator (Airflow object)"] = {"ok": not transform["violations"], **transform}
+                results["transform_dag passes the graph validator (Airflow object)"] = {**transform, "ok": not transform["violations"]}
             else:
                 for name, graph in image["pipeline_graphs"].items():
-                    results[f"{name} passes the graph validator (Airflow object)"] = {"ok": graph["present"] and not graph["violations"], **graph}
+                    results[f"{name} passes the graph validator (Airflow object)"] = {**graph, "ok": graph["present"] and not graph["violations"]}
             pins = image["constraints"]
             tools_ok = all(tool["ok"] for tool in pins["build_tools"].values())
             release_ok = not pins.get("release_problems") and set(pins.get("release", {})) == set(platform["airflow"]["release_packages"])
             results["image packages equal the constraints file and the release pins"] = {
-                "ok": not pins["differing"] and not pins["unpinned"] and tools_ok and release_ok,
                 **pins,
+                "ok": not pins["differing"] and not pins["unpinned"] and tools_ok and release_ok,
             }
     if "lint" in sections:
         results.update(lint())
