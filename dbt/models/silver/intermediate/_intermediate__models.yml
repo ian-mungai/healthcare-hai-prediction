@@ -540,7 +540,7 @@ models:
       Every period uses the enrollment's latest valid CCN, not a dated mapping, so a CCN change rewrites the earlier periods and their keys on the next build.
       The table records listings: a change of share or any other attribute of a listed owner opens no new version.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: ccn
         description: The latest valid CCN of the owner row's enrollment, not a CCN dated to the period.
@@ -570,7 +570,7 @@ models:
       layout before April 2025, is null; flags_published says whether the file has the private-equity column. Dates and
       shares are typed. Associate IDs that lost leading zeros are padded to 10 digits. Choosing a release for a hospital-year waits for the alignment step.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: owner_row_key
         description: File checksum and source row number.
@@ -625,7 +625,7 @@ models:
       party's enrollment state; the published values are kept and ccn_buyer_source and ccn_seller_source name the route.
       Associate IDs that lost leading zeros are padded to 10 digits.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: chow_row_key
         description: File checksum and source row number.
@@ -661,7 +661,7 @@ models:
       kept row's release (repeated_in_release). Values are compared as published through row lineage, so associate IDs
       123 and 0123 differ. A release with the same published values is not held.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: hold_key
         description: >
@@ -721,7 +721,7 @@ models:
       linkage (2023 and 2024). The criterion is true for Y, false for N and null when blank; the telephone column is left
       out.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: linkage_key
         description: Facility ID, program year, start and end dates and CHPL ID, joined by |.
@@ -735,7 +735,7 @@ models:
       One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart
       from the CHPL linkage, with no registry control.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: attestation_key
         description: File checksum and source row number.

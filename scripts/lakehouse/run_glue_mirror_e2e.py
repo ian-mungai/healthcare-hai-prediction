@@ -28,7 +28,7 @@ from scripts.lakehouse.gold_publish_record import PublishError
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
 PILOT = "bridge_county_neighbor"
-CONFIDENTIAL = "dim_state"
+SECOND_TABLE = "dim_state"
 RUN_ID = "20261030T120000Z-0123abcd"
 DIGEST = "a" * 64
 FIRST = f"s3://{BUCKET}/lakehouse/gold/{PILOT}/metadata/00001-aaaa.metadata.json"
@@ -109,7 +109,7 @@ def ids(names: Sequence[str], snapshot: int = 10) -> dict[str, int]:
 
 
 def hook(
-    ctx: gold_publish.Context, source: Any, glue: Any, config: Any = None, names: Sequence[str] = (PILOT, CONFIDENTIAL), snapshot: int = 10
+    ctx: gold_publish.Context, source: Any, glue: Any, config: Any = None, names: Sequence[str] = (PILOT, SECOND_TABLE), snapshot: int = 10
 ) -> dict[str, Any]:
     """The post-commit hook with the newest committed set stood in: the set the publish_runs table would name."""
     head = {"run_id": RUN_ID, "snapshot_set": ids(names, snapshot)}
@@ -127,12 +127,12 @@ def table_of(glue: FakeGlue, name: str = PILOT) -> dict[str, Any]:
 
 def case_first_publish_registers() -> Check:
     glue = FakeGlue()
-    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT, CONFIDENTIAL]), FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST}), glue)
+    report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT, SECOND_TABLE]), FakeSource({PILOT: FIRST, SECOND_TABLE: FIRST}), glue)
     table = glue.tables.get(("hai_mirror_gold", PILOT), {})
     parameters = table.get("Parameters", {})
     return {
-        "every_published_table_created": glue.writes() == [("create_table", "hai_mirror_gold", PILOT), ("create_table", "hai_mirror_gold", CONFIDENTIAL)],
-        "reported_ok": report.get("status") == "ok" and report.get("tables") == {PILOT: "created", CONFIDENTIAL: "created"},
+        "every_published_table_created": glue.writes() == [("create_table", "hai_mirror_gold", PILOT), ("create_table", "hai_mirror_gold", SECOND_TABLE)],
+        "reported_ok": report.get("status") == "ok" and report.get("tables") == {PILOT: "created", SECOND_TABLE: "created"},
         "points_at_polaris_file": parameters.get("metadata_location") == FIRST,
         "marked_iceberg_and_mirror": parameters.get("table_type") == "ICEBERG" and parameters.get("hai_mirror") == "true",
         "location_is_table_folder": table.get("StorageDescriptor", {}).get("Location") == f"s3://{BUCKET}/lakehouse/gold/{PILOT}",
@@ -196,7 +196,7 @@ def case_missing_database_says_so() -> Check:
 def context(directory: Path, namespace: str = "gold", mode: str = "real") -> gold_publish.Context:
     plan = replace(
         gold_publish.load_plan(),
-        tables={PILOT: ("county_sk", "neighbor_sk"), CONFIDENTIAL: ("state_sk",)},
+        tables={PILOT: ("county_sk", "neighbor_sk"), SECOND_TABLE: ("state_sk",)},
         namespaces={"publish_fixture": f"{namespace}_e2e", "real": namespace},
     )
     return gold_publish.Context(None, plan, RUN_ID, mode, directory, DIGEST, accepted_result_sha256=DIGEST, needs_sealed=True)
@@ -225,19 +225,19 @@ def case_hook_never_fails_the_publish() -> Check:
 
 def case_hook_repeat_is_a_no_op() -> Check:
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
-        ctx, glue, source = context(Path(directory)), FakeGlue(), FakeSource({PILOT: FIRST, CONFIDENTIAL: FIRST})
+        ctx, glue, source = context(Path(directory)), FakeGlue(), FakeSource({PILOT: FIRST, SECOND_TABLE: FIRST})
         first = hook(ctx, source, glue)
         glue.calls.clear()
         again = hook(ctx, source, glue)
         return {
-            "first_created": first.get("tables") == {PILOT: "created", CONFIDENTIAL: "created"},
+            "first_created": first.get("tables") == {PILOT: "created", SECOND_TABLE: "created"},
             "repeat_writes_nothing": glue.writes() == [],
             "repeat_unchanged": again.get("status") == "unchanged",
         }
 
 
-SECOND_OF = {name: FIRST.replace(PILOT, name).replace("00001-aaaa", "00002-bbbb") for name in (PILOT, CONFIDENTIAL)}
-FIRST_OF = {name: FIRST.replace(PILOT, name) for name in (PILOT, CONFIDENTIAL)}
+SECOND_OF = {name: FIRST.replace(PILOT, name).replace("00001-aaaa", "00002-bbbb") for name in (PILOT, SECOND_TABLE)}
+FIRST_OF = {name: FIRST.replace(PILOT, name) for name in (PILOT, SECOND_TABLE)}
 
 
 def later_failed_publish_source() -> FakeSource:
@@ -382,7 +382,7 @@ def case_a_write_is_refused_when_the_deadline_passes_as_it_starts() -> Check:
 
 def case_later_tables_are_not_attempted_after_the_deadline() -> Check:
     glue = FakeGlue()
-    names = [PILOT, CONFIDENTIAL, "dim_hospital"]
+    names = [PILOT, SECOND_TABLE, "dim_hospital"]
     source = SlowSource({name: FIRST for name in names}, delay=0.15)
     report = glue_mirror.mirror(short(0.4), "gold", "real", ids(names), source, glue, RUN_ID)
     time.sleep(0.8)
@@ -398,7 +398,7 @@ def case_hook_deadline_starts_at_entry() -> Check:
 
     def slow_head(ctx: Any) -> dict[str, Any]:
         time.sleep(0.6)
-        return {"run_id": RUN_ID, "snapshot_set": ids([PILOT, CONFIDENTIAL])}
+        return {"run_id": RUN_ID, "snapshot_set": ids([PILOT, SECOND_TABLE])}
 
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory, mock.patch.object(gold_publish, "published_head", side_effect=slow_head):
@@ -486,13 +486,13 @@ def case_bronze_and_other_layers_touch_nothing() -> Check:
     }
 
 
-def case_confidential_gold_table_is_mirrored() -> Check:
+def case_second_gold_table_is_mirrored() -> Check:
     glue = FakeGlue()
-    published = [PILOT, CONFIDENTIAL, "dim_hospital"]
+    published = [PILOT, SECOND_TABLE, "dim_hospital"]
     report = glue_mirror.mirror(enabled(), "gold", "real", ids(published), FakeSource({name: FIRST for name in published}), glue)
     return {
         "all_three_created": sorted(table for (_, table) in glue.tables) == sorted(published),
-        "confidential_dimension_created": ("create_table", "hai_mirror_gold", CONFIDENTIAL) in glue.calls,
+        "second_dimension_created": ("create_table", "hai_mirror_gold", SECOND_TABLE) in glue.calls,
         "reported_ok": report.get("status") == "ok",
     }
 
@@ -607,7 +607,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "disabled_touches_nothing": case_disabled_touches_nothing,
     "test_namespace_touches_nothing": case_test_namespace_touches_nothing,
     "bronze_and_other_layers_touch_nothing": case_bronze_and_other_layers_touch_nothing,
-    "confidential_gold_table_is_mirrored": case_confidential_gold_table_is_mirrored,
+    "second_gold_table_is_mirrored": case_second_gold_table_is_mirrored,
     "other_layers_touch_nothing": case_other_layers_touch_nothing,
     "foreign_table_is_refused": case_foreign_table_is_refused,
     "other_pointers_are_refused": case_other_pointers_are_refused,

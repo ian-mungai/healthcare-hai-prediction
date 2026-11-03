@@ -1,9 +1,10 @@
 """Run one OpenMetadata ingestion source of the catalog task, after proving its configuration has no profiler and no sampling.
 
 Runs inside the ingestion image as ``python openmetadata_ingest.py polaris|dbt --config-dir D --token-file F --work-dir W``. It refuses a configuration that
-profiles, samples or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables hold Confidential
-copies, which is why this guard exists beside the read-only role and the server setting that disables ingestion pipelines. Exit codes: 0 done, 1 the run
-failed, 2 the configuration was refused. Output names variables and exception classes and never prints a value.
+profiles, samples or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables can hold personal
+fields outside the Public research-data scope, which is why this guard exists beside the read-only role and the server setting that disables
+ingestion pipelines. Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a
+value.
 """
 
 from __future__ import annotations

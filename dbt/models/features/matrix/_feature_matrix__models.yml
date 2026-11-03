@@ -7,7 +7,7 @@ models:
       Wide table of the hospital window family, one row per hospital-window (spine key), built from int_hospital_spine.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -69,7 +69,7 @@ models:
       Wide table of the care compare family, one row per hospital-window (spine key), built from int_spine_care_compare_measures.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -254,7 +254,7 @@ models:
       Wide table of the hospital family, one row per hospital-window (spine key), built from int_spine_hospital_measures.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -562,7 +562,7 @@ models:
       Wide table of the operations family, one row per hospital-window (spine key), built from int_spine_operations_measures.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -741,7 +741,7 @@ models:
       Wide table of the county measures family, one row per hospital-window (spine key), built from int_spine_county_measures.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1340,7 +1340,7 @@ models:
       Wide table of the county context family, one row per hospital-window (spine key), built from int_spine_county_context.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1819,7 +1819,7 @@ models:
       Wide table of the hai outcomes family, one row per hospital-window (spine key), built from int_spine_hai_outcomes.
       Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar

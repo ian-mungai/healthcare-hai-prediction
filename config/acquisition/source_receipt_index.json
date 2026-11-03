@@ -2,7 +2,7 @@
   "index_version": 1,
   "generated_by": "scripts/acquisition/source_receipt_index.py",
   "generated_from": {
-    "log_sha256": "02813002256bfe2e788b7868eb8d8157cfdb7f963ca6ebd0e56146a243666d09"
+    "log_sha256": "8302d3f4185c15846f0e3454e6475f3c160f2d3ae32702243c12266c0e9b7476"
   },
   "rows": [
     {
@@ -51,7 +51,7 @@
     },
     {
       "dataset_id": "CA",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 328,
       "receipt_set_sha256": "239e455d7cc99dbaeade617f5f1257379938bce821debf9ca8992ff0150b5b11",
       "newest_receipt_sha256": "b444b66dc443080c441424b02e38f72622cdb9c2aa2eb8d364ed079c8ee3d6e5",
@@ -128,7 +128,7 @@
     },
     {
       "dataset_id": "CMS_CHOW",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 24,
       "receipt_set_sha256": "06101e374fddfeef29fc96034c89054e65e2ea2051f062e2fcc081e1829236f6",
       "newest_receipt_sha256": "2d2e9a3e32ac9c89de92ad677c7a69c32503ee38141382452ed9647130b9a350",
@@ -194,7 +194,7 @@
     },
     {
       "dataset_id": "CMS_OWNERS",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 51,
       "receipt_set_sha256": "b8a4393062937a5cc9223746e667fd1beb57dfb28c30d5b07db6357c66fa43a4",
       "newest_receipt_sha256": "3141998768443956c9dd611a9757e6ca3126331e5025a29a4fd302064d8efc23",
@@ -216,7 +216,7 @@
     },
     {
       "dataset_id": "ENROLL",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 48,
       "receipt_set_sha256": "123a9cf7a914661d8b960fbbb2e39de23596156840ef8c70577cf6317afe0312",
       "newest_receipt_sha256": "76b9e1c64d787bb6ba937a3a263f305288d3c9a9eef61d0cb9e489d76fd26b29",
@@ -227,7 +227,7 @@
     },
     {
       "dataset_id": "HCAI_FINANCE",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 62,
       "receipt_set_sha256": "344bd248a8270063bd58370b3dcee565f18ea9815ffabf904c0a991c2ba66997",
       "newest_receipt_sha256": "27aaac34f06251d0621e94bbbcd4c8341b3fe9c47f42ee2b9da902b825d7a380",
@@ -238,7 +238,7 @@
     },
     {
       "dataset_id": "HCAI_UTIL",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 36,
       "receipt_set_sha256": "918493977b0e5ac1cfa3fbcb55e5f7d23654fa162ad21e6cd561bafbcd908941",
       "newest_receipt_sha256": "24e054d02aa8221f4837dc92924b44fc67c539c64b8f9ae5cb4880804f299edc",
@@ -436,7 +436,7 @@
     },
     {
       "dataset_id": "ONC_PI",
-      "data_class": "Confidential",
+      "data_class": "Public",
       "receipt_count": 2,
       "receipt_set_sha256": "90a0870b58a3b2016fdb5c0171391d7a64cc2b47fc45b9faaf42cb5d711e6203",
       "newest_receipt_sha256": "39ccd9747b8f6c0c757ae84bc8bb12517bd1ab3fb21a62a0981bf342cf65dd74",

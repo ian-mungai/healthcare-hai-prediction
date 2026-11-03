@@ -16,9 +16,8 @@
         "reason": "HCRIS cost-report files. Hospital-level financial data with no personal field documented."
       },
       "cms/hospital_ownership": {
-        "class": "Confidential",
-        "reason": "The Hospital All Owners files name individual owners and the stored copy is the privacy-filtered derivative. The collection also holds the Change of Ownership and Enrollments files and the dictionaries, which have table overrides.",
-        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+        "class": "Public",
+        "reason": "The Hospital All Owners files name individual owners and the stored copy is the privacy-filtered derivative. The collection also holds the Change of Ownership and Enrollments files and the dictionaries, which have table overrides. Public research data (owner, decision 158); the personal original stays local with owner-only access."
       },
       "cms/medicare_inpatient": {
         "class": "Public",
@@ -97,9 +96,8 @@
         "reason": "Facility-level weekly capacity counts with small values suppressed. Facility fields are organizational."
       },
       "onc/promoting_interoperability": {
-        "class": "Confidential",
-        "reason": "The meaningful-use attestation file lists clinicians beside hospitals and the stored copy keeps hospital rows only. The collection also holds the CHPL linkage file, which has a table override.",
-        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+        "class": "Public",
+        "reason": "The meaningful-use attestation file lists clinicians beside hospitals and the stored copy keeps hospital rows only. The collection also holds the CHPL linkage file, which has a table override. Public research data (owner, decision 158); the personal original stays local with owner-only access."
       },
       "hrsa/shortage_areas": {
         "class": "Public",
@@ -118,14 +116,12 @@
         "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
       },
       "california_hcai/hospital_finance": {
-        "class": "Confidential",
-        "reason": "HCAI annual financial files name hospital chief executives. The untouched download stays local and only the privacy-filtered derivative is stored.",
-        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+        "class": "Public",
+        "reason": "HCAI annual financial files name hospital chief executives. The untouched download stays local and only the privacy-filtered derivative is stored. Public research data (owner, decision 158); the personal original stays local with owner-only access."
       },
       "california_hcai/hospital_utilization": {
-        "class": "Confidential",
-        "reason": "HCAI annual utilization workbooks. Personal columns and individual-owner details are replaced with [REDACTED] in the stored derivative.",
-        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+        "class": "Public",
+        "reason": "HCAI annual utilization workbooks. Personal columns and individual-owner details are replaced with [REDACTED] in the stored derivative. Public research data (owner, decision 158); the personal original stays local with owner-only access."
       },
       "illinois/hospital_report_card": {
         "class": "Public",
@@ -292,9 +288,8 @@
         "file_pattern": "(?i)CHOW_Data_Dictionary"
       },
       "classification": {
-        "class": "Confidential",
-        "reason": "Buyer and seller organization records. The dictionary does not rule out an individual buyer or seller (owner decision).",
-        "exception": "Stored whole in the Confidential bucket; the publisher dictionary does not rule out an individual buyer or seller (docs/data_collection.md, Privacy Handling)"
+        "class": "Public",
+        "reason": "Buyer and seller organization records. The dictionary does not rule out an individual buyer or seller (owner decision). Public research data (owner, decision 158); the personal original stays local with owner-only access."
       }
     },
     {
@@ -1501,9 +1496,8 @@
         "cp1252"
       ],
       "classification": {
-        "class": "Confidential",
-        "reason": "No publisher dictionary is stored for this file, so nothing rules out personal fields (owner decision).",
-        "exception": "Stored whole in the Confidential bucket; no publisher dictionary is stored to rule out personal fields (docs/data_collection.md, Privacy Handling)"
+        "class": "Public",
+        "reason": "No publisher dictionary is stored for this file, so nothing rules out personal fields (owner decision). Public research data (owner, decision 158); the personal original stays local with owner-only access."
       }
     },
     {

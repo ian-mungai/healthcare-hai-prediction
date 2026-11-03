@@ -211,7 +211,7 @@ models:
       step 7.3). Owner IDs are padded to 10 digits (failure mode 714). One missing release is bridged, never a held
       one, and counted in bridged_releases (owner decision Oct 10 2026, failure mode 715).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: enrollment_id
         data_type: varchar
@@ -274,7 +274,7 @@ models:
       snapshot closes it. A snapshot that lists one CCN with disagreeing values is held for that snapshot. Values as
       published; fills stay on the spine (silver step 7.3, failure modes 670 to 677).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: ccn
         data_type: varchar
@@ -352,7 +352,7 @@ models:
       CCN's SSA state code are never used. Connecticut windows also get their planning region when the ZIP lies in one
       region. A ZIP split across counties or regions gives none (failure modes 612 to 618, 631, 698 and 701).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: ccn
         data_type: varchar
@@ -522,7 +522,7 @@ models:
       codes and the spine's population flags. Parts from releases after the last 2015-baseline review are held and
       counted. Every type stays separate; no target is chosen here.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: ccn
         data_type: varchar
@@ -655,7 +655,7 @@ models:
       L001: the hospital's service-area ZIPs and cases in the latest data year before the window, suppressed rows left
       out. Linkage only, never a predictor (failure mode 638).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1051,7 +1051,7 @@ models:
       and window have no exact-ID row (the gold window facts already carry it); tokens stay text with a null number
       (failure modes 629 and 630). Controls C289, C290, C291 and children, comparison_only.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: measure_control
         data_type: varchar
@@ -1106,7 +1106,7 @@ models:
       control bridge names (source_seed validation_measures); tokens and the reviewed odd value stay text with a null
       number.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: measure_control
         data_type: varchar
@@ -1159,7 +1159,7 @@ models:
       release dated before the start, and two files on one date that disagree are held. Values stay as published with
       each row's age in months; C141's spellings map to one category each. No age limit and no eligibility choice.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1265,7 +1265,7 @@ models:
       final stage), the data year or the survey. Values that disagree for one period are held; occupational-mix copies
       within 0.0001 count as one value. Age in months, no limit; no eligibility choice.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1364,7 +1364,7 @@ models:
       enrollment CCN, private equity and REIT flags from ownership roles only (Y or not_reported). Change of
       ownership: events in the year before the start (C069) and months since the latest (C070).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1452,7 +1452,7 @@ models:
       Validation outcomes are compared with the HAI window, never used to predict it: no predictor model reads this
       table.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1546,7 +1546,7 @@ models:
       each data year. WONDER 2018 to 2020 from the single-race database. Connecticut matches on its old county or its
       planning region.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar
@@ -1635,7 +1635,7 @@ models:
       in int_spine_linkage. Counties come from the filled spine; Connecticut matches on its old county or its planning
       region (failure modes 604 to 611 and 634 to 637).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: spine_key
         data_type: varchar

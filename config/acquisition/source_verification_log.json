@@ -205,7 +205,7 @@
         "text": "Public source; no account, purchase or private access used.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "not recorded",
@@ -468,7 +468,7 @@
         "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "not recorded",
@@ -684,7 +684,7 @@
         "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "not recorded",
@@ -756,7 +756,7 @@
         "text": "Public source; no account, purchase or private access used.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "not recorded",
@@ -792,7 +792,7 @@
         "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "not recorded",
@@ -829,7 +829,7 @@
         "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "2026-10-02",
@@ -1499,7 +1499,7 @@
         "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
         "source": "registry validation.reviewed_access_terms"
       },
-      "data_class": "Confidential",
+      "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
         "date": "not recorded",

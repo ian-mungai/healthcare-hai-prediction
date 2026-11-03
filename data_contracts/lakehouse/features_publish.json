@@ -1,5 +1,5 @@
 {
-  "classification": "Confidential",
+  "classification": "Public",
   "note": "Publication contract of the features layer (design p3c/design.md section 1.1). Same shape as the publish entry of silver_publish.json. The static case E02 of scripts/features/run_feature_store_e2e.py compares this table list with data_contracts/features/feature_schema.json, the feature models and the Great Expectations suite data_contracts/great_expectations/features.",
   "publish": {
     "backup_prefix": "lakehouse/features/catalog_backups/",

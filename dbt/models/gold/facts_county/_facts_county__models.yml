@@ -332,7 +332,7 @@ models:
   - name: fct_hsa_zip_cases
     description: One row per row of int_hsa_zip_cases, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hsa_row_key
@@ -419,7 +419,7 @@ models:
   - name: fct_hud_zip_county_hold
     description: One row per row of int_hud_zip_county_holds, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hud_row_key
@@ -822,7 +822,7 @@ models:
   - name: fct_rucc_county
     description: One row per row of int_rucc_county_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: rucc_key
