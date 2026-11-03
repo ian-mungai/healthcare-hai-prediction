@@ -71,7 +71,8 @@ class StandInHost:
     ``other_provider`` (it reports another capacity provider's name),
     ``throttle:<n>`` (the next n describe calls fail), ``api_error`` (every describe call fails) and
     ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt), ``signal_run_task`` (a run-task call receives a real SIGTERM),
-    ``second_signal:<name>`` (the cleanup's set-desired-capacity call to 0 receives a real SIGINT, SIGTERM or SIGHUP once),
+    ``interrupt_catalog_stop`` (the call that scales the catalog service to zero raises KeyboardInterrupt), ``signal_catalog_stop`` (it receives a real
+    SIGTERM), ``second_signal:<name>`` (the cleanup's set-desired-capacity call to 0 receives a real SIGINT, SIGTERM or SIGHUP once),
     ``lose_run_task_reply[:<n>]`` (the next n run-task calls start their task but time out before the reply; one when n is absent),
     ``stale_list_tasks`` (list-tasks never shows a task), ``slow_calls:<n>`` (every describe and list call takes n virtual seconds and
     times out when its limit is shorter) and ``leaky_reasons`` (every provider reason holds an ARN, an instance ID and an account ID).
@@ -188,6 +189,11 @@ class StandInHost:
         if operation == "run-task" and "interrupt_run_task" in self.faults:
             raise KeyboardInterrupt
         if operation == "run-task" and "signal_run_task" in self.faults:
+            signal.raise_signal(signal.SIGTERM)
+        scaling_down = operation == "update-service" and options.get("--desired-count") == ["0"]
+        if scaling_down and "interrupt_catalog_stop" in self.faults:
+            raise KeyboardInterrupt
+        if scaling_down and "signal_catalog_stop" in self.faults:
             signal.raise_signal(signal.SIGTERM)
         second = next((fault for fault in self.faults if fault.startswith("second_signal:")), None)
         if second and operation == "set-desired-capacity" and options.get("--desired-capacity") == ["0"]:

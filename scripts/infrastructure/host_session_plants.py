@@ -31,6 +31,14 @@ PLANTS: dict[str, tuple[str, str]] = {
         '        except HostSessionError:\n            self.stop_after_failure("start", keep_on)\n            raise',
     ),
     "ignores the termination signal": ("raise TerminationRequested(signal.Signals(number).name)", "return"),
+    "skips host off after an interrupted catalog drain": (
+        "        try:\n            self.openmetadata_stop()\n        finally:\n            with deferred_signals(self.step):\n                self.host_off()",
+        "        self.openmetadata_stop()\n        self.host_off()",
+    ),
+    "lets a signal cut the host off after a catalog drain": (
+        "        finally:\n            with deferred_signals(self.step):\n                self.host_off()\n\n    def stop_after_failure",
+        "        finally:\n            self.host_off()\n\n    def stop_after_failure",
+    ),
     "launches without a client token": ('            "--client-token",\n            token,\n', ""),
     "keeps the token after a confirmed launch": ("            del self.launch_tokens[key]\n            return launched", "            return launched"),
     "treats a lost reply as absent": ("if UNCONFIRMED not in str(error):", "if True:"),
@@ -73,7 +81,7 @@ def caught(source: str) -> bool:
         try:
             if not all(function().values()):
                 return True
-        except cases.CASE_ERRORS:
+        except (*cases.CASE_ERRORS, KeyboardInterrupt, planted.TerminationRequested):
             return True
     return False
 

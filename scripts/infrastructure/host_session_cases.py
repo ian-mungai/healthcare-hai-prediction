@@ -547,6 +547,40 @@ def stop_without_the_catalog_only_turns_the_host_off() -> dict[str, bool]:
     return {"stop only sets the capacity to zero": new == ["set-desired-capacity"], "the host is off": host.desired == 0 and host.instance_up_at is None}
 
 
+def interrupted_catalog_stop() -> dict[str, bool]:
+    module = session_module()
+    restore = module.install_termination_handler()
+    checks = {}
+    try:
+        for name, fault, expected in (("SIGINT", "interrupt_catalog_stop", "KeyboardInterrupt"), ("SIGTERM", "signal_catalog_stop", "TerminationRequested")):
+            host, session, lines = build(openmetadata=True)
+            session.start()
+            host.faults.add(fault)
+            raised = None
+            try:
+                session.stop()
+            except (KeyboardInterrupt, module.TerminationRequested) as error:
+                raised = type(error).__name__
+            checks[f"a {name} during the catalog drain propagates"] = raised == expected
+            checks[f"a {name} during the catalog drain still turns the host off and verifies it"] = host.desired == 0 and host.instance_up_at is None
+        second_host, second, second_lines = build(openmetadata=True)
+        second.start()
+        second_host.faults.add("second_signal:SIGINT")
+        try:
+            second.stop()
+        except KeyboardInterrupt:
+            second_lines.append("stop cut short by SIGINT")
+        checks["a SIGINT while the host goes off is deferred and the stop completes"] = (
+            second_host.desired == 0
+            and second_host.instance_up_at is None
+            and any("signal_deferred" in line for line in second_lines)
+            and "stop cut short by SIGINT" not in second_lines
+        )
+    finally:
+        restore()
+    return checks
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "happy_start": happy_start,
     "registration_timeout": registration_timeout,
@@ -578,4 +612,5 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "openmetadata_that_will_not_stop_does_not_hold_the_host": openmetadata_that_will_not_stop_does_not_hold_the_host,
     "openmetadata_restart_after_a_stop": openmetadata_restart_after_a_stop,
     "stop_without_the_catalog_only_turns_the_host_off": stop_without_the_catalog_only_turns_the_host_off,
+    "interrupted_catalog_stop": interrupted_catalog_stop,
 }
