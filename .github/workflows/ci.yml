@@ -260,7 +260,7 @@ jobs:
             timeout: 20  # max 12.2 min
           - layer: Silver
             part: silver
-            timeout: 5  # max 3.3 min
+            timeout: 10  # max 3.3 min on main (Oct 28 2026); 5.5 min with the build marker cases on PR 72 run 41521618599, cut at 5
           # The gold layer's model metadata E2E, its longest command, runs in the gold_metadata job; writer_setup has timing assertions and runs
           # alone, before the other gold commands of this job.
           - layer: Gold
