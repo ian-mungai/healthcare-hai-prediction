@@ -76,6 +76,7 @@ COPIED = (
     ".yamllint",
     "README.md",
     "config/quality/ci_groups.json",
+    "config/quality/job_durations.json",
     "config/quality/launcher_inputs.json",
     "config/quality/feature_cases.json",
     "scripts/lakehouse/feature_shards.py",
