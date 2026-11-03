@@ -51,13 +51,12 @@ import os
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
 
-from scripts.process import CompletedProcess, TimeoutExpired, run_command
+from scripts.process import CompletedProcess, LaunchesNotStopped, LaunchPool, ProcessGroupSurvived, TimeoutExpired, run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
@@ -78,6 +77,9 @@ EXECUTION_CONTROLS = (
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
+    "CI_WORKER_LIMIT_SECONDS",
+    "CI_WORKER_GRACE_SECONDS",
+    "PROCESS_LAUNCH_SESSION",
     "RANGE_START",
     "RANGE_END",
     "LAUNCHER_SHARD",
@@ -299,6 +301,8 @@ def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
     try:
         result = launch(root, step, environment)
         code, text = result.returncode, result.stdout + result.stderr
+    except ProcessGroupSurvived as survived:
+        code, text, error = 1, "", f"step {step['name']} exceeded its deadline of {step['timeout_seconds']} seconds and its stop is not confirmed: {survived}"
     except TimeoutExpired:
         code, text, error = 1, "", f"step {step['name']} exceeded its deadline of {step['timeout_seconds']} seconds and was stopped"
     except FileNotFoundError as missing:
@@ -320,12 +324,22 @@ def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dic
     steps = [step for step in steps if step["kind"] != "run_ci"]
     serial = [step for step in steps if step["kind"] in SERIAL_KINDS]
     jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])
-    finished = []
+    finished: list[list[dict[str, Any]]] | None = None
+    unstopped = ""
     if jobs:
-        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
-    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in [completed, *finished] for row in job}
-    return [rows[step["name"]] for step in planned]
+        try:
+            with LaunchPool(max_workers=len(jobs)) as pool:
+                finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
+        except LaunchesNotStopped as failure:
+            # The pool is left with a stop that was not confirmed. Without results (an interrupt) the failure goes to the caller; with them it is a failing row.
+            if finished is None:
+                raise
+            unstopped = str(failure)
+    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in [completed, *(finished or [])] for row in job}
+    results = [rows[step["name"]] for step in planned]
+    if unstopped:
+        results.append({"name": "stop_confirmation", "exit": 1, "seconds": 0.0, "output": "", "error": unstopped})
+    return results
 
 
 def release(root: Path, started: float, registry: str = "") -> dict[str, Any]:

@@ -1925,6 +1925,8 @@ def timeout_cases() -> list[dict[str, Any]]:
 
 
 WORKER_KINDS = (
+    # The SDK runtime commands of the offline orchestration group run alone before the other items.
+    "orchestration_checks_sdk_runtime",
     "lakehouse_gold_checks",
     "lakehouse_gold_writer_setup",
     "lakehouse_gold_model_metadata_e2e",
@@ -4457,7 +4459,7 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
             "case": "run_ci_finish_releases_after_the_scratch_folder_and_the_trap_keeps_its_rule",
             "passed": "release_docker" in finish
             and ci.index("ci_started=") < ci.index("trap 'finish;")
-            and "trap 'finish; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
+            and "trap 'finish; end_unconfirmed; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
         }
     )
     planted = release_docker_run(

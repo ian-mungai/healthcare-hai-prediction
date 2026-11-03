@@ -282,5 +282,99 @@
       "range": 2700,
       "full": 3600
     }
+  },
+  "worker_limits": {
+    "python_lint": {
+      "job": "Local CI Core",
+      "minutes": 45
+    },
+    "orchestration_checks": {
+      "job": "Local CI Core",
+      "minutes": 45
+    },
+    "repository_code_checks": {
+      "job": "Local CI Core",
+      "minutes": 45
+    },
+    "configuration_checks": {
+      "job": "Local CI Core",
+      "minutes": 45
+    },
+    "sql_style": {
+      "job": "Local CI Core",
+      "minutes": 45
+    },
+    "terraform_checks": {
+      "job": "Local CI Core",
+      "minutes": 45
+    },
+    "reuse_gate_checks": {
+      "job": "CI Reuse and Gate E2E",
+      "minutes": 12
+    },
+    "lakehouse_bronze": {
+      "job": "Lakehouse Bronze Checks",
+      "minutes": 20
+    },
+    "lakehouse_silver": {
+      "job": "Lakehouse Silver Checks",
+      "minutes": 10
+    },
+    "lakehouse_gold_checks": {
+      "job": "Lakehouse Gold Checks",
+      "minutes": 25
+    },
+    "lakehouse_gold_writer_setup": {
+      "job": "Lakehouse Gold Checks",
+      "minutes": 25
+    },
+    "lakehouse_gold_model_metadata_e2e": {
+      "job": "Lakehouse Gold Model Metadata E2E",
+      "minutes": 30
+    },
+    "lakehouse_features_sources": {
+      "job": "Feature Sources (Shard 1 of 8)",
+      "minutes": 30
+    },
+    "lakehouse_features_columns": {
+      "job": "Feature Columns (Shard 1 of 4)",
+      "minutes": 30
+    },
+    "combine_feature_sources": {
+      "job": "Feature Combined Evidence",
+      "minutes": 10
+    },
+    "combine_feature_columns": {
+      "job": "Feature Combined Evidence",
+      "minutes": 10
+    },
+    "hook_privacy": {
+      "job": "Repository Hooks (privacy)",
+      "minutes": 12
+    },
+    "hook_documentation": {
+      "job": "Repository Hooks (documentation)",
+      "minutes": 30
+    },
+    "hook_code": {
+      "job": "Repository Hooks (code)",
+      "minutes": 40
+    },
+    "hook_samples": {
+      "job": "Repository Hooks (samples)",
+      "minutes": 20
+    },
+    "acquisition_shard": {
+      "job": "Acquisition Checks (Shard 1 of 4)",
+      "minutes": 30
+    },
+    "acquisition_combine": {
+      "job": "Acquisition Checks",
+      "minutes": 10
+    },
+    "orchestration_checks_sdk_runtime": {
+      "job": "Local CI Core",
+      "minutes": 45
+    }
   }
 }

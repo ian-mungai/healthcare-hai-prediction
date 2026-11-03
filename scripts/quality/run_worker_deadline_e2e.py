@@ -59,8 +59,12 @@ GRACE_SECONDS = 1
 RUN_TIMEOUT_SECONDS = 20
 # The stand-in Python launcher: the plan lists the groups of STUB_GROUPS, every other module succeeds, and -c code (the dispatcher's JSON reads) runs for real.
 STUB_PYTHON = f"""#!/bin/bash
-if [ -n "${{STUB_ALIGN_FRACTION:-}}" ] && [ "$1" = -c ] && [[ "$2" == *worker_limits* ]]; then
-  {PYTHON} -c "import time; time.sleep(($STUB_ALIGN_FRACTION - time.time() % 1) % 1)"
+# The first worker besides the exclusive SDK runtime item starts late in a wall-clock second (STUB_ALIGN_FRACTION), whatever that item took.
+if [ -n "${{STUB_ALIGN_FRACTION:-}}" ] && [ "$1" = -I ] && [ "$2" = -c ] && [[ "$3" == *os.setsid* ]]; then
+  if [[ "$*" != *orchestration_checks_sdk_runtime* ]] && [ ! -e "$STUB_DIR/aligned" ]; then
+    touch "$STUB_DIR/aligned"
+    {PYTHON} -c "import time; time.sleep(($STUB_ALIGN_FRACTION - time.time() % 1) % 1)"
+  fi
 fi
 if [ "$1" = -m ]; then
   if [ "$2" = scripts.quality.ci_groups ]; then
@@ -177,6 +181,8 @@ GROUP_BODIES = {
     "python_lint": 'python_lint() { timed "stub: python_lint" bash "$STUB_DIR/$STUB_PYTHON_LINT.sh" python_lint; }\n',
     "orchestration_checks": (
         'orchestration_checks() { timed "stub: orchestration_checks" bash "$STUB_DIR/${STUB_ORCHESTRATION:-quick}.sh" orchestration_checks; }\n'
+        # The dispatcher runs the SDK runtime commands of this group as their own exclusive item before the other workers.
+        'orchestration_checks_sdk_runtime() { timed "stub: SDK runtime" true; }\n'
     ),
 }
 
