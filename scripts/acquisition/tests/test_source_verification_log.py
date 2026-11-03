@@ -59,10 +59,11 @@ def test_rows_cover_bronze_sources_validation_only_and_rejected(built: dict[str,
     check({row["status"] for row in built["rows"]} <= set(log_module.STATUSES), "{row['status'] for row in built['rows']} <= set(log_module.STATUSES)")
 
 
-def test_confidential_sources_are_classed_and_carry_no_personal_field(built: dict[str, Any]) -> None:
+def test_research_sources_are_public_and_carry_no_personal_field(built: dict[str, Any]) -> None:
     rows = rows_by_id(built)
     for source_id in ("CMS_OWNERS", "CMS_CHOW", "HCAI_FINANCE", "HCAI_UTIL"):
-        check(rows[source_id]["data_class"] == "Confidential", "rows[source_id]['data_class'] == 'Confidential'")
+        check(rows[source_id]["data_class"] == "Public", "rows[source_id]['data_class'] == 'Public'")
+    check(not [row["dataset_id"] for row in built["rows"] if row["data_class"] == "Confidential"], "no research source is Confidential")
     for row in built["rows"]:
         check(set(row) <= set(log_module.ROW_FIELDS), "set(row) <= set(log_module.ROW_FIELDS)")
 

@@ -626,7 +626,7 @@ def render_yaml(schema: dict[str, Any]) -> str:
             f"      Wide table of the {table['family'].replace('_', ' ')} family, one row per hospital-window (spine key), built from {table['long_table']}.",
             "      Published to the features namespace and registered with Feast (feature_store/definitions.py). A missing value is null, never zero.",
             "    meta:",
-            "      classification: Confidential",
+            "      classification: Public",
             "    columns:",
         ]
         for column in table["columns"]:

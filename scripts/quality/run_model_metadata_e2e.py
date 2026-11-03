@@ -52,6 +52,15 @@ LINEAGE_SQL = "dbt/models/silver/staging/stg_bronze__file_copies.sql"
 OTHER_SOURCES = "dbt/models/silver/staging/zz_other_sources.yml"
 PUBLIC = "    meta:\n      classification: Public\n"
 CONFIDENTIAL = "    meta:\n      classification: Confidential\n"
+FUTURE_SOURCE = "raw_future_restricted"
+FUTURE_STAGING = "dbt/models/silver/staging/stg_raw_future_restricted.sql"
+FUTURE_INTERMEDIATE = "dbt/models/silver/intermediate/int_future_restricted.sql"
+OUTSIDE_PUBLIC_SCOPE: tuple[str, ...] = ()
+REPOSITORY_LABEL_FILES = (
+    "config/lakehouse/bronze_tables.json",
+    "data_contracts/lakehouse/silver_publish.json",
+    "data_contracts/lakehouse/features_publish.json",
+)
 ONC_PROPOSALS = {
     "onc_pi_attestations_csv": ("npi", "specialty"),
     "onc_pi_chpl_linkage_csv": ("facility_id", "facility_name", "address", "city_town", "zip_code", "telephone_number", "developer_name"),
@@ -259,6 +268,72 @@ def review_probes() -> list[Case]:
                 )
             )
     return cases
+
+
+def future_source_files(source_class: str = "Confidential", staging_class: str = "Confidential", intermediate_class: str = "Confidential") -> dict[str, str]:
+    """A synthetic future source outside the Public scope: its own collection, bronze table, source entry, staged model and reader."""
+    bronze = document(
+        BRONZE,
+        lambda d: (
+            d["classification"]["collections"].update(
+                {"future/restricted": {"class": "Confidential", "reason": "Synthetic restricted source.", "exception": "Synthetic"}}
+            ),
+            d["tables"].append({"table": FUTURE_SOURCE, "collection": "future/restricted"}),
+        ),
+    )
+    declared = "          exception: Synthetic\n          confidential_columns: [secret_value]\n" if source_class == "Confidential" else ""
+    sources = BASE[SOURCES] + (
+        f"      - name: {FUTURE_SOURCE}\n        description: A synthetic restricted table.\n"
+        f"        columns:\n          - name: secret_value\n          - name: id\n          - name: _object_key\n          - name: _member_sha256\n"
+        f"        meta:\n          classification: {source_class}\n{declared}"
+    )
+    return {
+        BRONZE_MAP: bronze,
+        SOURCES: sources,
+        FUTURE_STAGING: "select secret_value, id from {{ source('bronze', 'raw_future_restricted') }}\n",
+        STAGING: BASE[STAGING] + model_entry("stg_raw_future_restricted", staging_class),
+        FUTURE_INTERMEDIATE: "select upper(secret_value) as shout from {{ ref('stg_raw_future_restricted') }}\n",
+        INTERMEDIATE: BASE[INTERMEDIATE] + model_entry("int_future_restricted", intermediate_class),
+    }
+
+
+def future_source_cases() -> list[Case]:
+    """The Confidential origin check still works for a synthetic source outside the Public research-data scope (decision 158)."""
+    return [
+        Case("future_source_control", "model metadata ok", "", code=0, files=future_source_files()),
+        Case("future_source_staged_public", "[class-inheritance]", f"bronze.{FUTURE_SOURCE}.secret_value", files=future_source_files(staging_class="Public")),
+        Case(
+            "future_source_reader_public",
+            "[class-inheritance]",
+            "input stg_raw_future_restricted is Confidential",
+            files=future_source_files(intermediate_class="Public"),
+        ),
+        Case(
+            "future_source_labelled_public",
+            "[bronze-class]",
+            f"source {FUTURE_SOURCE} is Public but its bronze table is Confidential",
+            files=future_source_files(source_class="Public"),
+        ),
+        Case(
+            "future_source_columns_unlisted",
+            "[confidential-columns]",
+            "needs meta.confidential_columns",
+            files={**future_source_files(), SOURCES: future_source_files()[SOURCES].replace("          confidential_columns: [secret_value]\n", "")},
+        ),
+    ]
+
+
+def repository_label_problems(root: Path = ROOT) -> list[str]:
+    """Research data is Public (decision 158): name every Confidential label and confidential_columns entry left on this repository's own files."""
+    problems = []
+    tracked = run_command("git", ["ls-files", "dbt/*.yml"], cwd=root, check=True).stdout.split()
+    for relative in [*tracked, *REPOSITORY_LABEL_FILES]:
+        for number, line in enumerate((root / relative).read_text().splitlines(), 1):
+            if any(name in line for name in OUTSIDE_PUBLIC_SCOPE):
+                continue
+            if "Confidential" in line or "confidential_columns" in line:
+                problems.append(f"{relative}:{number}: {line.strip()[:90]}")
+    return problems
 
 
 def onc_read(table: str, sql: str, class_name: str = "Public", reason: str | None = ALL_COLUMNS_REASON, *, all_columns: bool = True) -> dict[str, str]:
@@ -610,6 +685,7 @@ def make_cases() -> list[Case]:
     )
     return [
         Case("control", code=0),
+        *future_source_cases(),
         *review_round8_cases(),
         *review_round7_cases(),
         *owner_followup_cases(),
@@ -1598,6 +1674,11 @@ def main() -> int:
     if unknown:
         sys.stderr.write(f"unknown cases: {', '.join(unknown)}\n")
         return 1
+    leftover = [] if args.case else repository_label_problems()
+    for line in leftover[:12]:
+        sys.stdout.write(f"WRONG  repository_labels_public {line}\n")
+    if leftover:
+        sys.stdout.write(f"WRONG  repository_labels_public {len(leftover)} Confidential labels remain on research data\n")
     started = datetime.now(UTC)
     checker_before, hook_before, runner_before = sha256_of(args.checker), sha256_of(args.hook_config), sha256_of(Path(__file__))
     workers = worker_count(args.workers)
@@ -1636,11 +1717,12 @@ def main() -> int:
         "wall_seconds": round((datetime.now(UTC) - started).total_seconds(), 1),
         "passed": len(results) - failures,
         "total": len(results),
+        "repository_label_problems": len(leftover),
         "cases": results,
     }
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"{report['passed']} of {report['total']} cases behaved as expected; report {out / 'report.json'}\n")
-    return int(bool(failures) or not stable or scanner_exit != 0)
+    return int(bool(failures) or not stable or scanner_exit != 0 or bool(leftover))
 
 
 if __name__ == "__main__":

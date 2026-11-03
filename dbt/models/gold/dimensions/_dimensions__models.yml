@@ -345,7 +345,7 @@ models:
     description: One row per day from the earliest to the latest DATE source date of the facts, plus the unknown member. The natural key is the
       date.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: date_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -473,7 +473,7 @@ models:
   - name: dim_ehr_product
     description: One row per (ONC CHPL product code system, code) as published, plus the unknown member.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: ehr_product_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -513,7 +513,7 @@ models:
     description: One row per enrollment ID that a fact's enrollment key carries, plus the unknown member (natural key '<unknown>'). The natural
       key is the only attribute.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: enrollment_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -591,7 +591,7 @@ models:
     description: One row per hospital CCN (6-character text) that a fact's hospital key carries, plus the unknown member. A state or national
       entity ID is not a hospital and takes the unknown member.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: hospital_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -835,7 +835,7 @@ models:
       Every period uses the enrollment's latest valid CCN, not a dated mapping, so a CCN change rewrites the earlier periods and their keys on the next build.
       The table records listings: a change of share or any other attribute of a listed owner opens no new version.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: hospital_owner_history_sk
         description: 'Surrogate key: the md5 of CCN, owner associate ID, role code and valid_from joined with a pipe. The unknown member''s key is md5(''<unknown>'').'
@@ -985,7 +985,7 @@ models:
     description: One row per 10-digit owner associate ID that a fact's owner key carries, plus the unknown member (natural key '<unknown>'). Names
       and flags stay on each release row.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: owner_organization_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -1285,7 +1285,7 @@ models:
     description: One row per 2-letter postal state code that a fact's state key carries, plus the unknown member (natural key '<unknown>'). A
       value that is not two upper-case letters is not a member and takes the unknown member in the facts.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: state_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -1346,7 +1346,7 @@ models:
     description: One row per 5-digit ZIP code that a fact's ZIP key carries, plus the unknown member (natural key '<unknown>'). A value that is
       not five digits is not a member and takes the unknown member in the facts.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: zip_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes

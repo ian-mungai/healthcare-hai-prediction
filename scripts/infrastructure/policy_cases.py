@@ -155,7 +155,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("autoscaling", "CreateOrUpdateTags", GROUP, region=None, tags=ECS_GROUP_TAG)
     add("cloudwatch", "PutMetricAlarm", ALARM, **tagged)
     for action in ("DeleteAlarms", "ListTagsForResource", "TagResource", "UntagResource"):
-        add("cloudwatch", action, ALARM, region=None, tags={"DataClassification": "Confidential"} if action.endswith("agResource") else None)
+        add("cloudwatch", action, ALARM, region=None, tags={"DataClassification": "Public"} if action.endswith("agResource") else None)
     add("cloudwatch", "DescribeAlarms", "*")
     add("dlm", "CreateLifecyclePolicy", "*", **tagged)
     for action in ("GetLifecyclePolicy", "UpdateLifecyclePolicy", "DeleteLifecyclePolicy", "ListTagsForResource", "TagResource", "UntagResource"):
@@ -196,7 +196,7 @@ def approved_requests() -> dict[str, list[Request]]:
     for action in ("DeleteRepository", "DescribeRepositories", "PutLifecyclePolicy", "GetLifecyclePolicy", "DeleteLifecyclePolicy", "ListTagsForResource"):
         add("ecr", action, REPOSITORY, region=None)
     for action in ("TagResource", "UntagResource"):
-        add("ecr", action, REPOSITORY, region=None, tags={"DataClassification": "Confidential"}, extra={"aws:ResourceTag/Project": P})
+        add("ecr", action, REPOSITORY, region=None, tags={"DataClassification": "Public"}, extra={"aws:ResourceTag/Project": P})
     for action in ("ListClusters", "ListTaskDefinitions", "ListTaskDefinitionFamilies", "DescribeTaskDefinition"):
         add("ecs", action, "*")
     add("ecs", "CreateCluster", CLUSTER, region=None, **tagged)
@@ -236,8 +236,8 @@ def approved_requests() -> dict[str, list[Request]]:
         "GetLogEvents",
         "FilterLogEvents",
     ):
-        add("logs", action, LOG_GROUP, region=None, tags={"DataClassification": "Confidential"} if action.endswith("agResource") else None)
-    add("logs", "TagResource", LOG_GROUP, region=None, tags={"DataClassification": "Confidential"})
+        add("logs", action, LOG_GROUP, region=None, tags={"DataClassification": "Public"} if action.endswith("agResource") else None)
+    add("logs", "TagResource", LOG_GROUP, region=None, tags={"DataClassification": "Public"})
     add("logs", "DescribeLogGroups", "*")
     add("secretsmanager", "GetSecretValue", arn("secretsmanager", "secret:bls_api_key-AbCdEf"), region=None)
     add("secretsmanager", "DescribeSecret", arn("secretsmanager", "secret:jev_api_key-AbCdEf"), region=None)

@@ -6,7 +6,7 @@ models:
       The silver model int_cc_window_holds with every column unchanged and one surrogate key per dimension it joins. One row per hold_key. Keeps
       every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hold_key
@@ -54,7 +54,7 @@ models:
       The silver model int_cc_complications_deaths_windows with every column unchanged and one surrogate key per dimension it joins. One row per
       window_key. Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -135,7 +135,7 @@ models:
       The silver model int_hac_program_years with every column unchanged and one surrogate key per dimension it joins. One row per program_key.
       Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: program_key
@@ -231,7 +231,7 @@ models:
     description: >-
       The silver model int_hai_hospital_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -358,7 +358,7 @@ models:
       The silver model int_hai_state_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key. The
       state key is state_sk on dim_state, built from entity_id.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -428,7 +428,7 @@ models:
       The silver model int_hai_window_holds with every column unchanged and one surrogate key per dimension it joins. One row per hold_key. Keeps
       every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hold_key
@@ -476,7 +476,7 @@ models:
       The silver model int_cc_hcahps_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
       Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -573,7 +573,7 @@ models:
       The silver model int_cc_hrrp_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
       Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -653,7 +653,7 @@ models:
       The silver model int_cc_maternal_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
       Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -730,7 +730,7 @@ models:
       The silver model int_cc_timely_effective_windows with every column unchanged and one surrogate key per dimension it joins. One row per
       window_key. Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -808,7 +808,7 @@ models:
       The silver model int_cc_unplanned_visits_windows with every column unchanged and one surrogate key per dimension it joins. One row per
       window_key. Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: window_key
@@ -891,7 +891,7 @@ models:
       The silver model int_validation_program_holds with every column unchanged and one surrogate key per dimension it joins. One row per
       hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hold_key
@@ -937,7 +937,7 @@ models:
       The silver model int_validation_window_holds with every column unchanged and one surrogate key per dimension it joins. One row per hold_key.
       Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hold_key
@@ -985,7 +985,7 @@ models:
       The silver model int_vbp_program_years with every column unchanged and one surrogate key per dimension it joins. One row per program_key.
       Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: program_key

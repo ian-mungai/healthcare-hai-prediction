@@ -5,7 +5,7 @@ models:
     description: >-
       One row per int_cmi_hospital_rows row, grain cmi_row_key: every silver column unchanged, then 2 surrogate keys.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: cmi_row_key
@@ -82,7 +82,7 @@ models:
       One row per int_cost_reports row, grain rpt_rec_num: every silver column unchanged, then 4 surrogate keys.
       Published values are covered by the silver test assert_cost_report_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: rpt_rec_num
@@ -655,7 +655,7 @@ models:
       One row per int_hospital_enrollment_rows row, grain enrollment_key: every silver column unchanged, then 6
       surrogate keys.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: enrollment_key
@@ -760,7 +760,7 @@ models:
       One row per int_hgi_hospital_releases row, grain release_key: every silver column unchanged, then 4 surrogate
       keys. Published values are covered by the silver test assert_hgi_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: release_key
@@ -843,7 +843,7 @@ models:
       One row per int_hhs_capacity_weeks row, grain week_key: every silver column unchanged, then 4 surrogate keys.
       Published values are covered by the silver test assert_hhs_onc_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: week_key
@@ -1431,7 +1431,7 @@ models:
       One row per int_hospital_owner_rows row, grain owner_row_key: every silver column unchanged, then 3 surrogate
       keys. Published values are covered by the silver test assert_ownership_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: owner_row_key
@@ -1504,7 +1504,7 @@ models:
       One row per int_impact_holds row, grain hold_key: every silver column unchanged, then 2 surrogate keys. A hold
       fact: it keeps the silver hold model's rows exactly.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: hold_key
@@ -1554,7 +1554,7 @@ models:
     description: >-
       One row per int_impact_hospital_values row, grain value_key: every silver column unchanged, then 2 surrogate keys.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: value_key
@@ -1614,7 +1614,7 @@ models:
       One row per int_mup_drg_discharges row, grain drg_key: every silver column unchanged, then 2 surrogate keys.
       Published values are covered by the silver test assert_mup_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: drg_key
@@ -1681,7 +1681,7 @@ models:
       One row per int_mup_providers row, grain provider_key: every silver column unchanged, then 3 surrogate keys.
       Published values are covered by the silver test assert_mup_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: provider_key
@@ -1935,7 +1935,7 @@ models:
       One row per int_occmix_survey_rows row, grain survey_row_key: every silver column unchanged, then 2 surrogate
       keys.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: survey_row_key
@@ -2022,7 +2022,7 @@ models:
       One row per int_onc_attestation_rows row, grain attestation_key: every silver column unchanged, then 3 surrogate
       keys.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: transaction
     columns:
       - name: attestation_key
@@ -2090,7 +2090,7 @@ models:
       One row per int_onc_chpl_linkage_rows row, grain linkage_key: every silver column unchanged, then 4 surrogate
       keys. Published values are covered by the silver test assert_hhs_onc_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: linkage_key
@@ -2168,7 +2168,7 @@ models:
       One row per int_change_of_ownership_rows row, grain event_key: every silver column unchanged, then 7 surrogate
       keys.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: transaction
     columns:
       - name: event_key
@@ -2285,7 +2285,7 @@ models:
       One row per int_change_of_ownership_holds row, grain hold_key: every silver column unchanged; no surrogate keys. A
       hold fact: it keeps the silver hold model's rows exactly.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: transaction
     columns:
       - name: hold_key
@@ -2303,7 +2303,7 @@ models:
       One row per int_pos_hospital_snapshots row, grain snapshot_key: every silver column unchanged, then 5 surrogate
       keys. Published values are covered by the silver test assert_pos_values_cast.
     meta:
-      classification: Confidential
+      classification: Public
       fact_type: periodic_snapshot
     columns:
       - name: snapshot_key
