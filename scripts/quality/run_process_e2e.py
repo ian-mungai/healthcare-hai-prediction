@@ -986,6 +986,10 @@ def plant_patches(plant: str) -> list[Any]:
         "interrupt_drops_the_outcome": [mock.patch("scripts.process.named_failure", lambda _outcome, _command, cause: cause)],
         # Fix round 7: the fallback of a failed listing signals the caller's own group again.
         "own_group_signalled": [mock.patch("scripts.process.caller_group", lambda: -1)],
+        # Finding 2: recording an unconfirmed stop only lists it; the pool keeps admitting work.
+        "admits_after_unconfirmed": [
+            mock.patch.object(process.Cancellation, "record", lambda self, session, text: self.unconfirmed.append((session, text)), create=True)
+        ],
         # Fix round 7: a normal end leaves the session alone.
         "no_finalization": [mock.patch("scripts.process.finalize_session", lambda *_arguments, **_keywords: (StopOutcome(), None))],
     }
@@ -1113,6 +1117,91 @@ except BaseException as error:
     result["raised"] = type(error).__name__
     result["message"] = str(error)[:300]
 (folder / "result.json").write_text(json.dumps(result))
+"""
+)
+
+# Finding 2 of the review: the real ``LaunchPool`` with one worker. The first job's launch ends with a stop that is not confirmed (a member is left); the job
+# swallows the error and tries another launch. A second job is queued behind it. Recording the failure must block admission at once: the queued job never
+# starts, the running job's next launch is refused, and the pool still ends with LaunchesNotStopped.
+POOL_ADMISSION_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import time
+marker = folder / "second_started"
+later = folder / "later_launch_ran"
+result = {}
+def first():
+    SURVIVOR.on = True
+    try:
+        process.run_command(sys.executable, ["-B", "-c", "import time; time.sleep(30)"], timeout=0.5, grace_seconds=0.2)
+    except process.ProcessGroupSurvived:
+        result["first_raised"] = "ProcessGroupSurvived"
+    SURVIVOR.on = False
+    try:
+        process.run_command(sys.executable, ["-B", "-c", "open(" + repr(str(later)) + ", 'w').write('x')"], timeout=20)
+    except BaseException as error:
+        result["later_launch_of_the_job"] = type(error).__name__
+def second():
+    marker.write_text("started")
+patches = [mock.patch("scripts.process.session_left", survivor_session_left), mock.patch("scripts.process.CONFIRM_SECONDS", 0.5), *plant_patches(plant)]
+for patch in patches:
+    patch.start()
+try:
+    with process.LaunchPool(max_workers=1) as pool:
+        head = pool.submit(first)
+        queued = pool.submit(second)
+        head.result(timeout=30)
+        time.sleep(1.0)
+        result["queued_future_cancelled"] = queued.cancelled()
+    result["raised"] = "nothing"
+except BaseException as error:
+    result["raised"] = type(error).__name__
+    result["message"] = str(error)[:200]
+result["queued_job_started"] = marker.exists()
+result["later_launch_ran"] = later.exists()
+(folder / "result.json").write_text(json.dumps(result))
+"""
+)
+# Finding 2, the serial runner of the model metadata E2E: its first case ends with a stop that is not confirmed. The loop must stop, report the cases it did not
+# run, and keep the scratch folder of the case (its survivors' files) instead of deleting it.
+SERIAL_STOP_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import tempfile
+from scripts.quality import run_model_metadata_e2e as e2e
+cases = e2e.make_cases()[:3]
+started = []
+def fake(case, checker, hook_config, case_seconds):
+    started.append(case.name)
+    if len(started) == 1:
+        raise process.ProcessGroupSurvived(["subject"], 1.0, 4242)
+    return {"name": case.name, "correct": True, "tail": []}
+with mock.patch.object(e2e, "run_case", fake):
+    results = e2e.run_cases(cases, Path("checker"), Path("hooks"), 1)
+kept = {}
+real_scratch = e2e.scratch_repo
+def recording_scratch(root, checker, hook_config):
+    kept["root"] = str(root)
+    return real_scratch(root, checker, hook_config)
+def survivor_launch(*_arguments, **_keywords):
+    raise process.ProcessGroupSurvived(["subject"], 1.0, 4243)
+with mock.patch.object(e2e, "scratch_repo", recording_scratch), mock.patch.object(e2e, "run_command", survivor_launch):
+    try:
+        e2e.run_case(cases[0], Path("checker"), Path("hooks"), 5)
+    except process.ProcessGroupSurvived:
+        kept["raised"] = True
+kept["exists"] = Path(kept.get("root", "/nonexistent")).exists()
+(folder / "result.json").write_text(
+    json.dumps(
+        {
+            "started": started,
+            "reported": [row["name"] for row in results],
+            "cases": [case.name for case in cases],
+            "later_reported_wrong": [row["correct"] for row in results[1:]],
+            "kept": kept,
+        }
+    )
+)
 """
 )
 
@@ -1271,6 +1360,41 @@ def swallowing_caller(base: Path, plant: str = "") -> dict[str, Any]:
         }
 
     return case("unconfirmed_stop_survives_a_swallowing_caller", base, body)
+
+
+def pool_admission_blocked(base: Path, plant: str = "") -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, POOL_ADMISSION_RUNNER, plant, seconds=60)
+        return {
+            "first_stop_is_unconfirmed": result.get("first_raised") == "ProcessGroupSurvived",
+            "queued_job_never_started": result.get("queued_job_started") is False,
+            "queued_future_was_cancelled": result.get("queued_future_cancelled") is True,
+            "later_launch_of_the_running_job_is_refused": result.get("later_launch_of_the_job") == "LaunchCancelled"
+            and result.get("later_launch_ran") is False,
+            "pool_still_reports_the_unconfirmed_stop": result.get("raised") == "LaunchesNotStopped",
+            "exception_seen": result.get("raised", "no result"),
+        }
+
+    return case("pool_blocks_work_after_an_unconfirmed_stop", base, body)
+
+
+def serial_runner_stops(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, SERIAL_STOP_RUNNER, "", seconds=60)
+        kept = result.get("kept", {})
+        folder = kept.get("root")
+        try:
+            return {
+                "only_the_first_case_started": len(result.get("started", [])) == 1,
+                "every_case_is_reported": result.get("reported") == result.get("cases"),
+                "the_cases_not_run_are_reported_wrong": bool(result.get("later_reported_wrong")) and not any(result.get("later_reported_wrong", [True])),
+                "scratch_folder_of_the_survivor_is_kept": kept.get("raised") is True and kept.get("exists") is True,
+            }
+        finally:
+            if folder:
+                shutil.rmtree(folder, ignore_errors=True)
+
+    return case("serial_runner_stops_at_an_unconfirmed_stop", base, body)
 
 
 def pool_timeout_report(base: Path, plant: str = "") -> dict[str, Any]:
@@ -1591,6 +1715,8 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "stop_that_raises_is_unconfirmed": stop_that_raises,
     "unconfirmed_stop_survives_a_swallowing_caller": swallowing_caller,
     "pool_reports_an_unconfirmed_timeout_stop": pool_timeout_report,
+    "pool_blocks_work_after_an_unconfirmed_stop": pool_admission_blocked,
+    "serial_runner_stops_at_an_unconfirmed_stop": serial_runner_stops,
     "interrupted_listing_leaves_no_lister": interrupted_listing,
     "alarm_during_the_stop_is_named": alarm_during_the_stop,
     "missing_lister_fallback_spares_the_confirming_caller": leader_with_a_missing_lister,
@@ -1703,6 +1829,7 @@ ROUND6_PLANTS: dict[str, tuple[Callable[..., dict[str, Any]], dict[str, str]]] =
         timeout_overlap,
         {"timeout_cleanup_failure_during_interrupt_is_named": "interrupt_became_a_named_failure"},
     ),
+    "admits_after_unconfirmed": (pool_admission_blocked, {"pool_blocks_work_after_an_unconfirmed_stop": "queued_job_never_started"}),
     "pool_ignores_unconfirmed_report": (pool_timeout_report, {"pool_reports_an_unconfirmed_timeout_stop": "pool_report_row_fails"}),
     "no_record": (swallowing_caller, {"unconfirmed_stop_survives_a_swallowing_caller": "exit_status_marks_the_unconfirmed_stop"}),
     "cancelled_futures_counted": (cancelled_queued_future, {"cancelled_queued_future_is_not_waited_for": "interrupt_reached_the_caller_unchanged"}),
