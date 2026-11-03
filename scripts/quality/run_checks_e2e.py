@@ -65,9 +65,12 @@ PHONE = "(206) 555" + "-0100"
 ACCOUNT = "1234" + "56789012"
 AWS_ARN = f"arn:aws:iam::{ACCOUNT}:role/deploy"
 ENV_VALUE = "acme" + "-admin-profile"
+# The AWS CLI profile name of this project, a local label that .privacy_allowlist names for its one tracked file.
+PROFILE_LABEL = "healthcare_hai" + "_prediction_dev"
+PROFILE_FILE = "scripts/infrastructure/iam_preflight_policies.py"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
-PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, ENV_VALUE]
+PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, ENV_VALUE, PROFILE_LABEL]
 WRITING_ALLOWLIST = ".writing_allowlist"
 ISO_DATE = "2026" + "-09-30"
 EM_DASH = "\u2014"
@@ -433,6 +436,18 @@ CASES = [
     Case("AWS account ID field", "privacy-scan", False, {"tests/test_config.py": f'CONFIG = {{"account_id": "{ACCOUNT}"}}\n'}),
     Case("value declared in .env", "privacy-scan", False, {".env": f"AWS_PROFILE={ENV_VALUE}\n", "scripts/deploy.sh": f"aws s3 ls --profile {ENV_VALUE}\n"}),
     Case(
+        "allowlisted profile label in its tracked file",
+        "privacy-scan",
+        True,
+        {".env": f"AWS_PROFILE={PROFILE_LABEL}\n", PROFILE_FILE: f'OFFLINE_VALUES = {{"AWS_PROFILE": "{PROFILE_LABEL}"}}\n'},
+    ),
+    Case(
+        "profile label in another file",
+        "privacy-scan",
+        False,
+        {".env": f"AWS_PROFILE={PROFILE_LABEL}\n", "scripts/deploy.sh": f"aws s3 ls --profile {PROFILE_LABEL}\n"},
+    ),
+    Case(
         "profile named after the project",
         "privacy-scan",
         True,
@@ -668,6 +683,7 @@ BLOCK_REASONS = {
     "AWS account ARN": "infra/policy.json:1: AWS account ID",
     "AWS account ID field": "tests/test_config.py:1: AWS account ID",
     "value declared in .env": "scripts/deploy.sh:1: value declared in .env",
+    "profile label in another file": "scripts/deploy.sh:1: value declared in .env",
     "bucket named after the project": "scripts/deploy.sh:1: value declared in .env",
     "allowlist is by type": "notes.md:1: phone number",
     "allowlist is by path": "docs/notes.md:1: email address",
