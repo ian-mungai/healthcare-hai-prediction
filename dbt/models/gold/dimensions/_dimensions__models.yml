@@ -457,7 +457,7 @@ models:
       - name: code_label
         description: The label from the paired silver column where silver has one; else null.
       - name: identity_rule
-        description: hold_single_latest for a code the owner holds as unresolved; null for a code with one label. A DRG code is never split.
+        description: single_latest for the approved billed-code policy; null for an unlisted code. Grouper provenance remains unresolved. A DRG code is never split.
         data_tests:
           - accepted_values:
               arguments:

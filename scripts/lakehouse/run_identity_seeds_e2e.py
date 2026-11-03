@@ -93,11 +93,27 @@ def classification_cases(folder: Path) -> list[tuple[str, Callable[[], None], st
     def drg_with_fact() -> None:
         edit(path, set_cell("068", "fact", "fct_medicare_inpatient_drg"))
 
+    def unresolved_measure_approved() -> None:
+        for column, value in (("classification", "unresolved"), ("identity_rule", "hold_single_latest"), ("approval_status", "approved")):
+            edit(path, set_cell("ED_1b", column, value))
+
+    def approved_drg(column: str, value: str) -> None:
+        for key, cell in (
+            ("approval_status", "approved"),
+            ("identity_rule", "single_latest"),
+            ("scope_limit", "Grouper version per release remains unresolved."),
+        ):
+            edit(path, set_cell("068", key, cell))
+        edit(path, set_cell("068", column, value))
+
     return [
         ("proposed_for_approval_stops", lambda: edit(path, set_cell("ED_1b", "approval_status", "proposed_for_approval")), "is proposed_for_approval"),
         ("redefined_with_single_rule", lambda: edit(path, set_cell("PSI_08", "identity_rule", "single_latest")), "class redefined needs identity_rule split"),
         ("renamed_with_split_rule", lambda: edit(path, set_cell("ED_1b", "identity_rule", "split")), "class renamed needs identity_rule single_latest"),
-        ("hold_marked_approved", lambda: edit(path, set_cell("068", "approval_status", "approved")), "class unresolved needs approval_status owner_hold"),
+        ("unresolved_measure_marked_approved", unresolved_measure_approved, "class unresolved needs approval_status owner_hold"),
+        ("approved_drg_without_scope", lambda: approved_drg("scope_limit", ""), "approved DRG policy needs a scope limit"),
+        ("approved_drg_with_split", lambda: approved_drg("identity_rule", "split"), "needs identity_rule single_latest"),
+        ("approved_drg_with_foreign_system", lambda: approved_drg("code_system", "other.code"), "needs identity_rule hold_single_latest"),
         ("renamed_marked_hold", lambda: edit(path, set_cell("ED_1b", "approval_status", "owner_hold")), "class renamed needs approval_status approved"),
         ("unknown_class", lambda: edit(path, set_cell("ED_1b", "classification", "moved")), "classification 'moved' is not one of"),
         ("blank_citation_url", lambda: edit(path, set_cell("6", "citation_urls", "")), "has no citation URL"),
@@ -205,14 +221,17 @@ def expected_rules(seed_text: str) -> list[str]:
         ("dim_measure", "ED_1b"): "single_latest",
         ("dim_rurality_code", "6"): "split",
         ("dim_rurality_code", "9"): "split",
-        ("dim_drg", "068"): "hold_single_latest",
-        ("dim_drg", "835"): "hold_single_latest",
     }
+    drg_codes = {"068", "070", "071", "072", "124", "233", "234", "250", "251", "834", "835"}
+    wanted.update({("dim_drg", code): "single_latest" for code in drg_codes})
     found = {(row["dimension"], row["code"]): row["identity_rule"] for row in rows}
     problems = [f"{key} has rule {found.get(key)!r}, expected {rule!r}" for key, rule in wanted.items() if found.get(key) != rule]
     counts = {rule: sum(1 for row in rows if row["identity_rule"] == rule) for rule in ("split", "single_latest", "hold_single_latest")}
-    if counts != {"split": 7, "single_latest": 7, "hold_single_latest": 11}:
-        problems.append(f"rule counts are {counts}, expected 7 split, 7 single_latest and 11 hold_single_latest")
+    drgs = [row for row in rows if row["dimension"] == "dim_drg"]
+    if {row["code"] for row in drgs} != drg_codes or any(row["approval_status"] != "approved" or row["classification"] != "unresolved" for row in drgs):
+        problems.append("the eleven DRG policies must be approved without claiming resolved grouper provenance")
+    if counts != {"split": 7, "single_latest": 18, "hold_single_latest": 0}:
+        problems.append(f"rule counts are {counts}, expected 7 split, 18 single_latest and 0 hold_single_latest")
     return problems
 
 
