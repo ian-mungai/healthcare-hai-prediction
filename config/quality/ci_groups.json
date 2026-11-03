@@ -273,7 +273,6 @@
       "container-mounts",
       "gofmt",
       "go-vet",
-      "model-metadata",
       "lint-settings",
       "suppressions",
       "subprocess-imports",
@@ -289,6 +288,9 @@
     "samples": [
       "test-checks"
     ]
+  },
+  "hooks_run_by_groups": {
+    "model-metadata": "lakehouse_gold"
   },
   "reuse": {
     "never": [

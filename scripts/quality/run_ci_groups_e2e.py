@@ -57,7 +57,7 @@ from unittest import mock
 
 from scripts.lakehouse import feature_shards
 from scripts.process import clear_git_environment, find_program, run_command
-from scripts.quality import ci_groups, core_commands
+from scripts.quality import ci_groups, ci_hooks, core_commands
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
@@ -2460,6 +2460,59 @@ def feature_case_timing_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+def hook_delegation_cases(scratch: Path) -> list[dict[str, Any]]:
+    """A manual hook that a check group already runs as the identical complete check leaves the hook partitions, and only then (owner decision 163)."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(".pre-commit-config.yaml must contain a mapping")
+    delegated = config.get("hooks_run_by_groups", {})
+    partitioned = [hook for hooks in config["hook_groups"].values() for hook in hooks]
+    entries: list[dict[str, Any]] = workflow_document()["jobs"]["lakehouse"]["strategy"]["matrix"]["include"]
+    gold = next((entry for entry in entries if entry.get("part") == "gold"), {})
+    results: list[dict[str, Any]] = [
+        {
+            "case": "model_metadata_hook_runs_once_in_the_gold_group",
+            "passed": delegated == {"model-metadata": "lakehouse_gold"}
+            and "model-metadata" not in partitioned
+            and "checks" in str(gold.get("units", "")).split(),
+            "delegated": delegated,
+        },
+        {
+            "case": "delegated_hook_is_the_identical_check_on_every_path_that_selects_it",
+            "passed": not ci_hooks.delegation_findings(ROOT),
+            "findings": ci_hooks.delegation_findings(ROOT)[:5],
+        },
+    ]
+    plants = {
+        "group_without_the_command_is_found": "does not run the identical command",
+        "group_not_selected_by_a_matching_path_is_found": "is not selected by",
+        "hook_with_file_names_is_found": "takes file names or arguments",
+    }
+    for label, marker in plants.items():
+        root = scratch / f"delegation_{label}"
+        shutil.copytree(ROOT / "scripts/ci/groups", root / "scripts/ci/groups")
+        (root / "config/quality").mkdir(parents=True)
+        damaged_config = copy.deepcopy(ci_groups.load())
+        damaged_document = copy.deepcopy(document)
+        if label.startswith("group_without"):
+            body = root / "scripts/ci/groups/lakehouse_gold.sh"
+            body.write_text(
+                body.read_text(encoding="utf-8").replace("-m scripts.quality.model_metadata\n", "-m scripts.quality.model_metadata --fast\n"), encoding="utf-8"
+            )
+        if label.startswith("group_not_selected"):
+            damaged_config["groups"]["lakehouse_gold"] = ["^never_matches$"]
+            damaged_config["groups"]["lakehouse_bronze"] = ["^never_matches$"]
+        if label.startswith("hook_with_file_names"):
+            next(hook for repo in damaged_document["repos"] for hook in repo["hooks"] if hook["id"] == "model-metadata")["pass_filenames"] = True
+        try:
+            problems = ci_hooks.delegation_findings(ROOT, damaged_config, damaged_document, root / "scripts/ci/groups")
+        except Exception as error:
+            problems = [f"{type(error).__name__}: {error}"]
+        results.append({"case": f"hook_delegation_{label}", "passed": any(marker in problem for problem in problems), "findings": problems[:3]})
+    return results
+
+
 def hook_partition_cases(scratch: Path) -> list[dict[str, Any]]:
     """The real hook runner rejects missing and repeated gates and preserves hook-stage and range arguments."""
     root = scratch / "hook_partition"
@@ -2688,7 +2741,10 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     if not isinstance(hook_document, dict):
         raise ValueError(".pre-commit-config.yaml must contain a mapping")
     hooks = hook_document["repos"][0]["hooks"]
-    expected = sorted(hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci")
+    delegated = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8")).get("hooks_run_by_groups", {})
+    expected = sorted(
+        hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci" and hook["id"] not in delegated
+    )
     actual: list[str] = []
     exits = []
     for group in ("privacy", "documentation", "code", "samples"):
@@ -2711,6 +2767,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
         *results,
         *feature_combination_cases(scratch),
         *hook_partition_cases(scratch),
+        *hook_delegation_cases(scratch),
         hook_timeout_case(scratch),
         *feature_case_timing_cases(scratch),
     ]
@@ -3903,7 +3960,9 @@ def stage_set(document: dict[str, Any], hook: dict[str, Any]) -> set[str]:
     return set(hook.get("stages", document.get("default_stages", [])))
 
 
-def hook_config_problems(document: dict[str, Any], push_plan_groups: list[str], partitions: dict[str, list[str]]) -> dict[str, Any]:
+def hook_config_problems(
+    document: dict[str, Any], push_plan_groups: list[str], partitions: dict[str, list[str]], delegated: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Every way the hook configuration can leave the fast commit stage, the pre-push run or the hosted manual stage wrong."""
     hooks = hook_table(document)
     commit = {name for name, hook in hooks.items() if "pre-commit" in stage_set(document, hook)}
@@ -3912,7 +3971,7 @@ def hook_config_problems(document: dict[str, Any], push_plan_groups: list[str], 
         name: hashlib.sha256(json.dumps({key: hooks[name].get(key) for key in FINGERPRINT_KEYS}, sort_keys=True).encode()).hexdigest()[:12] for name in manual
     }
     moved = sorted(set(MANUAL_FINGERPRINTS) - commit)
-    partitioned = {name for names in partitions.values() for name in names}
+    partitioned = {name for names in partitions.values() for name in names} | set(delegated or {})
     return {
         "heavy_in_commit_stage": sorted(commit - FAST_COMMIT_HOOKS),
         "fast_missing_from_commit_stage": sorted(FAST_COMMIT_HOOKS - commit),
@@ -3934,7 +3993,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
     partitions = config["hook_groups"]
     plan = pre_push_plan(pre_push_repo(scratch, "fast_hook_plan"))
     groups = [step["name"].removeprefix("hooks_") for step in plan["steps"] if step["name"].startswith("hooks_")]
-    real = hook_config_problems(document, groups, partitions)
+    real = hook_config_problems(document, groups, partitions, config.get("hooks_run_by_groups", {}))
     names = {
         "commit_stage_holds_only_fast_hooks": ("heavy_in_commit_stage", "fast_missing_from_commit_stage", "local_ci_affected_present"),
         "pre_push_hooks_declared": ("install_types", "push_hooks_not_in_push_stage"),
@@ -3947,7 +4006,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
         damaged = copy.deepcopy(document)
         damaged_partitions = copy.deepcopy(partitions)
         mutate(damaged, damaged_partitions)
-        found = hook_config_problems(damaged, groups, damaged_partitions)
+        found = hook_config_problems(damaged, groups, damaged_partitions, config.get("hooks_run_by_groups", {}))
         return {"case": f"planted_{label}_caught_by_{case}", "passed": bool(found[key]), "caught": found[key]}
 
     def add_stage(name: str, stage: str) -> Callable[[dict[str, Any], dict[str, list[str]]], None]:
