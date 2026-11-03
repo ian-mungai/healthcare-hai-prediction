@@ -1544,6 +1544,46 @@ if result["escaped_child_alive"]:
 )
 
 
+# The last round's finding: a running job cancels the queued work after submit() queued the tail but before the pool recorded it. The tail must still
+# reach a completion iterator. The cancel is forced into that window by wrapping the executor's own submit.
+POOL_SUBMIT_WINDOW_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import concurrent.futures
+import time
+release = threading.Event()
+result = {"yielded": 0}
+def head():
+    return "head"
+def middle():
+    release.wait(10)
+    return "middle"
+real_submit = concurrent.futures.ThreadPoolExecutor.submit
+try:
+    with process.LaunchPool(max_workers=1) as pool:
+        futures = [pool.submit(head), pool.submit(middle)]
+        time.sleep(0.3)
+        def submit_then_cancel(self, *arguments, **keywords):
+            future = real_submit(self, *arguments, **keywords)
+            pool.cancellation.record(0, "synthetic unconfirmed stop between queueing and recording")
+            return future
+        with mock.patch.object(concurrent.futures.ThreadPoolExecutor, "submit", submit_then_cancel):
+            futures.append(pool.submit(head))
+        release.set()
+        try:
+            for _future in concurrent.futures.as_completed(futures, timeout=5):
+                result["yielded"] += 1
+            result["iteration"] = "complete"
+        except concurrent.futures.TimeoutError:
+            result["iteration"] = "timed out"
+        result["tail_cancelled"] = futures[2].cancelled()
+except BaseException as error:
+    result["raised"] = type(error).__name__
+(folder / "result.json").write_text(json.dumps(result))
+"""
+)
+
+
 def run_round6_runner(scratch: Scratch, code: str, plant: str = "", seconds: float = 40.0) -> tuple[dict[str, Any], int | None, str]:
     """Run a fix round 6 runner in a session of its own; return what it recorded, its exit status and its standard error."""
     script = scratch.folder / "runner.py"
@@ -1802,6 +1842,18 @@ def term_handler_fork(base: Path) -> dict[str, Any]:
         }
 
     return case("term_handler_fork_cannot_escape_the_stop", base, body)
+
+
+def pool_submit_window(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, POOL_SUBMIT_WINDOW_RUNNER, "", seconds=60)
+        return {
+            "tail_was_cancelled_in_the_window": result.get("tail_cancelled") is True,
+            "as_completed_yields_every_future": result.get("iteration") == "complete" and result.get("yielded") == 3,
+            "pool_still_reports_the_unconfirmed_stop": result.get("raised") == "LaunchesNotStopped",
+        }
+
+    return case("pool_job_cancelled_while_it_is_submitted_reaches_completion_iterators", base, body)
 
 
 def pool_timeout_report(base: Path, plant: str = "") -> dict[str, Any]:
@@ -2132,6 +2184,7 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "pool_alarm_during_shutdown_cancels_and_bounds_the_drain": pool_shutdown_alarm,
     "term_handler_fork_cannot_escape_the_stop": term_handler_fork,
     "pool_cancelled_jobs_reach_completion_iterators": pool_cancelled_completion,
+    "pool_job_cancelled_while_it_is_submitted_reaches_completion_iterators": pool_submit_window,
     "scratch_is_kept_when_a_stop_is_not_confirmed_at_finalization": scratch_on_not_stopped,
     "serial_runner_stops_at_an_unconfirmed_stop": serial_runner_stops,
     "interrupted_listing_leaves_no_lister": interrupted_listing,

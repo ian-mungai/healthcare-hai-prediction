@@ -725,6 +725,10 @@ class LaunchPool(ThreadPoolExecutor):
             raise LaunchCancelled("the pool admits no more jobs: it was cancelled or the stop of one of its launches is not confirmed")
         future = super().submit(self.run_job, fn, args, kwargs)
         self.jobs.append(future)
+        # A running job may have cancelled the queued work between the queueing above and this record; announce that cancellation too.
+        if future.cancelled():
+            with contextlib.suppress(RuntimeError):
+                future.set_running_or_notify_cancel()
         return future
 
     def run_job(self, function: Callable[..., T], arguments: tuple[Any, ...], keywords: dict[str, Any]) -> T:
