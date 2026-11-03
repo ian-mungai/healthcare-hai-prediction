@@ -460,8 +460,16 @@ def overlay_sha256(overlays: list[Path]) -> str | None:
 
 
 def statuses_by_name(statuses: dict[str, str]) -> dict[str, str]:
-    """Node statuses keyed by node name (a unique ID is ``type.package.name``; a generic test's name ends with a hash)."""
-    return {unique.split(".")[2]: status for unique, status in statuses.items()}
+    """Return statuses by node name, preserving failures when full IDs share a name.
+
+    A unique ID is ``type.package.name`` with an optional generic-test hash suffix.
+    """
+    named: dict[str, str] = {}
+    for unique, status in statuses.items():
+        name = unique.split(".")[2]
+        if name not in named or accepted(name, named[name]):
+            named[name] = status
+    return named
 
 
 def dbt_run(case: package_fixture.Case, select: str) -> tuple[int, dict[str, str]]:
@@ -516,10 +524,11 @@ def case_sql(case: package_fixture.Case, sql: str) -> None:
 
 def test_nodes(case: package_fixture.Case, tests: list[str], require_release_test: bool) -> tuple[list[str], dict[str, Any]]:
     """Run the named tests of a case and reject every status outside pass or success."""
-    _code, _tail, raw = package_fixture.dbt(case, ["test", "--select", *tests])
+    code, _tail, raw = package_fixture.dbt(case, ["test", "--select", *tests])
     statuses = statuses_by_name(raw)
     manifest = json.loads((case.folder / "target/manifest.json").read_text())
     problems = not_passing(statuses) + disabled_problems(manifest) + ([] if statuses else ["no selected test ran"])
+    problems += [f"dbt exited {code}"] if code else []
     problems += release_test_problems(manifest) if require_release_test else []
     return problems, {"statuses": statuses}
 

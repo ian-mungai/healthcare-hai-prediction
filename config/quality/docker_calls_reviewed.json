@@ -419,7 +419,7 @@
         "scripts/lakehouse/dbt_package_archive.py": "sha256:b5eeba5e5ae835b219c5f866ebc990b8ceff4429dab31ae1eb8c5bbc8117e5ca",
         "scripts/lakehouse/fake_docker.py": "sha256:6a7a65d2f0973746904b425eef1e7e7aea4c2fbda9f945b3b99008f6ad35fb05",
         "scripts/lakehouse/launcher_cleanup.py": "sha256:271cbf7f0a014802fb8d517775b145de61c0a19473c49e6cfde8be0add9bce68",
-        "scripts/lakehouse/package_fixture.py": "sha256:9b1823d100e9faa716e4ae5c31a4f7415067b0ca63c73514a9a41f3323f38069",
+        "scripts/lakehouse/package_fixture.py": "sha256:8c59389957cc35b8187f70b5de53bd014e706755e3db21693d04b83b070fa223",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:6a84c3114ae00474955712af5821fdf32aae972a6b1671e7033fc9e2992a59f2",
