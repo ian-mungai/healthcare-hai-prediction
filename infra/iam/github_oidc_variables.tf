@@ -42,7 +42,7 @@ variable "github_oidc_apply_policy_services" {
 }
 
 variable "github_oidc_deploy_services" {
-  description = "Names of the ECS services in the project cluster that the deploy role may update. Empty until the model API names its service."
+  description = "Names of the ECS services in the project cluster that the deploy role may update. Each starts with <project>_<environment>_, the services stack naming, because the delivery boundary allows no other name. Empty until the model API names its service."
   type        = list(string)
   default     = []
   nullable    = false
@@ -54,7 +54,7 @@ variable "github_oidc_deploy_services" {
 }
 
 variable "github_oidc_deploy_task_role_names" {
-  description = "Names of the task roles the deploy role may pass to ECS tasks. Empty until the model API names its roles."
+  description = "Names of the task roles the deploy role may pass to ECS tasks. The delivery boundary allows only <project>_model_api_task_<environment>, <project>_streamlit_task_<environment> and <project>_task_execution_<environment>. Empty until the model API names its roles."
   type        = list(string)
   default     = []
   nullable    = false

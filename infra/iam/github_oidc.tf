@@ -15,10 +15,12 @@
 locals {
   github_issuer       = "token.actions.githubusercontent.com"
   github_subject_base = "repo:${var.github_repository}"
-  # Every delivery role carries the project role boundary that the administrator creates at bootstrap, the same policy name that the
-  # other roles of this stack use. The boundary policy must exist before the owner applies this file with the flag on.
-  github_role_boundary_arn = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_role_boundary"
-  github_provider_arn      = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
+  # Every delivery role carries one permissions boundary that the administrator creates at bootstrap from infra/iam/boundary/. The
+  # boundary policy must exist before the owner applies this file with the flag on. The delivery boundary holds exactly the grants of
+  # the four roles below. The project role boundary cannot hold them: it renders at 4,391 of the 6,144 characters IAM allows.
+  github_boundary_file = "healthcare_hai_prediction_delivery_boundary_policy.json"
+  github_boundary_arn  = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_delivery_boundary"
+  github_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
 
   # The stacks that continuous delivery may plan and apply. The IAM stack and the storage stack stay with the owner.
   github_state_stacks = ["platform", "services", "jobs"]
@@ -250,6 +252,41 @@ locals {
     ]
     if var.github_oidc_enabled
   ]))
+
+  # The boundary as the administrator renders it: the same file, the same values. A shared secret name repeats its resource once per name.
+  github_boundary_document = jsondecode(templatefile("${path.module}/boundary/${local.github_boundary_file}", merge(local.owner_policy_values, {
+    DATA_BUCKET_NAME   = var.data_bucket_name
+    SHARED_SECRET_NAME = "%SHARED_SECRET_NAME%"
+  })))
+  github_boundary_allows = [
+    for statement in local.github_boundary_document.Statement : {
+      actions = flatten([statement.Action])
+      resources = flatten([
+        for resource in flatten([statement.Resource]) :
+        strcontains(resource, "%SHARED_SECRET_NAME%") ? [for name in local.github_policy_shared_secrets : replace(resource, "%SHARED_SECRET_NAME%", name)] : [resource]
+      ])
+    } if statement.Effect == "Allow"
+  ]
+  github_boundary_actions = toset(flatten([for allow in local.github_boundary_allows : allow.actions]))
+
+  # An action of a delivery role that no boundary statement allows is dead: the boundary refuses it whatever the role policy says.
+  github_actions_outside_boundary = toset([
+    for action in local.github_custom_actions : action
+    if !anytrue([for pattern in local.github_boundary_actions : can(regex("^${replace(pattern, "*", ".*")}$", action))])
+  ])
+  # A named resource of a delivery role that no boundary statement allows for the same action. A resource of "*" is skipped: the
+  # boundary names the resources AWS authorizes such an action on, and the evaluator cases check those requests.
+  github_grants_outside_boundary = var.github_oidc_enabled ? toset(flatten([
+    for key, statements in local.github_statements : [
+      for statement in statements : [
+        for pair in setproduct(flatten([statement.Action]), flatten([statement.Resource])) : "${key}: ${pair[0]} on ${pair[1]}"
+        if pair[1] != "*" && !anytrue([
+          for allow in local.github_boundary_allows :
+          anytrue([for action in allow.actions : can(regex("^${replace(action, "*", ".*")}$", pair[0]))]) && anytrue([for pattern in allow.resources : can(regex("^${replace(replace(replace(pattern, ".", "\\."), "?", "."), "*", ".*")}$", pair[1]))])
+        ])
+      ] if statement.Effect == "Allow"
+    ]
+  ])) : toset([])
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -265,7 +302,7 @@ resource "aws_iam_role" "github" {
   name                 = format(local.platform_name, "gh_${each.key}")
   description          = each.value.description
   max_session_duration = 3600
-  permissions_boundary = local.github_role_boundary_arn
+  permissions_boundary = local.github_boundary_arn
   assume_role_policy   = local.github_trust[each.key]
 }
 
@@ -280,6 +317,11 @@ resource "aws_iam_role_policy" "github" {
     precondition {
       condition     = length(setsubtract(local.github_custom_actions, local.approved_actions)) == 0
       error_message = "A delivery role allows an action that no project policy in infra/iam/policies allows. Keep the roles inside the approved list."
+    }
+
+    precondition {
+      condition     = length(local.github_actions_outside_boundary) == 0 && length(local.github_grants_outside_boundary) == 0
+      error_message = "A delivery role grants an action or a resource that the delivery boundary in infra/iam/boundary does not allow. The boundary would refuse it."
     }
   }
 }
@@ -328,4 +370,19 @@ output "github_oidc_plan_wildcard_actions_outside_approved" {
     toset(flatten([for statement in local.github_plan_read_statements : statement.Action if contains(statement.Resource, "*")])),
     local.approved_wildcard_actions
   )))
+}
+
+output "github_oidc_actions_outside_boundary" {
+  description = "Actions that a delivery role allows and the delivery boundary does not. Must be empty."
+  value       = sort(tolist(local.github_actions_outside_boundary))
+}
+
+output "github_oidc_grants_outside_boundary" {
+  description = "Named resources of a delivery role that the delivery boundary does not allow for the same action. Must be empty."
+  value       = sort(tolist(local.github_grants_outside_boundary))
+}
+
+output "github_oidc_boundary_allowed_actions" {
+  description = "Every action the delivery boundary allows, to check that nothing outside the delivery work is in it."
+  value       = sort(tolist(local.github_boundary_actions))
 }

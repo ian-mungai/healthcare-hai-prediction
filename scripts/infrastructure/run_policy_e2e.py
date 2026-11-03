@@ -31,6 +31,7 @@ ROLE_DIRECTORY = REPO_ROOT / "infra" / "iam" / "role_policies"
 # Outside ``policies/``: the group tooling attaches every file there, and the administrator attaches these at bootstrap.
 BOUNDARY_DIRECTORY = REPO_ROOT / "infra" / "iam" / "boundary"
 BOUNDARY_FILE = "healthcare_hai_prediction_role_boundary_policy.json"
+DELIVERY_BOUNDARY_FILE = "healthcare_hai_prediction_delivery_boundary_policy.json"
 VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
 IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
 BRONZE_TABLES = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
@@ -170,21 +171,115 @@ def load_roles() -> dict[str, dict[str, Any]]:
     }
 
 
+# What the plan role never reads, the same list as ``github_plan_unreadable`` in infra/iam/github_oidc.tf.
+PLAN_UNREADABLE = frozenset(
+    {
+        "secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken",
+        "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord",
+        "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts",
+    }
+)  # fmt: skip
+PLAN_READ_ACTION = re.compile(r"^[a-z0-9]+:(Describe|List|Get|BatchGet)")
+
+
+def variable_list_default(name: str) -> list[str]:
+    """The list default of one Terraform variable of the IAM stack, written in one line."""
+    found = [match for path in sorted(IAM_DIRECTORY.glob("*variables.tf")) for match in re.findall(
+        rf'variable "{name}" \{{[^}}]*?default\s*=\s*(\[[^\]\n]*\])', path.read_text(encoding="utf-8"), re.DOTALL)]  # fmt: skip
+    if len(found) != 1:
+        raise RuntimeError(f"the default of {name} must be written once as a one-line list")
+    return [str(item) for item in json.loads(found[0])]
+
+
+def plan_read_statements(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """The statements of the plan role's reads, built the way ``github_plan_read_statements`` in infra/iam/github_oidc.tf builds them.
+
+    Each approved describe, list or get action keeps the resources and conditions of the project policy statement that allows it, less the actions that
+    return a secret value, log content, an image layer or a listing of versions and uploads, and with the region condition added.
+    """
+    statements = []
+    for name, document in sorted(documents.items()):
+        if not (name.startswith("healthcare_hai_prediction_") and name.endswith("_policy")):
+            continue
+        for statement in document["Statement"]:
+            actions = sorted(
+                action
+                for action in dict.fromkeys(as_list(statement["Action"]))
+                if PLAN_READ_ACTION.match(action) and action not in PLAN_UNREADABLE and not action.startswith("s3:GetObject")
+            )
+            if statement["Effect"] != "Allow" or "NotResource" in statement or not actions:
+                continue
+            condition = dict(statement.get("Condition", {}))
+            condition["StringEquals"] = {**condition.get("StringEquals", {}), "aws:RequestedRegion": policy_cases.R}
+            statements.append(
+                {"Sid": f"Read{template_service(name)}{statement['Sid']}", "Effect": "Allow", "Action": actions, "Resource": as_list(statement["Resource"]),
+                 "Condition": condition}
+            )  # fmt: skip
+    return statements
+
+
+def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The policies of the four GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
+
+    The statements follow ``github_statements`` in infra/iam/github_oidc.tf. The deploy role's service and task role names are the test inputs
+    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_TASK_ROLES``. The apply role also holds the project service policies it attaches by ARN.
+    """
+    state_read = [
+        {"Sid": "ReadStateObjects", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": list(policy_cases.STATE_KEYS)},
+        {"Sid": "ListStateKeys", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [policy_cases.BUCKET],
+         "Condition": {"StringLike": {"s3:prefix": [f"{policy_cases.STATE_PREFIX}/*"]}}},
+    ]  # fmt: skip
+    repository = f"arn:aws:ecr:{policy_cases.R}:{policy_cases.A}:repository/{policy_cases.P}_*_{policy_cases.E}"
+    statements = {
+        "image_push": [
+            {"Sid": "GetRegistryToken", "Effect": "Allow", "Action": ["ecr:GetAuthorizationToken"], "Resource": ["*"]},
+            {"Sid": "PushProjectImages", "Effect": "Allow", "Resource": [repository], "Action": [
+                "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+                "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories"]},
+        ],
+        "deploy": [
+            {"Sid": "ReadCluster", "Effect": "Allow", "Resource": ["*"],
+             "Action": ["ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTasks", "ecs:ListTasks"]},
+            {"Sid": "UpdateNamedServices", "Effect": "Allow", "Action": ["ecs:UpdateService"], "Resource": [policy_cases.DEPLOY_SERVICE]},
+            {"Sid": "RegisterTaskDefinitions", "Effect": "Allow", "Action": ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition"], "Resource": ["*"]},
+            {"Sid": "PassNamedTaskRoles", "Effect": "Allow", "Action": ["iam:PassRole"], "Resource": list(policy_cases.DEPLOY_TASK_ROLES),
+             "Condition": {"StringEquals": {"iam:PassedToService": policy_cases.ECS_TASKS}}},
+        ],
+        "terraform_plan": [
+            {"Sid": "NeverReadObjectsExceptStateKeys", "Effect": "Deny", "NotResource": list(policy_cases.STATE_KEYS),
+             "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes", "s3:GetObjectTagging"]},
+            *plan_read_statements(documents),
+            *state_read,
+        ],
+        "terraform_apply": [
+            *state_read,
+            {"Sid": "WriteStateObjects", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": list(policy_cases.STATE_KEYS)},
+            {"Sid": "HoldStateLocks", "Effect": "Allow", "Resource": list(policy_cases.LOCK_KEYS),
+             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]},
+        ],
+    }  # fmt: skip
+    loaded = {f"delivery/{role}/access": {"Version": "2012-10-17", "Statement": items} for role, items in statements.items()}
+    for service in variable_list_default("github_oidc_apply_policy_services"):
+        loaded[f"delivery/terraform_apply/attached_{service}"] = documents[f"healthcare_hai_prediction_{service}_policy"]
+    return loaded
+
+
 def load_all() -> dict[str, dict[str, Any]]:
-    """The 13 project user policies by template stem, the policies the IAM stack renders, as ``owner_<name>``, the role
-    boundary and every role policy as ``role/<role>/<policy>``."""
+    """The 13 project user policies by template stem, the policies the IAM stack renders, as ``owner_<name>``, the role boundary, the delivery
+    boundary, every role policy as ``role/<role>/<policy>`` and every delivery role policy as ``delivery/<role>/<policy>``."""
     documents = load_policies(POLICY_DIRECTORY, policy_cases.VALUES)
     documents[policy_cases.BOUNDARY] = render_template((BOUNDARY_DIRECTORY / BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
     documents["owner_snapshots"] = render_template((OWNER_DIRECTORY / "snapshots.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     documents[TASK_EXECUTION] = render_task_execution(OWNER_DIRECTORY)
-    return {**documents, **load_roles()}
+    documents[policy_cases.DELIVERY_BOUNDARY] = render_template((BOUNDARY_DIRECTORY / DELIVERY_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
+    return {**documents, **load_roles(), **load_delivery(documents)}
 
 
 def evaluate_cases(documents: dict[str, dict[str, Any]], cases: list[policy_cases.Case]) -> list[dict[str, Any]]:
     """Run every case; return the failures with the decision, the statement and the expected outcome.
 
     The boundary is shared by every role, so it cannot keep one role inside its own scope: a role's refusal must also hold under the role's own
-    policies alone. The wide role is the exception; only the boundary refuses it.
+    policies alone. The wide roles are the exception; only their boundary refuses them.
     """
     failures = []
     held = policy_cases.principals(documents)
@@ -192,7 +287,7 @@ def evaluate_cases(documents: dict[str, dict[str, Any]], cases: list[policy_case
     for case in cases:
         boundary = bounds.get(case.principal)
         decision: Decision = decide(held[case.principal], case.request) if boundary is None else decide_bounded(held[case.principal], boundary, case.request)
-        if boundary is not None and case.principal != policy_cases.WIDE_ROLE and not case.allowed and not decision.allowed:
+        if boundary is not None and case.principal not in (policy_cases.WIDE_ROLE, policy_cases.DELIVERY_WIDE) and not case.allowed and not decision.allowed:
             own = decide(held[case.principal], case.request)
             decision = own if own.allowed else decision
         wrong_effect = decision.allowed != case.allowed
