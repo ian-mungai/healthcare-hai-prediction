@@ -28,8 +28,8 @@ resource "aws_glue_catalog_database" "athena_mirror" {
   for_each = var.athena_mirror_prepared ? local.athena_layers : {}
 
   name        = each.value.database
-  description = "Read-only Glue registrations of every published ${each.key} table, Public and Confidential. Polaris is the catalog and the source of truth."
-  tags        = merge(local.project_tags, { DataClassification = "Confidential" })
+  description = "Read-only Glue registrations of every published ${each.key} table, all Public research data. Polaris is the catalog and the source of truth."
+  tags        = merge(local.project_tags, { DataClassification = "Public" })
 }
 
 resource "aws_athena_workgroup" "athena_mirror" {

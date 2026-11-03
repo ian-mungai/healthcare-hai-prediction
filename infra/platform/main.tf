@@ -34,7 +34,7 @@ locals {
   role_arn_prefix              = "arn:aws:iam::${var.expected_account_id}:role/"
 
   data_mount_path     = "/data"
-  data_classification = { DataClassification = "Confidential" }
+  data_classification = { DataClassification = "Public" }
 }
 
 # The IAM stack, which an administrator applies first, owns the network, the host launch template, the host Auto Scaling

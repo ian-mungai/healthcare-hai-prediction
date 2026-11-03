@@ -23,10 +23,10 @@ resource "aws_s3_bucket" "data" {
   bucket        = var.data_bucket_name
   force_destroy = false
 
-  # Classification belongs to the data, so it is set here rather than in default_tags. Confidential because the bucket
-  # holds a redacted but not formally anonymized derivative and, until remediation, public releases naming individuals.
+  # Classification belongs to the data, so it is set here rather than in default_tags. Public because the bucket holds the
+  # collected public research sources and their approved derivatives (decision 158). Access stays private and the personal originals stay owner-only.
   tags = {
-    DataClassification = "Confidential"
+    DataClassification = "Public"
   }
 
   lifecycle {
@@ -105,7 +105,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
-  # Athena writes query results here, and they can hold Confidential rows. Current results expire after 7 days, replaced versions after 1 day. S3 lets
+  # Athena writes query results here, and they hold rows of the Public research data. Current results expire after 7 days, replaced versions after 1 day. S3 lets
   # a rule carry either days or the delete-marker cleanup, so the markers of expired results stay. The prefix is exact: no other key matches it. The rule changes
   # the live lifecycle configuration, so it exists only while the owner sets athena_retention_enabled; a default plan leaves it out.
   dynamic "rule" {
