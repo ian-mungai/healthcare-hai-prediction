@@ -1,0 +1,204 @@
+{
+  "note": "The longest hosted wall time of each job of .github/workflows/ci.yml and its timeout, in minutes, by expanded job name. A job whose basis says estimate has no hosted measurement yet: resize it from its first complete hosted run. scripts/quality/run_ci_groups_e2e.py (job_timeouts_match_the_measured_durations) requires each workflow job to have an entry, its timeout to equal timeout_minutes and timeout_minutes to lie between 1.5 and 2.6 times measured_minutes (at least 5 minutes). Update the entry with each CI change. This file replaces the Measured durations table of docs/quality_checks.md, which no check reads.",
+  "schema_version": 1,
+  "jobs": [
+    {
+      "job": "CI Plan",
+      "measured_minutes": 1,
+      "timeout_minutes": 5,
+      "basis": "estimate"
+    },
+    {
+      "job": "Quick Gates of a Reused Result",
+      "measured_minutes": 4,
+      "timeout_minutes": 10,
+      "basis": "estimate"
+    },
+    {
+      "job": "Repository Hooks (privacy)",
+      "measured_minutes": 5,
+      "timeout_minutes": 12,
+      "basis": "estimate, secret and data checks"
+    },
+    {
+      "job": "Repository Hooks (documentation)",
+      "measured_minutes": 12,
+      "timeout_minutes": 30,
+      "basis": "estimate, prose, Markdown and review checks"
+    },
+    {
+      "job": "Repository Hooks (code)",
+      "measured_minutes": 24,
+      "timeout_minutes": 40,
+      "basis": "estimate, 22 measured Oct 30 2026 for the remaining manual hooks plus about 2 for the seven linters"
+    },
+    {
+      "job": "Repository Hooks (samples)",
+      "measured_minutes": 10,
+      "timeout_minutes": 20,
+      "basis": "measured Oct 30 2026, the `test-checks` hook alone"
+    },
+    {
+      "job": "Local CI Core",
+      "measured_minutes": 26,
+      "timeout_minutes": 45,
+      "basis": "hosted, measured Oct 31 2026"
+    },
+    {
+      "job": "CI Reuse and Gate E2E",
+      "measured_minutes": 7,
+      "timeout_minutes": 12,
+      "basis": "estimate, 98 seconds on the Mac (88 and 10) plus the setup and the gates"
+    },
+    {
+      "job": "Lakehouse Bronze Checks",
+      "measured_minutes": 8.9,
+      "timeout_minutes": 20,
+      "basis": "hosted"
+    },
+    {
+      "job": "Lakehouse Silver Checks",
+      "measured_minutes": 5.5,
+      "timeout_minutes": 10,
+      "basis": "hosted, 331 s on PR 72 run 41521618599 with the build marker cases, cancelled at the 5 minute limit"
+    },
+    {
+      "job": "Lakehouse Gold Checks",
+      "measured_minutes": 11,
+      "timeout_minutes": 25,
+      "basis": "hosted, supplied 10 to 11 minute range"
+    },
+    {
+      "job": "Lakehouse Features Checks",
+      "measured_minutes": 8,
+      "timeout_minutes": 15,
+      "basis": "estimate, offline feature store gates"
+    },
+    {
+      "job": "Feature Sources (Shard 1 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 2 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 3 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 4 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 5 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 6 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 7 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Sources (Shard 8 of 8)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Columns (Shard 1 of 4)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Columns (Shard 2 of 4)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Columns (Shard 3 of 4)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Columns (Shard 4 of 4)",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate, case-list partition plus setup and gates"
+    },
+    {
+      "job": "Feature Combined Evidence",
+      "measured_minutes": 4,
+      "timeout_minutes": 10,
+      "basis": "estimate, setup and report validation"
+    },
+    {
+      "job": "Lakehouse Gold Model Metadata E2E",
+      "measured_minutes": 14,
+      "timeout_minutes": 30,
+      "basis": "estimate"
+    },
+    {
+      "job": "Launcher E2E (Shard 1 of 2)",
+      "measured_minutes": 8.4,
+      "timeout_minutes": 20,
+      "basis": "hosted"
+    },
+    {
+      "job": "Launcher E2E (Shard 2 of 2)",
+      "measured_minutes": 9,
+      "timeout_minutes": 20,
+      "basis": "hosted"
+    },
+    {
+      "job": "Acquisition Checks (Shard 1 of 4)",
+      "measured_minutes": 13,
+      "timeout_minutes": 30,
+      "basis": "estimate"
+    },
+    {
+      "job": "Acquisition Checks (Shard 2 of 4)",
+      "measured_minutes": 13,
+      "timeout_minutes": 30,
+      "basis": "estimate"
+    },
+    {
+      "job": "Acquisition Checks (Shard 3 of 4)",
+      "measured_minutes": 13,
+      "timeout_minutes": 30,
+      "basis": "estimate"
+    },
+    {
+      "job": "Acquisition Checks (Shard 4 of 4)",
+      "measured_minutes": 13,
+      "timeout_minutes": 30,
+      "basis": "estimate"
+    },
+    {
+      "job": "Acquisition Checks",
+      "measured_minutes": 4,
+      "timeout_minutes": 10,
+      "basis": "estimate"
+    }
+  ]
+}

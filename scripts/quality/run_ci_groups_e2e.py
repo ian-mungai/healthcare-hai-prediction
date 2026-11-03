@@ -1542,7 +1542,7 @@ OLD_GOLD_COMMANDS = (
 )
 TIMING = "scripts/quality/timing.sh"
 ACQUISITION_PYTEST_PATHS = "scripts/acquisition/tests tests/test_source_registry.py"
-DURATIONS_HEADING = "## Measured durations"
+DURATIONS_FILE = "config/quality/job_durations.json"
 
 
 def workflow_document() -> dict[str, Any]:
@@ -1832,12 +1832,6 @@ def acquisition_script_cases() -> list[dict[str, Any]]:
     ]
 
 
-def table_rows(text: str, heading: str) -> list[list[str]]:
-    section = text.split(heading, 1)[1].split("\n## ", 1)[0] if heading in text else ""
-    rows = [[cell.strip() for cell in line.strip().strip("|").split("|")] for line in section.splitlines() if line.startswith("|")]
-    return [row for row in rows[2:] if len(row) >= 3]
-
-
 def fill_matrix(template: str, entry: dict[str, Any]) -> str:
     return re.sub(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", lambda found: str(entry.get(found.group(1), "")), template)
 
@@ -1870,9 +1864,9 @@ def matrix_entries(definition: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def timeout_cases() -> list[dict[str, Any]]:
-    """Each job's timeout equals the one in the table of measured durations and is between 1.5 and 2.6 times the measured time (at least 5 minutes)."""
-    rows = table_rows((ROOT / "docs/quality_checks.md").read_text(encoding="utf-8"), DURATIONS_HEADING)
-    recorded = {row[0]: (float(row[1]), int(row[2])) for row in rows}
+    """Each job's timeout equals the one in config/quality/job_durations.json and is between 1.5 and 2.6 times the measured time (at least 5 minutes)."""
+    entries = json.loads((ROOT / DURATIONS_FILE).read_text(encoding="utf-8"))["jobs"]
+    recorded = {entry["job"]: (float(entry["measured_minutes"]), int(entry["timeout_minutes"])) for entry in entries}
     timeouts = workflow_timeouts()
     off = {name: (recorded[name], timeouts.get(name)) for name in recorded if timeouts.get(name) != recorded[name][1]}
     ratio = {name: round(timeout / measured, 2) for name, (measured, timeout) in recorded.items() if not (1.5 * measured <= timeout <= max(2.6 * measured, 5))}
