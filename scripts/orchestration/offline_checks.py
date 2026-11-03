@@ -365,6 +365,10 @@ def lint() -> dict[str, dict[str, Any]]:
     return results
 
 
+# The official image's build tools that the in-image check reads from its environment (scripts/orchestration/in_image_checks.py).
+BUILD_TOOLS = ("pip", "uv")
+
+
 def image_graph_names() -> set[str]:
     """Read the image producer's literal case registry without importing Airflow."""
     module = ast.parse((ROOT / IN_IMAGE).read_text())
@@ -408,6 +412,9 @@ def image_report_problem(report: dict[str, Any]) -> str:
         return "IN_IMAGE constraints report is incomplete"
     if not isinstance(pins.get("release", {}), dict) or not isinstance(pins.get("release_problems", []), list):
         return "IN_IMAGE constraints release fields are malformed"
+    if set(pins["build_tools"]) != set(BUILD_TOOLS):
+        missing = ", ".join(sorted(set(BUILD_TOOLS) - set(pins["build_tools"]))) or "none"
+        return f"IN_IMAGE build_tools inventory differs; missing {missing}; expected exactly {', '.join(BUILD_TOOLS)}"
     if any(not isinstance(tool, dict) or type(tool.get("ok")) is not bool for tool in pins["build_tools"].values()):
         return "IN_IMAGE build_tools report requires Boolean verdicts"
     return ""
@@ -509,7 +516,7 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
                 for name, graph in image["pipeline_graphs"].items():
                     results[f"{name} passes the graph validator (Airflow object)"] = {**graph, "ok": graph["present"] and not graph["violations"]}
             pins = image["constraints"]
-            tools_ok = all(tool["ok"] for tool in pins["build_tools"].values())
+            tools_ok = set(pins["build_tools"]) == set(BUILD_TOOLS) and all(tool["ok"] is True for tool in pins["build_tools"].values())
             release_ok = not pins.get("release_problems") and set(pins.get("release", {})) == set(platform["airflow"]["release_packages"])
             results["image packages equal the constraints file and the release pins"] = {
                 **pins,

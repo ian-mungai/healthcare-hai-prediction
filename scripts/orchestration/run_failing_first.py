@@ -212,33 +212,59 @@ def run_runner(runner: str, selected: list[str], logs: Path, scratch: Path) -> l
     return rows
 
 
-def offline_entries(tree: Path) -> dict[str, bool]:
-    """The entries of the offline checks that the mutation, graph and distribution sections produce in a copy, by name."""
-    results = latest_report(tree, "orchestration_offline").get("results") or {}
-    return {name: bool(entry["ok"]) for name, entry in results.items()}
+def offline_entries(tree: Path) -> dict[str, Any]:
+    """The entries of the offline checks that the mutation, graph and distribution sections produce in a copy, by name, with their verdicts as written."""
+    results = latest_report(tree, "orchestration_offline").get("results")
+    if not isinstance(results, dict):
+        raise ValueError("the offline report has no results mapping")
+    verdicts: dict[str, Any] = {}
+    for name, entry in results.items():
+        if not isinstance(entry, dict):
+            raise TypeError(f"the offline entry {name} is not an object")
+        verdicts[name] = entry["ok"]
+    return verdicts
 
 
-def offline_result(tree: Path) -> dict[str, Any]:
+def offline_result(tree: Path, required: frozenset[str] = frozenset(), expected: frozenset[str] | None = None) -> dict[str, Any]:
+    """Run the offline sections in a copy and read them strictly: every verdict a Boolean, the entry inventory complete (it holds every ``required`` name and,
+    when ``expected`` is given, is exactly that set) and the exit code of the offline checks equal to the report (0 when every entry passed, 1 otherwise)."""
     arguments = [item for section in OFFLINE_SECTIONS for item in ("--only", section)]
-    in_tree(tree, "scripts.orchestration.offline_checks", arguments)
+    process = in_tree(tree, "scripts.orchestration.offline_checks", arguments)
     try:
         entries = offline_entries(tree)
     except json.JSONDecodeError:
-        return rejected_report({}, "JSONDecodeError: invalid JSON", None)
+        return rejected_report({}, "JSONDecodeError: invalid JSON", process.returncode)
     except KeyError as error:
-        return rejected_report({}, f"KeyError: {error}", None)
+        return rejected_report({}, f"KeyError: {error}", process.returncode)
     except (TypeError, AttributeError, UnicodeError):
-        return rejected_report({}, "the offline report has invalid fields", None)
+        return rejected_report({}, "the offline report has invalid fields", process.returncode)
     except ValueError as error:
-        return rejected_report({}, str(error), None)
-    return {"passed": bool(entries) and all(entries.values()), "checks": entries, "error": "", "seconds": 0}
+        return rejected_report({}, str(error), process.returncode)
+    if not entries:
+        return rejected_report({}, "the offline report holds no entries", process.returncode)
+    bad = sorted(name for name, ok in entries.items() if type(ok) is not bool)
+    if bad:
+        return rejected_report({}, f"the offline verdicts are not Boolean: {', '.join(bad)}", process.returncode)
+    names = frozenset(entries)
+    if not required <= names:
+        return rejected_report({}, f"the offline report lacks required entries: {', '.join(sorted(required - names))}", process.returncode)
+    if expected is not None and names != expected:
+        lost, added = sorted(expected - names), sorted(names - expected)
+        return rejected_report(
+            {}, f"the offline entries differ from the control; missing {', '.join(lost) or 'none'}; unexpected {', '.join(added) or 'none'}", process.returncode
+        )
+    passed = all(entries.values())
+    if process.returncode != (0 if passed else 1):
+        return rejected_report({}, "the offline exit code does not match the reported result", process.returncode)
+    return {"passed": passed, "checks": dict(entries), "error": "", "seconds": 0}
 
 
 def run_offline(selected: list[str], logs: Path, scratch: Path) -> list[dict[str, Any]]:
     """Control and mutant runs of the offline validators. The control is every mutation, graph and distribution entry passing on the unchanged code; a
     mutant turns one validator off, and the entry that feeds it a bad input must then fail."""
     tree = copy_tree(scratch / "offline_control")
-    control = offline_result(tree)
+    required = frozenset(guard.check for guards in guard_mutants.GUARDS["offline"].values() for guard in guards)
+    control = offline_result(tree, required=required)
     shutil.rmtree(tree, ignore_errors=True)
     rows: list[dict[str, Any]] = []
     for group, guards in guard_mutants.GUARDS["offline"].items():
@@ -248,7 +274,7 @@ def run_offline(selected: list[str], logs: Path, scratch: Path) -> list[dict[str
         for guard in guards:
             tree = copy_tree(scratch / f"offline_{guard.mutant}")
             diff = guard_mutants.apply(tree, guard_mutants.MUTANTS[guard.mutant])
-            result = offline_result(tree)
+            result = offline_result(tree, required=required, expected=frozenset(control["checks"]) if control["passed"] else None)
             shutil.rmtree(tree, ignore_errors=True)
             entries = result["checks"]
             ok = control["passed"] and not result["error"] and entries.get(guard.check) is False
