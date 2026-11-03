@@ -5,6 +5,7 @@ pseudonym: HMAC-SHA-256 over a documented normalization of an authoritative pers
 A name pseudonym supports matching and does not prove that two records name the same person. Pseudonymization is not anonymization.
 
 The key is read from Parameter Store at use, as text, held in memory and never written, logged or printed. Tests pass a synthetic key reader.
+verify admits a derivative only against the contract digest that the transformation run reported and the owner kept outside the derivative folder.
 run_pseudonymize_e2e.py verifies every behavior with synthetic inputs. Errors carry one fixed code and never a value, a name or a key.
 """
 
@@ -25,6 +26,8 @@ import sys
 import tempfile
 import unicodedata
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +53,11 @@ MAX_BYTES_LIMIT = 256 * 1024**2
 KEY_VERSION = re.compile(r"v[1-9][0-9]{0,2}")
 NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 PSEUDONYM_FORMAT = re.compile(r"v[1-9][0-9]{0,2}:[0-9a-f]{64}")
+HEX64 = re.compile(r"[0-9a-f]{64}")
+HEX16 = re.compile(r"[0-9a-f]{16}")
+SOURCE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+MIN_IDENTIFIER_CHARACTERS = 4
+MIN_NAME_CHARACTERS = 2
 NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not available", "not applicable", "[redacted]"})
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
@@ -81,9 +89,12 @@ def is_text_list(value: Any) -> bool:
 
 
 def validate_condition(condition: Any, headers: list[str]) -> None:
-    """A condition names one header and the exact cell value that selects a row."""
-    require(isinstance(condition, dict) and set(condition) == {"column", "equals"}, "policy_invalid")
-    require(condition["column"] in headers and isinstance(condition["equals"], str), "policy_invalid")
+    """A condition names one header, the cell value that selects a row and every other approved value; any other value stops the run."""
+    require(isinstance(condition, dict) and set(condition) == {"column", "equals", "others"}, "policy_invalid")
+    require(isinstance(condition["column"], str) and condition["column"] in headers and isinstance(condition["equals"], str), "policy_invalid")
+    require(isinstance(condition["others"], list) and all(isinstance(v, str) for v in condition["others"]), "policy_invalid")
+    approved = [base_text(v) for v in [condition["equals"], *condition["others"]]]
+    require(len(set(approved)) == len(approved), "policy_invalid")
 
 
 def source_removed(treatment: dict, rule: dict) -> bool:
@@ -91,11 +102,13 @@ def source_removed(treatment: dict, rule: dict) -> bool:
     return treatment["treatment"] == "drop" or (rule.get("when") is not None and treatment.get("blank_when") == rule["when"])
 
 
-def validate_policy(policy: dict) -> None:
-    """Reject a policy that is not closed, complete and fail-closed: every source column needs a reviewed treatment."""
-    require(isinstance(policy, dict) and set(policy) == POLICY_FIELDS and policy["policy_version"] == 1, "policy_invalid")
+def check_policy(policy: Any) -> None:
+    """Reject a policy that is not closed, complete and fail-closed: exact types first, then every source column needs a reviewed treatment."""
+    require(isinstance(policy, dict) and set(policy) == POLICY_FIELDS, "policy_invalid")
+    require(type(policy["policy_version"]) is int and policy["policy_version"] == 1, "policy_invalid")
     require(isinstance(policy["policy_id"], str) and NAME_PATTERN.fullmatch(policy["policy_id"]) is not None, "policy_invalid")
     require(isinstance(policy["source_id"], str) and NAME_PATTERN.fullmatch(policy["source_id"].lower()) is not None, "policy_invalid")
+    require(isinstance(policy["normalization_version"], str), "policy_invalid")
     require(policy["normalization_version"] == NORMALIZATION_VERSION, "unsupported_normalization")
     headers = policy["headers"]
     require(is_text_list(headers), "policy_invalid")
@@ -104,7 +117,8 @@ def validate_policy(policy: dict) -> None:
     treatments = policy["treatments"]
     require(isinstance(treatments, dict) and set(treatments) == set(headers), "policy_invalid")
     for rule in treatments.values():
-        require(isinstance(rule, dict) and {"treatment"} <= set(rule) <= {"treatment", "blank_when"} and rule["treatment"] in TREATMENTS, "policy_invalid")
+        require(isinstance(rule, dict) and {"treatment"} <= set(rule) <= {"treatment", "blank_when"}, "policy_invalid")
+        require(isinstance(rule["treatment"], str) and rule["treatment"] in TREATMENTS, "policy_invalid")
         if "blank_when" in rule:
             validate_condition(rule["blank_when"], headers)
             require(rule["treatment"] != "drop", "policy_invalid")
@@ -112,22 +126,31 @@ def validate_policy(policy: dict) -> None:
     require(isinstance(pseudonyms, list) and bool(pseudonyms), "policy_invalid")
     outputs = set()
     for rule in pseudonyms:
+        require(isinstance(rule, dict), "policy_invalid")
         require(
-            isinstance(rule, dict)
-            and {"output", "kind", "namespace", "columns"} <= set(rule) <= {"output", "kind", "namespace", "columns", "when", "middle_column"},
-            "policy_invalid",
+            {"output", "kind", "namespace", "columns"} <= set(rule) <= {"output", "kind", "namespace", "columns", "when", "middle_column"}, "policy_invalid"
         )
         require(isinstance(rule["output"], str) and NAME_PATTERN.fullmatch(rule["output"]) is not None, "policy_invalid")
         require(rule["output"] not in headers and rule["output"] not in outputs, "policy_invalid")
         outputs.add(rule["output"])
-        require(rule["kind"] in KINDS and isinstance(rule["namespace"], str) and NAME_PATTERN.fullmatch(rule["namespace"]) is not None, "policy_invalid")
+        require(isinstance(rule["kind"], str) and rule["kind"] in KINDS, "policy_invalid")
+        require(isinstance(rule["namespace"], str) and NAME_PATTERN.fullmatch(rule["namespace"]) is not None, "policy_invalid")
         require(is_text_list(rule["columns"]) and set(rule["columns"]) <= set(headers), "policy_invalid")
         require(rule["kind"] == "name" or len(rule["columns"]) == 1, "policy_invalid")
         require(all(source_removed(treatments[c], rule) for c in rule["columns"]), "pseudonym_source_not_dropped")
         if "when" in rule:
             validate_condition(rule["when"], headers)
         if "middle_column" in rule:
-            require(rule["kind"] == "name" and rule["middle_column"] in headers and source_removed(treatments[rule["middle_column"]], rule), "policy_invalid")
+            middle = rule["middle_column"]
+            require(isinstance(middle, str) and rule["kind"] == "name" and middle in headers and source_removed(treatments[middle], rule), "policy_invalid")
+
+
+def validate_policy(policy: Any) -> None:
+    """Validate a policy; any unexpected shape is the named error, never an exception that could carry a value."""
+    try:
+        check_policy(policy)
+    except (TypeError, KeyError, AttributeError):
+        raise PseudonymizationError("policy_invalid") from None
 
 
 def read_policy(path: Path) -> dict:
@@ -196,18 +219,34 @@ def load_key(version: str, reader: KeyReader) -> bytes:
     return key
 
 
+@contextmanager
+def quiet_sdk_logs() -> Iterator[None]:
+    """Switch off DEBUG logging for the duration of a secret read: the SDK logs response bodies at DEBUG, and the body holds the decrypted value."""
+    previous = logging.root.manager.disable
+    logging.disable(max(previous, logging.DEBUG))
+    try:
+        yield
+    finally:
+        logging.disable(previous)
+
+
 def parameter_store_reader(client: Any) -> KeyReader:
-    """A reader over a Parameter Store client: one SecureString per key version, read with decryption at use."""
+    """A reader over a Parameter Store client: one SecureString per key version, read with decryption at use and checked for type and name."""
 
     def read(version: str) -> str | None:
+        name = PARAMETER_PREFIX + version
         try:
-            value = client.get_parameter(Name=PARAMETER_PREFIX + version, WithDecryption=True)["Parameter"]["Value"]
+            with quiet_sdk_logs():
+                parameter = client.get_parameter(Name=name, WithDecryption=True)["Parameter"]
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
                 return None
             raise PseudonymizationError("key_read_failed") from None
         except (BotoCoreError, KeyError, TypeError):
             raise PseudonymizationError("key_read_failed") from None
+        require(isinstance(parameter, dict), "key_read_failed")
+        require(parameter.get("Type") == "SecureString" and parameter.get("Name") == name, "key_parameter_invalid")
+        value = parameter.get("Value")
         return value if isinstance(value, str) else None
 
     return read
@@ -224,9 +263,29 @@ def open_parameter_client(profile: str, region: str) -> Any:
         raise PseudonymizationError("aws_settings_invalid") from None
 
 
+@lru_cache(maxsize=4096)
+def classify(value: str, equals: str, others: tuple[str, ...]) -> bool | None:
+    """True for the selecting value, False for another approved value and None for any other value, compared after the base normalization."""
+    text = base_text(value)
+    if text == base_text(equals):
+        return True
+    return False if text in {base_text(v) for v in others} else None
+
+
+def selects(condition: dict, value: str) -> bool | None:
+    """The classification of one discriminator cell under a condition."""
+    return classify(value, condition["equals"], tuple(condition["others"]))
+
+
 def matches(condition: dict | None, row: dict[str, str]) -> bool:
-    """True when no condition is set or the row cell equals the condition value."""
-    return condition is None or row[condition["column"]] == condition["equals"]
+    """True when no condition is set or the row cell is the selecting value; the run has already refused any unapproved value."""
+    return condition is None or selects(condition, row[condition["column"]]) is True
+
+
+def conditions(policy: dict) -> list[dict]:
+    """Every distinct condition the policy uses, in policy order."""
+    found = [r["blank_when"] for r in policy["treatments"].values() if "blank_when" in r] + [r["when"] for r in policy["pseudonyms"] if "when" in r]
+    return [c for i, c in enumerate(found) if c not in found[:i]]
 
 
 def rows(path: Path, headers: list[str], max_bytes: int) -> Iterator[dict[str, str]]:
@@ -248,22 +307,52 @@ def rows(path: Path, headers: list[str], max_bytes: int) -> Iterator[dict[str, s
 
 
 def person_words(policy: dict, row: dict[str, str]) -> Iterator[tuple[str, ...]]:
-    """The name word sequences of the people one row names, for matching inside kept text cells."""
+    """The name word sequences of the people one row names, for matching inside kept text cells; a single-word name counts."""
     for rule in policy["pseudonyms"]:
         if rule["kind"] != "name" or not matches(rule.get("when"), row):
             continue
         parts = normalized_parts("name", [row[c] for c in rule["columns"]])
         if parts is not None:
-            words = tuple(" ".join(parts).split())
-            yield words
+            yield tuple(" ".join(parts).split())
             if rule.get("middle_column") and (middle := normalize_name(row[rule["middle_column"]])):
                 yield (*" ".join(parts[:-1]).split(), *middle.split(), *parts[-1].split())
 
 
+def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:
+    """The identifiers one row holds, as lower-case letters and digits only, for matching inside kept text cells."""
+    for rule in policy["pseudonyms"]:
+        if rule["kind"] == "id" and matches(rule.get("when"), row):
+            parts = normalized_parts("id", [row[c] for c in rule["columns"]])
+            if parts is not None:
+                yield "".join(c for c in parts[0] if c.isalnum())
+
+
 def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
-    """True when the text holds any known person's whole name as consecutive words."""
+    """True when the text holds any known person's whole name, of one word or more, as consecutive words."""
     words = tuple(normalize_name(text).split())
-    return any(words[i : i + n] in names for n in range(2, longest + 1) for i in range(len(words) - n + 1))
+    return any(words[i : i + n] in names for n in range(1, longest + 1) for i in range(len(words) - n + 1))
+
+
+def contains_identifier(text: str, identifiers: set[str], longest: int) -> bool:
+    """True when consecutive letter and digit runs of the text, joined, equal a known identifier: it may be typed with spaces or dashes."""
+    if not identifiers:
+        return False
+    runs = re.findall(r"[^\W_]+", base_text(text))
+    for start in range(len(runs)):
+        joined = ""
+        for run in runs[start:]:
+            joined += run
+            if len(joined) > longest:
+                break
+            if joined in identifiers:
+                return True
+    return False
+
+
+def refuse_short_values(names: set[tuple[str, ...]], identifiers: set[str]) -> None:
+    """Fail closed: a name or identifier too short to match safely in text stops the run before any output."""
+    require(all(len(i) >= MIN_IDENTIFIER_CHARACTERS for i in identifiers), "identifier_too_short")
+    require(all(len(n) > 1 or len(n[0]) >= MIN_NAME_CHARACTERS for n in names), "name_too_short")
 
 
 def output_headers(policy: dict) -> list[str]:
@@ -336,12 +425,19 @@ def transform(source: Path, output: Path, policy: dict, key_version: str, reader
     key = load_key(key_version, reader)
     headers, treatments = policy["headers"], policy["treatments"]
     names: set[tuple[str, ...]] = set()
+    identifiers: set[str] = set()
     count = 0
+    approved = conditions(policy)
     for row in rows(source, headers, policy["max_bytes"]):
         count += 1
-        names.update(words for words in person_words(policy, row) if len(words) > 1)
+        require(all(selects(c, row[c["column"]]) is not None for c in approved), "discriminator_unknown")
+        names.update(person_words(policy, row))
+        identifiers.update(person_identifiers(policy, row))
     require(count >= policy["min_rows"], "row_count_below_minimum")
-    longest = max((len(n) for n in names), default=0)
+    scrubbing = any(t["treatment"] == "scrub_names" for t in treatments.values())
+    if scrubbing:
+        refuse_short_values(names, identifiers)
+    names_longest, identifiers_longest = max((len(n) for n in names), default=0), max((len(i) for i in identifiers), default=0)
     kept = [h for h in headers if treatments[h]["treatment"] != "drop"]
     statistics: dict[str, Any] = {
         "rows": 0,
@@ -365,7 +461,11 @@ def transform(source: Path, output: Path, policy: dict, key_version: str, reader
                 if "blank_when" in rule and matches(rule["blank_when"], row) and cell:
                     cell = ""
                     statistics["blanked"] += 1
-                elif rule["treatment"] == "scrub_names" and names and cell and contains_name(cell, names, longest):
+                elif (
+                    rule["treatment"] == "scrub_names"
+                    and cell
+                    and (contains_name(cell, names, names_longest) or contains_identifier(cell, identifiers, identifiers_longest))
+                ):
                     cell = REPLACEMENT
                     statistics["scrubbed"] += 1
                 values.append(cell)
@@ -389,31 +489,103 @@ def transform(source: Path, output: Path, policy: dict, key_version: str, reader
         return contract
 
 
-def verify_derivative(directory: Path, policy: dict) -> dict:
-    """Check a stored derivative and its contract against the policy, without the original or the key."""
+def contract_shape(policy: dict) -> dict:
+    """The complete closed schema of a contract for this policy: exact fields, types and fixed values; a type stands for a non-negative integer."""
+    return {
+        "kind": "pseudonymized_csv_contract",
+        "contract_version": CONTRACT_VERSION,
+        "derivative_policy": {
+            "policy_id": NAME_PATTERN,
+            "policy_version": 1,
+            "policy_sha256": HEX64,
+            "source_id": SOURCE_ID,
+            "classification": CLASSIFICATION,
+        },
+        "normalization_version": NORMALIZATION_VERSION,
+        "key_version": KEY_VERSION,
+        "key_check": HEX16,
+        "input": {"sha256": HEX64, "byte_count": int, "headers": list(policy["headers"]), "row_count": int},
+        "output": {"sha256": HEX64, "byte_count": int, "headers": output_headers(policy), "row_count": int},
+        "dropped_columns": [h for h in policy["headers"] if policy["treatments"][h]["treatment"] == "drop"],
+        "conditionally_blanked_columns": [h for h in policy["headers"] if "blank_when" in policy["treatments"][h]],
+        "pseudonyms": [
+            {"output": r["output"], "namespace": r["namespace"], "match_strength": KINDS[r["kind"]], "written": int, "withheld": int, "distinct": int}
+            for r in policy["pseudonyms"]
+        ],
+        "scrubbed_cells": int,
+        "blanked_cells": int,
+        "name_pseudonyms_prove_identity": False,
+        "pseudonymization_is_anonymization": False,
+        "lookup_table_written": False,
+        "model_eligible": False,
+        "contract_sha256": HEX64,
+    }
+
+
+def shape_ok(value: Any, spec: Any) -> bool:
+    """True when the value has exactly the shape: objects with the same fields, lists of the same length, patterns, non-negative integers or equal constants."""
+    if isinstance(spec, dict):
+        return isinstance(value, dict) and set(value) == set(spec) and all(shape_ok(value[k], v) for k, v in spec.items())
+    if isinstance(spec, list):
+        return isinstance(value, list) and len(value) == len(spec) and all(shape_ok(v, s) for v, s in zip(value, spec, strict=True))
+    if isinstance(spec, re.Pattern):
+        return isinstance(value, str) and spec.fullmatch(value) is not None
+    if spec is int:
+        return type(value) is int and value >= 0
+    return type(value) is type(spec) and value == spec
+
+
+def read_derivative_table(directory: Path) -> list[list[str]]:
+    """The rows of the data file, header first, read strictly."""
+    try:
+        with (directory / DATA_NAME).open(newline="", encoding="utf-8") as handle:
+            return list(csv.reader(handle, strict=True))
+    except (OSError, UnicodeDecodeError, csv.Error):
+        raise PseudonymizationError("derivative_unreadable") from None
+
+
+def check_conditional_rows(policy: dict, header: list[str], table: list[list[str]]) -> None:
+    """On rows a condition selects, its blanked columns are empty; on other rows its pseudonym is empty; no row holds an unapproved value."""
+    position = {name: i for i, name in enumerate(header)}
+    checks = [(t["blank_when"], column, True) for column, t in policy["treatments"].items() if "blank_when" in t]
+    checks += [(r["when"], r["output"], False) for r in policy["pseudonyms"] if "when" in r]
+    for condition, column, blanked in checks:
+        if condition["column"] not in position:
+            continue
+        for row in table:
+            state = selects(condition, row[position[condition["column"]]])
+            require(state is not None, "conditional_rows_differ")
+            cell = row[position[column]]
+            require(state is not True or cell == "" if blanked else state is True or cell == "", "conditional_rows_differ")
+
+
+def verify_derivative(directory: Path, policy: dict, trusted_sha256: str) -> dict:
+    """Admit a stored derivative only when its contract is the trusted one and everything it and the data claim holds, without the original or the key."""
     validate_policy(policy)
+    require(isinstance(trusted_sha256, str) and HEX64.fullmatch(trusted_sha256) is not None, "invalid_hash_pin")
     require(directory.is_dir() and {p.name for p in directory.iterdir()} == {DATA_NAME, CONTRACT_NAME}, "derivative_files_differ")
     try:
         contract = json.loads((directory / CONTRACT_NAME).read_text())
-        body = {k: v for k, v in contract.items() if k != "contract_sha256"}
-        require(contract["contract_sha256"] == canonical_hash(body), "contract_hash_differs")
-        require(contract["derivative_policy"]["policy_sha256"] == canonical_hash(policy), "policy_differs")
-        require(contract["output"]["headers"] == output_headers(policy), "derivative_schema_differs")
-        require(fingerprint(directory / DATA_NAME) == (contract["output"]["sha256"], contract["output"]["byte_count"]), "derivative_hash_differs")
-        version = contract["key_version"]
-        require(isinstance(version, str) and KEY_VERSION.fullmatch(version) is not None, "key_version_invalid")
-        pseudonym_columns = [r["output"] for r in policy["pseudonyms"]]
-        with (directory / DATA_NAME).open(newline="", encoding="utf-8") as handle:
-            table = list(csv.DictReader(handle, strict=True))
-    except PseudonymizationError:
-        raise
-    except (OSError, ValueError, KeyError, TypeError, csv.Error):
+    except (OSError, ValueError):
         raise PseudonymizationError("contract_unreadable") from None
-    require(len(table) == contract["output"]["row_count"] == contract["input"]["row_count"], "row_count_differs")
-    for row in table:
-        for column in pseudonym_columns:
-            value = row[column]
-            require(value == "" or (PSEUDONYM_FORMAT.fullmatch(value) is not None and value.startswith(version + ":")), "pseudonym_format_differs")
+    require(shape_ok(contract, contract_shape(policy)), "contract_schema_differs")
+    require(contract["contract_sha256"] == canonical_hash({k: v for k, v in contract.items() if k != "contract_sha256"}), "contract_hash_differs")
+    require(contract["contract_sha256"] == trusted_sha256, "trusted_digest_differs")
+    require(contract["derivative_policy"]["policy_sha256"] == canonical_hash(policy), "policy_differs")
+    require(fingerprint(directory / DATA_NAME) == (contract["output"]["sha256"], contract["output"]["byte_count"]), "derivative_hash_differs")
+    table = read_derivative_table(directory)
+    header, body = (table[0] if table else []), table[1:]
+    require(header == output_headers(policy), "derivative_schema_differs")
+    require(all(len(row) == len(header) for row in body), "row_width_differs")
+    require(len(body) == contract["output"]["row_count"] == contract["input"]["row_count"], "row_count_differs")
+    version = contract["key_version"]
+    for rule, entry in zip(policy["pseudonyms"], contract["pseudonyms"], strict=True):
+        values = [row[header.index(rule["output"])] for row in body]
+        found = [v for v in values if v]
+        require(all(PSEUDONYM_FORMAT.fullmatch(v) is not None and v.startswith(version + ":") for v in found), "pseudonym_format_differs")
+        counts = (len(found), len(values) - len(found), len(set(found)))
+        require(counts == (entry["written"], entry["withheld"], entry["distinct"]), "contract_counts_differ")
+    check_conditional_rows(policy, header, body)
     return contract
 
 
@@ -429,7 +601,7 @@ def run(args: argparse.Namespace) -> dict:
     """Run one command-line action."""
     policy = read_policy(args.policy)
     if args.action == "verify":
-        return verify_derivative(args.output, policy)
+        return verify_derivative(args.output, policy, args.expect_contract_sha256)
     require(bool(args.profile) and bool(args.region), "aws_settings_invalid")
     reader = parameter_store_reader(open_parameter_client(args.profile, args.region))
     return transform(args.input, args.output, policy, args.key_version, reader, args.expect_input_sha256)
@@ -451,6 +623,7 @@ def main(argv: list[str] | None = None) -> None:
     check = sub.add_parser("verify")
     check.add_argument("--policy", required=True, type=Path)
     check.add_argument("--output", required=True, type=Path)
+    check.add_argument("--expect-contract-sha256", required=True)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
@@ -463,6 +636,7 @@ def main(argv: list[str] | None = None) -> None:
         "status": "admitted" if args.action == "verify" else "pseudonymized",
         "row_count": result["output"]["row_count"],
         "output_sha256": result["output"]["sha256"],
+        "contract_sha256": result["contract_sha256"],
     }
     sys.stdout.write(json.dumps(summary) + "\n")
 
