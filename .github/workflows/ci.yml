@@ -196,16 +196,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  local_ci:
-    name: Local CI Core
+  core:
+    name: ${{ matrix.title }}
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 25.3 min, mean 24.9 min. The reuse, shard and gate stage cases of the CI groups E2E moved to the job
-    # CI Reuse and Gate E2E; this job runs only the selection cases of that E2E.
-    # Runs on main reached 26 minutes on Oct 31 2026 and two runs were cancelled at 30, so the limit was 45. A passing run took 38.2 minutes on Nov 4 2026 and
-    # PR 76 ran past 45 twice on Nov 5 2026, so the limit is 60 until the configuration checks move to their own job and the limit returns to 45.
-    timeout-minutes: 60
+    # The former Local CI Core job is seven jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
+    # suites of its groups and splits no command and no scenario; config/quality/core_commands.json lists every command and the CI groups E2E fails on a dropped or a
+    # duplicated one. The wall time beside each timeout is an estimate until a complete hosted run of the new jobs exists: the longest group of the part from the
+    # command seconds of the last complete hosted run of the former job (run 41521618599 of pull request 72, where all its groups ran together, so the figure is an
+    # upper bound; the broker E2E and later commands of the orchestration groups were cut short, so the engine and offline figures add the design estimates) plus
+    # about 4 minutes of setup and gates. A timeout is between 1.5 and 2.6 times the wall time.
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: core_static
+            title: Core Static Checks
+            timeout: 12  # wall time 7.5 min, estimate: typecheck 203 s
+          - part: core_sql_terraform
+            title: Core SQL and Terraform Checks
+            timeout: 40  # wall time 23.5 min, estimate: SQL style 1169 s (Terraform 751 s runs beside it)
+          - part: core_configuration
+            title: Core Configuration Checks
+            timeout: 50  # wall time 32 min, estimate: 23 commands, 1692 s
+          - part: core_ci_tooling
+            title: Core CI Tooling Checks
+            timeout: 45  # wall time 30 min, estimate: container import hook 874 s, selection 387 s, process stops about 275 s, rebind 18 s
+          - part: core_code_rules
+            title: Core Code Rules
+            timeout: 10  # wall time 5.5 min, estimate: 106 s on the Mac (47 s of commands, 57 s of gates), about twice that hosted, and about 1.5 min of setup
+          - part: core_orchestration_engine
+            title: Core Orchestration Engine Tests
+            timeout: 30  # wall time 18 min, estimate: broker 502 s, stack 159 s, lean broker 58 s and about 120 s for the supervisor and transform broker
+          - part: core_orchestration_offline
+            title: Core Orchestration Offline Checks
+            timeout: 30  # wall time 18 min, estimate: 483 s measured, the SDK runtime cases alone 197 s, and about 350 s for the offline checks that were cut short
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -220,9 +247,9 @@ jobs:
         with:
           redis-server: "true"
 
-      - name: Run local CI without the launcher E2E
+      - name: Run this part of local CI without the launcher E2E
         env:
-          CI_PART: core
+          CI_PART: ${{ matrix.part }}
           CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
@@ -235,7 +262,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: configuration_e2e_${{ github.run_id }}_${{ github.run_attempt }}
+          name: core_${{ matrix.part }}_${{ github.run_id }}_${{ github.run_attempt }}
           path: |
             data/e2e/configuration/
             data/e2e/policies/
@@ -250,7 +277,7 @@ jobs:
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Estimate (no hosted run yet): the reuse, shard and gate stage cases of the CI groups E2E took 88 s and 10 s on the Mac (Oct 30 2026, load 8; about 3 minutes
-    # hosted), and the setup and the gates add about 4. They moved out of Local CI Core, which took 25.9 of its 30 minutes. Resize from the first complete hosted run.
+    # hosted), and the setup and the gates add about 4. They moved out of the former Core job, which took 25.9 of its 30 minutes. Resize from the first complete hosted run.
     timeout-minutes: 12
     steps:
       - name: Checkout

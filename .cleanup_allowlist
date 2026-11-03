@@ -76,7 +76,6 @@ unused-code scripts/streamlit_app/stand_in_api.py -- http.server dispatches do_G
 unused-code scripts/orchestration/task_guard_cases.py -- http.server dispatches do_GET of the loopback task metadata stand-in by method name
 config scripts/quality/model_metadata.py -- confidential_columns is still the live source annotation that the Confidential origin check enforces for a future source outside the Public research-data scope (decision 158)
 config scripts/quality/run_model_metadata_e2e.py -- confidential_columns appears in the synthetic Confidential source samples that prove the origin check still works (decision 176)
-config docs/data_collection.md -- the tracked document keeps its earlier wording until the documents leave the repository (decision 166)
 config scripts/quality/dbt_manifest_labels.py -- the Public label guard names the removed Confidential label keys so it can refuse any model that brings them back
 config scripts/quality/label_guard_fixtures.py -- the guard's test fixtures plant the removed Confidential label keys to prove the guard refuses them
 orphan orchestration/ecs_launch_provider.py -- the Airflow image imports the launch operator by name when a DAG uses it; the offline cases run its guarantees through orchestration/ecs_launch_operator.py over a stand-in
@@ -84,3 +83,7 @@ unused-code orchestration/ecs_launch_provider.py -- Airflow's DAG parser imports
 unused-code orchestration/ecs_launch_operator.py -- the provider operator's execute calls the four hooks by name, the task runner calls on_kill, and the unused started_by argument is part of the hook signature
 unused-code scripts/orchestration/ecs_launch_standin.py -- the stand-in keeps the signatures of the provider operator, so unused arguments and the hook names stay
 unused-code scripts/lakehouse/run_gold_publish_runner_cases.py -- the tempfile.mkdtemp stand-in keeps the dir keyword of the real signature, so callers that pass dir= still work
+config scripts/quality/ci_hooks.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
+config scripts/quality/pre_push.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
+config scripts/quality/run_ci_groups_e2e.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
+config .pre-commit-config.yaml -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job

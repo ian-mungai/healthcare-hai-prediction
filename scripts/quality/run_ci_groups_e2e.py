@@ -18,7 +18,7 @@ data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the
 the run fails when a file under test changes while it runs.
 
 The reuse, shard and gate stage cases are the check group reuse_gate_checks (hosted job CI Reuse and Gate E2E): ``--reuse-only`` and ``--gate-stage-only``
-run them, ``--selection-only`` (Local CI Core) leaves them out and a run without a mode runs all.
+run them, ``--selection-only`` (the Core CI tooling job) leaves them out and a run without a mode runs all.
 
 Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim check)
 and ``acquisition-checks``, every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is
@@ -56,7 +56,7 @@ from typing import Any
 from unittest import mock
 
 from scripts.process import clear_git_environment, find_program, run_command
-from scripts.quality import ci_groups
+from scripts.quality import ci_groups, core_commands
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
@@ -104,6 +104,8 @@ COPIED = (
     "orchestration/network_policy.py",
     "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/core_commands.py",
+    "config/quality/core_commands.json",
     "scripts/quality/ci_main_passes.py",
     "scripts/quality/launcher_inputs.py",
     "scripts/quality/source_reads.py",
@@ -165,7 +167,25 @@ ZERO = "0" * 40
 MISSING = "0123456789abcdef0123456789abcdef01234567"
 MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
 LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold", "lakehouse_features"]
-CORE = ["python_lint", "orchestration_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
+CORE = [
+    "python_lint",
+    "orchestration_checks",
+    "orchestration_engine_e2e",
+    "repository_code_checks",
+    "ci_tooling_checks",
+    "configuration_checks",
+    "sql_style",
+    "terraform_checks",
+]
+# The groups split from another group select on the same paths, apart from their own body file: a path that selects the origin selects the split group too.
+SPLIT_FROM = {"orchestration_engine_e2e": "orchestration_checks", "ci_tooling_checks": "repository_code_checks"}
+
+
+def with_split_groups(wanted: list[str]) -> list[str]:
+    """The groups a path selects: those of ``wanted`` and the groups split from them."""
+    return [*wanted, *(group for group, origin in SPLIT_FROM.items() if origin in wanted and group not in wanted)]
+
+
 WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
     "core": CORE,
@@ -234,9 +254,11 @@ def select(work: Path, *args: str) -> tuple[int, dict[str, Any] | None, str]:
     return result.returncode, plan, result.stderr.strip()
 
 
-def selection_case(work: Path, name: str, args: list[str], want_run: list[str], want_reason: str = "") -> dict[str, Any]:
+def selection_case(work: Path, name: str, args: list[str], want_run: list[str], want_reason: str = "", split: bool = True) -> dict[str, Any]:
     part = args[args.index("--part") + 1] if "--part" in args else "all"
     scope = args[args.index("--scope") + 1] if "--scope" in args else ""
+    if split:
+        want_run = with_split_groups(want_run)
     if part != "launcher":
         unconditional = {"sql_style"} if scope in {"full", "range"} and "sql_style" in PART_GROUPS[part] else set()
         want_run = [group for group in PART_GROUPS[part] if group in {*want_run, *unconditional}]
@@ -1924,8 +1946,85 @@ def timeout_cases() -> list[dict[str, Any]]:
     ]
 
 
+def core_scratch(root: Path) -> Path:
+    """A copy of what the Core command guard reads: the configuration, the inventory and the group body files."""
+    for name in ("config/quality/ci_groups.json", "config/quality/core_commands.json"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, root / name)
+    shutil.copytree(ROOT / "scripts/ci/groups", root / "scripts/ci/groups")
+    return root
+
+
+def core_command_cases() -> list[dict[str, Any]]:
+    """Every Core command runs once, in one of the seven hosted Core parts, and the guard fails on a dropped or a duplicated command."""
+    cases: list[dict[str, Any]] = [
+        {"case": "core_commands_run_exactly_once", "passed": not core_commands.findings(ROOT), "findings": core_commands.findings(ROOT)}
+    ]
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    jobs = workflow_document()["jobs"]
+    hosted = []
+    for definition in jobs.values():
+        for step in definition.get("steps", []):
+            value = str(step.get("env", {}).get("CI_PART", ""))
+            if value == "${{ matrix.part }}":
+                hosted += [str(entry["part"]) for entry in matrix_entries(definition)]
+            elif value:
+                hosted.append(value)
+    hosted = sorted(part for part in hosted if part.startswith("core_"))
+    cases.append(
+        {
+            "case": "seven_hosted_core_jobs_run_the_seven_parts",
+            "passed": len(config.get("parts", {})) == 7 and hosted == sorted(config.get("parts", {})),
+            "parts": sorted(config.get("parts", {})),
+            "hosted": hosted,
+        }
+    )
+    first_group = next(iter(core_commands.inventory(ROOT)))
+    plants = {
+        "dropped_command_is_found": ("dropped command", lambda root: drop_first_command(root, first_group)),
+        "duplicated_command_is_found": ("duplicated command", lambda root: duplicate_first_command(root, first_group)),
+        "unplaced_group_is_found": ("is in no hosted Core part", lambda root: change_parts(root, remove=first_group)),
+        "group_in_two_parts_is_found": ("hosted Core parts", lambda root: change_parts(root, repeat=first_group)),
+    }
+    for name, (marker_text, plant) in plants.items():
+        with tempfile.TemporaryDirectory(prefix="core_commands.") as folder:
+            root = core_scratch(Path(folder))
+            plant(root)
+            problems = core_commands.findings(root)
+        cases.append({"case": f"core_commands_guard_{name}", "passed": any(marker_text in problem for problem in problems), "findings": problems[:3]})
+    return cases
+
+
+def drop_first_command(root: Path, group: str) -> None:
+    path = root / "scripts/ci/groups" / f"{group}.sh"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}")
+    path.write_text("".join(lines[:index] + lines[index + 1 :]), encoding="utf-8")
+
+
+def duplicate_first_command(root: Path, group: str) -> None:
+    path = root / "scripts/ci/groups" / f"{group}.sh"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}")
+    path.write_text("".join(lines[: index + 1] + [lines[index]] + lines[index + 1 :]), encoding="utf-8")
+
+
+def change_parts(root: Path, remove: str = "", repeat: str = "") -> None:
+    path = root / "config/quality/ci_groups.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    parts = config.get("parts", {})
+    for name, groups in parts.items():
+        if remove in groups:
+            parts[name] = [group for group in groups if group != remove]
+    if repeat and parts:
+        first, second = list(parts)[:2]
+        parts[second] = [*parts[second], *(group for group in parts[first][:1] if group not in parts[second])]
+    config["parts"] = parts
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
 WORKER_KINDS = (
-    # The SDK runtime commands of the offline orchestration group run alone before the other items.
+    # The SDK runtime commands of the offline orchestration group run alone before the other items (pull request 72 splits them from the group's own item).
     "orchestration_checks_sdk_runtime",
     "lakehouse_gold_checks",
     "lakehouse_gold_writer_setup",
@@ -2565,7 +2664,13 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
             "exits": exits,
         }
     )
-    return [*results, *feature_combination_cases(scratch), *hook_partition_cases(scratch), hook_timeout_case(scratch), *feature_case_timing_cases(scratch)]
+    return [
+        *results,
+        *feature_combination_cases(scratch),
+        *hook_partition_cases(scratch),
+        hook_timeout_case(scratch),
+        *feature_case_timing_cases(scratch),
+    ]
 
 
 def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
@@ -2577,6 +2682,7 @@ def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
         *feature_split_cases(),
         *acquisition_script_cases(),
         *timeout_cases(),
+        *core_command_cases(),
     ]
 
 
@@ -2994,28 +3100,32 @@ def speed_real_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 
 
 BODY_SELECTION = {
-    "python_lint": ["python_lint", "repository_code_checks"],
-    "lakehouse_bronze": [*LAYERS, "repository_code_checks"],
-    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks"],
-    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks"],
-    "lakehouse_features": ["lakehouse_features", "repository_code_checks"],
-    "orchestration_checks": ["orchestration_checks", "repository_code_checks"],
-    "repository_code_checks": ["repository_code_checks"],
-    "configuration_checks": ["configuration_checks", "repository_code_checks"],
-    "sql_style": ["repository_code_checks", "sql_style"],
-    "terraform_checks": ["repository_code_checks", "terraform_checks"],
-    "launcher": ["repository_code_checks", "launcher"],
-    "reuse_gate_checks": ["repository_code_checks", "launcher", "reuse_gate_checks"],
+    "python_lint": ["python_lint", "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_bronze": [*LAYERS, "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_features": ["lakehouse_features", "repository_code_checks", "ci_tooling_checks"],
+    "orchestration_checks": ["orchestration_checks", "repository_code_checks", "ci_tooling_checks"],
+    "orchestration_engine_e2e": ["orchestration_engine_e2e", "repository_code_checks", "ci_tooling_checks"],
+    "repository_code_checks": ["repository_code_checks", "ci_tooling_checks"],
+    "ci_tooling_checks": ["repository_code_checks", "ci_tooling_checks"],
+    "configuration_checks": ["configuration_checks", "repository_code_checks", "ci_tooling_checks"],
+    "sql_style": ["repository_code_checks", "ci_tooling_checks", "sql_style"],
+    "terraform_checks": ["repository_code_checks", "ci_tooling_checks", "terraform_checks"],
+    "launcher": ["repository_code_checks", "ci_tooling_checks", "launcher"],
+    "reuse_gate_checks": ["repository_code_checks", "ci_tooling_checks", "launcher", "reuse_gate_checks"],
 }
 
 
-def staged_edit_case(work: Path, name: str, path: str, want_run: list[str], part: str = "core+layers", want_reason: str = "") -> dict[str, Any]:
+def staged_edit_case(
+    work: Path, name: str, path: str, want_run: list[str], part: str = "core+layers", want_reason: str = "", split: bool = True
+) -> dict[str, Any]:
     """Stage a one-line edit of ``path`` and check which groups the staged scope selects."""
     target = work / path
     try:
         target.write_text(target.read_text(encoding="utf-8") + "\n# staged edit\n", encoding="utf-8")
         git(work, "add", path)
-        return selection_case(work, name, ["--scope", "staged", "--part", part], want_run, want_reason)
+        return selection_case(work, name, ["--scope", "staged", "--part", part], want_run, want_reason, split)
     finally:
         restore(work)
 
@@ -3033,7 +3143,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
     ]
     for group, wanted in BODY_SELECTION.items():
         part = "all" if group in {"launcher", "reuse_gate_checks"} else "core+layers"
-        cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
+        cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part, split=False))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
     cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
@@ -3514,9 +3624,10 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     local = local_plan_of(log)
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
-        "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["repository_code_checks", "sql_style"],
+        "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["ci_tooling_checks", "repository_code_checks", "sql_style"],
         # Every path selects the launcher while a followed module carries the inventory_reads pattern ".", so the dry run starts it too.
-        "launcher_selected_by_every_path": "TIMED launcher E2E" in log and local["groups"] == {"launcher", "repository_code_checks", "sql_style"},
+        "launcher_selected_by_every_path": "TIMED launcher E2E" in log
+        and local["groups"] == {"launcher", "ci_tooling_checks", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }
     cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
@@ -4503,7 +4614,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
     )
     root = pre_push_repo(scratch, "pre_push_range_matches_hosted", "README.md")
     plan = pre_push_plan(root)
-    hosted = workflow_document()["jobs"]["local_ci"]["steps"]
+    hosted = workflow_document()["jobs"]["core"]["steps"]
     hosted_env = next(step["env"] for step in hosted if isinstance(step.get("env"), dict) and "CI_SCOPE" in step["env"])
     base = probe_git(root, "rev-parse", "origin/main")
     head = probe_git(root, "rev-parse", "HEAD")
@@ -4515,6 +4626,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
         "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
         "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
         "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
+        # The hosted jobs read the scope from the plan job: range for a pull request, which is the scope of a push range.
         "env_values": local.get("env", {}).get("CI_SCOPE") == "range"
         and hosted_env["CI_SCOPE"] == "${{ needs.plan.outputs.scope }}"
         and local.get("env", {}).get("RANGE_START") == base
@@ -5142,6 +5254,7 @@ def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
     ]
     body = (ROOT / GROUP_FILES / "reuse_gate_checks.sh").read_text(encoding="utf-8")
     core = (ROOT / GROUP_FILES / "repository_code_checks.sh").read_text(encoding="utf-8")
+    tooling = (ROOT / GROUP_FILES / "ci_tooling_checks.sh").read_text(encoding="utf-8")
     jobs = workflow_document()["jobs"]
     steps = [step.get("env", {}) for step in jobs["reuse_gate"]["steps"] if step.get("env", {}).get("CI_PART") == "reuse_gate"]
     required = json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8"))["required_pull_request_jobs"]
@@ -5149,7 +5262,8 @@ def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
         {
             "case": "reuse_and_gate_stage_cases_run_in_their_own_group_and_hosted_job",
             "passed": all(f"run_ci_groups_e2e {flag}" in body and f"run_ci_groups_e2e {flag}" not in core for flag in REUSE_GATE_CASES)
-            and "run_ci_groups_e2e --selection-only" in core
+            and "run_ci_groups_e2e --selection-only" in tooling
+            and "run_ci_groups_e2e" not in core
             and len(steps) == 1
             and jobs["reuse_gate"]["name"] == "CI Reuse and Gate E2E"
             and "CI Reuse and Gate E2E" in required,

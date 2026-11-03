@@ -118,6 +118,30 @@
       "^scripts/process_group\\.py$",
       "^services/hai/(deadline_run\\.py$|bootstrap/)"
     ],
+    "orchestration_engine_e2e": [
+      "^scripts/orchestration/",
+      "^scripts/serving/",
+      "^data_contracts/serving/",
+      "^scripts/streamlit_app/",
+      "^services/streamlit/",
+      "^orchestration/",
+      "^dags/",
+      "^tests/orchestration/",
+      "^config/orchestration/",
+      "^data_contracts/orchestration/",
+      "^services/orchestration/",
+      "^services/lineage/",
+      "^scripts/quality/(docker_calls|repo_checks|typecheck)\\.py$",
+      "^config/quality/(docker_calls_reviewed|mypy_runtimes)\\.json$",
+      "^docker-compose\\.yaml$",
+      "^scripts/lakehouse/",
+      "^dbt/",
+      "^data_contracts/lakehouse/",
+      "^data_contracts/great_expectations/",
+      "^scripts/ci/groups/orchestration_engine_e2e\\.sh$",
+      "^scripts/process_group\\.py$",
+      "^services/hai/(deadline_run\\.py$|bootstrap/)"
+    ],
     "repository_code_checks": [
       "\\.(py|sh)$",
       "(^|/)Dockerfile$",
@@ -136,6 +160,25 @@
       "^config/quality_tools\\.json$",
       "^services/orchestration/egress_proxy\\.json$",
       "^scripts/ci/groups/repository_code_checks\\.sh$"
+    ],
+    "ci_tooling_checks": [
+      "\\.(py|sh)$",
+      "(^|/)Dockerfile$",
+      "^[^/]*compose[^/]*\\.ya?ml$",
+      "^(orchestration|services|config)/.*compose[^/]*\\.ya?ml$",
+      "^scripts/quality/",
+      "^config/quality/",
+      "^\\.env\\.example$",
+      "^dbt/(dbt_project|profiles)\\.yml$",
+      "^dbt/models/silver/intermediate/_intermediate__models\\.yml$",
+      "^(README\\.md|docs/quality_checks\\.md)$",
+      "^\\.(privacy|writing|cleanup)_allowlist$",
+      "^\\.markdownlint-cli2\\.jsonc$",
+      "^\\.sqlfluff$",
+      "^\\.yamllint$",
+      "^config/quality_tools\\.json$",
+      "^services/orchestration/egress_proxy\\.json$",
+      "^scripts/ci/groups/ci_tooling_checks\\.sh$"
     ],
     "configuration_checks": [
       "^scripts/(infrastructure|quality|training)/",
@@ -285,28 +328,28 @@
   },
   "worker_limits": {
     "python_lint": {
-      "job": "Local CI Core",
-      "minutes": 45
+      "job": "Core Static Checks",
+      "minutes": 12
     },
     "orchestration_checks": {
-      "job": "Local CI Core",
-      "minutes": 45
+      "job": "Core Orchestration Offline Checks",
+      "minutes": 30
     },
     "repository_code_checks": {
-      "job": "Local CI Core",
-      "minutes": 45
+      "job": "Core Code Rules",
+      "minutes": 10
     },
     "configuration_checks": {
-      "job": "Local CI Core",
-      "minutes": 45
+      "job": "Core Configuration Checks",
+      "minutes": 50
     },
     "sql_style": {
-      "job": "Local CI Core",
-      "minutes": 45
+      "job": "Core SQL and Terraform Checks",
+      "minutes": 40
     },
     "terraform_checks": {
-      "job": "Local CI Core",
-      "minutes": 45
+      "job": "Core SQL and Terraform Checks",
+      "minutes": 40
     },
     "reuse_gate_checks": {
       "job": "CI Reuse and Gate E2E",
@@ -372,9 +415,41 @@
       "job": "Acquisition Checks",
       "minutes": 10
     },
-    "orchestration_checks_sdk_runtime": {
-      "job": "Local CI Core",
+    "ci_tooling_checks": {
+      "job": "Core CI Tooling Checks",
       "minutes": 45
+    },
+    "orchestration_engine_e2e": {
+      "job": "Core Orchestration Engine Tests",
+      "minutes": 30
+    },
+    "orchestration_checks_sdk_runtime": {
+      "job": "Core Orchestration Offline Checks",
+      "minutes": 30
     }
+  },
+  "parts": {
+    "core_static": [
+      "python_lint"
+    ],
+    "core_sql_terraform": [
+      "sql_style",
+      "terraform_checks"
+    ],
+    "core_configuration": [
+      "configuration_checks"
+    ],
+    "core_ci_tooling": [
+      "ci_tooling_checks"
+    ],
+    "core_code_rules": [
+      "repository_code_checks"
+    ],
+    "core_orchestration_engine": [
+      "orchestration_engine_e2e"
+    ],
+    "core_orchestration_offline": [
+      "orchestration_checks"
+    ]
   }
 }

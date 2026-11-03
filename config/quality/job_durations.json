@@ -39,10 +39,46 @@
       "basis": "measured Oct 30 2026, the `test-checks` hook alone"
     },
     {
-      "job": "Local CI Core",
-      "measured_minutes": 38,
-      "timeout_minutes": 60,
-      "basis": "hosted, the longest recent passing run (38.2 min, Nov 4 2026); PR 76 ran past 45 twice on Nov 5 2026; temporary until the configuration checks move to their own job"
+      "job": "Core Static Checks",
+      "measured_minutes": 7.5,
+      "timeout_minutes": 12,
+      "basis": "estimate, typecheck 203 s from the hosted run 41521618599 plus about 4 minutes of setup and gates"
+    },
+    {
+      "job": "Core SQL and Terraform Checks",
+      "measured_minutes": 23.5,
+      "timeout_minutes": 40,
+      "basis": "estimate, SQL style 1169 s from the hosted run 41521618599 (the Terraform checks, 751 s, run beside it) plus about 4 minutes of setup and gates"
+    },
+    {
+      "job": "Core Configuration Checks",
+      "measured_minutes": 32,
+      "timeout_minutes": 50,
+      "basis": "estimate, 23 commands and 1692 s from the hosted run 41521618599 plus about 4 minutes of setup and gates"
+    },
+    {
+      "job": "Core CI Tooling Checks",
+      "measured_minutes": 30,
+      "timeout_minutes": 45,
+      "basis": "estimate, container import hook 874 s, group selection 387 s and the process stop E2Es about 275 s from the hosted run 41521618599 and local runs, plus about 4 minutes"
+    },
+    {
+      "job": "Core Code Rules",
+      "measured_minutes": 5.5,
+      "timeout_minutes": 10,
+      "basis": "estimate, 106 s on the Mac (47 s of commands, 57 s of gates), about twice that hosted, plus about 1.5 minutes of setup"
+    },
+    {
+      "job": "Core Orchestration Engine Tests",
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "estimate, broker 502 s, stack 159 s and lean broker 58 s from the hosted run 41521618599 plus about 120 s for the supervisor and transform broker and about 4 minutes of setup and gates"
+    },
+    {
+      "job": "Core Orchestration Offline Checks",
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "estimate, 483 s measured in the hosted run 41521618599 (the SDK runtime cases alone 197 s) plus about 350 s for the offline checks that run was cut short before, and about 4 minutes of setup and gates"
     },
     {
       "job": "CI Reuse and Gate E2E",

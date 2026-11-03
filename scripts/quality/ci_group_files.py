@@ -11,9 +11,9 @@ boundary: a file can shadow the trap's own commands. The file defines the entry 
 for the launcher and ``lakehouse_gold_<unit>`` for each gold unit). No function of a group remains in the dispatcher: its text is searched for a
 declaration of any function that a group owns (continued lines, quotes, backslashes and ``$'...'`` escapes in names removed first). A body file is
 listed in its own group's path list and matches no other group's list, ``global``, ``passive`` or ``upstream_inputs`` (the broad ``\\.(py|sh)$``
-pattern of ``repository_code_checks`` may match it, so that the guards run when a body file changes). Groups in ``full_only`` have no body file. The
-guard also requires every configured group to have a hosted job that runs its part through scripts/run_ci.sh. The
-guard needs Bash 3.2 or later (macOS ``/bin/bash`` and GitHub's Bash 5).
+pattern of ``repository_code_checks`` and of the group split from it, ``ci_tooling_checks``, may match it, so that the guards run when a body file
+changes). Groups in ``full_only`` have no body file. The guard also requires every configured group to have a hosted job that runs its part through
+scripts/run_ci.sh. The guard needs Bash 3.2 or later (macOS ``/bin/bash`` and GitHub's Bash 5).
 
     .venv/bin/python -m scripts.quality.ci_group_files [--root <repository folder>]
 
@@ -38,7 +38,7 @@ GROUPS_DIRECTORY = "scripts/ci/groups"
 DISPATCHER = "scripts/run_ci.sh"
 CONFIG = "config/quality/ci_groups.json"
 WORKFLOW = ".github/workflows/ci.yml"
-BROAD_GROUP = "repository_code_checks"
+BROAD_GROUPS = ("repository_code_checks", "ci_tooling_checks")
 ENVIRONMENT = {"PATH": "/usr/bin:/bin"}
 SECONDS_PER_FILE = 30
 COMMAND_EXIT = 87  # the exit status in PROGRAM
@@ -123,7 +123,7 @@ def list_findings(group: str, config: dict[str, Any]) -> list[str]:
     if literal_pattern(group) not in lists[group]:
         findings.append(f"{path}: not in the path list of its group {group} (add {literal_pattern(group)})")
     for other, patterns in lists.items():
-        if other != group and other != BROAD_GROUP and any(re.search(pattern, path) for pattern in patterns):
+        if other != group and other not in BROAD_GROUPS and any(re.search(pattern, path) for pattern in patterns):
             findings.append(f"{path}: group {other} lists it too, but it belongs to group {group} only")
     for key in ("global", "passive"):
         if any(re.search(pattern, path) for pattern in config.get(key, [])):
@@ -148,7 +148,7 @@ def hosted_findings(root: Path, config: dict[str, Any]) -> list[str]:
             value = step.get("env", {}).get("CI_PART", "all")
             parts = {entry.get("part", "") for entry in entries} if value == "${{ matrix.part }}" else {value}
             for part in sorted(parts):
-                if part not in ci_groups.PARTS:
+                if part not in ci_groups.valid_parts(config):
                     findings.append(f"{WORKFLOW}: job {job} has unknown CI_PART={part} (use a part of {DISPATCHER})")
                 else:
                     covered.update(ci_groups.groups_of(part, config))

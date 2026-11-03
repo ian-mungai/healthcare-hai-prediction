@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the CI groups
-# reuse and gate stage cases, the acquisition gate and the four lakehouse layers), "reuse_gate" (those reuse and gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# reuse and gate stage cases, the acquisition gate and the four lakehouse layers), one of the seven hosted parts of "core" ("core_static", "core_sql_terraform", "core_configuration",
+# "core_ci_tooling", "core_code_rules", "core_orchestration_engine" or "core_orchestration_offline": the hosted Core jobs run these, see parts in config/quality/ci_groups.json), "reuse_gate" (those reuse and gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
 # if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), "feature_store" (the feature store's own light checks) or "gates" (the gates only).
 # FEATURE_SHARD=K/N selects one hosted feature shard. Without it the selected feature suites run all their shards and combine their evidence. GitHub CI runs
-# "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
+# the seven parts of "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
 # metadata E2E in its own job. A unit marked alone below (writer_setup: it has timing assertions) runs by itself, before the others.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
@@ -35,8 +36,8 @@ source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
-  *) printf 'CI_PART must be all, core, launcher, reuse_gate, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | core_static | core_sql_terraform | core_configuration | core_ci_tooling | core_code_rules | core_orchestration_engine | core_orchestration_offline | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
+  *) printf 'CI_PART must be all, core, core_static, core_sql_terraform, core_configuration, core_ci_tooling, core_code_rules, core_orchestration_engine, core_orchestration_offline, launcher, reuse_gate, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"
