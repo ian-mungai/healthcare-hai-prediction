@@ -18,7 +18,7 @@ concurrency:
 # Every checkout uses the head commit of a pull request (not GitHub's merge of the head into the base), so a pull request run checks the tree that
 # a later push to main can compare with byte for byte. The plan job lets the run after a merge reuse a passed pull request result (see
 # scripts/quality/ci_reuse.py); every other job waits for it and runs unless it answers reuse=true.
-# Timeouts are about twice the measured time of each job (the table "Measured durations" in docs/quality_checks.md); scripts/quality/run_ci_groups_e2e.py compares them.
+# Timeouts are about twice the measured time of each job (config/quality/job_durations.json); scripts/quality/run_ci_groups_e2e.py compares them.
 jobs:
   plan:
     name: CI Plan
