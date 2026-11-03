@@ -421,9 +421,15 @@ class Session:
             self.step("openmetadata_stop_failed", f"{error}; stopping the host anyway; the index rebuilds from the database after a restore")
 
     def stop(self) -> None:
-        """Stop the catalog service first, then turn the host off and verify it."""
-        self.openmetadata_stop()
-        self.host_off()
+        """Stop the catalog service first, then turn the host off and verify it.
+
+        An interruption or SIGTERM during the catalog drain still reaches the host-off step, which then holds every shutdown signal until it is verified.
+        """
+        try:
+            self.openmetadata_stop()
+        finally:
+            with deferred_signals(self.step):
+                self.host_off()
 
     def stop_after_failure(self, command: str, keep_on: bool) -> None:
         """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates."""
