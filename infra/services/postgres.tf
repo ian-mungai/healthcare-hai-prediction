@@ -26,19 +26,27 @@ locals {
     SELECT 'CREATE DATABASE mlflow_auth OWNER mlflow ENCODING ''UTF8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mlflow_auth') \gexec
   EOT
 
+  # The OpenMetadata role and logical database exist only while openmetadata_persistent_enabled is true, so the default definition stays unchanged. Repeats are safe.
+  postgres_databases_openmetadata = <<-EOT
+    \getenv openmetadata_password OPENMETADATA_DB_PASSWORD
+    SELECT 'CREATE ROLE openmetadata_user LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'openmetadata_user') \gexec
+    ALTER ROLE openmetadata_user PASSWORD :'openmetadata_password';
+    SELECT 'CREATE DATABASE openmetadata_db OWNER openmetadata_user ENCODING ''UTF8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'openmetadata_db') \gexec
+  EOT
+
   postgres_databases_end = <<-EOT
     SQL
   EOT
 
-  postgres_databases_script = "${local.postgres_databases_main}${var.mlflow_enabled ? local.postgres_databases_mlflow : ""}${local.postgres_databases_end}"
+  postgres_databases_script = "${local.postgres_databases_main}${var.mlflow_enabled ? local.postgres_databases_mlflow : ""}${local.om_on ? local.postgres_databases_openmetadata : ""}${local.postgres_databases_end}"
 
   postgres_containers = [
     merge(local.container_defaults, {
       name              = "postgres"
       image             = local.image["postgres"]
       user              = "999:999"
-      memory            = 2048
-      memoryReservation = 128
+      memory            = local.memory_profile.postgres.limit
+      memoryReservation = local.memory_profile.postgres.reservation
       stopTimeout       = 120
       command = [
         "postgres",
@@ -87,7 +95,7 @@ locals {
         { name = "AIRFLOW_DB_PASSWORD", valueFrom = local.secret_arn["airflow_db_password"] },
         { name = "MARQUEZ_DB_PASSWORD", valueFrom = local.secret_arn["marquez_db_password"] },
         { name = "PGPASSWORD", valueFrom = local.secret_arn["postgres_password"] },
-      ], var.mlflow_enabled ? [{ name = "MLFLOW_DB_PASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] }] : [])
+      ], var.mlflow_enabled ? [{ name = "MLFLOW_DB_PASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] }] : [], local.om_on ? [{ name = "OPENMETADATA_DB_PASSWORD", valueFrom = local.secret_arn["openmetadata_db_password"] }] : [])
       dependsOn        = [{ containerName = "postgres", condition = "HEALTHY" }]
       logConfiguration = local.log_configuration["postgres_databases"]
     }),

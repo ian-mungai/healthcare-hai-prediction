@@ -93,16 +93,16 @@ locals {
     merge(local.airflow_container_defaults, {
       name              = "airflow_migrate"
       essential         = false
-      memory            = 640
-      memoryReservation = 256
+      memory            = local.memory_profile.airflow_migrate.limit
+      memoryReservation = local.memory_profile.airflow_migrate.reservation
       command           = ["bash", "-ec", local.airflow_migrate_script]
       mountPoints       = []
       logConfiguration  = local.log_configuration["airflow_migrate"]
     }),
     merge(local.airflow_container_defaults, {
       name              = "airflow_apiserver"
-      memory            = 1536
-      memoryReservation = 256
+      memory            = local.memory_profile.airflow_apiserver.limit
+      memoryReservation = local.memory_profile.airflow_apiserver.reservation
       command           = ["bash", "-ec", local.airflow_apiserver_script]
       mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
       portMappings      = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
@@ -122,8 +122,8 @@ locals {
   airflow_scheduler_containers = [
     merge(local.airflow_container_defaults, {
       name              = "airflow_scheduler"
-      memory            = 1536
-      memoryReservation = 320
+      memory            = local.memory_profile.airflow_scheduler.limit
+      memoryReservation = local.memory_profile.airflow_scheduler.reservation
       command           = ["bash", "-ec", "${var.broker_enabled ? local.broker_session_script : ""}${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
       mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
       portMappings      = [{ containerPort = 8974, hostPort = 8974, protocol = "tcp" }]
@@ -152,8 +152,8 @@ locals {
   airflow_dag_processor_containers = [
     merge(local.airflow_container_defaults, {
       name              = "airflow_dag_processor"
-      memory            = 1280
-      memoryReservation = 192
+      memory            = local.memory_profile.airflow_dag_proc.limit
+      memoryReservation = local.memory_profile.airflow_dag_proc.reservation
       command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow dag-processor"]
       healthCheck = {
         command     = ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --local"]
@@ -170,8 +170,8 @@ locals {
   airflow_triggerer_containers = [
     merge(local.airflow_container_defaults, {
       name              = "airflow_triggerer"
-      memory            = 768
-      memoryReservation = 256
+      memory            = local.memory_profile.airflow_triggerer.limit
+      memoryReservation = local.memory_profile.airflow_triggerer.reservation
       command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow triggerer --skip-serve-logs"]
       healthCheck = {
         command     = ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --local"]

@@ -22,7 +22,7 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "opensearch"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
@@ -44,7 +44,7 @@ locals {
     "streamlit"                        = "airflow"
     "host_prepare"                     = "airflow"
     "polaris_bootstrap"                = "polaris"
-    }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {}, {
+    }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "marquez" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {}, {
     for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter"] : name => "monitoring" if var.monitoring_enabled
   })
 
@@ -87,6 +87,9 @@ locals {
     mlflow_admin_password  = var.mlflow_admin_password_name
     broker_token           = var.broker_token_name
     grafana_admin_password = var.grafana_admin_password_name
+    # These two names are used only by the OpenMetadata containers, so they appear in the task definitions and in the grant only while the flag is on.
+    openmetadata_admin_password = var.openmetadata_admin_password_name
+    openmetadata_db_password    = var.openmetadata_db_password_name
   }, local.model_api_secret_names, local.streamlit_secret_names)
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value
@@ -139,6 +142,15 @@ locals {
           volumes       = {}
         }
       } : key => service if var.marquez_enabled
+    },
+    {
+      for key, service in {
+        openmetadata = {
+          task_role_arn = var.control_plane_task_role_arn
+          containers    = local.openmetadata_containers
+          volumes       = { opensearch_data = local.om_search_data }
+        }
+      } : key => service if local.om_on
     },
     {
       for key, service in {
@@ -269,5 +281,10 @@ resource "aws_ecs_service" "service" {
   deployment_circuit_breaker {
     enable   = true
     rollback = true
+  }
+
+  # host_session stop scales the openmetadata service to zero before the host goes off, and start sets it back to one. Terraform must not read that as drift.
+  lifecycle {
+    ignore_changes = [desired_count]
   }
 }

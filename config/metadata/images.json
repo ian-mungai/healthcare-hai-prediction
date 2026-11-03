@@ -1,36 +1,55 @@
 {
-  "schema_version": 1,
-  "note": "The images the owner pushes to the project registry before the catalog task is enabled. Push each by digest into the repository named here, with the same platform for all four, then put the four digests in the jobs variable openmetadata_images. The tracked file names no release and no digest: the owner chooses the release and records the digest in the variable file, which stays out of Git. Every upstream name below is unverified.",
-  "platform": "linux/amd64 until the Arm check passes for all four images, then linux/arm64 together with openmetadata_cpu_architecture = ARM64",
+  "schema_version": 2,
+  "note": "The images the owner pushes to the project registry before the catalog task or the persistent catalog service is enabled. Push each by digest into the repository named here, then record the digest in the variable file, which stays out of Git. The selected releases below were decided by the owner on Nov 3 2026 (OpenMetadata and host sizing). A digest of TO_RESOLVE has not been read yet: the owner resolves it with `docker buildx imagetools inspect <upstream>:<release>` and pushes the linux/arm64 image. The persistent service takes server, ingestion and search; the finite catalog task also takes database.",
+  "platform": "linux/arm64 for the persistent service (verified Nov 3 2026). The finite catalog task keeps linux/amd64 until its own database image passes the same check.",
   "arm64_check": "docker buildx imagetools inspect <upstream>:<release> lists linux/arm64 for each of the four images",
   "images": {
     "server": {
       "ecr_repository": "<project>_openmetadata_server_<environment>",
       "upstream": "docker.io/openmetadata/server",
       "push_by": "digest",
-      "arm64": "unverified: no registry read was possible in the offline session",
-      "runs_as": "migration step and catalog server of the catalog task"
+      "arm64": "verified Nov 3 2026: Docker Hub lists linux/arm64 for this tag",
+      "runs_as": "migration step and catalog server of the catalog task; the persistent host service (openmetadata_persistent_enabled)",
+      "release": "2.0.7",
+      "selected_reference": "docker.io/openmetadata/server:2.0.7",
+      "digest": "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner"
     },
     "ingestion": {
       "ecr_repository": "<project>_openmetadata_ingestion_<environment>",
       "upstream": "docker.io/openmetadata/ingestion",
       "push_by": "digest",
-      "arm64": "unverified: no registry read was possible in the offline session",
-      "runs_as": "bootstrap and ingestion steps of the catalog task"
+      "arm64": "verified Nov 3 2026: Docker Hub lists linux/arm64 for this tag",
+      "runs_as": "bootstrap and ingestion steps of the catalog task; the one-shot bootstrap of the persistent service",
+      "release": "2.0.7",
+      "selected_reference": "docker.io/openmetadata/ingestion:2.0.7",
+      "digest": "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner"
     },
     "search": {
       "ecr_repository": "<project>_openmetadata_search_<environment>",
       "upstream": "docker.io/opensearchproject/opensearch",
       "push_by": "digest",
-      "arm64": "unverified: no registry read was possible in the offline session",
-      "runs_as": "search index of the catalog task"
+      "arm64": "verified Nov 3 2026: Docker Hub lists linux/arm64 for this tag",
+      "runs_as": "search index of the catalog task; the persistent OpenSearch single node on the host (loopback only, fixed heap)",
+      "release": "3.3.2",
+      "selected_reference": "docker.io/opensearchproject/opensearch:3.3.2",
+      "digest": "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner",
+      "release_line": "OpenSearch 3.3.x (OpenMetadata 2.0.x supports 3.x, recommended 3.3.0)"
     },
     "database": {
       "ecr_repository": "<project>_openmetadata_database_<environment>",
       "upstream": "docker.io/library/postgres",
       "push_by": "digest",
       "arm64": "unverified: no registry read was possible in the offline session",
-      "runs_as": "metadata database of the catalog task, rebuilt empty on each start"
+      "runs_as": "metadata database of the finite catalog task only, rebuilt empty on each start; the persistent service uses a logical database in the host PostgreSQL"
     }
+  },
+  "arm64_verified": {
+    "date": "2026-11-03",
+    "source": "Docker Hub tag listings (owner-supplied)",
+    "images": [
+      "openmetadata/server:2.0.7",
+      "openmetadata/ingestion:2.0.7",
+      "opensearchproject/opensearch:3.3.2"
+    ]
   }
 }

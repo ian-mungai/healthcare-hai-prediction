@@ -141,7 +141,7 @@ variable "ecr_repository_urls" {
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "opensearch"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
     error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs, the monitoring images included when monitoring_enabled is true."
@@ -185,6 +185,11 @@ variable "image_digests" {
   validation {
     condition     = !var.monitoring_enabled || alltrue([for image in ["prometheus", "grafana", "statsd_exporter"] : contains(keys(var.image_digests), image)])
     error_message = "Supply a digest for prometheus, grafana and statsd_exporter, or set monitoring_enabled to false."
+  }
+
+  validation {
+    condition     = !var.openmetadata_persistent_enabled || alltrue([for image in ["openmetadata_server", "openmetadata_ingestion", "opensearch"] : contains(keys(var.image_digests), image)])
+    error_message = "Supply a digest for openmetadata_server, openmetadata_ingestion and opensearch, or set openmetadata_persistent_enabled to false."
   }
 }
 
