@@ -83,8 +83,8 @@ POLL_SECONDS = 0.05
 SESSION_VARIABLE = "PROCESS_LAUNCH_SESSION"
 # The command that lists every live process with its parent and state, and the seconds it may take.
 SESSION_LISTING = ("ps", "-A", "-o", "pid=,ppid=,stat=")
-# Where a bare listing program is looked for before PATH. A caller may limit PATH (the launcher E2E does, to test the Docker lookup), and the stop of a launch
-# must not fail for that. A program named with a path, or one these folders do not hold, is looked up as before.
+# Where a bare listing program is looked for when PATH does not hold it. A caller may limit PATH (the launcher E2E does, to test the Docker lookup), and
+# the stop of a launch must not fail for that. A program named with a path, or one these folders do not hold, is looked up as before.
 SYSTEM_PROGRAM_FOLDERS = ("/bin", "/usr/bin")
 LISTING_SECONDS = 5.0
 # Seconds the lister gets to be reaped after its group got KILL at the listing deadline.
@@ -281,13 +281,15 @@ def end_lister(lister: subprocess.Popen[str]) -> None:
 
 
 def listing_program(name: str) -> str | None:
-    """The listing program: a bare name is looked for in the system folders first and then on PATH; a name with a path is looked up as it stands."""
-    if os.sep not in name:
-        for folder in SYSTEM_PROGRAM_FOLDERS:
-            candidate = os.path.join(folder, name)
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return candidate
-    return find_program(name)
+    """The listing program: a bare name is looked for on PATH first and then in the system folders; a name with a path is looked up as it stands."""
+    found = find_program(name)
+    if found is not None or os.sep in name:
+        return found
+    for folder in SYSTEM_PROGRAM_FOLDERS:
+        candidate = os.path.join(folder, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def list_processes() -> list[tuple[int, int, str]]:
