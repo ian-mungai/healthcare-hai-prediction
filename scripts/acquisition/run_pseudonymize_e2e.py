@@ -147,6 +147,9 @@ SCRUB_ROWS = [
     ["4", "", "", "Owner 01234 56789 LLC"],
     ["5", "", "", "Unrelated Clinic"],
     ["6", "", "", "Ref 0123456789-A"],
+    ["7", "", "", "Zelda's Clinic"],
+    ["8", "", "", "Zelda\u2019s Clinic"],
+    ["9", "", "", "O'Hare Plain Co"],
 ]
 SCRUB_POLICY: dict[str, Any] = {
     "policy_id": "synthetic_scrub_rows",
@@ -692,14 +695,28 @@ def check_discriminator(run: Run) -> None:
 
 
 def check_scrub(run: Run) -> None:
-    """The scrub covers every known single-word name and every known identifier, also typed with spaces or a suffix; short values fail closed."""
+    """The scrub covers known names, also possessive, and known identifiers, also typed with spaces or a suffix; short values fail closed."""
     folder = run.case_dir("scrub")
     source = write_csv(folder / "in.csv", SCRUB_HEADERS, SCRUB_ROWS)
     contract = module.transform(source, folder / "derivative", SCRUB_POLICY, "v1", reader_for(KEYS))
     rows = table(folder / "derivative")
     notes = [r["NOTE"] for r in rows]
-    ensure(notes == ["Plain Co", module.REPLACEMENT, module.REPLACEMENT, module.REPLACEMENT, "Unrelated Clinic", module.REPLACEMENT], f"scrub differs: {notes}")
-    ensure(contract["scrubbed_cells"] == 4, f"scrubbed count differs: {contract['scrubbed_cells']}")
+    ensure(
+        notes
+        == [
+            "Plain Co",
+            module.REPLACEMENT,
+            module.REPLACEMENT,
+            module.REPLACEMENT,
+            "Unrelated Clinic",
+            module.REPLACEMENT,
+            module.REPLACEMENT,
+            module.REPLACEMENT,
+            "O'Hare Plain Co",
+        ],
+        f"scrub differs: {notes}",
+    )
+    ensure(contract["scrubbed_cells"] == 6, f"scrubbed count differs: {contract['scrubbed_cells']}")
     text = "".join((folder / "derivative" / n).read_text().casefold() for n in (module.DATA_NAME, module.CONTRACT_NAME))
     ensure("zelda" not in text and "0123456789" not in text and "01234 56789" not in text, "a known name or identifier remained")
     for name, edit, code in (
