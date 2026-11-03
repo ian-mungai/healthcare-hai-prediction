@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "Athena reads every published gold table, Public and Confidential, through read-only Glue registrations, because Athena is for the owner to review the data. Polaris stays the catalog. Access stays private to the owner.",
+  "note": "Athena reads every published gold table, all Public research data, through read-only Glue registrations, because Athena is for the owner to review the data. Polaris stays the catalog. Access stays private to the owner.",
   "enabled": false,
   "mirror_marker": "hai_mirror",
   "layers": {

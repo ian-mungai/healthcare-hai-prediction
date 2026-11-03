@@ -27,8 +27,8 @@ run "private_versioned_storage" {
   }
 
   assert {
-    condition     = aws_s3_bucket.data.tags["DataClassification"] == "Confidential"
-    error_message = "The data bucket must carry its own DataClassification tag of Confidential, set on the resource rather than in default_tags."
+    condition     = aws_s3_bucket.data.tags["DataClassification"] == "Public"
+    error_message = "The data bucket must carry its own DataClassification tag of Public (decision 158), set on the resource rather than in default_tags."
   }
 
   assert {

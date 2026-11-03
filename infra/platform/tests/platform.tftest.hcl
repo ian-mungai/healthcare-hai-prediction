@@ -228,7 +228,7 @@ run "data_volume_and_snapshots" {
     condition = (
       aws_ebs_volume.data.type == "gp3" && aws_ebs_volume.data.size == 60 && aws_ebs_volume.data.encrypted && !aws_ebs_volume.data.final_snapshot &&
       aws_ebs_volume.data.availability_zone == data.aws_subnet.public["0"].availability_zone &&
-      aws_ebs_volume.data.tags["DataClassification"] == "Confidential" && aws_ebs_volume.data.tags["Name"] == "example_project_host_data_dev" &&
+      aws_ebs_volume.data.tags["DataClassification"] == "Public" && aws_ebs_volume.data.tags["Name"] == "example_project_host_data_dev" &&
       aws_ebs_volume.data.tags["Project"] == "example_project" && aws_eip.host.tags["Name"] == "example_project_host_dev"
     )
     error_message = "The data volume is a 60 GB encrypted gp3 volume in the host's zone with the exact Project tag in its create call and no final snapshot, which the project profile may not create."

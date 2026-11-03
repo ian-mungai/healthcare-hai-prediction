@@ -89,9 +89,9 @@ run "prepared_mirror_has_one_gold_database_and_a_limited_workgroup" {
     condition = (
       toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["gold"]) &&
       aws_glue_catalog_database.athena_mirror["gold"].name == "hai_mirror_gold" &&
-      aws_glue_catalog_database.athena_mirror["gold"].tags.DataClassification == "Confidential"
+      aws_glue_catalog_database.athena_mirror["gold"].tags.DataClassification == "Public"
     )
-    error_message = "One Glue database for the gold layer only, named by the tracked config and tagged Confidential because it lists every gold table."
+    error_message = "One Glue database for the gold layer only, named by the tracked config and tagged Public like the collected research data it lists."
   }
 
   assert {

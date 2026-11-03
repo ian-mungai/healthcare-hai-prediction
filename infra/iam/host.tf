@@ -15,7 +15,7 @@ locals {
   project_tags = { Project = local.platform_project_tag, Environment = var.environment, ManagedBy = "Terraform" }
   host_name    = format(local.platform_name, "host")
   instance_tags = merge(local.project_tags, {
-    DataClassification = "Confidential"
+    DataClassification = "Public"
     Name               = local.host_name
   })
 
