@@ -783,6 +783,24 @@ def check_scrub_text_words(run: Run) -> None:
     ensure(contract["scrubbed_cells"] == 4, f"text word count differs: {contract['scrubbed_cells']}")
 
 
+APOSTROPHE_FORMS = ("'", "\u2018", "\u2019", "\u02bc", "`", "\u00b4", "\uff07")
+
+
+def check_scrub_apostrophe_forms(run: Run) -> None:
+    """Every accepted apostrophe form is recognised as a possessive on the first word and on the last word of a two-word known name."""
+    rows = [["1", "", "Zelda Quimby", "Plain Co"]]
+    for form in APOSTROPHE_FORMS:
+        rows.append([str(len(rows) + 1), "", "", f"Zelda{form}s Quimby Clinic"])
+        rows.append([str(len(rows) + 1), "", "", f"Zelda Quimby{form}s Clinic"])
+    folder = run.case_dir("scrub_apostrophe_forms")
+    source = write_csv(folder / "in.csv", SCRUB_HEADERS, rows)
+    contract = module.transform(source, folder / "derivative", SCRUB_POLICY, "v1", reader_for(KEYS))
+    notes = [r["NOTE"] for r in table(folder / "derivative")]
+    survived = [n for n in notes[1:] if n != module.REPLACEMENT]
+    ensure(not survived, f"apostrophe forms survived: {survived}")
+    ensure(contract["scrubbed_cells"] == 2 * len(APOSTROPHE_FORMS), f"apostrophe form count differs: {contract['scrubbed_cells']}")
+
+
 def check_known_answer(run: Run) -> None:
     """The pseudonym equals an independently computed HMAC and the fixed known answer of the independent tool."""
     rows = table(run.derivative("known_answer"))
@@ -1064,6 +1082,7 @@ def main() -> None:
         check_scrub,
         check_scrub_mixed_possessive,
         check_scrub_text_words,
+        check_scrub_apostrophe_forms,
         check_known_answer,
         check_isolation,
         check_sdk_logging,
