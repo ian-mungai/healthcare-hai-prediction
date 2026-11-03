@@ -27,6 +27,7 @@ orchestration_checks() {
   timed "orchestration_checks: bronze driver E2E" "$python_bin" -m scripts.lakehouse.run_bronze_run_e2e
   timed "orchestration_checks: lineage completion E2E" "$python_bin" -m scripts.orchestration.run_lineage_completion_e2e
   timed "orchestration_checks: lineage OpenMetadata delivery E2E" "$python_bin" -m scripts.orchestration.run_lineage_openmetadata_e2e
+  timed "orchestration_checks: OpenMetadata and Marquez comparison E2E" "$python_bin" -m scripts.orchestration.run_openmetadata_comparison_e2e
   timed "orchestration_checks: lineage amendment E2E" "$python_bin" -m scripts.orchestration.run_lineage_amendment_e2e
   timed "orchestration_checks: publish contracts" "$python_bin" -m scripts.orchestration.run_publish_contracts
   timed "orchestration_checks: light pipeline" "$python_bin" -m scripts.orchestration.run_pipeline_light
