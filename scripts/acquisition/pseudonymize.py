@@ -61,6 +61,7 @@ MIN_NAME_CHARACTERS = 2
 NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not available", "not applicable", "[redacted]"})
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
+POSSESSIVE = re.compile(r"(?<=\w)['‘’ʼ`´]s\b")
 TREATMENTS = ("keep", "drop", "scrub_names")
 KINDS = {"id": "authoritative_id", "name": "name_match_only"}
 POLICY_FIELDS = {"policy_id", "policy_version", "source_id", "normalization_version", "headers", "treatments", "pseudonyms", "max_bytes", "min_rows"}
@@ -328,8 +329,8 @@ def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:
 
 
 def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
-    """True when the text holds any known person's whole name, of one word or more, as consecutive words."""
-    words = tuple(normalize_name(text).split())
+    """True when the text holds any known person's whole name, of one word or more, as consecutive words; a possessive ending does not hide it."""
+    words = tuple(normalize_name(POSSESSIVE.sub("", base_text(text))).split())
     return any(words[i : i + n] in names for n in range(1, longest + 1) for i in range(len(words) - n + 1))
 
 
