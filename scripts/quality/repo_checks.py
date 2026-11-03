@@ -825,8 +825,9 @@ def orphan_files() -> list[Finding]:
 
 
 DOCS_RULE = f"{POLICY}: a document reference names a tracked file"
-# A docs/ path in tracked text: not preceded by a path character, so a URL or an absolute path is not read, and not followed by a glob or an f-string brace.
-DOCS_PATH = re.compile(r"(?<![\w./~$-])docs/([\w.-]+(?:/[\w.-]+)*)")
+# A docs/ path in tracked text, also written ./docs/: not preceded by a path character, so a URL or an absolute path is not read, and not followed by a glob
+# or an f-string brace.
+DOCS_PATH = re.compile(r"(?<![\w./~$-])(?:\./)?docs/([\w.-]+(?:/[\w.-]+)*)")
 
 
 def docs_references() -> list[Finding]:
@@ -843,7 +844,8 @@ def docs_references() -> list[Finding]:
             continue
         for number, line in enumerate(text.splitlines(), 1):
             for match in DOCS_PATH.finditer(line):
-                target = "docs/" + match.group(1).rstrip(".-")
+                # Only a sentence's closing full stop is dropped; any other trailing character is part of the name it checks.
+                target = "docs/" + match.group(1).rstrip(".")
                 if target not in known:
                     fix = f"point it at a tracked file, remove the reference, or add 'docs-path {path} -- <why it stays>' to {CLEANUP_ALLOWLIST}"
                     findings.append(Finding(f"{path}:{number}", f"{target} is not a tracked file", DOCS_RULE, fix))

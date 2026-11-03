@@ -464,6 +464,18 @@ CASES = [
         {"README.md": "Read [the guide](docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED + "docs-path README.md -- quotes a deleted guide\n"},
     ),
     Case(
+        "docs reference with a ./ prefix to a missing file",
+        "docs-references",
+        False,
+        {"README.md": "Read [the guide](./docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs reference that extends a tracked file name",
+        "docs-references",
+        False,
+        {"README.md": "Read docs/guide.md- for the old steps.\n", "docs/guide.md": "# Guide\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
         "docs words that are not references",
         "docs-references",
         True,
