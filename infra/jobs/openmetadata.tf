@@ -10,6 +10,30 @@ variable "openmetadata_enabled" {
   }
 }
 
+variable "openmetadata_server_url" {
+  description = "Private http address of the persistent OpenMetadata catalog on the container host, for example http://10.0.1.20:8585. Set, the catalog task keeps its name and container names but runs only the Polaris and dbt ingestion steps against that catalog, with the ingestion bot token from Parameter Store, and needs only the ingestion image. Empty keeps the finite catalog task that rebuilds its own catalog."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.openmetadata_server_url == "" || can(regex("^http://(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}:8585$", var.openmetadata_server_url))
+    error_message = "Use http, a private IPv4 address and port 8585, or leave it empty."
+  }
+}
+
+variable "openmetadata_ingestion_token_name" {
+  description = "Parameter Store SecureString name of the ingestion bot token of the persistent catalog. The execution role injects it into the ingestion steps. The persistent catalog bootstrap writes it."
+  type        = string
+  default     = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
+  nullable    = false
+
+  validation {
+    condition     = !(var.openmetadata_enabled && var.openmetadata_server_url != "") || var.openmetadata_ingestion_token_name == "/${var.project_name}/openmetadata_bot_ingestion"
+    error_message = "Inject only the project ingestion bot token parameter."
+  }
+}
+
 variable "openmetadata_images" {
   description = "Server, ingestion, search and database image URIs from the project ECR repositories <project>_openmetadata_<name>_<environment>, pinned by digest. All four must list the platform of openmetadata_cpu_architecture."
   type        = map(string)
@@ -22,9 +46,9 @@ variable "openmetadata_images" {
         contains(["server", "ingestion", "search", "database"], name) &&
         can(regex("^${var.expected_account_id}\\.dkr\\.ecr\\.${var.aws_region}\\.amazonaws\\.com/${var.project_name}_openmetadata_${name}_${var.environment}@sha256:[a-f0-9]{64}$", image))
       ]) &&
-      (!var.openmetadata_enabled || alltrue([for name in ["server", "ingestion", "search", "database"] : contains(keys(var.openmetadata_images), name)]))
+      (!var.openmetadata_enabled || alltrue([for name in(var.openmetadata_server_url == "" ? ["server", "ingestion", "search", "database"] : ["ingestion"]) : contains(keys(var.openmetadata_images), name)]))
     )
-    error_message = "Supply the server, ingestion, search and database images from their project ECR repositories with an immutable SHA-256 digest."
+    error_message = "Supply the server, ingestion, search and database images (only the ingestion image when openmetadata_server_url is set) from their project ECR repositories with an immutable SHA-256 digest."
   }
 }
 
@@ -192,11 +216,35 @@ locals {
     { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
     { name = "PYTHONUNBUFFERED", value = "1" },
   ]
-  om_python = "/workspace/bin"
-  om_ingest = ["--config-dir", "/workspace/config", "--token-file", "/run/om/ingestion_token", "--work-dir", "/workspace"]
-  om_steps = concat(
+  om_python     = "/workspace/bin"
+  om_ingest     = ["--config-dir", "/workspace/config", "--token-file", "/run/om/ingestion_token", "--work-dir", "/workspace"]
+  om_persistent = var.openmetadata_server_url != ""
+  om_token_arn  = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}"
+  om_persistent_ingest = [
+    "--config-dir", "/workspace/config", "--token-env", "OM_INGESTION_TOKEN", "--work-dir", "/workspace", "--server-url", "${var.openmetadata_server_url}/api",
+  ]
+  om_init_step = { name = "init", image = local.om_persistent ? "ingestion" : "database", user = "0:0", essential = false, writable = false, after = [], environment = [{ name = "OM_LIFETIME_SECONDS", value = tostring(var.openmetadata_lifetime_seconds) }], secrets = [], entry = ["sh", "-c", local.om_init_script], workdir = "/workspace" }
+
+  # The persistent mode keeps the broker table's containers (ingest_polaris with RUN_ID and POLARIS_URI, ingest_dbt with RUN_ID) and runs them against the host catalog.
+  om_steps_persistent = [
+    local.om_init_step,
+    {
+      name        = "ingest_polaris", image = "ingestion", user = "10001:10001", essential = false, writable = false, after = [["init", "SUCCESS"]], workdir = "/workspace"
+      environment = [{ name = "RUN_ID", value = "" }, { name = "POLARIS_URI", value = "" }]
+      secrets     = concat(local.reader_parameters, [{ name = "OM_INGESTION_TOKEN", valueFrom = local.om_token_arn }])
+      entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "polaris"], local.om_persistent_ingest)
+    },
+    {
+      name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = true, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"
+      environment = [{ name = "RUN_ID", value = "" }]
+      secrets     = [{ name = "OM_INGESTION_TOKEN", valueFrom = local.om_token_arn }]
+      entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "dbt"], local.om_persistent_ingest)
+    },
+  ]
+
+  om_steps_finite = concat(
     [
-      { name = "init", image = "database", user = "0:0", essential = false, writable = false, after = [], environment = [{ name = "OM_LIFETIME_SECONDS", value = tostring(var.openmetadata_lifetime_seconds) }], secrets = [], entry = ["sh", "-c", local.om_init_script], workdir = "/workspace" },
+      local.om_init_step,
       {
         name        = "database", image = "database", user = "999:999", essential = true, writable = true, after = [["init", "SUCCESS"]], secrets = [], workdir = null
         environment = [{ name = "POSTGRES_USER", value = "openmetadata_user" }, { name = "POSTGRES_DB", value = "openmetadata_db" }, { name = "POSTGRES_PASSWORD_FILE", value = "/run/om/db_password" }, { name = "PGDATA", value = "/data/pg/data" }]
@@ -245,6 +293,7 @@ locals {
       },
     ]
   )
+  om_steps     = local.om_persistent ? local.om_steps_persistent : local.om_steps_finite
   om_init_drop = ["DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]
   om_containers = [
     for step in local.om_steps : merge(

@@ -166,6 +166,38 @@ def ingest_substitutes_values_and_keeps_secrets_out_of_output() -> None:
         require(secret not in out + err, "a secret reached the output")
 
 
+def ingest_takes_the_token_from_the_environment_and_the_persistent_server() -> None:
+    seen: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = ingest_environment(Path(folder))
+        args = [argument for index, argument in enumerate(args) if argument != "--token-file" and (index == 0 or args[index - 1] != "--token-file")]
+        env["OM_INGESTION_TOKEN"] = BEARER_VALUE
+        code, out, err = run_ingest(["polaris", *args, "--token-env", "OM_INGESTION_TOKEN", "--server-url", "http://10.0.1.20:8585/api"], env, seen.append)
+    require(code == 0, (code, err))
+    require(len(seen) == 1, "the workflow must run once")
+    server = seen[0]["workflowConfig"]["openMetadataServerConfig"]
+    require(
+        server["hostPort"] == "http://10.0.1.20:8585/api" and server["securityConfig"]["jwtToken"] == BEARER_VALUE,
+        "the persistent server and the token must reach the workflow",
+    )
+    require(BEARER_VALUE not in out + err, "the token reached the output")
+
+
+def ingest_refuses_a_missing_token_source_or_a_wrong_server_url() -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = ingest_environment(Path(folder))
+        without_file = [argument for index, argument in enumerate(args) if argument != "--token-file" and (index == 0 or args[index - 1] != "--token-file")]
+        env["OM_INGESTION_TOKEN"] = BEARER_VALUE
+        none_code, _, none_err = run_ingest(["polaris", *without_file], env, lambda _: None)
+        empty_code, _, empty_err = run_ingest(["polaris", *without_file, "--token-env", "OM_UNSET"], env, lambda _: None)
+        bad_url_code, out, err = run_ingest(
+            ["polaris", *without_file, "--token-env", "OM_INGESTION_TOKEN", "--server-url", "https://example.invalid/api"], env, lambda _: None
+        )
+    require(none_code == 2 and "token" in none_err.lower(), (none_code, none_err))
+    require(empty_code == 2 and "OM_UNSET" in empty_err, (empty_code, empty_err))
+    require(bad_url_code == 2 and "server" in err.lower() and BEARER_VALUE not in out + err, (bad_url_code, err))
+
+
 def ingest_refuses_a_profiler_config_before_the_workflow_starts() -> None:
     seen: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as folder:
@@ -793,9 +825,24 @@ def images_file_names_exactly_the_images_the_task_definition_takes() -> None:
     document = json.loads((REPO / "config" / "metadata" / "images.json").read_text())
     images = document["images"]
     require(set(images) == {"server", "ingestion", "search", "database"}, sorted(images))
+    require(
+        {name: images[name].get("release") for name in ("server", "ingestion", "search")} == {"server": "2.0.7", "ingestion": "2.0.7", "search": "3.3.2"},
+        "selected releases",
+    )
     for name, entry in images.items():
         require(entry["ecr_repository"] == f"<project>_openmetadata_{name}_<environment>", entry)
-        require(entry["arm64"].startswith("unverified"), f"{name}: the Arm claim must be stated as unverified")
+        if "release" in entry:
+            require(entry["arm64"].startswith("verified Nov 3 2026"), f"{name}: a selected release states the date of its Arm check")
+            require(
+                entry["selected_reference"] == f"{entry['upstream']}:{entry['release']}",
+                f"{name}: the selected reference must be the upstream name and the release",
+            )
+            require(
+                entry["digest"].startswith("TO_RESOLVE") or re.fullmatch(r"sha256:[0-9a-f]{64}", entry["digest"]),
+                f"{name}: the digest is TO_RESOLVE or a sha256 digest",
+            )
+        else:
+            require(entry["arm64"].startswith("unverified"), f"{name}: the Arm claim must be stated as unverified")
         require(entry["upstream"] and "@sha256:" not in entry["upstream"] and entry["push_by"] == "digest", entry)
 
 
@@ -852,6 +899,8 @@ CASES: list[Callable[[], None]] = [
     real_configs_have_no_profiler_or_sampling,
     every_profiler_or_sampling_mutant_is_refused,
     ingest_substitutes_values_and_keeps_secrets_out_of_output,
+    ingest_takes_the_token_from_the_environment_and_the_persistent_server,
+    ingest_refuses_a_missing_token_source_or_a_wrong_server_url,
     ingest_refuses_a_profiler_config_before_the_workflow_starts,
     ingest_names_a_missing_variable_but_not_a_value,
     ingest_fails_when_the_workflow_fails_without_echoing_the_config,

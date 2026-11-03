@@ -56,7 +56,7 @@ locals {
   openmetadata_containers = [for container in [
     merge(local.container_defaults, {
       name              = "opensearch"
-      image             = lookup(local.image, "opensearch", "")
+      image             = lookup(local.image, "openmetadata_search", "")
       user              = "1000:1000"
       memory            = var.openmetadata_memory_mib.search.limit
       memoryReservation = var.openmetadata_memory_mib.search.reservation
