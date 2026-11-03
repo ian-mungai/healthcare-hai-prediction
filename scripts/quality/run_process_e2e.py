@@ -161,6 +161,17 @@ def alive(pid: int) -> bool:
     return True
 
 
+def process_start(pid: int) -> str:
+    """The start time of a live process as ``ps`` prints it, or an empty text when there is none."""
+    result = run_command("ps", ["-o", "lstart=", "-p", str(pid)], timeout=10)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def start_seconds(text: str) -> float:
+    """The epoch seconds of a start time printed by ``ps -o lstart=``."""
+    return time.mktime(time.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y"))
+
+
 class Scratch:
     """One case folder for the pid files; every pid found is killed at the end so no case leaves a process."""
 
@@ -169,6 +180,7 @@ class Scratch:
         self.folder.mkdir(parents=True)
         # The start time of each recorded process when it was first seen (pid to start time); the teardown signals only a pid that still has it.
         self.retained: dict[int, str] = {}
+        self.created = time.time() - 2
 
     def environment(self, grandchild_mode: str, child_mode: str) -> dict[str, str]:
         return {
@@ -199,6 +211,8 @@ class Scratch:
         for file in self.folder.glob("*.pid"):
             if file.read_text().strip():
                 found[file.stem] = int(file.read_text().strip())
+        for pid in found.values():
+            self.retained.setdefault(pid, process_start(pid))
         return found
 
     def level(self, number: int) -> dict[str, int]:
@@ -208,6 +222,10 @@ class Scratch:
 
     def cleanup(self) -> None:
         for pid in self.pids().values():
+            # Only the process that was first seen under this pid is signalled: a pid that is gone, reused or older than the case is spared.
+            started = self.retained.get(pid, "")
+            if not started or process_start(pid) != started or start_seconds(started) < self.created:
+                continue
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(pid, signal.SIGKILL)
             with contextlib.suppress(ProcessLookupError, PermissionError):

@@ -481,10 +481,20 @@ def stop_sessions(
                 time.sleep(POLL_SECONDS)
     except SessionListingFailed as listing_failure:
         reason = f"the sessions could not be listed: {listing_failure}"
+        # The leaders' pids are the session ids. They are proof of ownership only while the leaders are unreaped children (``owner``): once a leader is reaped,
+        # another process may use its pid, and a signal to that group could hit it.
+        proven = owner is not None
         # The failure is on record and on standard error before any signal: the fallback may be the last thing this process does.
-        note_unconfirmed(f"{reason}; the leaders' groups of {sorted(targets)} are stopped without a confirmation of the sessions")
+        note_unconfirmed(
+            f"{reason}; "
+            + (
+                f"the leaders' groups of {sorted(targets)} are stopped without a confirmation of the sessions"
+                if proven
+                else f"the leader of {sorted(targets)} was already reaped, so its group is not proven to be this launch's and is not signalled"
+            )
+        )
         own_group = caller_group()
-        groups = [session for session in targets if session != own_group]
+        groups = [session for session in targets if session != own_group] if proven else []
         for signal_number in (signal.SIGTERM, signal.SIGKILL):
             for session in groups:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -494,9 +504,11 @@ def stop_sessions(
             if leader is not None:
                 leader.poll()
             time.sleep(POLL_SECONDS)
-        left = frozenset(session for session in targets if session == own_group or group_alive(session))
+        left = frozenset(session for session in targets if not proven or session == own_group or group_alive(session))
         if own_group in targets:
             reason += f"; the caller's own group {own_group} was not signalled and its members are not confirmed stopped"
+        if not proven:
+            reason += "; the group of the reaped leader is not proven to be this launch's and was not signalled"
         return StopOutcome(True, left or frozenset(targets), reason)
     return StopOutcome(True, frozenset(members), "members of the sessions were still alive after KILL")
 
@@ -584,8 +596,10 @@ def stop_recorded(
             except BaseException as failure:
                 late = failure
                 outcome = StopOutcome(True, frozenset({process.pid}), f"the stop failed with {type(failure).__name__}: {failure}")
+                # The last KILL goes to the leader's group only while the leader is unreaped: its pid then cannot be another process's.
                 with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL)
                 with contextlib.suppress(TimeoutExpired):
                     process.wait(timeout=REAP_SECONDS)
             close_pipes(process)
