@@ -61,7 +61,7 @@ MIN_NAME_CHARACTERS = 2
 NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not available", "not applicable", "[redacted]"})
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
-POSSESSIVE = re.compile(r"(?<=\w)['‘’ʼ`´]s\b")
+POSSESSIVE = re.compile(r"(?<=[^\W_])['‘’ʼ`´]s(?![^\W_])")
 TREATMENTS = ("keep", "drop", "scrub_names")
 KINDS = {"id": "authoritative_id", "name": "name_match_only"}
 POLICY_FIELDS = {"policy_id", "policy_version", "source_id", "normalization_version", "headers", "treatments", "pseudonyms", "max_bytes", "min_rows"}
@@ -329,9 +329,16 @@ def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:
 
 
 def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
-    """True when the text holds any known person's whole name, of one word or more, as consecutive words; a possessive ending does not hide it."""
-    words = tuple(normalize_name(POSSESSIVE.sub("", base_text(text))).split())
-    return any(words[i : i + n] in names for n in range(1, longest + 1) for i in range(len(words) - n + 1))
+    """True when the text holds any known person's whole name, of one word or more, as consecutive words; a possessive ending does not hide it.
+
+    Matching is tried on the text as written and with possessive endings removed, after combining marks are dropped, so neither form hides a name.
+    """
+    plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(text)) if not unicodedata.combining(c))
+    for variant in {plain, POSSESSIVE.sub("", plain)}:
+        words = tuple(normalize_name(variant).split())
+        if any(words[i : i + n] in names for n in range(1, longest + 1) for i in range(len(words) - n + 1)):
+            return True
+    return False
 
 
 def contains_identifier(text: str, identifiers: set[str], longest: int) -> bool:
