@@ -1,6 +1,6 @@
 output "service_names" {
   description = "ECS service name of each control-plane service."
-  value       = { for key, service in aws_ecs_service.service : key => service.name }
+  value       = merge({ for key, service in aws_ecs_service.service : key => service.name }, { for key, service in aws_ecs_service.catalog : key => service.name })
 }
 
 output "task_definition_arns" {

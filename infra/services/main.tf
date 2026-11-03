@@ -260,7 +260,33 @@ resource "aws_ecs_task_definition" "service" {
 }
 
 resource "aws_ecs_service" "service" {
-  for_each = local.services
+  for_each = { for key, value in local.services : key => value if key != "openmetadata" }
+
+  name                               = "${local.name_prefix}_${each.key}"
+  cluster                            = var.cluster_name
+  task_definition                    = aws_ecs_task_definition.service[each.key].arn
+  desired_count                      = 1
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+  enable_ecs_managed_tags            = true
+  propagate_tags                     = local.task_tag_source
+  tags                               = local.tags
+
+  capacity_provider_strategy {
+    capacity_provider = var.ec2_capacity_provider_name
+    weight            = 1
+    base              = 1
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+}
+
+# The catalog service has its own resource so that the desired_count exception covers it alone: the fixed services keep their count reconciled.
+resource "aws_ecs_service" "catalog" {
+  for_each = { for key, value in local.services : key => value if key == "openmetadata" }
 
   name                               = "${local.name_prefix}_${each.key}"
   cluster                            = var.cluster_name
@@ -283,7 +309,7 @@ resource "aws_ecs_service" "service" {
     rollback = true
   }
 
-  # host_session stop scales the openmetadata service to zero before the host goes off, and start sets it back to one. Terraform must not read that as drift.
+  # host_session stop scales this service to zero before the host goes off, and start sets it back to one. Terraform must not read that as drift.
   lifecycle {
     ignore_changes = [desired_count]
   }
