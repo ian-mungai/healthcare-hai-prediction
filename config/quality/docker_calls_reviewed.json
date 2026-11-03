@@ -275,11 +275,11 @@
     },
     {
       "path": "scripts/acquisition/tests/test_offline_e2e.py",
-      "line": 99,
+      "line": 100,
       "code_sha256": "c778c734aa2a198b9557d74507cafc1069d4045bcfc914d4e529fd92e245b12e",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "a5aa68cee3f87542ae74e0c30b1c694a26cdc8dbac48e45a46e740681983aa04",
+      "file_sha256": "e49c12c1989d394ec2dd6205acebdbf86875b69054e5be451d8534a50c7fdfe8",
       "dependencies": {
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",

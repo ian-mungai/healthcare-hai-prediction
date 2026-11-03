@@ -32,6 +32,7 @@ SUITES = [
     "hcai_util",
     "onc_mu",
     "privacy",
+    "pseudonymize",
     "code_versions",
     "collection_policy",
     "scope_cache",
@@ -43,7 +44,7 @@ SUITES = [
     # Off macOS, the HUD and WONDER suites substitute only the browser-download metadata reads (see run_hud_xlsx_e2e).
     "hud_xlsx",
 ]
-DIRECTORY_SUITES = {"privacy", "registry_additions"}
+DIRECTORY_SUITES = {"privacy", "pseudonymize", "registry_additions"}
 ARTIFACT_ONLY_SUITES = {"registry_additions"}
 MODE = os.environ.get("ACQUISITION_E2E_MODE", "full")
 SNAPSHOT_ROOTS = ("scripts/acquisition", "config/acquisition")
