@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import os
 import secrets
 import signal
 import sys
@@ -53,6 +54,7 @@ from scripts.orchestration.broker import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+OPENMETADATA_CREDENTIAL_VARIABLE = "HAI_OPENMETADATA_LINEAGE_TOKEN"
 COMPONENTS = ("metadatabase", "scheduler", "triggerer", "dag_processor")
 PULL_SECONDS = 3600.0
 TRANSFORM_DAG = "transform_dag"
@@ -221,11 +223,14 @@ class Supervisor:
         """Schedule independent durable collection; lineage failures leave the orchestration session available."""
         try:
             settings = json.loads((self.repo_root / "services/lineage/delivery.json").read_text())
-            if set(settings) != {"api_port", "interval_seconds", "pass_seconds", "batch_limit"}:
+            if set(settings) != {"api_port", "openmetadata_port", "interval_seconds", "pass_seconds", "batch_limit"}:
                 raise ValueError("lineage delivery settings contain unknown or missing fields")
             port = self.lineage_api_port
             if port is None and self.paths.registry.kind != "test":
                 port = settings["api_port"]
+            # The bot credential comes from the environment of the host service (Parameter Store injects it). Without it the worker delivers to Marquez only.
+            credential = os.environ.get(OPENMETADATA_CREDENTIAL_VARIABLE, "") or None
+            om_port = settings["openmetadata_port"] if credential and self.paths.registry.kind != "test" else None
             worker = CompletionWorker(
                 self.paths.records,
                 self.state / "lineage_provider",
@@ -234,10 +239,12 @@ class Supervisor:
                 interval_seconds=settings["interval_seconds"],
                 pass_seconds=settings["pass_seconds"],
                 limit=settings["batch_limit"],
+                openmetadata_port=om_port,
+                openmetadata_token=credential,
             )
             worker.start()
             self.emitter = worker
-            self.evidence["lineage"] = {"scheduled": True, "delivery": port is not None}
+            self.evidence["lineage"] = {"scheduled": True, "delivery": port is not None, "openmetadata": om_port is not None}
         except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
             self.evidence["lineage"] = {"scheduled": False, "error": type(error).__name__}
             sys.stderr.write(f"supervisor: lineage collection was not scheduled ({type(error).__name__})\n")
