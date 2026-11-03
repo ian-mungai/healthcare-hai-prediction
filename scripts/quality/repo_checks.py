@@ -53,6 +53,8 @@ RUFF_LINE_LENGTH = 160
 RUFF_LOOSENING_KEYS = {"ignore", "extend-ignore", "per-file-ignores", "extend-per-file-ignores", "exclude", "extend-exclude"}
 MYPY_FLAGS = ("--check-untyped-defs", "--disallow-untyped-defs")
 MYPY_LOOSENING_KEYS = {"ignore_errors", "ignore_missing_imports", "follow_imports", "disable_error_code", "allow_untyped_defs", "allow_incomplete_defs"}
+TEMPORARY_LIST = "config/quality/temporary_code.json"
+TEMPORARY_RULE = "the bundle's git_and_ci rules: main never imports, calls or reads temporary code"
 CI_SCRIPT = "scripts/run_ci.sh"
 CI_GROUP_FILES = "scripts/ci/groups"
 
@@ -852,6 +854,86 @@ def docs_references() -> list[Finding]:
     return findings
 
 
+def temporary_list() -> tuple[list[str], list[Finding]]:
+    """The paths in the list of temporary files; an unreadable or malformed list is a finding."""
+    try:
+        entries = json.loads(Path(TEMPORARY_LIST).read_text(encoding="utf-8"))["files"]
+        return [entry["path"] for entry in entries], []
+    except (OSError, ValueError, KeyError, TypeError):
+        fix = 'restore it: {"files": [{"path": "<file>", "why": "<reason>"}]}'
+        return [], [Finding(TEMPORARY_LIST, "the list of temporary files cannot be read", TEMPORARY_RULE, fix)]
+
+
+def imported_modules(path: str, tree: ast.AST) -> list[tuple[int, str]]:
+    """The (line, dotted module) pairs a Python file imports, relative imports resolved from the file's package."""
+    package = path.removesuffix(".py").split("/")[:-1]
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found += [(node.lineno, alias.name) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - node.level + 1] if node.level else []
+            module = ".".join([*base, *([node.module] if node.module else [])])
+            found += [(node.lineno, module)] + [(node.lineno, f"{module}.{alias.name}") for alias in node.names]
+    return found
+
+
+def string_values(tree: ast.AST) -> list[tuple[int, str]]:
+    """The (line, text) pairs of every string in a Python file except the docstrings, which only describe."""
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+    }
+    return [
+        (node.lineno, node.value) for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
+    ]
+
+
+def temporary_uses(path: str, text: str, listed: list[str]) -> list[tuple[int, str]]:
+    """The (line, listed file) pairs a permanent Python or shell file uses: an import, or a string or shell line that names the file."""
+    modules = {item.removesuffix(".py").replace("/", "."): item for item in listed if item.endswith(".py")}
+    named = {item: re.compile(rf"(?<![\w./-]){re.escape(item)}(?![\w-])|(?<![\w./-]){re.escape(Path(item).name)}(?![\w-])") for item in listed}
+    dotted = {item: re.compile(rf"(?<![\w.]){re.escape(module)}(?![\w])") for module, item in modules.items()}
+    found: list[tuple[int, str]] = []
+    if path.endswith(".py"):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return []
+        found += [(line, modules[module]) for line, module in imported_modules(path, tree) if module in modules]
+        for line, value in string_values(tree):
+            found += [(line, item) for item, pattern in named.items() if pattern.search(value)]
+            found += [(line, item) for item, pattern in dotted.items() if pattern.search(value)]
+    else:
+        for number, line in enumerate(text.splitlines(), 1):
+            found += [(number, item) for item, pattern in named.items() if pattern.search(line)]
+    return sorted(set(found))
+
+
+def temporary_code() -> list[Finding]:
+    """Permanent Python and shell files never import, call or read a file in the list of temporary files, and every listed file is tracked."""
+    listed, findings = temporary_list()
+    tracked = git("ls-files").splitlines()
+    for item in listed:
+        if item not in tracked:
+            findings.append(Finding(TEMPORARY_LIST, f"temporary file {item} is listed but not tracked", TEMPORARY_RULE, f"remove {item} from the list"))
+    for path in tracked:
+        if path in listed or not path.endswith((".py", ".sh")):
+            continue
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line, item in temporary_uses(path, text, listed):
+            fix = f"move what {path} needs from {item} into a permanent module that {item} imports (temporary code may use permanent code, not the reverse)"
+            findings.append(Finding(f"{path}:{line}", f"permanent code uses the temporary file {item}", TEMPORARY_RULE, fix))
+    return findings
+
+
 def terraform_unused() -> list[Finding]:
     """No Terraform variable, local, data source or module output that nothing uses (tflint, every module)."""
     globs, findings = allowed_paths("terraform-unused")
@@ -1310,7 +1392,7 @@ def warn(findings: list[Finding]) -> int:
 def main() -> int:
     """Run the named check and report its findings."""
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
-    checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused"]
+    checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references"])
     parser.add_argument("paths", nargs="*")
@@ -1342,6 +1424,7 @@ def main() -> int:
         "unused-dependencies": unused_dependencies,
         "orphan-files": orphan_files,
         "terraform-unused": terraform_unused,
+        "temporary-code": temporary_code,
         "front-matter": front_matter,
         "docs-references": docs_references,
         "commit-msg": lambda: commit_message(args.paths[0]),

@@ -171,6 +171,15 @@ CLEANUP_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terrafor
 WHITELIST = "scripts/quality/vulture_whitelist.py"
 
 
+TEMPORARY_LIST = "config/quality/temporary_code.json"
+# The sample names are assembled so this file, which the scratch repositories copy, never names a listed file itself.
+TEMPORARY_MODULE = "tmp" + "_one"
+TEMPORARY_FILE = f"scripts/lakehouse/{TEMPORARY_MODULE}.py"
+TEMPORARY_USE = f"permanent code uses the temporary file {TEMPORARY_FILE}"
+TEMPORARY_LIST_SOURCE = json.dumps({"note": "sample list", "files": [{"path": TEMPORARY_FILE, "why": "sample temporary file"}]})
+TEMPORARY_BASE = {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE, TEMPORARY_FILE: "VALUE = 1\n"}
+
+
 @dataclass
 class Case:
     """One hook run: files to stage (or delete) in a scratch repository and whether the hook must pass."""
@@ -484,6 +493,54 @@ CASES = [
             ".cleanup_allowlist": DOCS_ALLOWED,
         },
     ),
+    Case("permanent file with no temporary code", "temporary-code", True, {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": "VALUE = 2\n"}),
+    Case(
+        "temporary file imports permanent code",
+        "temporary-code",
+        True,
+        {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE, TEMPORARY_FILE: "from scripts.lakehouse import perm\n", "scripts/lakehouse/perm.py": "VALUE = 2\n"},
+    ),
+    Case(
+        "permanent docstring names a temporary file",
+        "temporary-code",
+        True,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f'"""Prose may name {TEMPORARY_FILE} without using it."""\n'},
+    ),
+    Case(
+        "import of a temporary module from its package",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"from scripts.lakehouse import {TEMPORARY_MODULE}\n"},
+    ),
+    Case(
+        "import of a name from a temporary module",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"from scripts.lakehouse.{TEMPORARY_MODULE} import VALUE\n"},
+    ),
+    Case(
+        "plain import of a temporary module",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"import scripts.lakehouse.{TEMPORARY_MODULE}\n"},
+    ),
+    Case(
+        "relative import of a temporary module", "temporary-code", False, {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"from . import {TEMPORARY_MODULE}\n"}
+    ),
+    Case(
+        "permanent file reads a temporary file by name",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f'from pathlib import Path\nTEXT = Path(__file__).with_name("{TEMPORARY_MODULE}.py").read_text()\n'},
+    ),
+    Case(
+        "shell script pipes a temporary file",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/run_probe.sh": f"#!/usr/bin/env bash\ndocker run -i image < {TEMPORARY_FILE}\n"},
+    ),
+    Case("list names a file that is not tracked", "temporary-code", False, {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE}),
+    Case("list is missing", "temporary-code", False, {"scripts/lakehouse/perm.py": "VALUE = 2\n"}),
     Case("used Terraform variable", "terraform-unused", True, {"infra/main.tf": USED_TF}),
     Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
     # Only folders that hold a tracked .tf file are checked; an ignored folder is out of scope, as in CI.
@@ -746,6 +803,14 @@ CASES = [
 ]
 # Privacy cases must be blocked for their intended cause, shown by file, line and type.
 BLOCK_REASONS = {
+    "import of a temporary module from its package": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "import of a name from a temporary module": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "plain import of a temporary module": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "relative import of a temporary module": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "permanent file reads a temporary file by name": f"scripts/lakehouse/perm.py:2: {TEMPORARY_USE}",
+    "shell script pipes a temporary file": f"scripts/lakehouse/run_probe.sh:2: {TEMPORARY_USE}",
+    "list names a file that is not tracked": f"config/quality/temporary_code.json: temporary file {TEMPORARY_FILE} is listed but not tracked",
+    "list is missing": "config/quality/temporary_code.json: the list of temporary files cannot be read",
     "function nothing calls": f"app/util.py:4: unused function '{STALE_HELPER}'",
     "dependency nothing imports": f"pyproject.toml: {UNUSED_PACKAGE} is declared but nothing imports it",
     "import missing from requirements": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
@@ -873,7 +938,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
-        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", "docs-references", *CLEANUP_HOOKS):
+        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
             reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"

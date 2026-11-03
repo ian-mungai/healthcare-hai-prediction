@@ -414,7 +414,7 @@ def case_mac_port(_: Path) -> dict[str, bool]:
 
 def case_host_ingress(_: Path) -> dict[str, bool]:
     """The route goes only to one running host whose inbound sources are project security groups of its VPC; its public address is allowed."""
-    from scripts.lakehouse.run_bronze_cutover_e2e import describe_runner, ingress_variants
+    from scripts.lakehouse.host_ingress_cases import describe_runner, ingress_variants
 
     checks: dict[str, bool] = {}
     settings = {"aws_profile": "synthetic", "aws_region": REGION, "data_bucket_name": "synthetic-bucket", "expected_account_id": "synthetic_account"}

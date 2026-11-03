@@ -242,7 +242,7 @@ def probe_command(folder: Path, nonce: str, ports: list[int], image: str, expire
         'for network in $(cat "$probe/networks.before"); do\n'
         f'  bounded "hai_route_probe_{nonce}_$network" docker run --rm -i --pull=never --name "hai_route_probe_{nonce}_$network"'
         f' --network "$network" --entrypoint python3 {image} -I - {arguments}'
-        ' < scripts/lakehouse/mac_route_probe.py > "$probe/$network.json"\n'
+        ' < scripts/lakehouse/route_probe.py > "$probe/$network.json"\n'
         "done\n"
         "bounded '' docker network ls --format '{{.Name}}' > \"$probe/networks.txt.partial\" || exit 1\n"
         'mv "$probe/networks.txt.partial" "$probe/networks.txt"\n'

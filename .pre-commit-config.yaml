@@ -50,6 +50,13 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: temporary-code
+        # The list of temporary files is config/quality/temporary_code.json; temporary code may import permanent code, never the reverse.
+        name: Permanent code never imports, calls or reads temporary code
+        entry: .venv/bin/python -m scripts.quality.repo_checks temporary-code
+        language: system
+        pass_filenames: false
+        always_run: true
       # Cleanup checks: they block; exceptions go in .cleanup_allowlist or scripts/quality/vulture_whitelist.py.
       - id: unused-code
         name: No unused functions, classes or variables (vulture)

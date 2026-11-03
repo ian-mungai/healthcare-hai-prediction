@@ -15,7 +15,8 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.lakehouse import migrate_aws_catalog as migration
-from scripts.lakehouse.catalog_migration_cases import MIGRATION_CASES, Scenario
+from scripts.lakehouse.catalog_journal_cases import Scenario
+from scripts.lakehouse.catalog_migration_cases import MIGRATION_CASES
 from scripts.lakehouse.run_catalog_migration_e2e import fingerprints
 from scripts.process import TimeoutExpired, run_command
 

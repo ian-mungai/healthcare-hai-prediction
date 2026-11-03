@@ -258,6 +258,7 @@
     ],
     "code": [
       "removed-names",
+      "temporary-code",
       "unused-code",
       "unused-dependencies",
       "dependency-lock",
