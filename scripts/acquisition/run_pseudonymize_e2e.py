@@ -739,6 +739,25 @@ def check_scrub(run: Run) -> None:
         module.transform(bad, case / "unscrubbed", plain, "v1", reader_for(KEYS))
 
 
+MIXED_ROWS = [
+    ["1", "", "O'S Zelda", "Plain Co"],
+    ["2", "", "", "O'S Zelda's Clinic"],
+    ["3", "", "", "O\u2019S Zelda\uff07s Clinic"],
+    ["4", "", "", "O'S Zelda Clinic"],
+    ["5", "", "", "Zelda's Clinic"],
+]
+
+
+def check_scrub_mixed_possessive(run: Run) -> None:
+    """A multi-word known name is found when only some of its words carry a possessive ending, in any apostrophe form."""
+    folder = run.case_dir("scrub_mixed_possessive")
+    source = write_csv(folder / "in.csv", SCRUB_HEADERS, MIXED_ROWS)
+    contract = module.transform(source, folder / "derivative", SCRUB_POLICY, "v1", reader_for(KEYS))
+    notes = [r["NOTE"] for r in table(folder / "derivative")]
+    ensure(notes == ["Plain Co", module.REPLACEMENT, module.REPLACEMENT, module.REPLACEMENT, "Zelda's Clinic"], f"mixed possessive scrub differs: {notes}")
+    ensure(contract["scrubbed_cells"] == 3, f"mixed possessive count differs: {contract['scrubbed_cells']}")
+
+
 def check_known_answer(run: Run) -> None:
     """The pseudonym equals an independently computed HMAC and the fixed known answer of the independent tool."""
     rows = table(run.derivative("known_answer"))
@@ -1018,6 +1037,7 @@ def main() -> None:
         check_conditional_rows,
         check_discriminator,
         check_scrub,
+        check_scrub_mixed_possessive,
         check_known_answer,
         check_isolation,
         check_sdk_logging,
