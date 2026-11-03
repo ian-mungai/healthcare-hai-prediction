@@ -61,12 +61,67 @@ def in_tree(tree: Path, module: str, arguments: list[str]) -> Any:
 
 
 def latest_report(tree: Path, folder: str) -> dict[str, Any]:
-    """The report the last run in a copy wrote."""
+    """Read the single report produced in a fresh source copy."""
     reports = sorted((tree / "data" / "e2e" / folder).glob("*/report.json"))
-    if not reports:
-        return {}
-    loaded: dict[str, Any] = json.loads(reports[-1].read_text())
+    if len(reports) != 1:
+        raise ValueError("the runner wrote no report" if not reports else "the runner wrote multiple reports")
+    loaded = json.loads(reports[0].read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError("the report must be an object")
     return loaded
+
+
+def rejected_report(report: dict[str, Any], reason: str, returncode: int | None) -> dict[str, Any]:
+    checks: dict[str, bool] = {}
+    errors = [reason]
+    if returncode is not None:
+        errors.append(f"runner exit {returncode}")
+    if isinstance(report.get("error"), str) and report["error"]:
+        errors.append(report["error"])
+    cases = report.get("cases")
+    for row in cases if isinstance(cases, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if isinstance(row.get("checks"), dict):
+            for name, ok in row["checks"].items():
+                checks[name] = checks.get(name, True) and ok is True
+        if isinstance(row.get("error"), str) and row["error"]:
+            errors.append(row["error"])
+    return {"passed": False, "checks": checks, "error": "\n".join(errors), "seconds": 0}
+
+
+def case_result(report: dict[str, Any], case: str, returncode: int) -> dict[str, Any]:
+    for field in ("cases", "passed", "total"):
+        if field not in report:
+            return rejected_report(report, f"missing required field {field}", returncode)
+    cases = report["cases"]
+    if not isinstance(cases, list) or len(cases) != 1 or not isinstance(cases[0], dict):
+        return rejected_report(report, "the report must contain exactly one case object", returncode)
+    row = cases[0]
+    for field in ("case", "status", "passed", "checks", "error", "seconds", "leftovers"):
+        if field not in row:
+            return rejected_report(report, f"missing required field {field}", returncode)
+    if row["case"] != case:
+        return rejected_report(report, "the report does not name the requested case", returncode)
+    checks = row["checks"]
+    if not isinstance(checks, dict) or not checks or any(type(ok) is not bool for ok in checks.values()):
+        return rejected_report(report, "the case checks must be nonempty Boolean evidence", returncode)
+    if not isinstance(row["error"], str) or not isinstance(row["leftovers"], list):
+        return rejected_report(report, "the case error or leftovers field has an invalid type", returncode)
+    if type(row["seconds"]) not in (int, float) or not 0 <= row["seconds"] < float("inf"):
+        return rejected_report(report, "the case seconds field must be a finite nonnegative number", returncode)
+    passed = all(checks.values()) and not row["error"] and not row["leftovers"]
+    if type(row["passed"]) is not bool or row["passed"] != passed or row["status"] != ("pass" if passed else "fail"):
+        return rejected_report(report, "the case status, passed flag and checks disagree", returncode)
+    if type(report["total"]) is not int or report["total"] != 1 or type(report["passed"]) is not int or report["passed"] != int(passed):
+        return rejected_report(report, "the report summary disagrees with the selected case", returncode)
+    if report.get("error", "") != "" or row["error"]:
+        return rejected_report(report, "the report or case contains an error", returncode)
+    if row["leftovers"] or checks.get(LEFTOVER) is not True:
+        return rejected_report(report, "the case cleanup did not pass", returncode)
+    if returncode != (0 if passed else 1):
+        return rejected_report(report, "the runner exit does not match the reported result", returncode)
+    return {"passed": passed, "checks": checks, "error": "", "seconds": row["seconds"]}
 
 
 def run_case(runner: str, case: str, tree: Path) -> dict[str, Any]:
@@ -77,12 +132,15 @@ def run_case(runner: str, case: str, tree: Path) -> dict[str, Any]:
         process = in_tree(tree, "scripts.orchestration.run_supervisor_e2e", ["--case", case])
     else:
         process = in_tree(tree, "scripts.orchestration.run_stack_e2e", ["--case", case])
-    cases = latest_report(tree, RUNNERS[runner]).get("cases") or [{}]
-    result: dict[str, Any] = cases[0]
-    if not result:
-        error = f"the runner wrote no report (exit {process.returncode}): {(process.stderr or process.stdout)[-300:]}"
-        return {"passed": False, "checks": {}, "error": error, "seconds": 0}
-    return {"passed": result["status"] == "pass", "checks": result["checks"], "error": result["error"], "seconds": result["seconds"]}
+    try:
+        report = latest_report(tree, RUNNERS[runner])
+    except json.JSONDecodeError:
+        return rejected_report({}, "JSONDecodeError: invalid JSON", process.returncode)
+    except UnicodeError:
+        return rejected_report({}, "the report is not valid UTF-8", process.returncode)
+    except ValueError as error:
+        return rejected_report({}, str(error), process.returncode)
+    return case_result(report, case, process.returncode)
 
 
 def failed_checks(result: dict[str, Any]) -> list[str]:
@@ -111,14 +169,14 @@ def write_log(path: Path, title: str, control: dict[str, Any], rows: list[dict[s
     lines = [f"case {title}", "", f"control: an unchanged copy of the tree, valid input: {'pass' if control['passed'] else 'FAIL'} ({control['seconds']} s)"]
     lines += check_lines(control["checks"])
     if control["error"]:
-        lines.append(f"  error: {control['error'].splitlines()[0]}")
+        lines += [f"  error: {line}" for line in control["error"].splitlines()]
     for row in rows:
         lines += ["", f"mutant {row['mutant']}: {guard_mutants.MUTANTS[row['mutant']].what}", f"  intended check: {row['intended']}"]
         lines += [f"  verdict: {'failing-first verified' if row['ok'] else 'NOT VERIFIED'}: {row['why']}", "  the code change:"]
         lines += [f"    {line}" for line in row["diff"].rstrip("\n").splitlines()]
         lines += check_lines(row["result"]["checks"])
         if row["result"]["error"]:
-            lines.append(f"  error: {row['result']['error'].splitlines()[0]}")
+            lines += [f"  error: {line}" for line in row["result"]["error"].splitlines()]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
 
@@ -156,19 +214,32 @@ def run_runner(runner: str, selected: list[str], logs: Path, scratch: Path) -> l
 
 def offline_entries(tree: Path) -> dict[str, bool]:
     """The entries of the offline checks that the mutation, graph and distribution sections produce in a copy, by name."""
-    arguments = [item for section in OFFLINE_SECTIONS for item in ("--only", section)]
-    in_tree(tree, "scripts.orchestration.offline_checks", arguments)
     results = latest_report(tree, "orchestration_offline").get("results") or {}
     return {name: bool(entry["ok"]) for name, entry in results.items()}
+
+
+def offline_result(tree: Path) -> dict[str, Any]:
+    arguments = [item for section in OFFLINE_SECTIONS for item in ("--only", section)]
+    in_tree(tree, "scripts.orchestration.offline_checks", arguments)
+    try:
+        entries = offline_entries(tree)
+    except json.JSONDecodeError:
+        return rejected_report({}, "JSONDecodeError: invalid JSON", None)
+    except KeyError as error:
+        return rejected_report({}, f"KeyError: {error}", None)
+    except (TypeError, AttributeError, UnicodeError):
+        return rejected_report({}, "the offline report has invalid fields", None)
+    except ValueError as error:
+        return rejected_report({}, str(error), None)
+    return {"passed": bool(entries) and all(entries.values()), "checks": entries, "error": "", "seconds": 0}
 
 
 def run_offline(selected: list[str], logs: Path, scratch: Path) -> list[dict[str, Any]]:
     """Control and mutant runs of the offline validators. The control is every mutation, graph and distribution entry passing on the unchanged code; a
     mutant turns one validator off, and the entry that feeds it a bad input must then fail."""
     tree = copy_tree(scratch / "offline_control")
-    control_entries = offline_entries(tree)
+    control = offline_result(tree)
     shutil.rmtree(tree, ignore_errors=True)
-    control = {"passed": bool(control_entries) and all(control_entries.values()), "checks": control_entries, "error": "", "seconds": 0}
     rows: list[dict[str, Any]] = []
     for group, guards in guard_mutants.GUARDS["offline"].items():
         if selected and group not in selected:
@@ -177,10 +248,10 @@ def run_offline(selected: list[str], logs: Path, scratch: Path) -> list[dict[str
         for guard in guards:
             tree = copy_tree(scratch / f"offline_{guard.mutant}")
             diff = guard_mutants.apply(tree, guard_mutants.MUTANTS[guard.mutant])
-            entries = offline_entries(tree)
+            result = offline_result(tree)
             shutil.rmtree(tree, ignore_errors=True)
-            result = {"passed": all(entries.values()), "checks": entries, "error": "", "seconds": 0}
-            ok = control["passed"] and entries.get(guard.check) is False
+            entries = result["checks"]
+            ok = control["passed"] and not result["error"] and entries.get(guard.check) is False
             why = "the intended entry failed on the mutant and passed on the control" if ok else "the intended entry did not fail, or the control did not pass"
             case_rows.append({"mutant": guard.mutant, "intended": guard.check, "ok": ok, "why": why, "diff": diff, "result": result})
             sys.stdout.write(f"offline/{group}: {'ok' if ok else 'FAIL'} {guard.mutant}: {sum(1 for v in entries.values() if not v)} entries fail\n")
