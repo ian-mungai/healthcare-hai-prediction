@@ -1,7 +1,5 @@
--- One row per (diagnosis-related group code system, code) as published, plus the unknown member. code_system names the silver model and column;
--- code_label is the paired label column where silver has one, else null. A code with two different labels keeps the label of its latest data
--- year (amendment A48); a code with a label and a null label keeps the label [824] [750]. Every DRG code has one identity, whether or not
--- its label changed; identity_rule says hold_single_latest for the codes the identity_splits seed holds as unresolved [940].
+-- One identity per billed diagnosis-related group code, plus the unknown member; the latest non-null published label is a display attribute.
+-- The approved single_latest policy does not establish a grouper version per calendar-year release or a rename-only classification.
 {%- set code_systems = [
     {'model': 'int_mup_drg_discharges', 'code': 'drg_cd', 'label': 'drg_desc', 'order': 'data_year'},
 ] %}
@@ -25,8 +23,7 @@ observed as (
     {%- endfor %}
 ),
 
--- A code published with more than one label keeps the label of its latest vintage (then the first label in order); every
--- published label stays on the fact rows (amendment A48).
+-- Published labels remain on fact rows; the dimension selects the latest vintage and breaks ties by label.
 labeled as (
     select distinct on (code_system, code)
         code_system,

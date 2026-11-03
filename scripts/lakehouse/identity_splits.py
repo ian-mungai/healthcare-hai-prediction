@@ -6,11 +6,14 @@ Run from the repository root:
     .venv/bin/python -m scripts.lakehouse.identity_splits --check    # fail when the list is invalid or the seed drifts from it
 
 ``config/lakehouse/identity_classification.csv`` is the approved list: one row per code or measure whose label changed across releases, with its class,
-its approval status, the identity rule and the public sources that support the class. Each class has one rule: ``redefined`` gives ``split`` (one identity
+its approval status, the identity rule and the public sources that support the class. Normally ``redefined`` gives ``split`` (one identity
 per edition), ``renamed`` gives ``single_latest`` (one identity with the latest label) and ``unresolved`` gives ``hold_single_latest`` (one identity with
 the latest label until an owner decision). A ``redefined`` or ``renamed`` row must be ``approved`` and an ``unresolved`` row must be ``owner_hold``; a
 ``proposed_for_approval`` row stops the generator, so an unapproved key cannot reach a model. The list holds codes, classes, statuses and public
 citations only: no approval dates and no owner decision records, because the repository is public.
+
+For billed inpatient DRGs, an approved ``single_latest`` policy may retain ``unresolved`` grouper provenance. It requires a scope limit and applies only to
+``dim_drg`` from ``int_mup_drg_discharges.drg_cd``. Policy approval does not establish a grouper version or a rename-only classification.
 """
 
 from __future__ import annotations
@@ -94,6 +97,16 @@ def validate_row(row: dict[str, str], where: str) -> None:
     if row["approval_status"] == "proposed_for_approval":
         raise IdentityError(f"{where}: {name} is proposed_for_approval; only an approved class or an owner hold reaches a model")
     expected_rule, expected_status = RULE_OF_CLASS[row["classification"]], STATUS_OF_CLASS[row["classification"]]
+    approved_drg = (
+        row["dimension"] == "dim_drg"
+        and row["code_system"] == "int_mup_drg_discharges.drg_cd"
+        and row["classification"] == "unresolved"
+        and row["approval_status"] == "approved"
+    )
+    if approved_drg:
+        if not row["scope_limit"].strip():
+            raise IdentityError(f"{where}: {name} approved DRG policy needs a scope limit")
+        expected_rule, expected_status = "single_latest", "approved"
     if row["identity_rule"] != expected_rule:
         raise IdentityError(f"{where}: {name} class {row['classification']} needs identity_rule {expected_rule}, not {row['identity_rule']!r}")
     if row["approval_status"] != expected_status:
