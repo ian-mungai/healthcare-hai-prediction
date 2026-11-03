@@ -30,6 +30,7 @@ POLICIES = (
     "job_writer_layer_upload",
     "job_writer_layer_state",
     "job_writer_features_feast",
+    "job_writer_features_activation",
 )
 
 
@@ -56,7 +57,7 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
             add(f"{layer} lookalike {namespace}", layer, "s3:PutObject", f"{BUCKET}/lakehouse/{namespace}_other/file", False)
         for prefix in ("", "lakehouse/", f"lakehouse/{layer}", f"lakehouse/{layer}_other/"):
             add(f"{layer} list boundary {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
-        add(f"{layer} list needs prefix", layer, "s3:ListBucket", BUCKET, False)
+        add(f"{layer} list needs prefix", layer, "s3:ListBucket", BUCKET, layer == "features")  # the bucket check of the Feast registry sends none
         add(f"{layer} list other bucket", layer, "s3:ListBucket", OTHER_BUCKET, False, {"s3:prefix": (f"lakehouse/{layer}/",)})
         for action in WRITER_ACTIONS:
             add(f"{layer} other bucket {action}", layer, action, f"{OTHER_BUCKET}/lakehouse/{layer}/file", False)
@@ -83,7 +84,7 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
     for layer in LAYERS:
         for owner in (*UPLOADS, "features", "bronze", "other"):
             resource = f"{BUCKET}/lakehouse/layer_runs/{owner}/run/export/manifest.json"
-            add(f"{layer} run upload {owner}", layer, "s3:PutObject", resource, layer in UPLOADS and layer == owner)
+            add(f"{layer} run upload {owner}", layer, "s3:PutObject", resource, layer == owner and owner != "bronze" and owner != "other")
             for action in ("s3:GetObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:PutObjectAcl", "s3:AbortMultipartUpload"):
                 add(f"{layer} run upload excludes {owner} {action}", layer, action, resource, False)
             add(f"{layer} run list {owner}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"lakehouse/layer_runs/{owner}/",)})
@@ -110,6 +111,9 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
         add(f"{layer} feast registry delete", layer, "s3:DeleteObject", REGISTRY, False)
         add(f"{layer} feast other object", layer, "s3:PutObject", f"{BUCKET}/lakehouse/feast/other.pb", False)
         add(f"{layer} feast e2e registry", layer, "s3:PutObject", f"{BUCKET}/lakehouse/feast_e2e/registry.pb", False)
+        add(f"{layer} registry bucket check sends no prefix", layer, "s3:ListBucket", BUCKET, layer == "features")
+        add(f"{layer} registry bucket check is not a list of the whole bucket", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": ("",)})
+        add(f"{layer} registry bucket check is not a list of another bucket", layer, "s3:ListBucket", OTHER_BUCKET, False)
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")
         for action in ("ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DeleteParameter"):
             add(f"{layer} redis password excludes {action}", layer, action, REDIS_PARAMETER, False)
@@ -157,12 +161,16 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
         False,
         {"iam:PassedToService": ("ecs-tasks.amazonaws.com",)},
     )
+    prepared_state = f"{BUCKET}/lakehouse/layer_runs/features/run/state/pinned.json"
+    add("features before its activation puts its run claim", "features_prepared", "s3:PutObject", prepared_state, True)
+    add("features before its activation uploads nothing", "features_prepared", "s3:PutObject", f"{BUCKET}/lakehouse/layer_runs/features/run/commit.json", False)
+    add("features before its activation has no bucket check", "features_prepared", "s3:ListBucket", BUCKET, False)
     return result
 
 
 def evaluate(documents: dict[str, dict[str, Any]], collections: tuple[str, ...]) -> list[dict[str, Any]]:
     """Evaluate complete writer attachments and the complete project policy set."""
-    extras = ("layer_input", "layer_upload", "layer_state", "layer_feast")
+    extras = ("layer_input", "layer_upload", "layer_state", "layer_feast", "layer_activation")
     actors = {
         **{
             layer: [
@@ -172,6 +180,12 @@ def evaluate(documents: dict[str, dict[str, Any]], collections: tuple[str, ...])
             ]
             for layer in LAYERS
         },
+        # The features role of a silver or gold window: job_features_image_prepared is off, so the activation policy is not attached.
+        "features_prepared": [
+            documents["job_stage_read"],
+            documents["storage_features"],
+            *(documents[f"{name}_features"] for name in extras if name != "layer_activation" and f"{name}_features" in documents),
+        ],
         "execution_delta": [documents["job_writer_execution"]],
         "reader": [documents["job_stage_read"], documents["job_source_read"]],
         "project": [document for name, document in documents.items() if name.startswith("project_")],
@@ -225,6 +239,8 @@ def verify(root: Path, base: dict[str, dict[str, Any]], output: Path) -> tuple[l
     documents["layer_state_features"] = json.loads(Template((directory / "job_writer_layer_upload.json").read_text()).substitute(values))
     values = {"REGISTRY_OBJECT_ARNS": json.dumps([REGISTRY]), "REDIS_PARAMETER_ARNS": json.dumps([REDIS_PARAMETER])}
     documents["layer_feast_features"] = json.loads(Template((directory / "job_writer_features_feast.json").read_text()).substitute(values))
+    values = {"BUCKET_ARN": BUCKET, "RUN_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/layer_runs/features/*"])}
+    documents["layer_activation_features"] = json.loads(Template((directory / "job_writer_features_activation.json").read_text()).substitute(values))
     path = directory / "job_writer_execution.json"
     values = {
         "WRITER_PARAMETER_ARNS": json.dumps([PARAMETER + f"aws_polaris_{layer}_{suffix}" for layer in LAYERS for suffix in ("client_id", "client_secret")])

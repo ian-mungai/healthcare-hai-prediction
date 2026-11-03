@@ -3,7 +3,8 @@
     .venv/bin/python -m scripts.lakehouse.run_layer_acceptance_e2e --out <NEW_DIRECTORY>
 
 The records have the shapes the driver writes (``layer_run.bundle``, ``gold_export.export_sealed``, ``gold_publish.publish_candidates``,
-``reconcile_candidates``, ``catalog_backup``, ``commit_receipt`` and ``silver_publish.record_committed``) with the tables of the frozen publish contract.
+``reconcile_candidates``, ``catalog_backup``, ``commit_receipt``, ``silver_publish.record_committed``, ``feast_job.apply`` and
+``feast_materialize.run_materialize``) with the tables of the frozen publish contract.
 The input listing digest comes from the driver's own ``layer_run.input_listing`` over a fake bucket. The describe output holds the overrides that
 ``job_overrides`` writes. Every defect case copies a good run, breaks one thing and requires the report to fail the check that names it."""
 
@@ -26,17 +27,20 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from scripts.features.publication_reads import Publication
 from scripts.lakehouse import layer_acceptance as acceptance
 from scripts.lakehouse import layer_run
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 GIT_IGNORED = acceptance.ignored  # the real check, before the cases replace it with a rule about the scratch folder
-SILVER_RUN, OTHER_SILVER_RUN, GOLD_RUN, OTHER_GOLD_RUN = (
+SILVER_RUN, OTHER_SILVER_RUN, GOLD_RUN, OTHER_GOLD_RUN, FEATURES_RUN, OTHER_FEATURES_RUN = (
     "20261031T120000Z-abcdef12",
     "20261031T130000Z-fedcba98",
     "20261101T090000Z-0a1b2c3d",
     "20261101T100000Z-3d2c1b0a",
+    "20261102T090000Z-1a2b3c4d",
+    "20261102T100000Z-4d3c2b1a",
 )
 ACCOUNT = "111111111111"
 INPUTS = 1500  # more than one page of 1000, so the page structure of the digest is exercised
@@ -72,6 +76,7 @@ def frozen(path: str) -> Any:
 CONTRACT_TABLES = {
     "silver": sorted(frozen("data_contracts/lakehouse/silver_publish.json")["publish"]["tables"]),
     "gold": sorted(frozen("data_contracts/lakehouse/gold_contract.json")["publish"]["tables"]),
+    "features": sorted(frozen("data_contracts/lakehouse/features_publish.json")["publish"]["tables"]),
 }
 BRONZE_TABLES = sorted({entry["table"] for entry in frozen("config/lakehouse/bronze_tables.json")["tables"]} | {"file_metadata"})
 
@@ -107,7 +112,7 @@ class Env:
 
     @property
     def source(self) -> Env:
-        """The silver run that a gold run reads. A silver run has none."""
+        """The run of the layer below that this run reads. A silver run has none."""
         if self.producer is None:
             raise RuntimeError("this run has no producer")
         return self.producer
@@ -170,7 +175,7 @@ def cli_listing(entries: list[dict[str, Any]]) -> dict[str, Any]:
 def build_records(env: Env) -> None:
     """The run folder the layer upload leaves: every record has the shape the driver writes and every digest link holds."""
     item, folder = env.spec, env.evidence
-    namespace = "silver" if item.layer == "silver" else "gold"
+    namespace = {"silver": "silver", "gold": "gold", "features": "features"}[item.layer]
     run, sealed = item.run, item.sealed
     entries = input_entries(item)
     listing = layer_run.input_listing(FakeBucket(entries), "bucket", acceptance.INPUT_PREFIX[item.layer])
@@ -250,17 +255,54 @@ def build_records(env: Env) -> None:
             folder / "silver_snapshot.json", {"schema": 1, "run_id": run, "mode": "real", "namespace": "silver", "snapshot_set": snapshots}
         )  # record_committed
     else:
-        producer = json.loads((env.producer.evidence / "silver_snapshot.json").read_text()) if env.producer else {"run_id": "", "snapshot_set": {}}
+        source = {"gold": "silver_snapshot.json", "features": "publish/commit.json"}[item.layer]
+        producer = json.loads((env.producer.evidence / source).read_text()) if env.producer else {"run_id": "", "snapshot_set": {}}
         write(
-            folder / "silver_pins.json",
+            folder / acceptance.PIN_FILE[item.layer],
             {
                 "schema": 1,
                 "run_id": run,
                 "mode": "real",
-                "namespace": "silver",
+                "namespace": "silver" if item.layer == "gold" else "gold",
                 "source_run_id": producer["run_id"],
                 "snapshot_set": producer["snapshot_set"],
-            },  # silver_publish.pin
+            },  # silver_publish.pin and features_input.pin
+        )
+    if item.layer == "features":
+        write(folder / "features_snapshot.json", {"schema": 1, "run_id": run, "mode": "real", "namespace": "features", "snapshot_set": snapshots})
+        publication = Publication("features", run, "2026-11-02T09:00:00+00:00", snapshots)
+        write(
+            folder / "feast_apply.json",
+            {  # feast_job.apply
+                "schema": 1,
+                "step": "apply",
+                "run_id": run,
+                "mode": "real",
+                "namespace": "features",
+                "publication": {
+                    "run_id": run,
+                    "committed_at": publication.committed_at,
+                    "tables": len(snapshots),
+                    "snapshot_set_sha256": publication.snapshot_set_sha256,
+                },
+                "feature_schema_sha256": h(item.tag, "schema"),
+                "feast_version": "0.66.0",
+                "objects": {"entity": 1, "feature_view": 9, "data_source": 9},
+                "object_list_sha256": h(item.tag, "objects"),
+            },
+        )
+        write(
+            folder / "feast_materialize.json",
+            {  # feast_materialize.run_materialize
+                "schema": 1,
+                "step": "materialize",
+                "run_id": run,
+                "mode": "real",
+                "publication": {"run_id": run, "snapshot_set_sha256": publication.snapshot_set_sha256},
+                "feature_schema_sha256": h(item.tag, "schema"),
+                "load_id": h(item.tag, "load")[:16],
+                "entities": 12,
+            },
         )
     root = env.root
     write(root / "before.json", cli_listing(entries + [{"Key": f"lakehouse/run_stage/{run}/inputs/code.tar.gz", "VersionId": "s1", "ETag": '"s"', "Size": 5}]))
@@ -405,10 +447,14 @@ def scenario(work: Path, layer: str, label: str, tables: tuple[str, ...] | None 
     producer = None
     if layer == "gold":
         producer = make(work, f"{slug}_producer", spec("silver", SILVER_RUN, "a"))
-    runs = {"silver": (SILVER_RUN, OTHER_SILVER_RUN), "gold": (GOLD_RUN, OTHER_GOLD_RUN)}[layer]
-    env = Env(work / slug, spec(layer, runs[0], "a" if layer == "silver" else "c", tables), producer)
+    elif layer == "features":
+        source = make(work, f"{slug}_source", spec("silver", SILVER_RUN, "a"))
+        producer = make(work, f"{slug}_producer", spec("gold", GOLD_RUN, "c"), source)
+    runs = {"silver": (SILVER_RUN, OTHER_SILVER_RUN), "gold": (GOLD_RUN, OTHER_GOLD_RUN), "features": (FEATURES_RUN, OTHER_FEATURES_RUN)}[layer]
+    tags = {"silver": "ab", "gold": "cd", "features": "ef"}[layer]
+    env = Env(work / slug, spec(layer, runs[0], tags[0], tables), producer)
     build_records(env)
-    other = Env(work / f"{slug}_other", spec(layer, runs[1], "b" if layer == "silver" else "d", tables), producer)
+    other = Env(work / f"{slug}_other", spec(layer, runs[1], tags[1], tables), producer)
     build_records(other)
     return env, other
 
@@ -432,6 +478,12 @@ NAMES = {
     "pin": "H3: the gold pin is complete: its run, mode, namespace and the silver contract's tables",
     "producer_set": "H3: the pin names the silver run and its complete snapshot set",
     "signed": "the silver producer is signed: its report passed, covers its record and matches its signature",
+    "features_record": "the features record equals the commit",
+    "features_pin": "H3: the features pin is complete: its run, mode, namespace and the gold contract's tables",
+    "features_producer_set": "H3: the pin names the gold run and its complete snapshot set",
+    "features_signed": "the gold producer is signed: its report passed, covers its record and matches its signature",
+    "feast_apply": "Feast applied this run's publication: its run, namespace, table count and snapshot set",
+    "feast_materialize": "Feast loaded this run's publication into the online store: its run, snapshot set and a positive entity count",
     "same": "H2: the input object versions are the same before and after the task",
     "listing": "H2: the pin recorded the digest and count of the listing taken before the task",
     "scope": "the task added versions only under the layer's prefixes and its own run prefix",
@@ -596,7 +648,106 @@ def common_cases() -> list[Case]:
     ]
 
 
+def features_cases() -> list[Case]:
+    """The input check against the signed gold run, the features record and the two Feast records."""
+    pin, commit = "gold_pins.json", "publish/commit.json"
+
+    def another_digest(d: dict[str, Any]) -> None:
+        d["publication"]["snapshot_set_sha256"] = "0" * 64
+
+    def another_run(d: dict[str, Any]) -> None:
+        d["publication"]["run_id"] = OTHER_FEATURES_RUN
+
+    def empty_gold_sets(e: Env, o: Env) -> None:
+        edit(e.evidence / pin, lambda d: d.update(snapshot_set={}))
+        edit(e.source.evidence / commit, lambda d: d.update(snapshot_set={}))
+
+    return [
+        (
+            "a features pin of another run",
+            lambda e, o: edit(e.evidence / pin, lambda d: d.update(run_id="20261030T000000Z-00000000")),
+            (NAMES["features_pin"],),
+        ),
+        ("a features pin with a fixture namespace", lambda e, o: edit(e.evidence / pin, lambda d: d.update(namespace="gold_e2e")), (NAMES["features_pin"],)),
+        (
+            "a features pin that misses a gold table",
+            lambda e, o: edit(e.evidence / pin, lambda d: d["snapshot_set"].pop(sorted(d["snapshot_set"])[0])),
+            (NAMES["features_pin"], NAMES["features_producer_set"]),
+        ),
+        (
+            "a features pin with another snapshot of a gold table",
+            lambda e, o: edit(e.evidence / pin, lambda d: d["snapshot_set"].update({sorted(d["snapshot_set"])[0]: 987654})),
+            (NAMES["features_producer_set"],),
+        ),
+        (
+            "a features pin that names another gold run",
+            lambda e, o: edit(e.evidence / pin, lambda d: d.update(source_run_id=OTHER_GOLD_RUN)),
+            (NAMES["features_producer_set"], NAMES["features_signed"], NAMES["task"]),
+        ),
+        (
+            "a features task that names another input run",
+            lambda e, o: edit(
+                e.root / "describe.json",
+                lambda d: [
+                    i.update(value=OTHER_GOLD_RUN)
+                    for c in d["tasks"][0]["overrides"]["containerOverrides"]
+                    for i in c.get("environment", [])
+                    if i["name"] == "INPUT_RUN_ID"
+                ],
+            ),
+            (NAMES["task"],),
+        ),
+        ("an unsigned gold producer", lambda e, o: e.source.root.joinpath("qualification.signed.json").unlink(), (NAMES["features_signed"],)),
+        (
+            "a gold report changed after it was signed",
+            lambda e, o: e.source.root.joinpath("qualification.json").write_text(e.source.root.joinpath("qualification.json").read_text() + " "),
+            (NAMES["features_signed"],),
+        ),
+        (
+            "a gold commit record changed after it was signed",
+            lambda e, o: edit(e.source.evidence / commit, lambda d: d.update(note="x")),
+            (NAMES["features_signed"],),
+        ),
+        (
+            "a gold candidates record changed after it was signed",
+            lambda e, o: edit(e.source.evidence / "publish/candidates.json", lambda d: d.update(note="x")),
+            (NAMES["features_signed"],),
+        ),
+        (
+            "a gold commit that is not committed",
+            lambda e, o: edit(e.source.evidence / commit, lambda d: d.update(state="pending")),
+            (NAMES["features_producer_set"],),
+        ),
+        ("matching empty gold snapshot sets", empty_gold_sets, (NAMES["features_pin"], NAMES["features_signed"])),
+        ("the features record of another run", lambda e, o: copy_from(e, o, "features_snapshot.json"), (NAMES["features_record"],)),
+        (
+            "the features record names another namespace",
+            lambda e, o: edit(e.evidence / "features_snapshot.json", lambda d: d.update(namespace="features_e2e")),
+            (NAMES["features_record"],),
+        ),
+        ("Feast applied another run's publication", lambda e, o: edit(e.evidence / "feast_apply.json", another_run), (NAMES["feast_apply"],)),
+        ("Feast applied another snapshot set", lambda e, o: edit(e.evidence / "feast_apply.json", another_digest), (NAMES["feast_apply"],)),
+        (
+            "Feast applied a fixture namespace",
+            lambda e, o: edit(e.evidence / "feast_apply.json", lambda d: d.update(namespace="features_e2e")),
+            (NAMES["feast_apply"],),
+        ),
+        (
+            "the apply record has no views",
+            lambda e, o: edit(e.evidence / "feast_apply.json", lambda d: d["objects"].update(feature_view=0)),
+            (NAMES["feast_apply"],),
+        ),
+        ("the apply record is missing", lambda e, o: e.evidence.joinpath("feast_apply.json").unlink(), ()),
+        ("the materialize record is missing", lambda e, o: e.evidence.joinpath("feast_materialize.json").unlink(), ()),
+        ("Feast loaded another snapshot set", lambda e, o: edit(e.evidence / "feast_materialize.json", another_digest), (NAMES["feast_materialize"],)),
+        ("Feast loaded another run's publication", lambda e, o: edit(e.evidence / "feast_materialize.json", another_run), (NAMES["feast_materialize"],)),
+        ("Feast loaded no entities", lambda e, o: edit(e.evidence / "feast_materialize.json", lambda d: d.update(entities=0)), (NAMES["feast_materialize"],)),
+    ]
+
+
 def layer_cases(layer: str) -> list[Case]:
+    if layer == "features":
+        return features_cases()
     if layer == "silver":
         return [
             ("the pin misses a bronze table", lambda e, o: edit(e.evidence / "pins.json", lambda d: d.pop(sorted(d)[0])), (NAMES["bronze"],)),
@@ -665,7 +816,8 @@ def good_cases(work: Path) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     silver = make(work, "good_silver", spec("silver", SILVER_RUN, "a"))
     gold = make(work, "good_gold", spec("gold", GOLD_RUN, "c"), silver)
-    for env in (silver, gold):
+    features = make(work, "good_features", spec("features", FEATURES_RUN, "e"), gold)
+    for env in (silver, gold, features):
         layer = env.spec.layer
         report = json.loads((env.root / "qualification.json").read_text())
         signature = json.loads((env.root / "qualification.signed.json").read_text())
@@ -678,11 +830,20 @@ def good_cases(work: Path) -> dict[str, bool]:
             "before",
             "after",
         }
-        wanted |= (
-            {"pins.json", "silver_snapshot.json"}
-            if layer == "silver"
-            else {"silver_pins.json", "input/silver_snapshot.json", "input/report", "input/signature"}
-        )
+        wanted |= {
+            "silver": {"pins.json", "silver_snapshot.json"},
+            "gold": {"silver_pins.json", "input/silver_snapshot.json", "input/report", "input/signature"},
+            "features": {
+                "gold_pins.json",
+                "features_snapshot.json",
+                "feast_apply.json",
+                "feast_materialize.json",
+                "input/publish/commit.json",
+                "input/publish/candidates.json",
+                "input/report",
+                "input/signature",
+            },
+        }[layer]
         checks[f"{layer}: the good run passes every check and is signed"] = report["passed"] is True and signature["report_sha256"] == digest(
             env.root / "qualification.json"
         )
@@ -825,6 +986,19 @@ def plan_cases(work: Path) -> dict[str, bool]:
         path.write_text(json.dumps({"events": events}))
         code, _, _ = run_cli(["plan", "--layer", "silver", "--run", SILVER_RUN, "--log", str(path)])
         checks[f"plan: {label}"] = code == expected
+    limit = acceptance.online_entity_limit()
+    spine = "features.int_hospital_spine"
+    features_plans = {
+        "a features plan whose load fits the online store": ([{"table": spine, "rows": limit}], 0),
+        "a features plan whose load is above the memory guard": ([{"table": spine, "rows": limit + 1}], 1),
+        "a features plan that does not name the entity table": ([{"table": "features.other", "rows": 1}], 1),
+    }
+    for label, (tables, expected) in features_plans.items():
+        path = folder / (re.sub("[^a-z]+", "_", label) + ".json")
+        path.write_text(json.dumps({"events": plan_events("features", tables=tables)}))
+        code, printed, _ = run_cli(["plan", "--layer", "features", "--run", SILVER_RUN, "--log", str(path)])
+        checks[f"plan: {label}"] = code == expected and ("the online store would refuse" in printed or expected == 0 or "entity table" in printed)
+    checks["plan: the limit is the guard of the Feast job at the size of the real Redis"] = 0 < limit < 100_000
     return checks
 
 
@@ -833,18 +1007,19 @@ def static_cases() -> dict[str, bool]:
     writer = (ROOT / "infra/iam/job_writer.tf").read_text()
     prefixes = {
         layer: {f"lakehouse/{name}/" for name in re.findall(r'"([a-z_]+)"', body)}
-        for layer, body in re.findall(r"(silver|gold) = \{\s*prefixes\s*=\s*\[([^\]]*)\]", writer)
+        for layer, body in re.findall(r"(silver|gold|features) = \{\s*prefixes\s*=\s*\[([^\]]*)\]", writer)
     }
     broker = json.loads(acceptance.JOBS_FILE.read_text())["jobs"]
     return {
         "the write prefixes equal the layer writer roles": all(
-            set(acceptance.WRITE_PREFIXES[layer]) - {"metadata/dbt/"} == prefixes[layer] for layer in acceptance.LAYERS
+            set(acceptance.WRITE_PREFIXES[layer]) - {"metadata/dbt/", "lakehouse/feast/registry.pb"} == prefixes[layer] for layer in acceptance.LAYERS
         ),
+        "the features role may also write the Feast registry": 'job_layer_run_registry_key   = "lakehouse/feast/registry.pb"' in writer,
         "the gold role may also write the dbt metadata": '"${local.bronze_bucket_arn}/metadata/dbt/*"' in writer,
         "the expected containers are init and the broker table's containers": all(
             acceptance.expected_containers(layer) == ["init", *broker[layer]["containers"]] for layer in acceptance.LAYERS
         ),
-        "the contract tables are read from the frozen revision": len(CONTRACT_TABLES["silver"]) > 1 and len(CONTRACT_TABLES["gold"]) > 1,
+        "the contract tables are read from the frozen revision": all(len(CONTRACT_TABLES[layer]) > 1 for layer in acceptance.LAYERS),
     }
 
 
@@ -863,7 +1038,8 @@ def main() -> int:
     out = args.out.expanduser().absolute()
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     work = Path(tempfile.mkdtemp(prefix="layer_acceptance_", dir=out))
-    results: dict[str, dict[str, bool]] = {"static": static_cases()}
+    results: dict[str, dict[str, bool]] = {"features is accepted": {"the acceptance command covers features": "features" in acceptance.LAYERS}}
+    results["static"] = static_cases()
     try:
         with mock.patch.object(acceptance, "ignored", lambda path: str(path).startswith(str(work))):
             results["good"] = group("good", good_cases, work)

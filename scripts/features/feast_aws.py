@@ -53,6 +53,10 @@ PHASES = ("the secret fetch", "the Redis check", "the token exchange", "the cata
 HANDOVER = "the hand-over of the catalog"
 SSM_CONNECT_SECONDS = 5
 SSM_READ_SECONDS = 10
+# PyIceberg asks the catalog for vended credentials unless a header says otherwise, and the AWS catalog cannot vend (stsUnavailable). publication_reads could
+# pass the header, but Feast's own reader builds its catalog with only the address and the token. PyIceberg reads this variable for catalog hai when it first
+# loads.
+NO_DELEGATION_VARIABLE = "PYICEBERG_CATALOG__HAI__HEADER__X_ICEBERG_ACCESS_DELEGATION"
 
 
 @dataclass(frozen=True)
@@ -253,6 +257,7 @@ def catalog_session(
             raise ReadError(f"the job passed its {total:g} s deadline before {phase}")
         return min(limit, left)
 
+    environ[NO_DELEGATION_VARIABLE] = ""
     try:
         check(PHASES[0])
         environ["REDIS_PASSWORD"] = fetch_password(open_store, wait(limits.secret, PHASES[0]))

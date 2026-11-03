@@ -1,12 +1,15 @@
-"""The owner's AWS catalog setup: create or verify the AWS catalog and report the AWS Polaris pair parameters, under the project profile only.
+"""The owner's AWS catalog setup: create or verify the AWS catalog and report the AWS Polaris pair parameters, under the project profile.
 
 Run from the repository root at a terminal:
 
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup inspect --instance <HOST_INSTANCE_ID>
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold|features|serving --instance <HOST_INSTANCE_ID>
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold|serving --instance <HOST_INSTANCE_ID>
         [--namespace-approval <APPROVAL_ID>]
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity features --instance <HOST_INSTANCE_ID> --admin-profile <ADMIN_PROFILE>
+        [--namespace-approval <APPROVAL_ID>]
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check --admin-profile <ADMIN_PROFILE>
 
 The AWS catalog is reached only through ``orchestration.catalog_transport.CatalogTransport``: the Session Manager tunnel to the host's private
 port 8181 behind an owned loopback relay, after the network acceptance check. Neither local port may be the Mac Polaris port 8181, so a request
@@ -18,8 +21,12 @@ The tool refuses to start unless the configured profile resolves to the project 
 Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only.
 
 ``check`` reports each AWS Polaris pair parameter that the project user's policy lets it read by exact name with its type and version, never a value.
-The features pair stays with the administrator: ``check`` names it as an administrator item and does not read it. ``check`` reads without decryption,
-drops the encrypted value unread and never reads the root secret. ``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
+The features pair stays with the administrator: under the project profile ``check`` names it as an administrator item and does not read it, and ``principal``
+refuses the identity by name before any call. ``--admin-profile`` runs the whole step under the administrator profile, for the features identity only. The
+profile is never read from ``.env``. Its identity must be in the project account and must not be the project user. The vault, the root secret, the network
+acceptance and the tunnel then all use it, so no process that holds the project profile sees the pair. The pair still goes from the Polaris reply straight to
+Parameter Store and only names and counts are printed. ``check`` reads without decryption, drops the encrypted value unread and never reads the root secret.
+``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
 catalog and each identity's roles and grants and changes nothing.
 
 ``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
@@ -522,16 +529,17 @@ def step_catalog(services: Services, instance: str, seconds: float, clock: Clock
     return {"catalog": CATALOG, "outcome": outcome}
 
 
-def step_check(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Report the pair parameters the project profile may read by exact name, metadata only: nothing is decrypted and nothing is changed.
+def step_check(services: Services, seconds: float, clock: Clock = time.monotonic, administrator: bool = False) -> dict[str, Any]:
+    """Report the pair parameters the profile may read by exact name, metadata only: nothing is decrypted and nothing is changed.
 
-    The pairs of the administrator identities are named but never read, because the project user's policy has no grant for them.
+    Under the project profile the pairs of the administrator identities are named but never read, because the project user's policy has no grant for them. Under
+    the administrator profile the check reports those pairs and no other.
     """
     deadline = clock() + seconds
     vault = services.vault()
     parameters = []
     for identity, pair in configured_pairs().items():
-        if identity in ADMINISTRATOR_IDENTITIES:
+        if (identity in ADMINISTRATOR_IDENTITIES) != administrator:
             continue
         for name in pair:
             left = min(SECRET_SECONDS, check_deadline(deadline, clock))
@@ -540,8 +548,8 @@ def step_check(services: Services, seconds: float, clock: Clock = time.monotonic
             except secret_store.SecretStoreError as error:
                 raise SetupError("parameters", str(error)) from None
             parameters.append({"identity": identity, **found})
-    administrator = [{"identity": identity, "names": sorted(configured_pairs()[identity])} for identity in ADMINISTRATOR_IDENTITIES]
-    return {"parameters": parameters, "administrator_items": administrator}
+    items = [] if administrator else [{"identity": identity, "names": sorted(configured_pairs()[identity])} for identity in ADMINISTRATOR_IDENTITIES]
+    return {"parameters": parameters, "administrator_items": items}
 
 
 def step_inspect(services: Services, instance: str, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
@@ -923,24 +931,46 @@ def check_principals(request: Request, access: str, approvals: Path) -> dict[str
     return found
 
 
-class LiveServices:
-    """The project profile, checked against the caller identity on first use, and the Session Manager route to the AWS host."""
+def administrator_settings(settings: dict[str, str], profile: str) -> dict[str, str]:
+    """The settings with the administrator profile in place of the project profile, if its identity is in the project account and is not the project user."""
+    import boto3
 
-    def __init__(self, tunnel_port: int, relay_port: int) -> None:
+    if not profile.strip() or profile == settings["aws_profile"]:
+        raise SetupError("profile", "--admin-profile must name a profile other than the project profile")
+    try:
+        client = boto3.Session(profile_name=profile, region_name=settings["aws_region"]).client("sts", config=secret_store.client_config())
+        identity = client.get_caller_identity()
+    except (BotoCoreError, ClientError) as error:
+        raise SetupError("profile", f"the administrator identity could not be verified ({type(error).__name__})") from None
+    if identity.get("Account") != settings["expected_account_id"] or str(identity.get("Arn")).endswith(f":user/{settings['aws_profile']}"):
+        raise SetupError("profile", "the administrator profile must be in the project account and must not be the project user")
+    return {**settings, "aws_profile": profile}
+
+
+class LiveServices:
+    """The project or the named administrator profile, checked against the caller identity on first use, and the Session Manager route to the AWS host."""
+
+    admin_profile: str | None = None
+
+    def __init__(self, tunnel_port: int, relay_port: int, admin_profile: str | None = None) -> None:
         self.state_root = run_lock.main_checkout(REPO_ROOT) / "data/lakehouse"
         self.ports = (tunnel_port, relay_port)
+        self.admin_profile = admin_profile
 
     @functools.cached_property
     def settings(self) -> dict[str, str]:
-        """The project profile, region and bucket; any profile that does not resolve to the project user stops the tool (P2)."""
+        """The profile, region and bucket; any project profile that does not resolve to the project user stops the tool (P2), and so does an administrator
+        profile outside the project account or one that is the project user."""
         from scripts.infrastructure.render_project_config import ConfigurationError, load_configuration, verify_project_identity
 
         try:
             settings, _ = load_configuration(REPO_ROOT / ".env")
-            verify_project_identity(settings)
+            if self.admin_profile is None:
+                verify_project_identity(settings)
+                return settings
         except ConfigurationError as error:
             raise SetupError("profile", str(error)) from None
-        return settings
+        return administrator_settings(settings, self.admin_profile)
 
     @functools.cached_property
     def project_tag(self) -> str:
@@ -1007,12 +1037,16 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--seconds", type=float, default=600, help="the deadline of the whole step")
     steps = cli.add_subparsers(dest="step", required=True)
     steps.add_parser("catalog").add_argument("--instance", required=True)
-    steps.add_parser("check")
+    check = steps.add_parser("check")
+    check.add_argument("--admin-profile", help="report the pairs that stay with the administrator instead; never read from .env")
     steps.add_parser("inspect").add_argument("--instance", required=True)
     principal = steps.add_parser("principal")
     principal.add_argument("--identity", required=True, choices=IDENTITIES)
     principal.add_argument("--instance", required=True)
     principal.add_argument("--namespace-approval", help="the owner's approval ID for creating this identity's absent namespaces")
+    principal.add_argument(
+        "--admin-profile", help="the administrator profile, required for an identity whose pair stays with the administrator; never read from .env"
+    )
     return cli
 
 
@@ -1022,16 +1056,18 @@ def run(args: argparse.Namespace, services: Services) -> dict[str, Any]:
     if args.step == "catalog":
         return step_catalog(services, args.instance, args.seconds)
     if args.step == "principal":
+        if (args.identity in ADMINISTRATOR_IDENTITIES) != bool(args.admin_profile):
+            raise SetupError("administrator", f"the pair of {' and '.join(ADMINISTRATOR_IDENTITIES)} and no other is set up under --admin-profile")
         return step_principal(services, args.identity, args.instance, args.namespace_approval, args.seconds)
     if args.step == "inspect":
         return step_inspect(services, args.instance, args.seconds)
-    return step_check(services, args.seconds)
+    return step_check(services, args.seconds, administrator=bool(args.admin_profile))
 
 
 def main(argv: list[str] | None = None, services: Services | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        result = run(args, services or LiveServices(args.tunnel_port, args.relay_port))
+        result = run(args, services or LiveServices(args.tunnel_port, args.relay_port, getattr(args, "admin_profile", None)))
     except (SetupError, secret_store.SecretStoreError, bronze_writer.BindingError, OSError, ValueError) as error:
         code = f" ({error.code})" if isinstance(error, SetupError) else ""
         sys.stderr.write(f"aws catalog setup {args.step}{code}: {error}\n")

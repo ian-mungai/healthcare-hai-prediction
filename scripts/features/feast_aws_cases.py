@@ -747,6 +747,26 @@ def case_fa16(c: Checker) -> None:
     c.check("an unknown profile stops the job", calls == [] and code == 1)
 
 
+def case_fa17(c: Checker) -> None:
+    """FA17: PyIceberg asks Polaris to vend credentials unless told otherwise, and the AWS catalog cannot vend. Feast's reader builds its catalog with no way to
+    pass a header, so the session sets the variable that PyIceberg reads when it first loads, before anything can import it."""
+    environ, store, server = prepared()
+    seen: list[str | None] = []
+
+    def loader(name: str, **properties: Any) -> Any:
+        seen.append(environ.get(feast_aws.NO_DELEGATION_VARIABLE))
+        return runs_catalog("features")
+
+    job = feast_aws.job_settings(environ, "materialize", RUN, "real")
+    session = feast_aws.catalog_session(
+        job, environ, open_store=lambda: store, exchange=exchange_stand_in(), loader=loader, redis_factory=redis_factory(server)
+    )
+    with session:
+        pass
+    c.check("the variable is empty when the catalog is opened, so no delegation mode is asked for", seen == [""])
+    c.check("the variable names catalog hai and the header", feast_aws.NO_DELEGATION_VARIABLE == "PYICEBERG_CATALOG__HAI__HEADER__X_ICEBERG_ACCESS_DELEGATION")
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -764,4 +784,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA14": (case_fa14, "FA14"),
     "FA15": (case_fa15, "FA15"),
     "FA16": (case_fa16, "FA16"),
+    "FA17": (case_fa17, "FA17"),
 }

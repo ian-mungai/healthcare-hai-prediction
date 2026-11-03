@@ -2,9 +2,9 @@
 
     .venv/bin/python -m scripts.infrastructure.run_owner_list_e2e --out <new folder>
 
-The commands come from the "Silver first run" and "Gold and features after silver" sections. Each runs through the parser of its real program with synthetic
-values (``scripts.infrastructure.owner_commands``), so a typo, a missing argument or a wrong option fails here and not on the owner's first run. The reviewed
-jobs file that the list describes passes the real renderer through the real wrapper. Nothing calls AWS or Docker."""
+The commands come from the "Silver first run", "Gold after silver" and "Features after gold" sections. Each runs through the parser of its real program with
+synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing argument or a wrong option fails here and not on the owner's first run. The
+reviewed jobs file that each list describes passes the real renderer through the real wrapper. Nothing calls AWS or Docker."""
 
 from __future__ import annotations
 
@@ -19,12 +19,21 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import owner_commands
-from scripts.infrastructure.run_activation_inputs_e2e import ADMIN, ROOT, ROWS, STACKS, Workspace, variables_of
+from scripts.infrastructure.run_activation_inputs_e2e import (
+    ADMIN,
+    PLATFORM_DEFAULT_LOG_GROUPS,
+    PLATFORM_DEFAULT_REPOSITORIES,
+    ROOT,
+    ROWS,
+    STACKS,
+    Workspace,
+    variables_of,
+)
 from scripts.process import run_command
 
 DOCUMENT = ROOT / "docs/aws_broker.md"
-SILVER, GOLD = "Silver first run", "Gold and features after silver"
-IAM_FLAGS = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True}
+SILVER, GOLD, FEATURES = "Silver first run", "Gold after silver", "Features after gold"
+IAM_FLAGS = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True, "job_features_image_prepared": True}
 STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs")
 
 
@@ -41,6 +50,15 @@ def gold_sample(silver: dict[str, Any]) -> dict[str, Any]:
         name.replace("silver", "gold") for name in variables["writer_parameter_names"]["write_silver_task"]
     ]
     return silver | {"variables": variables}
+
+
+def platform_sample() -> dict[str, Any]:
+    """The reviewed file of the features image step: the default repositories and log groups and the one added repository."""
+    return {
+        "schema_version": 1,
+        "root": "platform",
+        "variables": {"ecr_repositories": [*PLATFORM_DEFAULT_REPOSITORIES, "feature_store"], "log_groups": list(PLATFORM_DEFAULT_LOG_GROUPS)},
+    }
 
 
 def make_wrapper(workspace: Workspace, samples: dict[str, dict[str, Any]]) -> Any:
@@ -135,16 +153,52 @@ def structure_checks(text: str) -> dict[str, bool]:
         result >= 0 and "10 minutes" in steps[result] and "6.5 hours" in steps[result]
     )
     gold = owner_commands.section(text, GOLD)
-    checks["the gold section is a numbered list and names features as not ready with H3 open"] = (
-        bool(steps_of(gold)) and "not ready to run" in gold and "features H3" in gold
-    )
-    checks["the gold section takes the signed silver run as input and names the feature store grant"] = (
-        "--input-run <SILVER_RUN_ID>" in gold and "job_features_image_prepared" in gold
-    )
+    checks["the gold section is a numbered list and takes the signed silver run as input"] = bool(steps_of(gold)) and "--input-run <SILVER_RUN_ID>" in gold
+    features = owner_commands.section(text, FEATURES)
+    checks |= features_checks(features)
     variables = {name for names in (variables_of(directory) for directory in STACKS.values()) for name in names}
-    named = {name for name in re.findall(r"`([a-z][a-z0-9_]+)`", body + gold) if name in variables}
+    named = {name for name in re.findall(r"`([a-z][a-z0-9_]+)`", body + gold + features) if name in variables}
     rows = {row.name for row in ROWS}
     checks[f"every input the lists name has a row ({sorted(named - rows)})"] = named <= rows
+    return checks
+
+
+def features_checks(body: str) -> dict[str, bool]:
+    """The features list is complete: every step of the first features run, in the order the stacks and the run depend on."""
+    steps = steps_of(body)
+    numbers = [int(step.split(".", 1)[0]) for step in steps]
+    checks = {"the features section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 12}
+
+    def index(*needles: str) -> int:
+        return next((position for position, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
+
+    order = [
+        ("repository", index("--platform", "ecr_repositories", "feature_store")),
+        ("IAM activation", index("--iam", "job_features_image_prepared")),
+        ("feature store image", index("push_images plan", "--only feature_store")),
+        ("host start", index("host_session start", "describe-instances")),
+        ("pair under the administrator", index("aws_catalog_setup principal", "--identity features", "--admin-profile <ADMIN_PROFILE>")),
+        ("jobs file", index("--jobs", "layer_feast_redis_host", "train_images")),
+        ("approval", index("code_archive", "layer_acceptance approve --layer features")),
+        ("IAM preflight", index("iam_preflight --scope features")),
+        ("dry run", index("run-task", "--input-run <GOLD_RUN_ID> --dry-run")),
+        ("dry run result", index("layer_acceptance task --layer features", "layer_acceptance plan --layer features", "features/publish/<TASK_ID>")),
+        ("real run", index("before_features.json", "--input-run <GOLD_RUN_ID> >")),
+        ("evidence", index("after_features.json", "lakehouse/layer_runs/features/<RUN_ID>/", "list-tasks")),
+        ("report", index("host_session stop", "layer_acceptance report --layer features", "--input-evidence", "--input-report", "layer_acceptance sign")),
+        ("endpoints off", index("job_endpoints_enabled", "`false`")),
+    ]
+    positions = [position for _, position in order]
+    checks[f"the features steps come in dependency order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
+    jobs = index("--jobs", "layer_feast_redis_host", "train_images")
+    checks["the jobs step names the task role, the pair and only the features task definition"] = jobs >= 0 and all(
+        word in steps[jobs] for word in ("write_features_task", "_job_features", "and nothing else")
+    )
+    iam = index("--iam", "job_features_image_prepared")
+    checks["the IAM step says what the plan may add"] = iam >= 0 and "two policies" in steps[iam] and "Stop on any other change" in steps[iam]
+    result = index("layer_acceptance task --layer features", "layer_acceptance plan --layer features")
+    checks["the dry run step explains the online store limit"] = result >= 0 and "online store" in steps[result]
+    checks["the list says how to recover from a failed Feast phase"] = "Feast phase fails" in body and "new run ID" in body
     return checks
 
 
@@ -152,12 +206,18 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     workspace = Workspace(folder / "workspace")
     silver_body = owner_commands.section(text, SILVER)
     sample = owner_commands.example_json(silver_body) or {}
-    samples = {"jobs_silver.json": sample, "jobs_gold.json": gold_sample(sample) if sample else {}}
+    features_sample = owner_commands.example_json(owner_commands.section(text, FEATURES)) or {}
+    samples = {
+        "jobs_silver.json": sample,
+        "jobs_gold.json": gold_sample(sample) if sample else {},
+        "jobs_features.json": features_sample,
+        "platform_features.json": platform_sample(),
+    }
     wrapper = make_wrapper(workspace, samples)
     checks: dict[str, bool] = {
         "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample
     }
-    for heading in (SILVER, GOLD):
+    for heading in (SILVER, GOLD, FEATURES):
         problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
         count = len(problems)
         checks[f"{heading}: {count} printed commands were found"] = count >= 5
@@ -186,12 +246,21 @@ MUTANTS = (
     ("an unknown preflight scope", "iam_preflight --scope silver", "iam_preflight --scope bronze"),
     ("a report without its output path", " --out <RECORD_DIR>/qualification_silver.json", ""),
     ("an unknown layer", "layer_acceptance plan --layer silver", "layer_acceptance plan --layer bronze"),
+    ("an unknown preflight scope in the features list", "iam_preflight --scope features", "iam_preflight --scope feature"),
+    ("an unknown identity in the features list", "--identity features --instance", "--identity feature --instance"),
+    ("a mistyped image option in the features list", "--only feature_store", "--omly feature_store"),
+    ("a features report without its output path", " --out <RECORD_DIR>/qualification_features.json", ""),
+    (
+        "features overrides without the digest",
+        "--job features --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> ",
+        "--job features --run <RUN_ID> --code-run <RUN_ID> ",
+    ),
 )
 
 
 def mutant_checks(text: str, folder: Path) -> dict[str, bool]:
     """Each planted typo in one printed command must fail the parser check of that line."""
-    lines = [line for heading in (SILVER, GOLD) for line in owner_commands.commands(owner_commands.section(text, heading))]
+    lines = [line for heading in (SILVER, GOLD, FEATURES) for line in owner_commands.commands(owner_commands.section(text, heading))]
     wrapper = make_wrapper(Workspace(folder / "mutant_workspace"), {})
     checks: dict[str, bool] = {}
     for label, old, new in MUTANTS:

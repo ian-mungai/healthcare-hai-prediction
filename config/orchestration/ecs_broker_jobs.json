@@ -158,6 +158,10 @@
           "CODE_RUN_ID",
           "POLARIS_URI"
         ],
+        "upload": [
+          "RUN_ID",
+          "CODE_RUN_ID"
+        ],
         "feast": [
           "RUN_ID",
           "CODE_RUN_ID",

@@ -28,7 +28,15 @@
       "policies": [
         "owner_policies/job_execution.json",
         "owner_policies/job_writer_execution.json",
-        "owner_policies/job_train_parameter.json"
+        "owner_policies/job_train_parameter.json",
+        "owner_policies/job_features_image.json"
+      ],
+      "attachments": [
+        {
+          "policy": "owner_policies/job_features_image.json",
+          "resource": "job_features_image_pull",
+          "flag": "job_features_image_prepared"
+        }
       ]
     },
     "task_execution": {
@@ -112,7 +120,8 @@
         "owner_policies/job_stage_read.json",
         "owner_policies/job_writer_layer_input.json",
         "owner_policies/job_writer_layer_upload.json",
-        "owner_policies/job_writer_features_feast.json"
+        "owner_policies/job_writer_features_feast.json",
+        "owner_policies/job_writer_features_activation.json"
       ],
       "attachments": [
         {
@@ -129,6 +138,11 @@
           "policy": "owner_policies/job_writer_features_feast.json",
           "resource": "job_writer_features_feast",
           "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_features_activation.json",
+          "resource": "job_writer_features_activation",
+          "flag": "job_features_image_prepared"
         }
       ]
     },
@@ -675,7 +689,11 @@
     {
       "role": "write_features",
       "action": "s3:PutObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/state/pinned.json"
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/state/pinned.json",
+      "granted_by": [
+        "FeaturesRunObjects",
+        "LayerRunObjects"
+      ]
     },
     {
       "role": "write_features",
@@ -1196,6 +1214,570 @@
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/state/pinned.json",
       "scope": "silver"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetAuthorizationToken",
+      "resource": "*",
+      "context": {
+        "aws:RequestedRegion": "${AWS_REGION}"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_spark_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_spark_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_quality_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_quality_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:BatchGetImage",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_feature_store_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ecr:GetDownloadUrlForLayer",
+      "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_feature_store_${ENVIRONMENT}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_ID_NAME}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_FEATURES_CLIENT_ID_NAME}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "ssm:GetParameters",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_FEATURES_CLIENT_SECRET_NAME}",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/init/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/init/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/fetch/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/fetch/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/pin/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/pin/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/build/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/build/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/validate/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/validate/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/export/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/export/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/publish/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/publish/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/upload/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/upload/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:CreateLogStream",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/feast/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "job_execution",
+      "action": "logs:PutLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/feast/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar.gz",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/gold/"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/data/example.parquet",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/metadata/example.metadata.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/data/example.parquet",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/data/example.parquet",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/example.metadata.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/table/metadata/example.metadata.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/catalog_backups/example.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/features/catalog_backups/example.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/feast/registry.pb",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/feast/registry.pb",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${REDIS_PASSWORD_NAME}",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/layer_run.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/gold_pins.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/features_snapshot.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/feast_apply.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/feast_materialize.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/state/pinned.json",
+      "granted_by": [
+        "FeaturesRunObjects",
+        "LayerRunObjects"
+      ],
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/build_receipt.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/quality_features/result.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/candidates.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/reconcile.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/backup.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/commit.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/consumer_result.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/export/manifest.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "iam:SimulatePrincipalPolicy",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:user/${AWS_PROFILE}",
+      "context": {
+        "aws:username": "${AWS_PROFILE}"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:RunTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_features:1",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
+        "aws:RequestTag/Project": "${PROJECT_NAME}",
+        "aws:TagKeys": [
+          "Project"
+        ]
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:TagResource",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/0123456789abcdef0123456789abcdef",
+      "context": {
+        "ecs:CreateAction": "RunTask"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_execution_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_features_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:DescribeTasks",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:ListTasks",
+      "resource": "*",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "ecs:StopTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "logs:GetLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:features/publish/0123456789abcdef0123456789abcdef",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar.gz",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/layer_runs/features/example_run/"
+      },
+      "granted_by": [
+        "InspectApprovedAcquisitionBucket",
+        "ReadApprovedBucketConfiguration"
+      ],
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/layer_run.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/gold_pins.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/features_snapshot.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/feast_apply.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/feast_materialize.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/state/pinned.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/build_receipt.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/quality_features/result.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/candidates.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/reconcile.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/backup.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/commit.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/consumer_result.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/export/manifest.json",
+      "scope": "features"
     }
   ]
 }

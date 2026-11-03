@@ -198,6 +198,7 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
         plan_state(job, arguments)
     elif name == "feast_job":
         shared_write("feast", step=step, run=job.run)
+        (folder / f"feast_{step}.json").write_text(json.dumps({"step": step, "run_id": job.run}) + "\n")
     else:
         raise AssertionError(f"no stand-in for {module}")
 
@@ -248,6 +249,9 @@ def build(job: Job, module: str, arguments: Sequence[str | Path], environment: d
     connection = duckdb.connect(str(folder / "staging.duckdb"))
     connection.execute("create or replace table t as select 1 as x")
     connection.close()
+    if module.endswith("features_build"):  # the real builder leaves its bulk working copies of gold and the dbt project here
+        (folder / "features_work").mkdir(exist_ok=True)
+        (folder / "features_work/full.duckdb").write_text("bulk\n")
     receipt = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "source_sha256": source, "input_sha256": expected_input}
     (folder / "build_receipt.json").write_text(json.dumps(receipt) + "\n")
     target = folder / "target"
@@ -309,6 +313,8 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
         pinned = sorted(contract("silver" if job.layer == "gold" else "gold", job.mode)[1].tables)
         if "pin_tables" in DEFECTS:
             pinned = pinned[1:]
+        if "pin_source" in DEFECTS:
+            source = "20260101T000000Z-deadbeef"
         target.write_text(json.dumps({"source_run_id": source, "snapshot_set": {name: 1 for name in pinned}}) + "\n")
     elif step == "read":
         if option(arguments, "--expected-pin-sha256") != sha_of(folder / "gold_pins.json"):
@@ -636,12 +642,18 @@ def case_silver_chain(case: Case) -> None:
 def case_gold_and_features_chain(case: Case) -> None:
     require(case.chain("silver") == [0] * 7, case.err)
     require(case.chain("gold") == [0] * 6, case.err)
-    require(case.chain("features") == [0] * 6, case.err)
+    require(case.chain("features") == [0] * 7, case.err)
     require([row["layer"] for row in model("publish_runs.json", [])] == ["silver", "gold", "features"], model("publish_runs.json", []))
-    require(kinds().count("feast") == 2 and kinds()[-1] == "feast", "feast applies and materializes last")
-    for layer in ("silver", "gold"):
+    require(kinds().count("feast") == 2, "feast applies and materializes")
+    for layer in ("silver", "gold", "features"):
         require(any(key.startswith(f"lakehouse/layer_runs/{layer}/") for _, key in UPLOADS), layer)
-    require(not any("/features/" in key for _, key in UPLOADS), "features uploads nothing")
+    prefix = f"lakehouse/layer_runs/features/{FEATURES_RUN}/"
+    sent = [key.removeprefix(prefix) for _, key in UPLOADS if key.startswith(prefix)]
+    for name in ("layer_run.json", "gold_pins.json", "features_snapshot.json", "publish/commit.json", "feast_apply.json", "feast_materialize.json"):
+        require(name in sent, f"the features evidence holds {name}: {sent}")
+    require(not any(name.startswith(("features_work/", "gold_input/", "snapshot/")) for name in sent), f"bulk files are not uploaded: {sent}")
+    order = [(item["kind"], item.get("key", "").rsplit("/", 1)[-1]) for item in writes()]
+    require(order.index(("upload", "commit.json")) < order.index(("feast", "")), "the evidence of a committed publish is uploaded before Feast can fail")
     dbt_keys = sorted(key for _, key in UPLOADS if key.startswith("metadata/dbt/"))
     require(dbt_keys == ["metadata/dbt/manifest.json", "metadata/dbt/run_results.json"], f"the gold run publishes its dbt files for the catalog: {dbt_keys}")
 
@@ -727,6 +739,47 @@ def case_missing_input_run(case: Case) -> None:
             require(case.chain("gold") == [0] * 6, case.err)
         code = case.phase(layer, "pin", extra=["--input-run", ""])
         require(code != 0 and "input" in case.err, case.err)
+
+
+def features_up_to(case: Case, last: str) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
+    for phase in layer_run.PHASES["features"]:
+        if phase == last:
+            return
+        require(case.phase("features", phase) == 0, (phase, case.err))
+
+
+def case_features_h3_table_list(case: Case) -> None:
+    features_up_to(case, "publish")
+    pin = case.root / "w_features/code/data/analytics/dbt/runs" / FEATURES_RUN / "gold_pins.json"
+    document = read_json(pin)
+    document["snapshot_set"].popitem()
+    pin.write_text(json.dumps(document) + "\n")
+    before = len(writes())
+    require(case.phase("features", "publish") != 0 and "the features pin's table list differs from the gold publish contract" in case.err, case.err)
+    require(len(writes()) == before, "nothing is written after a refused features pin")
+
+
+def case_features_h3_extra_table(case: Case) -> None:
+    features_up_to(case, "publish")
+    pin = case.root / "w_features/code/data/analytics/dbt/runs" / FEATURES_RUN / "gold_pins.json"
+    document = read_json(pin)
+    document["snapshot_set"]["outside_table"] = 1
+    pin.write_text(json.dumps(document) + "\n")
+    require(case.phase("features", "publish") != 0 and "extra ['outside_table']" in case.err, case.err)
+
+
+def case_features_h3_other_source(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
+    DEFECTS.add("pin_source")
+    require(case.phase("features", "pin") != 0 and "names another gold run than INPUT_RUN_ID" in case.err, case.err)
+
+
+def case_features_failed_feast_keeps_the_evidence(case: Case) -> None:
+    features_up_to(case, "feast")
+    prefix = f"lakehouse/layer_runs/features/{FEATURES_RUN}/"
+    require(any(key == f"{prefix}publish/commit.json" for _, key in UPLOADS), "the run records are in the bucket before the feast phase starts")
+    require(not any(key.endswith(("feast_apply.json", "feast_materialize.json")) for _, key in UPLOADS), UPLOADS)
 
 
 def case_input_run_not_published(case: Case) -> None:
@@ -974,7 +1027,7 @@ def case_dry_run_with_unreadable_catalog_state_fails(case: Case) -> None:
 def case_dry_run_features_skips_feast(case: Case) -> None:
     require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
     before = len(writes())
-    require(case.chain("features", extra=["--dry-run"]) == [0] * 6, case.err)
+    require(case.chain("features", extra=["--dry-run"]) == [0] * 7, case.err)
     require(len(writes()) == before and "feast" not in kinds(), kinds())
 
 
@@ -997,13 +1050,17 @@ def case_dry_run_from_the_environment(case: Case) -> None:
 
 def case_phase_not_in_layer(case: Case) -> None:
     require(case.phase("gold", "verify") != 0 and "not a phase of gold" in case.err, case.err)
-    require(case.phase("features", "upload") != 0, case.err)
+    require(case.phase("features", "verify") != 0, case.err)
     require(case.phase("silver", "feast") != 0, case.err)
 
 
 CASES: dict[str, Callable[[Case], None]] = {
     "silver chain publishes once, uploads under its run prefix": case_silver_chain,
-    "gold and features chains follow silver, features uploads nothing": case_gold_and_features_chain,
+    "gold and features chains follow silver, features uploads its evidence": case_gold_and_features_chain,
+    "features H3: a pin that misses a gold table is refused": case_features_h3_table_list,
+    "features H3: a pin with an extra table is refused": case_features_h3_extra_table,
+    "features H3: a pin of another gold run is refused": case_features_h3_other_source,
+    "features: the evidence is in the bucket before Feast can fail": case_features_failed_feast_keeps_the_evidence,
     "a second pin of a run ID is refused before any shared write": case_retry_of_a_run_is_refused_at_the_pin,
     "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
     "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,

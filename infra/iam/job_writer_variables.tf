@@ -79,7 +79,7 @@ variable "job_layer_runs_prepared" {
 }
 
 variable "job_features_image_prepared" {
-  description = "Let the shared job execution role pull the feature store image, which only the features layer job needs. It needs job_layer_runs_prepared and turns on no training grant."
+  description = "Activate the features layer job: let the shared job execution role pull the feature store image, let the features role upload its run records and make the bucket check of the Feast registry. It needs job_layer_runs_prepared and turns on no training grant."
   type        = bool
   default     = false
   nullable    = false

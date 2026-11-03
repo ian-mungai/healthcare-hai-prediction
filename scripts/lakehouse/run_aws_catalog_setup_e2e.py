@@ -652,6 +652,130 @@ def case_check_project_policy(_: Path) -> dict[str, bool]:
         }
 
 
+ADMIN_PROFILE = "example_admin"
+
+
+def case_features_needs_the_administrator(_: Path) -> dict[str, bool]:
+    """The project profile has no grant for the features pair, so the step refuses at once by name and never starts on the catalog."""
+    with world() as (ssm, polaris, root):
+        services = Services(ssm, polaris, denied=frozenset(setup.configured_pairs()["features"]))
+        code, out, err = call(["principal", "--identity", "features", "--instance", INSTANCE, "--namespace-approval", "approval-1"], services, root)
+        return {
+            "the step stops": code == 1,
+            "the error names the administrator profile": "(administrator)" in err and "--admin-profile" in err,
+            "the vault was never read": services.decryption == [],
+            "nothing reached the catalog": polaris.principals == {} and not (services.approvals.exists() and any(services.approvals.iterdir())),
+            "nothing is printed": out == "",
+        }
+
+
+def case_administrator_only_for_features(_: Path) -> dict[str, bool]:
+    """The administrator profile sets up only the identities that stay with it: any other identity keeps the project profile."""
+    with world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        code, _printed, err = call(["principal", "--identity", "gold", "--instance", INSTANCE, "--admin-profile", ADMIN_PROFILE], services, root)
+        return {"the step stops": code == 1, "the error names the identity": "(administrator)" in err, "the vault was never read": services.decryption == []}
+
+
+def case_features_by_the_administrator(_: Path) -> dict[str, bool]:
+    """The administrator path issues the pair and stores it straight in Parameter Store: only names and counts are printed, and a rerun keeps the pair."""
+    pairs = setup.configured_pairs()["features"]
+    with world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        polaris.catalog = setup.catalog_body(BUCKET, REGION)
+        argv = ["principal", "--identity", "features", "--instance", INSTANCE, "--namespace-approval", "approval-1", "--admin-profile", ADMIN_PROFILE]
+        code, out, err = call(argv, services, root)
+        SECRETS_SEEN.extend(polaris.issued)
+        result = outcome(out) or {}
+        first = stored_pair(ssm, "features")
+        again = call(argv[:-2] + ["--admin-profile", ADMIN_PROFILE], services, root)
+        return {
+            "the step succeeds": code == 0 and err == "",
+            "the principal is the features writer": result.get("principal") == "features_writer",
+            "the stored pair is the issued pair": first == live_pair(polaris, "features") and all(first),
+            "the pair is under its own two names": set(pairs) <= set(ssm.values),
+            "no pair value is printed": not any(value and value in out + err for value in first),
+            "a rerun keeps the pair": again[0] == 0 and stored_pair(ssm, "features") == first,
+        }
+
+
+def case_check_by_the_administrator(_: Path) -> dict[str, bool]:
+    """The administrator's check reports the features pair by type and version without decrypting it, and names no other pair."""
+    pairs = setup.configured_pairs()["features"]
+    seeded = {pairs[0]: "features-id-" + secrets.token_hex(6), pairs[1]: "features-secret-" + secrets.token_hex(6)}
+    SECRETS_SEEN.extend(seeded.values())
+    with world(seeded) as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        code, out, _errors = call(["check", "--admin-profile", ADMIN_PROFILE], services, root)
+        result = outcome(out) or {}
+        return {
+            "the check succeeds": code == 0,
+            "exactly the features names are reported": {item["name"] for item in result.get("parameters", [])} == set(pairs),
+            "nothing is decrypted": not any(services.decryption),
+            "no administrator item is left": result.get("administrator_items") == [],
+            "no value is printed": not any(value in out for value in seeded.values()),
+        }
+
+
+def case_live_administrator_profile(out: Path) -> dict[str, bool]:
+    """Under ``--admin-profile`` every AWS call of the process uses that profile: its identity is checked, the vault and the tunnel use it and the project
+    profile is never named, so no process that holds the project profile sees the pair."""
+    from scripts.infrastructure import render_project_config
+
+    project, other = "1" * 12, "2" * 12
+    configured: tuple[dict[str, str], dict[str, str]] = ({"aws_profile": "project_user", "aws_region": REGION, "expected_account_id": project}, {})
+
+    def session_for(account: str, arn: str) -> mock.Mock:
+        session = mock.Mock()
+        session.client.return_value.get_caller_identity.return_value = {"Account": account, "Arn": arn}
+        return session
+
+    def services(profile: str) -> setup.LiveServices:
+        return setup.LiveServices(49152, 49153, profile)
+
+    good = session_for(project, f"arn:aws:iam::{project}:user/example_admin")
+    with (
+        mock.patch.object(render_project_config, "load_configuration", return_value=configured),
+        mock.patch.object(render_project_config, "verify_project_identity", side_effect=AssertionError("the project identity is not used")) as project_check,
+        mock.patch("boto3.Session", return_value=good) as session,
+        mock.patch.object(setup, "network_acceptance") as acceptance,
+        mock.patch.object(setup, "CatalogTransport") as transport,
+    ):
+        transport.return_value.start.return_value = "http://127.0.0.1:9"
+        transport.return_value.close.return_value = True
+        live = services(ADMIN_PROFILE)
+        live.state_root = out
+        live.__dict__["project_tag"] = "hai"
+        settings = live.settings
+        live.vault()
+        with live.remote(INSTANCE, deadline=time.monotonic() + 5):
+            spec = transport.return_value.start.call_args.args[0]
+        profiles = {call_item.kwargs["profile_name"] for call_item in session.call_args_list}
+        cli_profile = acceptance.call_args.args[1].configuration["aws_profile"]
+        results = {
+            "the settings name the administrator profile": settings["aws_profile"] == ADMIN_PROFILE,
+            "every client uses the administrator profile": profiles == {ADMIN_PROFILE},
+            "the tunnel uses the administrator profile": spec.profile == ADMIN_PROFILE,
+            "the network acceptance uses the administrator profile": cli_profile == ADMIN_PROFILE,
+            "the project identity is not used": not project_check.called,
+        }
+
+    def refused(profile: str, session_value: mock.Mock) -> bool:
+        with (
+            mock.patch.object(render_project_config, "load_configuration", return_value=configured),
+            mock.patch("boto3.Session", return_value=session_value),
+        ):
+            code, _, err = run_main(["check", "--admin-profile", profile], services(profile))
+        return code == 1 and "(profile)" in err
+
+    results["the project profile is refused as the administrator"] = refused("project_user", good)
+    results["a profile of another account is refused"] = refused(ADMIN_PROFILE, session_for(other, f"arn:aws:iam::{other}:user/example_admin"))
+    results["the project user under another profile name is refused"] = refused(
+        ADMIN_PROFILE, session_for(project, f"arn:aws:iam::{project}:user/project_user")
+    )
+    return results
+
+
 def case_check_catalog(_: Path) -> dict[str, bool]:
     """The check with an instance reads the catalog and changes nothing."""
     with world() as (ssm, polaris, root):
@@ -730,6 +854,7 @@ def catalog_world(seeded: dict[str, str] | None = None) -> contextlib.AbstractCo
 
 def principal(services: Services, root: str, identity: str, approval: str | None = None) -> tuple[int, str, str]:
     argv = ["principal", "--identity", identity, "--instance", INSTANCE, *(["--namespace-approval", approval] if approval else [])]
+    argv += ["--admin-profile", ADMIN_PROFILE] if identity in setup.ADMINISTRATOR_IDENTITIES else []
     result = call(argv, services, root)
     SECRETS_SEEN.extend(services.polaris.issued)
     return result
@@ -1377,6 +1502,11 @@ CASES: dict[str, Case] = {
     "profile_refused": case_profile_refused,
     "check_metadata": case_check_metadata,
     "check_project_policy": case_check_project_policy,
+    "features_needs_the_administrator": case_features_needs_the_administrator,
+    "administrator_only_for_features": case_administrator_only_for_features,
+    "features_by_the_administrator": case_features_by_the_administrator,
+    "check_by_the_administrator": case_check_by_the_administrator,
+    "live_administrator_profile": case_live_administrator_profile,
     "check_catalog": case_check_catalog,
     "vault_scope": case_vault_scope,
     "pair_names": case_pair_names,

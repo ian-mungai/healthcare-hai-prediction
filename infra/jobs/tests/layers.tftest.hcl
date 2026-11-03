@@ -88,7 +88,7 @@ run "containers_follow_the_broker_table_in_order" {
     condition = (
       [for container in jsondecode(output.layer_phase_containers["silver"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload"] &&
       [for container in jsondecode(output.layer_phase_containers["gold"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload"] &&
-      [for container in jsondecode(output.layer_phase_containers["features"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "feast"]
+      [for container in jsondecode(output.layer_phase_containers["features"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload", "feast"]
     )
     error_message = "Each layer runs the table's containers in pipeline order after the volume ownership step."
   }
@@ -178,11 +178,11 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
 
   assert {
     condition = (
-      jsondecode(output.layer_phase_containers["features"])[7].command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run feast --layer features --run \"$RUN_ID\""] &&
-      jsondecode(output.layer_phase_containers["features"])[7].image == var.train_images.feature_store &&
-      contains(jsondecode(output.layer_phase_containers["features"])[7].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
-      contains(jsondecode(output.layer_phase_containers["features"])[7].environment, { name = "FEAST_REDIS_HOST", value = "10.0.1.20" }) &&
-      contains(jsondecode(output.layer_phase_containers["features"])[7].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" })
+      jsondecode(output.layer_phase_containers["features"])[8].command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run feast --layer features --run \"$RUN_ID\""] &&
+      jsondecode(output.layer_phase_containers["features"])[8].image == var.train_images.feature_store &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_REDIS_HOST", value = "10.0.1.20" }) &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" })
     )
     error_message = "The features job applies Feast from the feature store image on the AWS profile."
   }
@@ -205,7 +205,7 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
   }
 }
 
-run "uploads_exist_only_for_silver_and_gold" {
+run "every_layer_uploads_and_only_features_applies_feast" {
   command = plan
 
   variables {
@@ -216,11 +216,11 @@ run "uploads_exist_only_for_silver_and_gold" {
     condition = (
       contains([for container in jsondecode(output.layer_phase_containers["silver"]) : container.name], "upload") &&
       contains([for container in jsondecode(output.layer_phase_containers["gold"]) : container.name], "upload") &&
-      !contains([for container in jsondecode(output.layer_phase_containers["features"]) : container.name], "upload") &&
+      contains([for container in jsondecode(output.layer_phase_containers["features"]) : container.name], "upload") &&
       !contains([for container in jsondecode(output.layer_phase_containers["silver"]) : container.name], "feast") &&
       !contains([for container in jsondecode(output.layer_phase_containers["gold"]) : container.name], "verify")
     )
-    error_message = "Silver and gold upload their run folder. Features applies Feast instead. Only silver verifies bronze again."
+    error_message = "Every layer uploads its run folder. Only features applies Feast. Only silver verifies bronze again."
   }
 }
 

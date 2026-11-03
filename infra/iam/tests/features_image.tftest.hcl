@@ -48,9 +48,10 @@ run "the_features_image_grant_defaults_off" {
     condition = (
       !var.job_features_image_prepared &&
       length(aws_iam_role_policy.job_features_image_pull) == 0 &&
+      length(aws_iam_role_policy.job_writer_features_activation) == 0 &&
       length(aws_iam_role_policy.train_image_pull) == 0
     )
-    error_message = "The features image grant defaults to off and the execution role pulls no feature store image."
+    error_message = "The features activation defaults to off: the execution role pulls no feature store image and the features role uploads nothing."
   }
 }
 
@@ -83,5 +84,43 @@ run "the_features_image_grant_names_one_repository_and_needs_no_training" {
       jsondecode(aws_iam_role_policy.job_features_image_pull[0].policy).Statement[0].Resource == ["arn:aws:ecr:eu-west-1:111111111111:repository/example_project_feature_store_dev"]
     )
     error_message = "The features image grant lets the execution role pull the feature store repository and no other, and it does not turn on the training grants."
+  }
+}
+
+run "a_silver_window_keeps_the_features_role_as_it_is" {
+  command = plan
+
+  variables {
+    job_writer_layers_prepared = true
+    job_layer_runs_prepared    = true
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.job_writer_features_activation) == 0
+    error_message = "The layer flags alone change nothing on the features role beyond its claim object, its Feast registry and its input read."
+  }
+}
+
+run "the_features_activation_lets_the_role_upload_its_run_and_check_the_registry_bucket" {
+  command = plan
+
+  variables {
+    job_writer_layers_prepared  = true
+    job_layer_runs_prepared     = true
+    job_features_image_prepared = true
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role_policy.job_writer_features_activation) == 1 &&
+      aws_iam_role_policy.job_writer_features_activation[0].role == aws_iam_role.job_write_layer_task["features"].name &&
+      length(jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement) == 2 &&
+      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[0].Action == ["s3:PutObject"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[1].Action == ["s3:ListBucket"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[1].Condition.Null["s3:prefix"] == "true"
+    )
+    error_message = "The features role may put objects under its own run prefix and may make the bucket check of the Feast registry, which sends no prefix. A list with a prefix stays refused."
   }
 }
