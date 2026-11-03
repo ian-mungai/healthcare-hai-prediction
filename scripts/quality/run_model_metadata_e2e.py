@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from scripts.process import LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
+from scripts.process import LaunchCancelled, LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
 from scripts.quality import dbt_manifest_labels, label_guard_fixtures
 from scripts.quality.hook_stage import hook_stage
 
@@ -1580,7 +1580,9 @@ def judge(case: Case, exit_code: int, output: str, exact: bool) -> bool:
 def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = CASE_SECONDS) -> dict[str, Any]:
     """Run a synthetic case through the given hook and checker and return their assertions and diagnostic tails."""
     began = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="hai_model_metadata_") as scratch:
+    scratch = tempfile.mkdtemp(prefix="hai_model_metadata_")
+    survivors = False
+    try:
         repo = scratch_repo(Path(scratch), checker, hook_config)
         apply(repo, case)
         args = [
@@ -1613,6 +1615,13 @@ def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = C
             "direct_tail": direct_tail,
             "seconds": round(time.monotonic() - began, 2),
         }
+    except ProcessGroupSurvived:
+        # The survivors' files stay in the scratch folder for the owner to read; nothing else removes them.
+        survivors = True
+        raise
+    finally:
+        if not survivors:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def worker_count(value: str) -> int:
@@ -1656,13 +1665,16 @@ def run_cases(cases: list[Case], checker: Path, hook_config: Path, workers: int,
     """
     if workers == 1:
         results: list[dict[str, Any]] = []
-        for case in cases:
+        for number, case in enumerate(cases):
             try:
                 results.append(run_case(case, checker, hook_config, case_seconds))
             except ProcessGroupSurvived as error:
                 results.append(
                     failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds and its stop is not confirmed: {error}")
                 )
+                # A program may still be alive: no later case starts, and each is reported as not run.
+                results.extend(failed_case(later, f"not run: the stop of a program of case {case.name} is not confirmed") for later in cases[number + 1 :])
+                break
             except TimeoutExpired as error:
                 results.append(failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds"))
         return results
@@ -1673,7 +1685,9 @@ def run_cases(cases: list[Case], checker: Path, hook_config: Path, workers: int,
         pool.shutdown(wait=False, cancel_futures=True)
     results = []
     for case, future in zip(cases, futures, strict=True):
-        if future not in done:
+        if future.cancelled() or (future in done and isinstance(future.exception(), LaunchCancelled)):
+            results.append(failed_case(case, "not run: the stop of a program of an earlier case is not confirmed, or the pool was cancelled"))
+        elif future not in done:
             results.append(failed_case(case, f"deadline: not finished {deadline} seconds after the start of the pool ({len(unfinished)} cases unfinished)"))
         elif isinstance(future.exception(), ProcessGroupSurvived):
             results.append(failed_case(case, f"deadline: a program of this case ran longer than {case_seconds} seconds and its stop is not confirmed"))

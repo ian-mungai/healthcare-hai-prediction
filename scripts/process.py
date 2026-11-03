@@ -194,7 +194,7 @@ def record_unconfirmed(command: Any, session: int, outcome: StopOutcome, cancell
     program = program_name(command)
     text = f"the stop of {program} (session or process group {session}) is not confirmed ({outcome.describe()})"
     if cancellation is not None:
-        cancellation.unconfirmed.append((session, text))
+        cancellation.record(session, text)
     note_unconfirmed(text)
     return text
 
@@ -487,14 +487,31 @@ def interrupts_deferred() -> Iterator[None]:
 
 class Cancellation:
     """The cancellation of one ``LaunchPool``: set once by the pool's first interrupt; ``unconfirmed`` lists the launches of its jobs whose stop was not
-    confirmed, on every path (a deadline, a cancellation, an error), as (session or group, text)."""
+    confirmed, on every path (a deadline, a cancellation, an error), as (session or group, text).
+
+    Recording an unconfirmed stop (``record``) also blocks the pool at once: ``refuses`` is true, no job and no launch of the pool starts, and the queued
+    jobs are cancelled (``on_block``). The jobs that already run end on their own deadlines. The block lasts until the pool is left, which reports the stop.
+    """
 
     def __init__(self) -> None:
         self.event = threading.Event()
+        self.blocked = threading.Event()
+        self.on_block: Callable[[], None] | None = None
         self.unconfirmed: list[tuple[int, str]] = []
 
     def cancelled(self) -> bool:
         return self.event.is_set()
+
+    def refuses(self) -> bool:
+        """Whether the pool admits no new job and no new launch: it was cancelled, or a stop of one of its launches is not confirmed."""
+        return self.event.is_set() or self.blocked.is_set()
+
+    def record(self, session: int, text: str) -> None:
+        """Keep an unconfirmed stop, block the pool and cancel its queued jobs."""
+        self.unconfirmed.append((session, text))
+        self.blocked.set()
+        if self.on_block is not None:
+            self.on_block()
 
 
 # The cancellation of the pool whose job runs in this thread; absent in every other thread.
@@ -570,6 +587,7 @@ class LaunchPool(ThreadPoolExecutor):
     def __init__(self, max_workers: int | None = None) -> None:
         super().__init__(max_workers=max_workers)
         self.cancellation = Cancellation()
+        self.cancellation.on_block = self.cancel_queued
         self.jobs: list[Future[Any]] = []
         self.closed = False
         self.interrupts = 0
@@ -608,15 +626,21 @@ class LaunchPool(ThreadPoolExecutor):
         self.closed = True
         super().shutdown(wait=wait, cancel_futures=cancel_futures)
 
+    def cancel_queued(self) -> None:
+        """Drop the queued jobs at once (a stop that is not confirmed blocks the pool); the running jobs are left to end."""
+        super().shutdown(wait=False, cancel_futures=True)
+
     def submit(self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+        if self.cancellation.refuses():
+            raise LaunchCancelled("the pool admits no more jobs: it was cancelled or the stop of one of its launches is not confirmed")
         future = super().submit(self.run_job, fn, args, kwargs)
         self.jobs.append(future)
         return future
 
     def run_job(self, function: Callable[..., T], arguments: tuple[Any, ...], keywords: dict[str, Any]) -> T:
         """Run a job in a pool thread with the pool's cancellation visible to its ``run_command`` calls; a cancelled pool starts no job."""
-        if self.cancellation.cancelled():
-            raise LaunchCancelled("the pool was cancelled by an interrupt before this job started")
+        if self.cancellation.refuses():
+            raise LaunchCancelled("the pool was cancelled, or the stop of one of its launches is not confirmed, before this job started")
         JOB.cancellation = self.cancellation
         try:
             return function(*arguments, **keywords)
@@ -737,8 +761,8 @@ def run_command(
     child_environment[SESSION_VARIABLE] = "1"
     # SIGINT is held while the program starts and while it is stopped; one that arrived then is raised once the stop is confirmed.
     cancellation: Cancellation | None = getattr(JOB, "cancellation", None)
-    if cancellation is not None and cancellation.cancelled():
-        raise LaunchCancelled(f"{program} was not started: the pool was cancelled by an interrupt")
+    if cancellation is not None and cancellation.refuses():
+        raise LaunchCancelled(f"{program} was not started: the pool was cancelled, or the stop of one of its launches is not confirmed")
     process: subprocess.Popen[str] | None = None
     try:
         with interrupts_deferred():
