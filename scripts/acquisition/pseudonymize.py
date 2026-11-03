@@ -310,16 +310,40 @@ def rows(path: Path, headers: list[str], max_bytes: int) -> Iterator[dict[str, s
         raise PseudonymizationError("csv_malformed") from None
 
 
+def scrub_tokens(value: str) -> list[str]:
+    """The raw words of a value for scrub matching, shared by known names and free text: apostrophe forms folded first, then case and combining marks."""
+    plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(value.translate(APOSTROPHE_FORMS))) if not unicodedata.combining(c))
+    return TEXT_TOKEN.findall(plain)
+
+
+def scrub_name_words(value: str) -> tuple[str, ...]:
+    """A known name as scrub words: the same word rules as free text, with a trailing generational suffix dropped when another word remains."""
+    words = [w for w in (text_word(token) for token in scrub_tokens(value)) if w]
+    while len(words) > 1 and words[-1] in NAME_SUFFIXES:
+        words.pop()
+    return tuple(words)
+
+
 def person_words(policy: dict, row: dict[str, str]) -> Iterator[tuple[str, ...]]:
-    """The name word sequences of the people one row names, for matching inside kept text cells; a single-word name counts."""
+    """The name word sequences of the people one row names, for matching inside kept text cells; a single-word name counts.
+
+    A name counts only when it has an identity (identity normalization decides that), but its words come from the shared scrub rules, never from the
+    identity normalization, so the name list and the text can never be normalized differently.
+    """
     for rule in policy["pseudonyms"]:
         if rule["kind"] != "name" or not matches(rule.get("when"), row):
             continue
-        parts = normalized_parts("name", [row[c] for c in rule["columns"]])
-        if parts is not None:
-            yield tuple(" ".join(parts).split())
-            if rule.get("middle_column") and (middle := normalize_name(row[rule["middle_column"]])):
-                yield (*" ".join(parts[:-1]).split(), *middle.split(), *parts[-1].split())
+        values = [row[c] for c in rule["columns"]]
+        if normalized_parts("name", values) is None:
+            continue
+        words = scrub_name_words(" ".join(values))
+        if words:
+            yield words
+        if rule.get("middle_column") and normalize_name(row[rule["middle_column"]]):
+            *first, last = values
+            middle = scrub_name_words(" ".join([*first, row[rule["middle_column"]], last]))
+            if middle:
+                yield middle
 
 
 def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:
@@ -350,8 +374,7 @@ def contains_name(text: str, index: dict[str, list[tuple[str, ...]]]) -> bool:
     Each word is matched as written or with one possessive ending removed, after combining marks are dropped and connectors deleted. Text words are
     never discarded, so a word that is an empty marker in an identity field (for example "na") still has to match.
     """
-    plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(text.translate(APOSTROPHE_FORMS))) if not unicodedata.combining(c))
-    options = [{text_word(token), text_word(POSSESSIVE_END.sub("", token))} - {""} for token in TEXT_TOKEN.findall(plain)]
+    options = [{text_word(token), text_word(POSSESSIVE_END.sub("", token))} - {""} for token in scrub_tokens(text)]
     for start, forms in enumerate(options):
         for first in forms:
             for name in index.get(first, ()):

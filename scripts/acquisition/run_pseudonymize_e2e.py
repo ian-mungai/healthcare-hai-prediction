@@ -801,6 +801,29 @@ def check_scrub_apostrophe_forms(run: Run) -> None:
     ensure(contract["scrubbed_cells"] == 2 * len(APOSTROPHE_FORMS), f"apostrophe form count differs: {contract['scrubbed_cells']}")
 
 
+SOURCE_SPELLING_ROWS = [
+    ["1", "", "O\u00b4Brien", "Plain Co"],
+    ["2", "", "Zelda D\u00b4Arcy", "Plain Co"],
+    ["3", "", "", "O\u00b4Brien Clinic"],
+    ["4", "", "", "O\u00b4Brien's Clinic"],
+    ["5", "", "", "O'Brien Clinic"],
+    ["6", "", "", "Zelda D\u00b4Arcy Clinic"],
+    ["7", "", "", "Zelda D\u2019Arcy Clinic"],
+    ["8", "", "", "Brien Clinic"],
+]
+
+
+def check_scrub_source_spellings(run: Run) -> None:
+    """Known names whose source spelling holds an apostrophe form are matched with the same word rules as the text, in every apostrophe form."""
+    folder = run.case_dir("scrub_source_spellings")
+    source = write_csv(folder / "in.csv", SCRUB_HEADERS, SOURCE_SPELLING_ROWS)
+    contract = module.transform(source, folder / "derivative", SCRUB_POLICY, "v1", reader_for(KEYS))
+    notes = [r["NOTE"] for r in table(folder / "derivative")]
+    expected = ["Plain Co", "Plain Co", *[module.REPLACEMENT] * 5, "Brien Clinic"]
+    ensure(notes == expected, f"source spelling scrub differs: {notes}")
+    ensure(contract["scrubbed_cells"] == 5, f"source spelling count differs: {contract['scrubbed_cells']}")
+
+
 def check_known_answer(run: Run) -> None:
     """The pseudonym equals an independently computed HMAC and the fixed known answer of the independent tool."""
     rows = table(run.derivative("known_answer"))
@@ -1083,6 +1106,7 @@ def main() -> None:
         check_scrub_mixed_possessive,
         check_scrub_text_words,
         check_scrub_apostrophe_forms,
+        check_scrub_source_spellings,
         check_known_answer,
         check_isolation,
         check_sdk_logging,
