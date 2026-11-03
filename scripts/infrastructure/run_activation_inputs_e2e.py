@@ -42,6 +42,8 @@ SOURCES = (
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
 )
+# The committed defaults in the shape the renderer reads (the owner edits the committed file itself).
+DEFAULT_PREPARATION = "tests/fixtures/iam_preparation_default.json"
 ACCOUNT = "111111111111"
 ADMIN = "example_admin"
 STACKS = {"iam": "infra/iam", "platform": "infra/platform", "services": "infra/services", "jobs": "infra/jobs"}
@@ -417,6 +419,7 @@ class Workspace:
         for stack in ("services",):
             (self.root / STACKS[stack] / "images.auto.tfvars.json").parent.mkdir(parents=True, exist_ok=True)
             (self.root / STACKS[stack] / "images.auto.tfvars.json").write_text(json.dumps({"image_digests": {}}))
+        shutil.copy2(ROOT / DEFAULT_PREPARATION, self.root / "config/aws/iam_preparation.json")
         self.default_iam = (self.root / "config/aws/iam_preparation.json").read_text()
 
     def environment(self) -> dict[str, str]:

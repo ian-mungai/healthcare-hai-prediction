@@ -43,6 +43,8 @@ SOURCE_PATHS = (
     "data_contracts/infrastructure/platform_preparation.schema.json",
 )
 PREPARATION_PATH = "config/aws/iam_preparation.json"
+# The committed defaults in the shape the renderer reads (the owner edits the committed file itself).
+DEFAULT_PREPARATION = "tests/fixtures/iam_preparation_default.json"
 PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
 BRONZE_TABLES_PATH = "config/lakehouse/bronze_tables.json"
 # The IAM stack files that declare the preparation inputs.
@@ -536,7 +538,7 @@ def fixture_sources(evidence: Evidence) -> dict[str, bytes]:
     """Copy actual implementation bytes and record their hashes without patching."""
     sources = {}
     for name in SOURCE_PATHS:
-        original = (REPO_ROOT / name).read_bytes()
+        original = (REPO_ROOT / (DEFAULT_PREPARATION if name == PREPARATION_PATH else name)).read_bytes()
         sources[name] = original
         evidence.report["source_hashes"][name] = {"original_sha256": sha256(original), "fixture_sha256": sha256(original)}
     evidence.report["source_hashes"]["run_e2e.py"] = {"original_sha256": sha256(Path(__file__).read_bytes())}
@@ -576,21 +578,26 @@ def mapped_collections() -> list[str]:
     return sorted({row["collection"] for row in tables})
 
 
-def prepared_document(bucket: str = FIXTURE["S3_BUCKET"], **changes: Any) -> dict[str, Any]:
-    """A valid, fully prepared input file for the synthetic bucket, with optional overrides."""
+def rendered_document(document: dict[str, Any], bucket: str = FIXTURE["S3_BUCKET"]) -> dict[str, Any]:
+    """The inputs the renderer writes for a file: the live-locations flag becomes the two namespace locations of the bucket, or an empty map."""
     locations = {"bronze": f"s3://{bucket}/lakehouse/bronze/", "bronze_dictionary": f"s3://{bucket}/lakehouse/bronze_dictionary/"}
+    return {**document, "bronze_live_locations": locations if document["bronze_live_locations"] else {}}
+
+
+def prepared_document(**changes: Any) -> dict[str, Any]:
+    """A valid, fully prepared input file, with optional overrides."""
     document = {
         "bronze_writer_prepared": True,
         "job_writer_e2e_prepared": True,
         "bronze_qualification_collection": mapped_collections()[0],
-        "bronze_live_locations": locations,
+        "bronze_live_locations": True,
     }
     return {**document, **changes}
 
 
 def default_document() -> dict[str, Any]:
     """The committed safe defaults."""
-    document: dict[str, Any] = json.loads((REPO_ROOT / PREPARATION_PATH).read_text(encoding="utf-8"))
+    document: dict[str, Any] = json.loads((REPO_ROOT / DEFAULT_PREPARATION).read_text(encoding="utf-8"))
     return document
 
 
@@ -601,7 +608,8 @@ def write_preparation(workspace: Path, document: Any, raw: str | None = None) ->
 
 RENDERER_PATH = "scripts/infrastructure/render_project_config.py"
 RENDERER_MODULE = "scripts.infrastructure.render_project_config"
-# Each planted defect: the renderer edits and what must notice it (rejection labels, or "@storage", "@stale", "@render", "@plan").
+# Each planted defect: the renderer edits and what must notice it (rejection labels, or "@storage", "@stale", "@render", "@plan";
+# "@render_off" renders the file with the live-locations flag off).
 PREPARATION_PLANTS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
     "missing_file_check_removed": (
         [
@@ -643,10 +651,13 @@ PREPARATION_PLANTS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
     "pattern_check_removed": ([("(collection and not COLLECTION_PATTERN.fullmatch(collection))", "False")], ["collection_pattern", "collection_extra_part"]),
     "membership_check_removed": ([("if collection and collection not in mapped_collections(tables):", "if False:")], ["unmapped_collection"]),
     "table_map_errors_uncaught": ([("except (OSError, ValueError, KeyError, TypeError):", "except KeyError:")], ["tables_garbage"]),
-    "locations_check_loosened": (
-        [('if document["bronze_live_locations"] not in ({}, locations):', 'if not isinstance(document["bronze_live_locations"], dict):')],
-        ["locations_other_bucket", "locations_no_trailing_slash", "locations_swapped"],
+    "locations_flag_unchecked": (
+        [('PREPARATION_FLAGS = ("bronze_live_locations", ', "PREPARATION_FLAGS = (")],
+        ["locations_object", "locations_empty_object", "locations_list", "locations_string", "locations_int", "locations_null"],
     ),
+    "locations_built_for_another_bucket": ([('f"s3://{bucket}/lakehouse/bronze/"', 'f"s3://{bucket}-planted/lakehouse/bronze/"')], ["@render"]),
+    "locations_always_empty": ([('locations if document["bronze_live_locations"] else {}', "{}")], ["@render"]),
+    "locations_always_built": ([('locations if document["bronze_live_locations"] else {}', "locations")], ["@render_off"]),
     "rejected_value_echoed": (
         [
             (
@@ -744,33 +755,12 @@ def preparation_rejections() -> list[tuple[str, str | None, str, str | None, str
         ("collection_extra_part", text(bronze_qualification_collection=other + "/planted"), "empty or a publisher/collection", "/planted"),
         ("collection_space", text(bronze_qualification_collection=other + " "), "empty or a publisher/collection", None),
         ("unmapped_collection", text(bronze_qualification_collection="example_publisher/example_unmapped"), "not a mapped collection", "example_unmapped"),
-        ("locations_not_object", text(bronze_live_locations=[]), "Set bronze_live_locations", None),
-        ("locations_one_key", text(bronze_live_locations={"bronze": good["bronze_live_locations"]["bronze"]}), "Set bronze_live_locations", None),
-        ("locations_extra_key", text(bronze_live_locations={**good["bronze_live_locations"], "example_extra": "x"}), "Set bronze_live_locations", None),
-        ("locations_non_string", text(bronze_live_locations={"bronze": 1, "bronze_dictionary": 2}), "Set bronze_live_locations", None),
-        (
-            "locations_other_bucket",
-            text(bronze_live_locations=prepared_document("example-planted-other-bucket")["bronze_live_locations"]),
-            "Set bronze_live_locations",
-            "example-planted-other-bucket",
-        ),
-        (
-            "locations_no_trailing_slash",
-            text(bronze_live_locations={key: value.rstrip("/") for key, value in good["bronze_live_locations"].items()}),
-            "Set bronze_live_locations",
-            None,
-        ),
-        (
-            "locations_swapped",
-            text(
-                bronze_live_locations={
-                    "bronze": good["bronze_live_locations"]["bronze_dictionary"],
-                    "bronze_dictionary": good["bronze_live_locations"]["bronze"],
-                }
-            ),
-            "Set bronze_live_locations",
-            None,
-        ),
+        ("locations_object", text(bronze_live_locations=rendered_document(good)["bronze_live_locations"]), "bronze_live_locations to true or false", None),
+        ("locations_empty_object", text(bronze_live_locations={}), "bronze_live_locations to true or false", None),
+        ("locations_list", text(bronze_live_locations=[]), "bronze_live_locations to true or false", None),
+        ("locations_string", text(bronze_live_locations="true"), "bronze_live_locations to true or false", None),
+        ("locations_int", text(bronze_live_locations=1), "bronze_live_locations to true or false", None),
+        ("locations_null", text(bronze_live_locations=None), "bronze_live_locations to true or false", None),
     ]
     unmapped_tables = json.dumps({"tables": [{"collection": "example_publisher/other"}]})
     return [(*case, None) for case in cases] + [
@@ -815,7 +805,11 @@ def render_written(evidence: Evidence, sources: dict[str, bytes], prefix: str, *
     step, result = evidence.run(f"{prefix}_render_prepared", command, workspace)
     path = workspace / PREPARATION_OUTPUT
     written = result.returncode == 0 and not result.stderr and path.is_file()
-    exact = written and json.loads(path.read_text(encoding="utf-8")) == prepared_document(**changes) and stat.S_IMODE(path.stat().st_mode) == 0o600
+    exact = (
+        written
+        and json.loads(path.read_text(encoding="utf-8")) == rendered_document(prepared_document(**changes))
+        and stat.S_IMODE(path.stat().st_mode) == 0o600
+    )
     _, checked = evidence.run(f"{prefix}_check_prepared", [*command, "--check"], workspace)
     return step, exact and checked.returncode == 0 and not list(workspace.rglob(".config_*"))
 
@@ -847,6 +841,8 @@ def run_preparation_cases(evidence: Evidence, sources: dict[str, bytes], rendere
     evidence.check(step, "storage_render_ignores_the_file", ok)
     step, ok = render_written(evidence, sources, "prep")
     evidence.check(step, "prepared_file_rendered_exactly", ok)
+    step, ok = render_written(evidence, sources, "prep_locations_off", bronze_live_locations=False)
+    evidence.check(step, "file_with_the_locations_flag_off_rendered_exactly", ok)
     step, ok = render_written(evidence, sources, "prep_monitoring", monitoring_enabled=True)
     evidence.check(step, "file_with_the_monitoring_flag_rendered_exactly", ok)
     step, ok = render_written(evidence, sources, "prep_athena", athena_mirror_prepared=True)
@@ -859,7 +855,7 @@ def run_preparation_cases(evidence: Evidence, sources: dict[str, bytes], rendere
     step, result = evidence.run("prep_render_defaults", shell_renderer, workspace)
     path = workspace / PREPARATION_OUTPUT
     evidence.check(step, "defaults_rendered", result.returncode == 0 and not result.stderr and path.is_file())
-    evidence.check(step, "defaults_exact", json.loads(path.read_text(encoding="utf-8")) == default_document())
+    evidence.check(step, "defaults_exact", json.loads(path.read_text(encoding="utf-8")) == rendered_document(default_document()))
     evidence.check(step, "storage_has_no_preparation_file", not (workspace / "infra/preparation.auto.tfvars.json").exists())
 
     detected = run_preparation_plan_cases(evidence, sources, renderer, shell_renderer)
@@ -877,6 +873,8 @@ def run_preparation_cases(evidence: Evidence, sources: dict[str, bytes], rendere
                 outcomes.append(stale_rejected(evidence, planted, prefix)[1])
             elif target == "@render":
                 outcomes.append(render_written(evidence, planted, prefix)[1])
+            elif target == "@render_off":
+                outcomes.append(render_written(evidence, planted, prefix, bronze_live_locations=False)[1])
             else:
                 outcomes.append(preparation_rejected(evidence, planted, by_label[target], prefix)[1])
         evidence.check(evidence.report["steps"][-1], f"planted_defect_{name}_noticed", not all(outcomes))
@@ -926,7 +924,7 @@ def run_preparation_plan_cases(evidence: Evidence, sources: dict[str, bytes], re
         "job_endpoints_enabled": {**prepared, "job_endpoints_enabled": True},
         "training_prepared": {**prepared, "training_prepared": True},
         "bronze_qualification_collection": {**prepared, "bronze_qualification_collection": collections[1]},
-        "bronze_live_locations": {**prepared, "bronze_live_locations": {}},
+        "bronze_live_locations": {**prepared, "bronze_live_locations": False},
         "monitoring_enabled": {**prepared, "monitoring_enabled": True},
         "athena_mirror_prepared": {**prepared, "athena_mirror_prepared": True},
         "athena_owner_user": {**prepared, "athena_owner_user": "example_owner"},
