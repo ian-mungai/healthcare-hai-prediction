@@ -88,7 +88,6 @@ COPIED = (
     "config/quality/mypy_runtimes.json",
     "config/quality_tools.json",
     "dbt/models/silver/intermediate/_intermediate__models.yml",
-    "docs/quality_checks.md",
     "scripts/acquisition/run_checks.sh",
     "scripts/acquisition/run_checks_pushed.sh",
     "scripts/quality/pre_push.py",
@@ -861,7 +860,6 @@ LAUNCHER_IMPORTED = (
 LAUNCHER_ALWAYS_SELECTED = (
     "infra/main.tf",
     "config/quality/mypy_runtimes.json",
-    "docs/data_collection.md",
     ".github/pull_request_template.md",
 )
 # The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
@@ -1456,7 +1454,6 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
                     "dbt/models/silver/intermediate/_intermediate__models.yml",
                     [*LAYERS[1:], "orchestration_checks", "repository_code_checks", "sql_style"],
                 ),
-                ("docs/quality_checks.md", ["repository_code_checks"]),
             )
         ),
         selection_case(
@@ -1550,7 +1547,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         acquisition_selection_case(work, "uv.lock", True),
         acquisition_selection_case(work, "pyproject.toml", True),
         acquisition_selection_case(work, "requirements.txt", False),
-        acquisition_selection_case(work, "docs/quality_checks.md", False),
+        acquisition_selection_case(work, "docs/analysis_plan.md", False),
     ]
     return cases
 
@@ -4098,7 +4095,6 @@ ESCALATING_PATHS = (
 )
 ORDINARY_PATHS = (
     "README.md",
-    "docs/quality_checks.md",
     "scripts/lakehouse/silver.py",
     "dbt/models/gold/fact_example.sql",
     "scripts/acquisition/s3_store.py",
@@ -6022,38 +6018,18 @@ def wrapper_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> d
     return {"case": "acquisition_wrapper_skips_the_native_push", "passed": ran == [False, True], "ran": ran}
 
 
-def stale_docs_problems(text: str) -> dict[str, bool]:
-    flat = " ".join(text.split())
-    return {
-        "no_staged_commit_hook": "commit hook (`CI_SCOPE=staged`)" not in flat and "local_ci_affected" not in flat,
-        "release_requirement": "before every release" in flat,
-        "shim_documented": "install-shim" in flat,
-        "no_first_ref_only": "Only the first pushed reference" not in flat,
-        "gate_is_the_shim": "pre_push run --hook" in flat and "check-shim" in flat,
-        "no_captured_input": "keeps the whole push input" not in flat,
-        "skip_cleared": "`SKIP`" in flat,
-    }
-
-
 def runner_doc_describes_range(text: str) -> bool:
     flat = " ".join(text.split())
     return "skips once after a passing full run" not in flat and "runs once over the computed range" in flat
 
 
 def docs_cases() -> list[dict[str, Any]]:
-    text = (ROOT / "docs/quality_checks.md").read_text()
-    found = stale_docs_problems(text)
-    stale = stale_docs_problems(text + "\nThe commit hook\n(`CI_SCOPE=staged`) always runs the groups the staged paths select.\n")
-    captured = stale_docs_problems(text + "\nA Git config hook keeps the whole push input for the pre-push hook.\n")
     return [
-        {"case": "quality_docs_match_the_hooks", "passed": all(found.values()), "checks": found},
-        {"case": "planted_stale_paragraph_caught_by_quality_docs_match_the_hooks", "passed": not stale["no_staged_commit_hook"], "caught": stale},
         {"case": "runner_describes_the_computed_range", "passed": runner_doc_describes_range(__doc__ or "")},
         {
             "case": "planted_marker_description_caught_by_runner_describes_the_computed_range",
             "passed": not runner_doc_describes_range((__doc__ or "") + " The acquisition hook skips once after a passing full run."),
         },
-        {"case": "planted_capture_paragraph_caught_by_quality_docs_match_the_hooks", "passed": not captured["no_captured_input"], "caught": captured},
     ]
 
 

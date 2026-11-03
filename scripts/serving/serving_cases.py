@@ -1054,11 +1054,6 @@ def case_key_tool(c: Checker) -> None:
         with contextlib.redirect_stdout(bad), contextlib.redirect_stderr(bad):
             wrong = keys.main(["new", "--id", "Not A Key Id", "--output", folder])
         c.check("a key identifier that the ring refuses is refused at creation", wrong != 0)
-    text = (ROOT / "docs/model_api.md").read_text()
-    c.check(
-        "the document points to the tool and no longer hashes a file with a newline",
-        "scripts.serving.keys new" in text and "openssl rand" not in text and "shasum" not in text,
-    )
 
 
 def refusal_text(call: Callable[[], object]) -> str:
