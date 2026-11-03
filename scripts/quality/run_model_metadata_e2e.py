@@ -338,6 +338,31 @@ def entry_problem(path: str, kind: str, name: str, meta: Any, outside: Collectio
     return [f"{path}: {kind} {name}: {', '.join(found)}"] if found else []
 
 
+def entry_meta(entry: Any) -> dict[str, Any]:
+    """The metadata of one dbt entry from both supported locations, `meta` and `config.meta`."""
+    if not isinstance(entry, dict):
+        return {}
+    config = entry.get("config") if isinstance(entry.get("config"), dict) else {}
+    merged = dict(config.get("meta") or {}) if isinstance(config.get("meta"), dict) else {}
+    merged.update(entry.get("meta") if isinstance(entry.get("meta"), dict) else {})
+    return merged
+
+
+def project_meta_problems(path: str, document: Any, trail: str = "") -> list[str]:
+    """Project-level `+meta` or `meta` blocks may not carry a Confidential label: they apply to whole folders, which no exemption names."""
+    problems: list[str] = []
+    if isinstance(document, dict):
+        for key, value in document.items():
+            where = f"{trail}.{key}" if trail else str(key)
+            if key in ("+meta", "meta") and isinstance(value, dict):
+                found = ["classification Confidential"] if value.get("classification") == "Confidential" else []
+                found += [k for k in CONFIDENTIAL_KEYS if k in value]
+                problems += [f"{path}: {where}: {', '.join(found)}"] if found else []
+            else:
+                problems += project_meta_problems(path, value, where)
+    return problems
+
+
 def label_problems(files: dict[str, str], outside: Collection[str] = OUTSIDE_PUBLIC_SCOPE) -> list[str]:
     """Research data is Public (decision 158): name every research entry that still carries a Confidential label.
 
@@ -346,14 +371,18 @@ def label_problems(files: dict[str, str], outside: Collection[str] = OUTSIDE_PUB
     """
     problems: list[str] = []
     for path, text in files.items():
-        if path.endswith(".yml"):
+        if path.endswith("dbt_project.yml"):
+            problems += project_meta_problems(path, yaml.safe_load(text) or {})
+        elif path.endswith(".yml"):
             document = yaml.safe_load(text) or {}
-            sources, models = document.get("sources"), document.get("models")
+            sources = document.get("sources")
             for source in sources if isinstance(sources, list) else []:
                 for table in source.get("tables") or []:
-                    problems += entry_problem(path, "source", table.get("name"), table.get("meta"), outside)
-            for model in models if isinstance(models, list) else []:
-                problems += entry_problem(path, "model", model.get("name"), model.get("meta"), outside)
+                    problems += entry_problem(path, "source", table.get("name"), entry_meta(table), outside)
+            for kind in ("models", "seeds", "snapshots"):
+                entries = document.get(kind)
+                for entry in entries if isinstance(entries, list) else []:
+                    problems += entry_problem(path, kind[:-1], entry.get("name"), entry_meta(entry), outside)
         elif path == BRONZE_MAP:
             document = json.loads(text)
             rules = [("collection", name, rule, name) for name, rule in document["classification"]["collections"].items()]
@@ -414,6 +443,21 @@ def guard_cases() -> list[tuple[str, bool]]:
         ("guard_research_entries_fail", len(leaked) == 3 and all("raw_public" in line or "stg_raw_public" in line or "pub/coll" in line for line in leaked)),
         ("guard_future_source_without_exception_fails", len(without_exception) >= 4),
         ("guard_contract_label_fails", len(contract) == 1 and "silver_publish.json" in contract[0]),
+        *config_meta_cases(outside),
+    ]
+
+
+def config_meta_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
+    """Confidential labels in the other dbt metadata locations (config.meta of a model or seed, +meta in the project file) are caught too."""
+    model_config = "version: 2\nmodels:\n  - name: stg_raw_public\n    config:\n      meta:\n        classification: Confidential\n"
+    seed_config = "version: 2\nseeds:\n  - name: seed_public\n    config:\n      meta:\n        confidential_columns: [value]\n"
+    project = "name: hai\nmodels:\n  hai:\n    silver:\n      +meta:\n        classification: Confidential\n"
+    clean_project = "name: hai\nmodels:\n  hai:\n    silver:\n      +meta:\n        owner: lakehouse\n"
+    return [
+        ("guard_model_config_meta_fails", len(label_problems({"dbt/models/x.yml": model_config}, outside)) == 1),
+        ("guard_seed_config_meta_fails", len(label_problems({"dbt/seeds/x.yml": seed_config}, outside)) == 1),
+        ("guard_project_meta_fails", len(label_problems({"dbt/dbt_project.yml": project}, outside)) == 1),
+        ("guard_project_meta_public_passes", label_problems({"dbt/dbt_project.yml": clean_project}, outside) == []),
     ]
 
 
