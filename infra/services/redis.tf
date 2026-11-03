@@ -13,8 +13,8 @@ locals {
       name              = "redis"
       image             = local.image["redis"]
       user              = "999:999"
-      memory            = 1024
-      memoryReservation = 64
+      memory            = local.memory_profile.redis.limit
+      memoryReservation = local.memory_profile.redis.reservation
       stopTimeout       = 60
       entryPoint        = ["bash", "-ec"]
       command           = [local.redis_script]

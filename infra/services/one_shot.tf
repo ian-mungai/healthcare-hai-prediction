@@ -1,7 +1,7 @@
 locals {
   host_prepare_script = <<-EOT
-    mkdir -p /host/postgres /host/redis /host/airflow/logs /host/airflow/lineage_provider /host/repo${var.broker_enabled ? " /host/broker" : ""}
-    chown 999:999 /host/postgres /host/redis
+    mkdir -p /host/postgres /host/redis /host/airflow/logs /host/airflow/lineage_provider /host/repo${var.broker_enabled ? " /host/broker" : ""}${local.om_on ? " /host/opensearch" : ""}
+    chown 999:999 /host/postgres /host/redis${local.om_on ? "\n    chown 1000:1000 /host/opensearch\n    chmod 0700 /host/opensearch" : ""}
     chown 50000:0 /host/airflow/logs /host/airflow/lineage_provider${var.broker_enabled ? " /host/broker" : ""}
     chmod 0700 /host/postgres
     chmod 0750 /host/airflow/logs /host/airflow/lineage_provider /host/redis${var.broker_enabled ? " /host/broker" : ""}
@@ -21,7 +21,7 @@ locals {
     restartAttemptPeriod = 60
   }
 
-  one_shot_tasks = {
+  one_shot_tasks = merge({
     host_prepare = {
       network_mode  = "none"
       task_role_arn = var.control_plane_task_role_arn
@@ -63,8 +63,8 @@ locals {
           name              = "polaris_bootstrap"
           image             = local.image["polaris_admin"]
           user              = "10000:10001"
-          memory            = 1024
-          memoryReservation = 512
+          memory            = local.memory_profile.polaris_bootstrap.limit
+          memoryReservation = local.memory_profile.polaris_bootstrap.reservation
           stopTimeout       = 60
           entryPoint        = ["bash", "-ec"]
           command           = [local.polaris_bootstrap_script]
@@ -92,7 +92,17 @@ locals {
         }),
       ]
     }
-  }
+    },
+    {
+      for key, task in {
+        openmetadata_bootstrap = {
+          network_mode  = "host"
+          task_role_arn = var.openmetadata_task_role_arn
+          volumes       = { code_repo = local.code_path }
+          containers    = local.openmetadata_bootstrap_containers
+        }
+      } : key => task if local.om_on
+  })
 }
 
 resource "aws_ecs_task_definition" "one_shot" {

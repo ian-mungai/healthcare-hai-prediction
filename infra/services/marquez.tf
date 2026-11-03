@@ -39,8 +39,8 @@ locals {
       name              = "marquez_api"
       image             = lookup(local.image, "marquez", "")
       user              = "10001:10001"
-      memory            = 1280
-      memoryReservation = 768
+      memory            = local.memory_profile.marquez_api.limit
+      memoryReservation = local.memory_profile.marquez_api.reservation
       stopTimeout       = 60
       entryPoint        = ["bash", "-ec"]
       command           = [local.marquez_script]
@@ -64,8 +64,8 @@ locals {
       name              = "marquez_web"
       image             = lookup(local.image, "marquez_web", "")
       user              = "1000:1000"
-      memory            = 256
-      memoryReservation = 128
+      memory            = local.memory_profile.marquez_web.limit
+      memoryReservation = local.memory_profile.marquez_web.reservation
       environment = [
         { name = "MARQUEZ_HOST", value = "127.0.0.1" },
         { name = "MARQUEZ_PORT", value = "5000" },
