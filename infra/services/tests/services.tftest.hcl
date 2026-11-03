@@ -89,6 +89,30 @@ run "memory_fits_host" {
   }
 }
 
+run "reservations_follow_measured_use_and_hard_limits_stay" {
+  command = plan
+
+  # Owner rule "B then A" (Nov 3 2026): the reservations of the seven services measured during the real gold run are their
+  # measured use rounded up to 64 MiB; the hard limits stay as they were until a peak sample on the r7g.xlarge host.
+  assert {
+    condition = alltrue([
+      for name, sizes in {
+        postgres              = { reservation = 128, limit = 2048 }
+        redis                 = { reservation = 64, limit = 1024 }
+        polaris               = { reservation = 320, limit = 2048 }
+        airflow_apiserver     = { reservation = 256, limit = 1536 }
+        airflow_scheduler     = { reservation = 320, limit = 1536 }
+        airflow_dag_processor = { reservation = 192, limit = 1280 }
+        airflow_triggerer     = { reservation = 256, limit = 768 }
+        } : anytrue([
+          for container in jsondecode(aws_ecs_task_definition.service[name].container_definitions) :
+          container.name == name && container.memoryReservation == sizes.reservation && container.memory == sizes.limit
+      ])
+    ])
+    error_message = "Each measured service reserves its measured use rounded up to 64 MiB and keeps its hard limit."
+  }
+}
+
 run "host_too_small_is_refused" {
   command = plan
 
@@ -2245,6 +2269,7 @@ run "model_api_with_marquez_does_not_fit_the_small_host" {
   command = plan
 
   variables {
+    host_memory_mib         = 16384 # the r7g.large size this refusal is about
     model_api_enabled       = true
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"

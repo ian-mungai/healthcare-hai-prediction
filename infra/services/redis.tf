@@ -14,7 +14,7 @@ locals {
       image             = local.image["redis"]
       user              = "999:999"
       memory            = 1024
-      memoryReservation = 512
+      memoryReservation = 64
       stopTimeout       = 60
       entryPoint        = ["bash", "-ec"]
       command           = [local.redis_script]

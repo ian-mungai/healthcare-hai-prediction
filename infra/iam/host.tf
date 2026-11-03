@@ -6,7 +6,7 @@
 locals {
   # Resizing the host is an administrator change: edit these, then plan and apply this stack; the Auto Scaling group below
   # takes the new template version through an instance refresh. Graviton only: the images are arm64.
-  host_instance_type  = "r7g.large"
+  host_instance_type  = "r7g.xlarge"
   host_root_volume_gb = 30
   platform_vpc_cidr   = "10.40.0.0/16"
   data_mount_path     = "/data"
