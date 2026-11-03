@@ -47,11 +47,11 @@ import threading
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess, SubprocessError, TimeoutExpired
 from types import FrameType, TracebackType
-from typing import Any, ParamSpec, Self, TypeVar
+from typing import Any, NamedTuple, ParamSpec, Self, TypeVar
 
 __all__ = [
     "CompletedProcess",
@@ -81,12 +81,14 @@ CONFIRM_SECONDS = 5.0
 POLL_SECONDS = 0.05
 # The environment variable that marks a process inside a session that a launch started; a launch made there is nested.
 SESSION_VARIABLE = "PROCESS_LAUNCH_SESSION"
-# The command that lists every live process with its parent and state, and the seconds it may take.
-SESSION_LISTING = ("ps", "-A", "-o", "pid=,ppid=,stat=")
+# The command that lists every live process with its parent, process group, state and start time, and the seconds it may take.
+SESSION_LISTING = ("ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,lstart=")
 # Where a bare listing program is looked for when PATH does not hold it. A caller may limit PATH (the launcher E2E does, to test the Docker lookup), and
 # the stop of a launch must not fail for that. A program named with a path, or one these folders do not hold, is looked up as before.
 SYSTEM_PROGRAM_FOLDERS = ("/bin", "/usr/bin")
 LISTING_SECONDS = 5.0
+# Seconds the stop of a session spends stopping (SIGSTOP) the members it finds, until a listing finds no new member, before it signals them.
+FREEZE_SECONDS = 1.0
 # Seconds the lister gets to be reaped after its group got KILL at the listing deadline.
 REAP_SECONDS = 1.0
 # A job of a ``LaunchPool`` waits for its program in slices of this many seconds and looks at the pool's cancellation between them.
@@ -292,8 +294,18 @@ def listing_program(name: str) -> str | None:
     return None
 
 
-def list_processes() -> list[tuple[int, int, str]]:
-    """Every live process as (pid, parent pid, state), from ``SESSION_LISTING``. Raises ``SessionListingFailed`` on any failure."""
+class ProcessRow(NamedTuple):
+    """A live process as the listing shows it: its pid, parent pid, process group, state and start time (it tells two users of one pid apart)."""
+
+    pid: int
+    parent: int
+    group: int
+    state: str
+    started: str
+
+
+def list_processes() -> list[ProcessRow]:
+    """Every live process, from ``SESSION_LISTING``. Raises ``SessionListingFailed`` on any failure."""
     executable = listing_program(SESSION_LISTING[0])
     if executable is None:
         raise SessionListingFailed(f"{SESSION_LISTING[0]} is not on PATH")
@@ -312,55 +324,88 @@ def list_processes() -> list[tuple[int, int, str]]:
         raise
     if lister.returncode:
         raise SessionListingFailed(f"{executable} exited {lister.returncode}: {error.strip()}")
-    rows: list[tuple[int, int, str]] = []
+    rows: list[ProcessRow] = []
     for line in output.splitlines():
         fields = line.split()
         if not fields:
             continue
-        if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
-            raise SessionListingFailed(f"{executable} printed a line that is not a pid, a parent pid and a state: {line!r}")
-        rows.append((int(fields[0]), int(fields[1]), fields[2]))
+        if len(fields) < 5 or not all(value.isdigit() for value in fields[:3]):
+            raise SessionListingFailed(f"{executable} printed a line that is not a pid, a parent pid, a process group, a state and a start time: {line!r}")
+        rows.append(ProcessRow(int(fields[0]), int(fields[1]), int(fields[2]), fields[3], " ".join(fields[4:])))
     return rows
 
 
-def session_members(sessions: Collection[int], parent: int | None) -> set[int]:
-    """The live members of the sessions, without zombies and without the caller.
+@dataclass
+class Claims:
+    """The processes that a stop owns, kept for the whole stop: ``owned`` maps a pid to its start time, ``groups`` maps a process group that an owned
+    process leads to the start time of that leader. A pid counts again only with the start time it had when it was claimed, so a reused pid is no member."""
 
-    A session's leader counts while it is ``parent``'s child even before it has made its session (a worker whose ``setsid`` has not run yet). ``parent``
-    is None when the leader has ended and been reaped: its pid is then only a session id, and a new child with that pid is not a member.
+    owned: dict[int, str] = field(default_factory=dict)
+    groups: dict[int, str] = field(default_factory=dict)
+
+
+def session_members(sessions: Collection[int], parent: int | None, claims: Claims | None = None) -> set[int]:
+    """The live processes that belong to the sessions, without zombies and without the caller.
+
+    A process belongs to them when it is in one of the sessions, and also when it descends from one that does (its parent is owned) or is in a process
+    group that an owned process leads: a descendant that made a session of its own (``setsid``) is still owned through its parent. Ownership is kept in
+    ``claims`` from one listing to the next, with the start time of each process. A session's leader counts while it is ``parent``'s child even before it has
+    made its session (a worker whose ``setsid`` has not run yet). ``parent`` is None when the leader has ended and been reaped: its pid is then only a session
+    id, and a new child with that pid is not a member.
     """
-    members: set[int] = set()
+    claims = Claims() if claims is None else claims
     own = os.getpid()
-    for pid, parent_pid, state in list_processes():
-        if pid == own or state.startswith("Z"):
+    rows = {row.pid: row for row in list_processes()}
+    live = {pid: row for pid, row in rows.items() if pid != own and not row.state.startswith("Z")}
+    owned = {pid for pid, started in claims.owned.items() if pid in live and live[pid].started == started}
+    for pid, row in live.items():
+        if pid in owned:
             continue
-        if parent is not None and pid in sessions and parent_pid == parent:
-            members.add(pid)
+        if parent is not None and pid in sessions and row.parent == parent:
+            owned.add(pid)
             continue
         try:
             if os.getsid(pid) in sessions:
-                members.add(pid)
+                owned.add(pid)
         except ProcessLookupError:
             continue
         except PermissionError as error:
             raise SessionListingFailed(f"the session of process {pid} cannot be read: {error}") from None
-    return members
+    changed = True
+    while changed:
+        changed = False
+        leaders = {pid for pid in owned if live[pid].group == pid}
+        # A group that an owned process led counts while no other process has taken its id.
+        led = leaders | {group for group, started in claims.groups.items() if group not in rows or rows[group].started == started}
+        for pid, row in live.items():
+            if pid not in owned and (row.parent in owned or row.group in led):
+                owned.add(pid)
+                changed = True
+    for pid in owned:
+        claims.owned[pid] = live[pid].started
+        if live[pid].group == pid:
+            claims.groups[pid] = live[pid].started
+    return owned
 
 
-def still_member(pid: int, sessions: Collection[int]) -> bool:
-    """Read the session of a listed member again just before its signal: a member that has left the sessions (``setsid``) or ended is skipped.
+def freeze_members(sessions: Collection[int], parent: int | None, claims: Claims) -> set[int]:
+    """Stop (SIGSTOP) every member that the sessions have, listing again until no new member shows up or ``FREEZE_SECONDS`` have passed.
 
-    A leader that has not made its session yet (``pid`` is a session id) stays a member. A pid that ends and is reused between this check and the
-    signal is the remaining race (microseconds).
+    A stopped member can neither fork nor start a session, so the ownership in ``claims`` is complete before the first TERM. Returns the stopped pids.
     """
-    if pid in sessions:
-        return True
-    try:
-        return os.getsid(pid) in sessions
-    except ProcessLookupError:
-        return False
-    except PermissionError as error:
-        raise SessionListingFailed(f"the session of process {pid} cannot be read: {error}") from None
+    frozen: set[int] = set()
+    end = time.monotonic() + FREEZE_SECONDS
+    while True:
+        new = session_members(sessions, parent, claims=claims) - frozen
+        if not new:
+            return frozen
+        for pid in new:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGSTOP)
+        frozen |= new
+        if time.monotonic() >= end:
+            return frozen
+        time.sleep(POLL_SECONDS)
 
 
 def session_left(members: set[int]) -> bool:
@@ -414,17 +459,20 @@ def stop_sessions(
     grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
     owner = None if leader is not None and leader.returncode is not None else (os.getpid() if parent is None else parent)
     members: set[int] = set()
+    claims = Claims()
     try:
+        frozen = freeze_members(targets, owner, claims)
         for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
             signalled: set[int] = set()
             end = time.monotonic() + wait_seconds
             while True:
-                members = session_members(targets, owner)
+                members = session_members(targets, owner, claims=claims)
                 for pid in members - signalled:
-                    if not still_member(pid, targets):
-                        continue
                     with contextlib.suppress(ProcessLookupError):
                         os.kill(pid, signal_number)
+                        # A stopped member gets the signal only when it runs again.
+                        if pid in frozen and signal_number == signal.SIGTERM:
+                            os.kill(pid, signal.SIGCONT)
                 signalled |= members
                 if not session_left(members):
                     return StopOutcome()
