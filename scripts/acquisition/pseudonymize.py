@@ -62,6 +62,7 @@ NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not a
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
 POSSESSIVE = re.compile(r"(?<=[^\W_])['‘’ʼ`´]s(?![^\W_])")
+TEXT_TOKEN = re.compile(r"[^\W_]+(?:['‘’ʼ`´.][^\W_]+)*")
 TREATMENTS = ("keep", "drop", "scrub_names")
 KINDS = {"id": "authoritative_id", "name": "name_match_only"}
 POLICY_FIELDS = {"policy_id", "policy_version", "source_id", "normalization_version", "headers", "treatments", "pseudonyms", "max_bytes", "min_rows"}
@@ -329,15 +330,22 @@ def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:
 
 
 def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
-    """True when the text holds any known person's whole name, of one word or more, as consecutive words; a possessive ending does not hide it.
+    """True when the text holds any known person's whole name, of one word or more, as consecutive words.
 
-    Matching is tried on the text as written and with possessive endings removed, after combining marks are dropped, so neither form hides a name.
+    Each word of the text is matched as written or without a possessive ending, so a possessive on any word of a name does not hide it. Word order
+    stays exact. Combining marks are dropped first, so a case fold that adds one (for example a dotted capital I) cannot split a word.
     """
     plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(text)) if not unicodedata.combining(c))
-    for variant in {plain, POSSESSIVE.sub("", plain)}:
-        words = tuple(normalize_name(variant).split())
-        if any(words[i : i + n] in names for n in range(1, longest + 1) for i in range(len(words) - n + 1)):
-            return True
+    options = []
+    for token in TEXT_TOKEN.findall(plain):
+        forms = {normalize_name(token), normalize_name(POSSESSIVE.sub("", token))} - {""}
+        if forms:
+            options.append(forms)
+    for size in range(1, longest + 1):
+        for start in range(len(options) - size + 1):
+            window = options[start : start + size]
+            if any(len(name) == size and all(part in forms for part, forms in zip(name, window, strict=True)) for name in names):
+                return True
     return False
 
 
