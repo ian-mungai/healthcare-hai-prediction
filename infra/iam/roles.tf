@@ -36,7 +36,6 @@ locals {
   cluster_name         = format(local.platform_name, "cluster")
 
   ecs_arn = "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}"
-  ec2_arn = "arn:aws:ec2:${var.aws_region}:${var.expected_account_id}"
 
   ecs_tasks_trust = jsonencode({
     Version = "2012-10-17"
@@ -50,11 +49,6 @@ locals {
       }
     }]
   })
-
-  host_tags = { "aws:ResourceTag/Name" = format(local.platform_name, "host"), "aws:ResourceTag/Project" = local.platform_project_tag }
-  data_volume_tags = {
-    "aws:ResourceTag/Name" = format(local.platform_name, "host_data"), "aws:ResourceTag/Project" = local.platform_project_tag
-  }
 
   # The services the platform adds, as the Cost Explorer SERVICE dimension names them. S3 and Secrets Manager stay out.
   budget_services = [
@@ -128,77 +122,9 @@ resource "aws_iam_instance_profile" "ecs_host" {
 }
 
 resource "aws_iam_role_policy" "ecs_host" {
-  name = "container_host"
-  role = aws_iam_role.ecs_host.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "JoinProjectCluster"
-        Effect = "Allow"
-        Action = [
-          "ecs:DeregisterContainerInstance", "ecs:RegisterContainerInstance", "ecs:SubmitAttachmentStateChanges",
-          "ecs:SubmitContainerStateChange", "ecs:SubmitTaskStateChange"
-        ]
-        Resource = "${local.ecs_arn}:cluster/${local.cluster_name}"
-      },
-      {
-        Sid      = "AgentSessions"
-        Effect   = "Allow"
-        Action   = ["ecs:Poll", "ecs:StartTelemetrySession"]
-        Resource = "${local.ecs_arn}:container-instance/${local.cluster_name}/*"
-      },
-      {
-        Sid       = "FindPollEndpoint"
-        Effect    = "Allow"
-        Action    = "ecs:DiscoverPollEndpoint"
-        Resource  = "*"
-        Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }
-      },
-      {
-        Sid       = "RegisterWithSessionManager"
-        Effect    = "Allow"
-        Action    = "ssm:UpdateInstanceInformation"
-        Resource  = "${local.ec2_arn}:instance/*"
-        Condition = { StringEquals = { "ssm:resourceTag/Name" = format(local.platform_name, "host"), "ssm:resourceTag/Project" = local.platform_project_tag } }
-      },
-      {
-        Sid       = "SessionManagerChannels"
-        Effect    = "Allow"
-        Action    = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"]
-        Resource  = "*"
-        Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }
-      },
-      {
-        Sid       = "FindOwnDataVolumeAndAddress"
-        Effect    = "Allow"
-        Action    = ["ec2:DescribeAddresses", "ec2:DescribeVolumes"]
-        Resource  = "*"
-        Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }
-      },
-      {
-        Sid       = "AssociateOwnElasticIp"
-        Effect    = "Allow"
-        Action    = "ec2:AssociateAddress"
-        Resource  = ["${local.ec2_arn}:elastic-ip/*", "${local.ec2_arn}:instance/*", "${local.ec2_arn}:network-interface/*"]
-        Condition = { StringEquals = local.host_tags }
-      },
-      {
-        Sid       = "AttachDataVolume"
-        Effect    = "Allow"
-        Action    = "ec2:AttachVolume"
-        Resource  = "${local.ec2_arn}:volume/*"
-        Condition = { StringEquals = local.data_volume_tags }
-      },
-      {
-        Sid       = "AttachToOwnInstance"
-        Effect    = "Allow"
-        Action    = "ec2:AttachVolume"
-        Resource  = "${local.ec2_arn}:instance/*"
-        Condition = { StringEquals = local.host_tags }
-      }
-    ]
-  })
+  name   = "container_host"
+  role   = aws_iam_role.ecs_host.id
+  policy = templatefile("${path.module}/owner_policies/ecs_host.json", local.owner_policy_values)
 }
 
 resource "aws_iam_role" "task_execution" {
@@ -246,28 +172,9 @@ resource "aws_iam_role" "polaris_task" {
 }
 
 resource "aws_iam_role_policy" "polaris_task" {
-  name = "polaris_task"
-  role = aws_iam_role.polaris_task.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ManageLakehouseTables"
-        Effect   = "Allow"
-        Action   = ["s3:AbortMultipartUpload", "s3:DeleteObject", "s3:GetObject", "s3:ListMultipartUploadParts", "s3:PutObject"]
-        Resource = "arn:aws:s3:::${var.data_bucket_name}/lakehouse/*"
-      },
-      {
-        Sid      = "ListLakehouseFolder"
-        Effect   = "Allow"
-        Action   = "s3:ListBucket"
-        Resource = "arn:aws:s3:::${var.data_bucket_name}"
-        Condition = {
-          StringLike = { "s3:prefix" = ["lakehouse/", "lakehouse/*"] }
-        }
-      }
-    ]
-  })
+  name   = "polaris_task"
+  role   = aws_iam_role.polaris_task.id
+  policy = templatefile("${path.module}/owner_policies/polaris_task.json", merge(local.owner_policy_values, { DATA_BUCKET_NAME = var.data_bucket_name }))
 }
 
 # Postgres, Redis, Airflow and Marquez need no AWS access of their own: the role has no policy.

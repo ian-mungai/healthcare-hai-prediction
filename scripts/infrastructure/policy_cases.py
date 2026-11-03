@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from scripts.infrastructure.policy_evaluator import Request, as_list, build_request
+from scripts.infrastructure.policy_evaluator import POLICY_VARIABLE, Request, as_list, build_request
 
 R, A, P, E, B = "eu-west-1", "111111111111", "example_project", "dev", "example-project-ci-bucket"
 VALUES = {"AWS_REGION": R, "AWS_ACCOUNT_ID": A, "PROJECT_NAME": P, "ENVIRONMENT": E, "DATA_BUCKET_NAME": B}
@@ -1379,6 +1379,184 @@ FORBIDDEN = {
 }
 
 
+ROLE_BOUNDARY = f"arn:aws:iam::{A}:policy/{P}_role_boundary"
+ADMINISTRATOR_ACCESS = "arn:aws:iam::aws:policy/AdministratorAccess"
+
+
+BOUNDARY = "role_boundary"
+# The roles the IAM stack creates, by the name part between the project and the environment. Each holds the documents keyed
+# ``role/<name>/<policy>``, or ``owner_<name>`` for the snapshot and task execution roles, and runs under the boundary.
+# The control-plane task role has no policy.
+ROLES = (
+    "lakehouse_reader",
+    "lakehouse_writer",
+    "ecs_host",
+    "task_execution",
+    "polaris_task",
+    "control_plane_task",
+    "snapshots",
+    "job_execution",
+    "job_offline_task",
+    "job_seal_task",
+    "job_read_task",
+    "job_try_writer",
+    "job_write_bronze_task",
+    "job_write_e2e_task",
+)
+WIDE_ROLE = "wide_role"
+SESSION_USER_ID = "AROAEXAMPLEEXAMPLE:task"
+# A role whose own policy grants far more than any project role: only the boundary stands between it and the account.
+WIDE_ROLE_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Everything",
+            "Effect": "Allow",
+            "Action": [
+                "iam:*",
+                "budgets:*",
+                "organizations:*",
+                "account:*",
+                "sts:AssumeRole",
+                "s3:AbortMultipartUpload",
+                "s3:DeleteObject",
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:PutObject",
+                "ssm:GetParameters",
+                "ssm:UpdateInstanceInformation",
+                "ec2:AssociateAddress",
+                "ec2:AttachVolume",
+                "ec2:CreateSnapshot",
+                "ec2:DeleteSnapshot",
+                "ec2:RunInstances",
+            ],
+            "Resource": "*",
+        }
+    ],
+}
+
+
+def bounded_role_cases() -> Iterator[Case]:
+    """A role that holds ``iam:*``, the budget or another bucket in its own policy gets ``deny`` or ``implicit_deny`` from the boundary."""
+
+    def case(label: str, action: str, resource: str, allowed: bool, sid: str | None = None, extra: dict[str, str] | None = None) -> Case:
+        return Case(f"bounded: {label}", request(action, resource, extra=extra), allowed, sid, WIDE_ROLE)
+
+    deny = "DenyIamOrganizationsAccountAndBudgets"
+    for action, resource in (
+        ("iam:CreateRole", f"arn:aws:iam::{A}:role/{P}_x"),
+        ("iam:AttachRolePolicy", f"arn:aws:iam::{A}:role/{P}_x"),
+        ("iam:PutRolePolicy", f"arn:aws:iam::{A}:role/{P}_ecs_host_{E}"),
+        ("iam:DeleteRolePermissionsBoundary", f"arn:aws:iam::{A}:role/{P}_ecs_host_{E}"),
+        ("iam:PassRole", f"arn:aws:iam::{A}:role/{P}_ecs_host_{E}"),
+        ("iam:CreateUser", f"arn:aws:iam::{A}:user/{P}_x"),
+        ("iam:CreatePolicyVersion", ROLE_BOUNDARY),
+        ("budgets:ModifyBudget", BUDGET),
+        ("organizations:LeaveOrganization", "*"),
+        ("account:PutAlternateContact", "*"),
+    ):
+        yield case(f"wide role {action}", action, resource, False, deny, {"iam:PermissionsBoundary": ROLE_BOUNDARY})
+    for name in ("administrator", "healthcare_realtime_x", "other_project_role"):
+        yield case(f"wide role assumes {name}", "sts:AssumeRole", f"arn:aws:iam::{A}:role/{name}", False, "DenyAssumeRoleOutsideProject")
+    yield case("wide role assumes a project role the boundary does not grant", "sts:AssumeRole", f"arn:aws:iam::{A}:role/{P}_x", False)
+    for bucket in ("other-bucket", f"{B}-copy"):
+        yield case(f"wide role reads {bucket}", "s3:GetObject", f"arn:aws:s3:::{bucket}/lakehouse/x", False)
+    yield case("wide role reads the project bucket", "s3:GetObject", f"{BUCKET}/lakehouse/x", True)
+    yield case("wide role reads a parameter of another folder", "ssm:GetParameters", arn("ssm", "parameter/other_project/token"), False)
+    yield case("wide role launches an instance", "ec2:RunInstances", INSTANCE, False)
+    yield from boundary_scope_cases(case)
+
+
+def boundary_scope_cases(case: Callable[..., Case]) -> Iterator[Case]:
+    """Design section 1: the boundary allows no more than the union of the current roles' scopes (review of parts 1 and 2, finding 2).
+
+    Each refused request is one that every current role refuses, sent by the wide role, so only the boundary decides it.
+    """
+    source = f"{BUCKET}/cms/hospitals/original.csv"
+    for action in ("s3:DeleteObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:GetObject"):
+        yield case(f"wide role {action} on a source object", action, source, False)
+        yield case(f"wide role {action} on a lakehouse object", action, f"{BUCKET}/lakehouse/silver/x", True)
+    yield case("wide role reads a source object version", "s3:GetObjectVersion", source, True)
+    data = {"aws:ResourceTag/Project": P, "aws:ResourceTag/Name": DATA_VOLUME_NAME}
+    scheduled = {**data, "aws:ResourceTag/aws:dlm:lifecycle-schedule-name": "daily"}
+    yield case("wide role deletes a scheduled data snapshot", "ec2:DeleteSnapshot", SNAPSHOT, True, extra=scheduled)
+    for label, context in (
+        ("a manual project snapshot", {"aws:ResourceTag/Project": P, "aws:ResourceTag/Name": f"{P}_manual_backup_{E}"}),
+        ("an unscheduled data snapshot", data),
+        ("a weekly data snapshot", {**data, "aws:ResourceTag/aws:dlm:lifecycle-schedule-name": "weekly"}),
+        ("a daily snapshot named for another volume", {**scheduled, "aws:ResourceTag/Name": f"{P}_other_volume_{E}"}),
+    ):
+        yield case(f"wide role deletes {label}", "ec2:DeleteSnapshot", SNAPSHOT, False, extra=context)
+    other_volume = {**data, "aws:ResourceTag/Name": f"{P}_other_volume_{E}"}
+    yield case("wide role snapshots the data volume", "ec2:CreateSnapshot", VOLUME, True, extra=data)
+    yield case("wide role snapshots a project volume with another Name", "ec2:CreateSnapshot", VOLUME, False, extra=other_volume)
+    yield case("wide role attaches the data volume", "ec2:AttachVolume", VOLUME, True, extra=data)
+    yield case("wide role attaches a project volume with another Name", "ec2:AttachVolume", VOLUME, False, extra=other_volume)
+    other_host = {**HOST_TAGS, "aws:ResourceTag/Name": f"{P}_other_{E}"}
+    for action, kind, resource in (
+        ("ec2:AttachVolume", "instance", INSTANCE),
+        ("ec2:AssociateAddress", "instance", INSTANCE),
+        ("ec2:AssociateAddress", "address", ADDRESS),
+        ("ec2:AssociateAddress", "network interface", arn("ec2", "network-interface/eni-0123456789abcdef0")),
+    ):
+        yield case(f"wide role {action} on the host {kind}", action, resource, True, extra=HOST_TAGS)
+        yield case(f"wide role {action} on a project {kind} with another Name", action, resource, False, extra=other_host)
+    register = "ssm:UpdateInstanceInformation"
+    host = {"ssm:resourceTag/Project": P, "ssm:resourceTag/Name": f"{P}_host_{E}"}
+    yield case("wide role registers the host with Session Manager", register, INSTANCE, True, extra=host)
+    yield case("wide role registers a project instance with another Name", register, INSTANCE, False, extra={**host, "ssm:resourceTag/Name": f"{P}_other_{E}"})
+
+
+def coverage_requests(statement: dict[str, Any], tag_context: dict[str, tuple[str, ...]]) -> Iterator[Request]:
+    """Requests that one role statement allows: each action on each resource, with every condition value the statement accepts.
+
+    A wildcard in a resource or value becomes a sample word. IAM sends ``aws:userid`` for every role session, so a policy variable in a resource is
+    that session's identifier.
+    The request tags of the role's other statements for the same action are sent too, so a deny that needs them does not fire.
+    """
+    positive: list[tuple[str, list[str]]] = []
+    for operator, keys in statement.get("Condition", {}).items():
+        if "Not" in operator or operator.endswith("IfExists"):
+            continue
+        for key, expected in keys.items():
+            if operator == "Null":
+                if str(as_list(expected)[0]).lower() == "false":
+                    positive.append((key, ["sample"]))
+                continue
+            positive.append((key, [str(value).replace("*", "sample").replace("?", "a") for value in as_list(expected)]))
+    combinations: list[dict[str, tuple[str, ...]]] = [{}]
+    for key, values in positive:
+        combinations = [{**combination, key: (value,)} for combination in combinations for value in values]
+    for action in as_list(statement["Action"]):
+        for resource in as_list(statement["Resource"]):
+            concrete = POLICY_VARIABLE.sub(SESSION_USER_ID, resource)
+            concrete = concrete if concrete == "*" else concrete.replace("*", "sample").replace("?", "a")
+            for combination in combinations:
+                context = {"aws:RequestedRegion": (R,), "aws:userid": (SESSION_USER_ID,), **tag_context, **combination}
+                yield Request(action, concrete, context)
+
+
+def coverage_cases(documents: dict[str, dict[str, Any]]) -> Iterator[Case]:
+    """Every request a role's own policies allow today is allowed under the boundary: the boundary covers all current role access."""
+    held_by = principals(documents)
+    for name in ROLES:
+        allows = [statement for document in held_by[name] for statement in document["Statement"] if statement["Effect"] == "Allow"]
+        for statement in allows:
+            actions = set(as_list(statement["Action"]))
+            tag_context: dict[str, tuple[str, ...]] = {
+                str(key): (str(as_list(expected)[0]),)
+                for other in allows
+                if actions & set(as_list(other["Action"]))
+                for operator, keys in other.get("Condition", {}).items()
+                if "Not" not in operator
+                for key, expected in keys.items()
+                if key.startswith("aws:RequestTag/") or key == "aws:TagKeys"
+            }
+            for item in coverage_requests(statement, tag_context):
+                yield Case(f"coverage: {name} {statement.get('Sid')} {item.action} {item.resource}", item, True, None, name)
+
+
 def forbidden_cases() -> Iterator[Case]:
     """Actions that the project profile must never hold, sent with every context key that could satisfy a condition."""
     rich = {
@@ -1615,6 +1793,13 @@ def execution_cases() -> Iterator[Case]:
 
 def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     """Every case the evaluator suite runs."""
+    current = list(current_cases(operations))
+    yield from current
+    yield from bounded_role_cases()
+
+
+def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
+    """The cases of the policies attached today."""
     yield from scope_cases(operations)
     yield from scope_cases({"s3": bucket_requests()})
     yield from single_copy_cases()
@@ -1670,12 +1855,24 @@ def drop_owner(documents: dict[str, dict[str, Any]], name: str, *sids: str) -> N
 
 
 def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """The policy documents each principal holds: the project user, the snapshot role and the task execution role."""
+    """The policy documents each principal holds: the project user, the snapshot role, the task execution role,
+    every role of the IAM stack and the wide test role."""
     user = [document for name, document in documents.items() if name.startswith("healthcare_hai_prediction_")]
+    roles = {name: [document for key, document in documents.items() if key.startswith(f"role/{name}/")] for name in ROLES}
     return {
+        **roles,
         "user": user,
         "snapshots": [documents["owner_snapshots"]],
         "execution": [documents["owner_task_execution"]],
+        "task_execution": [documents["owner_task_execution"]],
+        WIDE_ROLE: [WIDE_ROLE_POLICY],
+    }
+
+
+def boundaries(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """The permissions boundary of each bounded principal: every role, never the project user."""
+    return {
+        **{name: [documents[BOUNDARY]] for name in ("snapshots", "execution", *ROLES, WIDE_ROLE)},
     }
 
 
@@ -2143,6 +2340,34 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             "job reader batch action added": ("job reader: refuse GetParameters ", job_reader_batch_allowed),
         }
     )
+
+    def boundary_statement(documents: dict[str, dict[str, Any]], sid: str) -> dict[str, Any]:
+        return next(statement for statement in documents[BOUNDARY]["Statement"] if statement["Sid"] == sid)
+
+    def boundary_shared_prefix(documents: dict[str, dict[str, Any]]) -> None:
+        boundary_statement(documents, "DenyAssumeRoleOutsideProject")["NotResource"] = f"arn:aws:iam::{A}:role/healthcare_*"
+
+    def boundary_reads_every_bucket(documents: dict[str, dict[str, Any]]) -> None:
+        documents[BOUNDARY]["Statement"].append({"Sid": "ReadEverything", "Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"})
+
+    def boundary_without_host_action(documents: dict[str, dict[str, Any]]) -> None:
+        statement = boundary_statement(documents, "JoinProjectCluster")
+        statement["Action"] = [action for action in statement["Action"] if action != "ecs:RegisterContainerInstance"]
+
+    def boundary_without_iam_deny(documents: dict[str, dict[str, Any]]) -> None:
+        documents[BOUNDARY]["Statement"] = [
+            statement for statement in documents[BOUNDARY]["Statement"] if statement["Sid"] != "DenyIamOrganizationsAccountAndBudgets"
+        ]
+
+    def boundary_only_project_tag(sid: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            boundary_statement(documents, sid)["Condition"] = {"StringEquals": {"aws:ResourceTag/Project": P}}
+
+        return mutation
+
+    def boundary_writes_every_object(documents: dict[str, dict[str, Any]]) -> None:
+        boundary_statement(documents, "ProjectLakehouseObjects")["Resource"] = f"{BUCKET}/*"
+
     return {
         **job_defects,
         **aws_pair_defects,
@@ -2242,4 +2467,30 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "cluster actions on every cluster": ("ecs:DeleteCluster in another project", ecs_other_project),
         "secret creation": ("secret: no CreateSecret", secrets_create),
         "registry token in every region": ("forbidden ecr token outside the region", region_condition_dropped),
+        "design 3 defect 6: the boundary's AssumeRole deny uses the shared prefix healthcare_*": (
+            "bounded: wide role assumes healthcare_realtime_x",
+            boundary_shared_prefix,
+        ),
+        "design 3 defect 7: the boundary allows s3:GetObject on every resource": ("bounded: wide role reads other-bucket", boundary_reads_every_bucket),
+        "design 3 defect 8: the boundary lacks an action the host role needs": (
+            "coverage: ecs_host JoinProjectCluster ecs:RegisterContainerInstance",
+            boundary_without_host_action,
+        ),
+        "the boundary does not deny IAM, Organizations, account and budget actions": ("bounded: wide role iam:CreateRole", boundary_without_iam_deny),
+        "the boundary deletes objects across the bucket (review of parts 1 and 2, finding 2)": (
+            "bounded: wide role s3:DeleteObject on a source object",
+            boundary_writes_every_object,
+        ),
+        "the boundary deletes project snapshots the schedule did not make": (
+            "bounded: wide role deletes a manual project snapshot",
+            boundary_only_project_tag("DeleteScheduledSnapshots"),
+        ),
+        "the boundary attaches any project volume": (
+            "bounded: wide role attaches a project volume with another Name",
+            boundary_only_project_tag("AttachAndSnapshotDataVolume"),
+        ),
+        "the boundary associates addresses with any project instance": (
+            "bounded: wide role ec2:AssociateAddress on a project instance with another Name",
+            boundary_only_project_tag("HostAttachments"),
+        ),
     }

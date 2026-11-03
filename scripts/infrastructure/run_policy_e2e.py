@@ -20,7 +20,7 @@ from typing import Any
 
 from infra.iam.scripts.render_policy import MAX_POLICY_CHARACTERS, non_whitespace_length, render_template, template_service, terraform_names
 from scripts.infrastructure import policy_cases, secret_store
-from scripts.infrastructure.policy_evaluator import Decision, Request, allowed_actions, as_list, decide, load_policies
+from scripts.infrastructure.policy_evaluator import Decision, Request, allowed_actions, as_list, decide, decide_bounded, load_policies
 from scripts.infrastructure.policy_script_defects import run_script_defects
 from scripts.process import run_command
 
@@ -28,7 +28,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 POLICY_DIRECTORY = REPO_ROOT / "infra" / "iam" / "policies"
 OWNER_DIRECTORY = REPO_ROOT / "infra" / "iam" / "owner_policies"
 ROLE_DIRECTORY = REPO_ROOT / "infra" / "iam" / "role_policies"
+# Outside ``policies/``: the group tooling attaches every file there, and the administrator attaches these at bootstrap.
+BOUNDARY_DIRECTORY = REPO_ROOT / "infra" / "iam" / "boundary"
+BOUNDARY_FILE = "healthcare_hai_prediction_role_boundary_policy.json"
 VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
+IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
+BRONZE_TABLES = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 # The longest values the real deployment can use, to check the managed policy size limit with them.
 LONGEST_VALUES = {
     "AWS_REGION": "ap-southeast-2",
@@ -51,20 +56,145 @@ def code_revision() -> dict[str, Any]:
     return {"head": head, "uncommitted_changes_in_scope": bool(dirty)}
 
 
+def hcl_list(text: str, name: str) -> list[str]:
+    """A list of strings that a Terraform file writes out in one line, such as ``lakehouse_read_prefixes = ["a/", "b/"]``."""
+    found = re.findall(rf"^\s*{name}\s*=\s*(\[[^\]\n]*\])", text, re.MULTILINE)
+    if len(found) != 1:
+        raise RuntimeError(f"{name} must be written once as a one-line list")
+    return [str(item) for item in json.loads(found[0])]
+
+
+def variable_default(name: str) -> str:
+    """The string default of one Terraform variable of the IAM stack."""
+    found = [match for path in sorted(IAM_DIRECTORY.glob("*variables.tf")) for match in re.findall(
+        rf'variable "{name}" \{{[^}}]*?default\s*=\s*"([^"]*)"', path.read_text(encoding="utf-8"), re.DOTALL)]  # fmt: skip
+    if len(found) != 1:
+        raise RuntimeError(f"the default of {name} must be written once")
+    return str(found[0])
+
+
+def render_role_template(path: Path, inputs: dict[str, str], expressions: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    """Render a role policy the way Terraform ``templatefile`` does with the stack's inputs.
+
+    ``inputs`` replaces the placeholders the policy renderer does not know with their text; ``expressions`` replaces a whole
+    ``${jsonencode(...)}`` expression with its JSON list. Each must occur in the file, or a changed template would go unchecked.
+    """
+    text = path.read_text(encoding="utf-8")
+    for expression, values in (expressions or {}).items():
+        text = plant(text, expression, json.dumps(values))
+    for key, value in inputs.items():
+        if "${" + key + "}" not in text:
+            raise RuntimeError(f"{path.name} holds no ${{{key}}}")
+        text = text.replace("${" + key + "}", value)
+    return render_template(text, policy_cases.VALUES)
+
+
+def load_roles() -> dict[str, dict[str, Any]]:
+    """The policies of every role the IAM stack creates, keyed ``role/<role>/<policy>``, with the inputs the stack passes.
+
+    Prepared and unattached role policies (the bronze and qualification deltas) are included, so the boundary covers them before they are attached.
+    The qualification collection is the first mapped one, because the variable default is empty until the lead selects one.
+    """
+    roles_tf = (IAM_DIRECTORY / "roles.tf").read_text(encoding="utf-8")
+    bucket = f"arn:aws:s3:::{policy_cases.B}"
+    owner = OWNER_DIRECTORY
+    lakehouse_inputs = {"DATA_BUCKET_NAME": policy_cases.B}
+    expressions: dict[str, dict[str, list[str]]] = {}
+    for kind in ("READ", "WRITE"):
+        listed = hcl_list(roles_tf, f"lakehouse_{kind.lower()}_prefixes")
+        expressions[kind] = {
+            f'${{jsonencode([for prefix in {kind}_PREFIXES : "arn:aws:s3:::${{DATA_BUCKET_NAME}}/${{prefix}}*"])}}': [
+                f"{bucket}/{prefix}*" for prefix in listed
+            ],
+            f'${{jsonencode(flatten([for prefix in {kind}_PREFIXES : [trimsuffix(prefix, "/"), "${{prefix}}*"]]))}}': [
+                item for prefix in listed for item in (prefix.removesuffix("/"), f"{prefix}*")
+            ],
+        }
+    namespaces = hcl_list((IAM_DIRECTORY / "bronze_writer.tf").read_text(encoding="utf-8"), "bronze_namespaces")
+    test_namespaces = [f"{name}_e2e" for name in namespaces]
+    collections = sorted({str(table["collection"]) for table in json.loads(BRONZE_TABLES.read_text(encoding="utf-8"))["tables"]})
+    qualification = collections[0]
+
+    def objects(names: list[str]) -> str:
+        return json.dumps([f"{bucket}/lakehouse/{name}/*" for name in names])
+
+    def prefixes(names: list[str]) -> str:
+        return json.dumps([f"lakehouse/{name}/*" for name in names])
+
+    def parameters(*variables: str) -> str:
+        return json.dumps([f"arn:aws:ssm:{policy_cases.R}:{policy_cases.A}:parameter{variable_default(name)}" for name in variables])
+
+    bronze = {"BUCKET_ARN": bucket, "TABLE_OBJECT_ARNS": objects(namespaces), "TABLE_LIST_PREFIXES": prefixes(namespaces),
+              "SOURCE_OBJECT_ARNS": json.dumps([f"{bucket}/{name}/*" for name in collections]),
+              "SOURCE_LIST_PREFIXES": json.dumps([f"{name}/*" for name in collections])}  # fmt: skip
+    bronze_test = {**bronze, "TABLE_OBJECT_ARNS": objects(test_namespaces), "TABLE_LIST_PREFIXES": prefixes(test_namespaces),
+                   "SOURCE_OBJECT_ARNS": json.dumps([f"{bucket}/{qualification}/*"]), "SOURCE_LIST_PREFIXES": json.dumps([f"{qualification}/*"])}  # fmt: skip
+    e2e_names = ["silver_e2e", "gold_e2e", "features_e2e", *test_namespaces]
+    e2e = {"BUCKET_ARN": bucket, "TEST_OBJECT_ARNS": objects(e2e_names), "TEST_LIST_PREFIXES": prefixes(e2e_names),
+           "BRONZE_TEST_OBJECT_ARNS": objects(test_namespaces), "BRONZE_TEST_LIST_PREFIXES": prefixes(test_namespaces),
+           "SOURCE_OBJECT_ARNS": json.dumps([f"{bucket}/{qualification}/*"]), "SOURCE_LIST_PREFIXES": json.dumps([f"{qualification}/*"]),
+           "E2E_PARAMETER_ARNS": parameters("aws_polaris_e2e_client_id_name", "aws_polaris_e2e_client_secret_name")}  # fmt: skip
+
+    def read(name: str, inputs: dict[str, str] | None = None) -> dict[str, Any]:
+        return render_role_template(owner / f"{name}.json", inputs or {})
+
+    # Terraform passes TASK_USER_ID as the IAM policy variable ${aws:userid}, which IAM fills in per role session.
+    stage = read("job_stage_read", {"TASK_USER_ID": "${aws:userid}"})
+    return {
+        "role/lakehouse_reader/access": render_role_template(ROLE_DIRECTORY / "reader.json", lakehouse_inputs, expressions["READ"]),
+        "role/lakehouse_writer/access": render_role_template(ROLE_DIRECTORY / "writer.json", lakehouse_inputs, expressions["WRITE"]),
+        "role/ecs_host/container_host": read("ecs_host"),
+        "role/polaris_task/polaris_task": read("polaris_task"),
+        "role/job_execution/job_execution": read("job_execution"),
+        "role/job_execution/inject_qualification_pair": read("job_writer_e2e_execution", {"E2E_PARAMETER_ARNS": e2e["E2E_PARAMETER_ARNS"]}),
+        "role/job_execution/bronze_execution_delta": read(
+            "bronze_execution", {"BRONZE_PARAMETER_ARNS": parameters("aws_polaris_bronze_client_id_name", "aws_polaris_bronze_client_secret_name")}
+        ),
+        "role/job_offline_task/stage_read": stage,
+        "role/job_seal_task/stage_read": stage,
+        "role/job_seal_task/no_input_tree": read("job_seal_deny"),
+        "role/job_read_task/stage_read": stage,
+        "role/job_read_task/source_read": read("job_source_read"),
+        "role/job_read_task/qualification_read": read(
+            "job_reader_e2e",
+            {key: e2e[key] for key in ("BUCKET_ARN", "TEST_OBJECT_ARNS", "TEST_LIST_PREFIXES", "BRONZE_TEST_OBJECT_ARNS", "BRONZE_TEST_LIST_PREFIXES")},
+        ),  # fmt: skip
+        "role/job_try_writer/try_outputs": read("job_try_writer"),
+        "role/job_write_bronze_task/bronze_objects_and_versioned_sources": read("bronze_writer_storage", bronze),
+        "role/job_write_e2e_task/qualification_objects_and_versioned_source": read(
+            "job_writer_e2e_storage",
+            {key: e2e[key] for key in ("BUCKET_ARN", "TEST_OBJECT_ARNS", "TEST_LIST_PREFIXES", "SOURCE_OBJECT_ARNS", "SOURCE_LIST_PREFIXES")},
+        ),  # fmt: skip
+        "role/job_write_e2e_task/qualification_storage_delta": read("bronze_writer_storage", bronze_test),
+        "role/job_write_e2e_task/stage_read": stage,
+    }
+
+
 def load_all() -> dict[str, dict[str, Any]]:
-    """The 13 project user policies by template stem and the policies the IAM stack renders, as ``owner_<name>``."""
+    """The 13 project user policies by template stem, the policies the IAM stack renders, as ``owner_<name>``, the role
+    boundary and every role policy as ``role/<role>/<policy>``."""
     documents = load_policies(POLICY_DIRECTORY, policy_cases.VALUES)
+    documents[policy_cases.BOUNDARY] = render_template((BOUNDARY_DIRECTORY / BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
     documents["owner_snapshots"] = render_template((OWNER_DIRECTORY / "snapshots.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     documents[TASK_EXECUTION] = render_task_execution(OWNER_DIRECTORY)
-    return documents
+    return {**documents, **load_roles()}
 
 
 def evaluate_cases(documents: dict[str, dict[str, Any]], cases: list[policy_cases.Case]) -> list[dict[str, Any]]:
-    """Run every case; return the failures with the decision, the statement and the expected outcome."""
+    """Run every case; return the failures with the decision, the statement and the expected outcome.
+
+    The boundary is shared by every role, so it cannot keep one role inside its own scope: a role's refusal must also hold under the role's own
+    policies alone. The wide role is the exception; only the boundary refuses it.
+    """
     failures = []
     held = policy_cases.principals(documents)
+    bounds = policy_cases.boundaries(documents)
     for case in cases:
-        decision: Decision = decide(held[case.principal], case.request)
+        boundary = bounds.get(case.principal)
+        decision: Decision = decide(held[case.principal], case.request) if boundary is None else decide_bounded(held[case.principal], boundary, case.request)
+        if boundary is not None and case.principal != policy_cases.WIDE_ROLE and not case.allowed and not decision.allowed:
+            own = decide(held[case.principal], case.request)
+            decision = own if own.allowed else decision
         wrong_effect = decision.allowed != case.allowed
         wrong_reason = case.sid is not None and case.sid not in decision.statements
         if wrong_effect or wrong_reason:
@@ -462,8 +592,10 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def check_sizes() -> list[str]:
-    """Each policy, rendered with the longest real values, stays under the managed policy limit."""
+    """Each project user policy and the boundary, rendered with the longest real values, stay under the managed policy limit."""
     rendered = load_policies(POLICY_DIRECTORY, LONGEST_VALUES)
+    for path in sorted(BOUNDARY_DIRECTORY.glob("*.json")):
+        rendered[path.stem] = render_template(path.read_text(encoding="utf-8"), LONGEST_VALUES)
     return [
         f"{name}: {non_whitespace_length(document)} characters over the {MAX_POLICY_CHARACTERS} limit"
         for name, document in rendered.items()
@@ -475,8 +607,8 @@ def run_suite(output: Path) -> dict[str, Any]:
     """Evaluate the shipped policies, then every planted defect, and return the report."""
     started = time.perf_counter()
     operations = policy_cases.approved_requests()
-    cases = list(policy_cases.all_cases(operations))
     documents = load_all()
+    cases = [*policy_cases.all_cases(operations), *policy_cases.coverage_cases(documents)]
     failures = evaluate_cases(documents, cases)
     context_checks = [
         {"label": label, "passed": dict(item.context) == expected, "expected": expected, "observed": dict(item.context)}

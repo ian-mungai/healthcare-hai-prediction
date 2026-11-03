@@ -1,0 +1,76 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "JoinProjectCluster",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DeregisterContainerInstance",
+        "ecs:RegisterContainerInstance",
+        "ecs:SubmitAttachmentStateChanges",
+        "ecs:SubmitContainerStateChange",
+        "ecs:SubmitTaskStateChange"
+      ],
+      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+    },
+    {
+      "Sid": "AgentSessions",
+      "Effect": "Allow",
+      "Action": ["ecs:Poll", "ecs:StartTelemetrySession"],
+      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:container-instance/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*"
+    },
+    {
+      "Sid": "FindPollEndpoint",
+      "Effect": "Allow",
+      "Action": "ecs:DiscoverPollEndpoint",
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "${AWS_REGION}"}}
+    },
+    {
+      "Sid": "RegisterWithSessionManager",
+      "Effect": "Allow",
+      "Action": "ssm:UpdateInstanceInformation",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {"StringEquals": {"ssm:resourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}", "ssm:resourceTag/Project": "${PROJECT_NAME}"}}
+    },
+    {
+      "Sid": "SessionManagerChannels",
+      "Effect": "Allow",
+      "Action": ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"],
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "${AWS_REGION}"}}
+    },
+    {
+      "Sid": "FindOwnDataVolumeAndAddress",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeAddresses", "ec2:DescribeVolumes"],
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "${AWS_REGION}"}}
+    },
+    {
+      "Sid": "AssociateOwnElasticIp",
+      "Effect": "Allow",
+      "Action": "ec2:AssociateAddress",
+      "Resource": [
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:elastic-ip/*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:network-interface/*"
+      ],
+      "Condition": {"StringEquals": {"aws:ResourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}", "aws:ResourceTag/Project": "${PROJECT_NAME}"}}
+    },
+    {
+      "Sid": "AttachDataVolume",
+      "Effect": "Allow",
+      "Action": "ec2:AttachVolume",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {"StringEquals": {"aws:ResourceTag/Name": "${PROJECT_NAME}_host_data_${ENVIRONMENT}", "aws:ResourceTag/Project": "${PROJECT_NAME}"}}
+    },
+    {
+      "Sid": "AttachToOwnInstance",
+      "Effect": "Allow",
+      "Action": "ec2:AttachVolume",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {"StringEquals": {"aws:ResourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}", "aws:ResourceTag/Project": "${PROJECT_NAME}"}}
+    }
+  ]
+}
