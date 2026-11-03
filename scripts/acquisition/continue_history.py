@@ -7,7 +7,7 @@ import copy
 import fcntl
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, pref
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json
 from scripts.acquisition.transport import CaptureError, Limits
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration
+from scripts.process import LaunchPool
 
 
 def run_archive(mapping: dict, plans: dict, registry: dict, validator: Any, root: Path, settings: dict, outputs: dict) -> dict:
@@ -109,7 +110,7 @@ def main() -> None:
     args.state_root.mkdir(parents=True, exist_ok=True)
     with (args.state_root / ".execution.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        with LaunchPool(max_workers=args.workers) as pool:
             jobs = {pool.submit(run_archive, mapping, plans, registry, validator, args.state_root, settings, outputs): mapping for mapping in maps["archives"]}
             for job in as_completed(jobs):
                 mapping = jobs[job]
