@@ -2,9 +2,9 @@
 
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_process_e2e``. Each case starts real shell programs through ``run_command``. A
 child starts a grandchild (one that ignores TERM in some cases) and the case checks, by process ID, that no member of the group is left once the call
-returns or raises. Cases: a grandchild stopped at the deadline, a grandchild and a child that ignore TERM (KILL after the grace period), a grandchild
-that holds the output pipe after the child exited, partial output kept in the ``TimeoutExpired``, a caller interrupt that stops the group, a child in
-its own group (the caller is never signalled), a survivor that fails visibly, and unchanged results for a program that ends in time (exit code, text,
+returns or raises. Cases: a grandchild stopped at the deadline, a grandchild and a child that ignore TERM (KILL of the frozen members, no grace period),
+a grandchild that holds the output pipe after the child exited, partial output kept in the ``TimeoutExpired``, a caller interrupt that stops the group,
+a child in its own group (the caller is never signalled), a survivor that fails visibly, and unchanged results for a program that ends in time (exit code, text,
 ``check``, a missing program, working folder, environment and a closed stdin). The program leads its own session. Nested cases start a Python program
 that itself calls ``run_command`` (one and two levels deep): a nested launch stays in the outer session in a group of its own, the outer deadline stops
 every member of the session, and a nested launch keeps its own earlier deadline. A descendant that moves to a new process group is stopped; a
@@ -18,7 +18,8 @@ Fix round 6 (unreported cleanup failures): an unconfirmed deadline stop that ove
 interrupt without a pool, a stop that raises, a caller that swallows the timeout, a pool step with an unconfirmed deadline stop and an alarm during the listing,
 with six plants. Fix round 7 (the recheck of round 6): an alarm that raises ``SystemExit`` during the stop, a failed session listing in the CI worker's
 own session, a member left after a normal end (also in the credential-process shape) and a finalization that cannot be confirmed, with four plants.
-A member that starts its own session is outside the launch's session; that limit is documented in scripts/process.py and not tested here.
+Review round 2: a TERM handler that forks into a new session cannot escape, because a session stop sends KILL to frozen members; the remaining limit (a
+descendant whose parent ended before the stop began) is documented in scripts/process.py and not tested here.
 The report goes to data/e2e/process/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 
@@ -311,7 +312,7 @@ def grandchild_stopped(base: Path) -> dict[str, Any]:
 def term_ignoring_grandchild(base: Path) -> dict[str, Any]:
     def body(scratch: Scratch) -> dict[str, Any]:
         caught, elapsed = timed_out(scratch, "term", "wait")
-        return {**stopped(scratch, caught, elapsed), "waited_for_the_grace_period": elapsed >= CASE_TIMEOUT_SECONDS + CASE_GRACE_SECONDS * 0.9}
+        return {**stopped(scratch, caught, elapsed), "session_stop_gives_no_grace_period": elapsed < CASE_TIMEOUT_SECONDS + CASE_GRACE_SECONDS * 0.9}
 
     return case("term_ignoring_grandchild_killed", base, body)
 
@@ -731,12 +732,15 @@ def second_interrupt(base: Path) -> dict[str, Any]:
         # The review reproduction: SIGINT while the program runs, then a second SIGINT 0.2 s into the stop of a member that ignores TERM.
         main = threading.get_ident()
         subject = scratch.folder / "subject.pid"
-        cleaning, finished = threading.Event(), threading.Event()
+        cleaning, finished, second_sent = threading.Event(), threading.Event(), threading.Event()
         sent: list[str] = []
         real_stop = process.stop_launch
 
+        # A session stop KILLs its frozen members at once (review round 2, finding 1), so the cleanup no longer lasts a grace period: the stop is held
+        # open until the second interrupt has been sent, which keeps that interrupt inside the deferred window without a timing race.
         def observed_stop(leader_pid: int, leader: Any = None, grace_seconds: float | None = None, session: bool = False) -> StopOutcome:
             cleaning.set()
+            second_sent.wait(5)
             survived = real_stop(leader_pid, leader, grace_seconds, session)
             finished.set()
             return survived
@@ -746,9 +750,10 @@ def second_interrupt(base: Path) -> dict[str, Any]:
                 return
             signal.pthread_kill(main, signal.SIGINT)
             sent.append("first")
-            if cleaning.wait(5) and not finished.wait(0.2):
+            if cleaning.wait(5) and not finished.is_set():
                 signal.pthread_kill(main, signal.SIGINT)
                 sent.append("second")
+            second_sent.set()
 
         earlier = signal.signal(signal.SIGINT, signal.default_int_handler)
         sending = threading.Thread(target=sender, daemon=True)
@@ -825,7 +830,8 @@ def member_leaves_before_signal(base: Path) -> dict[str, Any]:
             return {
                 "member_left_after_the_listing": bool(synchronized) and (scratch.folder / "escaped").exists(),
                 # Review finding 1: a member that left the session is still a descendant of the launch: it is signalled and it is gone.
-                "escaped_member_was_signalled": (scratch.folder / "term_session").exists(),
+                # Review round 2, finding 1: frozen members get KILL, not TERM, so its TERM handler never runs; the endless member is gone only by our KILL.
+                "escaped_member_was_killed_not_termed": not (scratch.folder / "term_session").exists(),
                 "escaped_member_is_gone": gone_within(escaper),
                 "stop_confirmed": not survived,
                 "leader_gone": leader.poll() is not None,
@@ -1151,8 +1157,11 @@ def plant_patches(plant: str) -> list[Any]:
         "pool_ignores_unconfirmed": [mock.patch.object(process.LaunchPool, "unconfirmed_problems", lambda self: [])],
         # The record of an unconfirmed stop is not kept (a caller that drops the exception drops the outcome).
         "no_record": [mock.patch("scripts.process.record_unconfirmed", lambda *_arguments, **_keywords: None)],
-        # Cancelled queued futures are waited for as if they ran.
-        "cancelled_futures_counted": [mock.patch.object(process.LaunchPool, "live_jobs", lambda self: list(self.jobs))],
+        # Cancelled queued futures are waited for as if they ran, and their waiters are never told (review round 2, finding 3, made the count alone harmless).
+        "cancelled_futures_counted": [
+            mock.patch.object(process.LaunchPool, "live_jobs", lambda self: list(self.jobs)),
+            mock.patch.object(process.LaunchPool, "notify_cancelled", lambda self: None, create=True),
+        ],
         # The lister is left running when the listing is interrupted.
         "listing_not_unwound": [mock.patch("scripts.process.end_lister", lambda *_arguments, **_keywords: None)],
         # The interrupt path raises the interrupt and drops the outcome of the stop.
@@ -1406,6 +1415,135 @@ release.set()
 )
 
 
+# Review round 2, finding 2: the block ends normally while a job hangs for 25 s and an alarm handler raises SystemExit during the pool's own
+# shutdown(wait=True). The pool must still cancel its jobs, drain them within CANCEL_WAIT_SECONDS (2 here) and raise LaunchesNotStopped chained from it.
+POOL_SHUTDOWN_ALARM_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import time
+release = threading.Event()
+result = {}
+def hang():
+    release.wait(25)
+def alarm(_number, _frame):
+    raise SystemExit(4)
+began = time.monotonic()
+with mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 2.0, create=True):
+    try:
+        with process.LaunchPool(max_workers=1) as pool:
+            pool.submit(hang)
+            time.sleep(0.3)
+            signal.signal(signal.SIGALRM, alarm)
+            signal.setitimer(signal.ITIMER_REAL, 0.5)
+    except BaseException as error:
+        result["raised"] = type(error).__name__
+        result["message"] = str(error)[:300]
+        result["chained_from"] = type(error.__cause__).__name__
+signal.setitimer(signal.ITIMER_REAL, 0)
+result["seconds"] = round(time.monotonic() - began, 1)
+(folder / "result.json").write_text(json.dumps(result))
+release.set()
+"""
+)
+
+# Review round 2, finding 3: an unconfirmed stop cancels the queued jobs. A caller that iterates as_completed over every future must see the cancelled
+# ones too, instead of waiting forever after the finished head. The iteration gets a 5 s timeout here so a stranded iterator fails visibly.
+POOL_CANCELLED_COMPLETION_RUNNER = (
+    ROUND6_PREFIX
+    + """
+import concurrent.futures
+import time
+release = threading.Event()
+result = {"yielded": 0}
+def head():
+    return "head"
+def middle():
+    release.wait(10)
+    return "middle"
+try:
+    with process.LaunchPool(max_workers=1) as pool:
+        futures = [pool.submit(head), pool.submit(middle), pool.submit(head)]
+        time.sleep(0.3)
+        pool.cancellation.record(0, "synthetic unconfirmed stop")
+        release.set()
+        try:
+            for _future in concurrent.futures.as_completed(futures, timeout=5):
+                result["yielded"] += 1
+            result["iteration"] = "complete"
+        except concurrent.futures.TimeoutError:
+            result["iteration"] = "timed out"
+        result["tail_cancelled"] = futures[2].cancelled()
+except BaseException as error:
+    result["raised"] = type(error).__name__
+(folder / "result.json").write_text(json.dumps(result))
+"""
+)
+
+# Review round 2, finding 4: a run_case whose launch raises LaunchesNotStopped (a normal end whose finalization finds a survivor) keeps its scratch folder.
+SCRATCH_ON_NOT_STOPPED_RUNNER = (
+    ROUND6_PREFIX
+    + """
+from scripts.quality import run_model_metadata_e2e as e2e
+cases = e2e.make_cases()[:1]
+kept = {}
+real_scratch = e2e.scratch_repo
+def recording_scratch(root, checker, hook_config):
+    kept["root"] = str(root)
+    return real_scratch(root, checker, hook_config)
+def not_stopped_launch(*_arguments, **_keywords):
+    raise process.LaunchesNotStopped("synthetic survivor at finalization", [4244])
+with mock.patch.object(e2e, "scratch_repo", recording_scratch), mock.patch.object(e2e, "run_command", not_stopped_launch):
+    try:
+        e2e.run_case(cases[0], Path("checker"), Path("hooks"), 5)
+    except process.LaunchesNotStopped:
+        kept["raised"] = True
+kept["exists"] = Path(kept.get("root", "/nonexistent")).exists()
+(folder / "result.json").write_text(json.dumps({"kept": kept}))
+"""
+)
+
+
+# Review round 2, finding 1: the program forks a child into a new session from its TERM handler and exits at once, before the next listing. A stop
+# that resumes frozen members lets that handler run, so the child escapes while the stop reports success. The stop must leave no such child alive.
+TERM_FORK_SUBJECT = (
+    "import os, signal, sys, time\n"
+    "from pathlib import Path\n"
+    "folder = Path(sys.argv[1])\n"
+    "def term(_number, _frame):\n"
+    "    if os.fork() == 0:\n"
+    "        os.setsid()\n"
+    "        (folder / 'escaped.pid').write_text(str(os.getpid()))\n"
+    "        time.sleep(30)\n"
+    "        os._exit(0)\n"
+    "    os._exit(0)\n"
+    "signal.signal(signal.SIGTERM, term)\n"
+    "(folder / 'ready').write_text('1')\n"
+    "time.sleep(30)\n"
+)
+TERM_FORK_RUNNER = (
+    ROUND6_PREFIX
+    + "SUBJECT = "
+    + repr(TERM_FORK_SUBJECT)
+    + """
+import time
+result = {}
+try:
+    process.run_command(sys.executable, ["-B", "-c", SUBJECT, str(folder)], timeout=1.0, grace_seconds=0.5)
+    result["raised"] = "nothing"
+except BaseException as error:
+    result["raised"] = type(error).__name__
+time.sleep(1.0)
+pid_file = folder / "escaped.pid"
+result["escaped_child_started"] = pid_file.exists()
+escaped = int(pid_file.read_text()) if pid_file.exists() else 0
+result["escaped_child_alive"] = bool(escaped) and living(escaped)
+if result["escaped_child_alive"]:
+    os.kill(escaped, signal.SIGKILL)
+(folder / "result.json").write_text(json.dumps(result))
+"""
+)
+
+
 def run_round6_runner(scratch: Scratch, code: str, plant: str = "", seconds: float = 40.0) -> tuple[dict[str, Any], int | None, str]:
     """Run a fix round 6 runner in a session of its own; return what it recorded, its exit status and its standard error."""
     script = scratch.folder / "runner.py"
@@ -1609,6 +1747,61 @@ def pool_exit_on_system_exit(base: Path) -> dict[str, Any]:
         }
 
     return case("pool_exit_on_system_exit_cancels_and_bounds_the_drain", base, body)
+
+
+def pool_shutdown_alarm(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, POOL_SHUTDOWN_ALARM_RUNNER, "", seconds=60)
+        return {
+            "pool_raised_the_unconfirmed_cleanup_failure": result.get("raised") == "LaunchesNotStopped",
+            "failure_is_chained_from_the_alarm": result.get("chained_from") == "SystemExit",
+            "failure_names_the_unfinished_job": "still running" in result.get("message", ""),
+            "drain_was_bounded": 0 < result.get("seconds", 99.0) < 10.0,
+            "seconds_seen": result.get("seconds", -1.0),
+        }
+
+    return case("pool_alarm_during_shutdown_cancels_and_bounds_the_drain", base, body)
+
+
+def pool_cancelled_completion(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, POOL_CANCELLED_COMPLETION_RUNNER, "", seconds=60)
+        return {
+            "queued_tail_was_cancelled": result.get("tail_cancelled") is True,
+            "as_completed_yields_every_future": result.get("iteration") == "complete" and result.get("yielded") == 3,
+            "pool_still_reports_the_unconfirmed_stop": result.get("raised") == "LaunchesNotStopped",
+            "iteration_seen": result.get("iteration", "no result"),
+        }
+
+    return case("pool_cancelled_jobs_reach_completion_iterators", base, body)
+
+
+def scratch_on_not_stopped(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, SCRATCH_ON_NOT_STOPPED_RUNNER, "", seconds=60)
+        kept = result.get("kept", {})
+        folder = kept.get("root")
+        try:
+            return {"scratch_folder_is_kept_on_launches_not_stopped": kept.get("raised") is True and kept.get("exists") is True}
+        finally:
+            if folder:
+                shutil.rmtree(folder, ignore_errors=True)
+
+    return case("scratch_is_kept_when_a_stop_is_not_confirmed_at_finalization", base, body)
+
+
+def term_handler_fork(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        result, _status, _error = run_round6_runner(scratch, TERM_FORK_RUNNER, "", seconds=60)
+        alive = result.get("escaped_child_alive", True)
+        return {
+            "no_child_escaped_the_stop": alive is False,
+            "a_confirmed_stop_left_nothing_alive": not (alive and result.get("raised") == "TimeoutExpired"),
+            "term_handler_never_ran": result.get("escaped_child_started") is False,
+            "exception_seen": result.get("raised", "no result"),
+        }
+
+    return case("term_handler_fork_cannot_escape_the_stop", base, body)
 
 
 def pool_timeout_report(base: Path, plant: str = "") -> dict[str, Any]:
@@ -1936,6 +2129,10 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "pool_reports_an_unconfirmed_timeout_stop": pool_timeout_report,
     "pool_blocks_work_after_an_unconfirmed_stop": pool_admission_blocked,
     "pool_exit_on_system_exit_cancels_and_bounds_the_drain": pool_exit_on_system_exit,
+    "pool_alarm_during_shutdown_cancels_and_bounds_the_drain": pool_shutdown_alarm,
+    "term_handler_fork_cannot_escape_the_stop": term_handler_fork,
+    "pool_cancelled_jobs_reach_completion_iterators": pool_cancelled_completion,
+    "scratch_is_kept_when_a_stop_is_not_confirmed_at_finalization": scratch_on_not_stopped,
     "serial_runner_stops_at_an_unconfirmed_stop": serial_runner_stops,
     "interrupted_listing_leaves_no_lister": interrupted_listing,
     "alarm_during_the_stop_is_named": alarm_during_the_stop,

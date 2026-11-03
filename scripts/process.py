@@ -4,10 +4,13 @@ Every call resolves the program to a full path, passes a list of arguments (neve
 applies a timeout. A top-level call starts the program in a new session (``setsid``), which it leads; the call names it to its descendants with
 ``PROCESS_LAUNCH_SESSION=1``. At the deadline, or when the caller is interrupted, every member of that session stops: the call lists the live
 processes (``ps -A -o pid=,ppid=,stat=``; macOS ``pgrep`` has no session option and its ``ps`` shows the session as 0) and signals those whose
-``os.getsid`` is the session: TERM, then KILL after a grace period, then a check that no member is left. A call made inside such a session (a nested
+``os.getsid`` is the session: every member is frozen (SIGSTOP), then gets KILL, then a check that no member is left. A frozen member never runs again, so
+its TERM handler cannot fork a child into a new session during the stop; a session stop therefore gives no grace period (a stopped Terraform can leave
+its state lock and Git its ``index.lock``). A call made inside such a session (a nested
 launch, whose environment carries the variable) stays in that session: it starts its program in a new process group and stops only that group at its
-own deadline; the outer stop reaches it as a session member. A member that starts its own session (``setsid``) without this launcher is outside the
-session and is not stopped. The leader is reaped only after the stop, so its pid, which is the session id, cannot be reused while the stop runs. If
+own deadline (TERM, then KILL after the grace period); the outer stop reaches it as a session member. A descendant that starts its own session is
+followed through its parent while that parent lives; one whose parent ended before the stop began is outside cleanup (macOS has no kernel containment).
+The leader is reaped only after the stop, so its pid, which is the session id, cannot be reused while the stop runs. If
 the session cannot be listed (the lister cannot start, fails or stalls: its own group is killed and reaped within a bound), the stop still signals
 the leader's group and the call fails as if a member survived. Each member's session is read again just before its signal. SIGINT is held while the
 program starts and while it is stopped, and is raised once the stop is confirmed. Python delivers SIGINT to the main thread only, so a caller that
@@ -422,7 +425,8 @@ def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None 
     """
     grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
     for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
-        with contextlib.suppress(ProcessLookupError):
+        # macOS refuses a signal to a group that holds only zombies (EPERM); the liveness check below still decides whether the stop is confirmed.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(process_group, signal_number)
         end = time.monotonic() + wait_seconds
         while True:
@@ -443,12 +447,13 @@ def stop_sessions(
     leader: subprocess.Popen[str] | None = None,
     allow_own: bool = False,
 ) -> StopOutcome:
-    """Stop every member of the sessions: TERM, then KILL after the grace period, and confirm none is left.
+    """Stop every member of the sessions: freeze them, KILL them and confirm none is left. ``grace_seconds`` is not used: frozen members get no TERM.
 
     ``sessions`` are session ids (each its leader's pid); ``parent`` is the leaders' parent, the caller when None. The sessions are listed again on
     every poll, so a member started during the stop is signalled too. Returns the outcome, unconfirmed (and truthy) when a member survived KILL for
     ``CONFIRM_SECONDS`` (``survivors`` holds those pids) or when the sessions could not be listed (``reason`` says why); then each leader's process group
-    (its id is the session id) still gets TERM and KILL and the stop waits up to ``CONFIRM_SECONDS`` for those groups to end (``leader`` is reaped there
+    (its id is the session id) still gets TERM and KILL (a frozen member dies on the KILL without running)
+    and the stop waits up to ``CONFIRM_SECONDS`` for those groups to end (``leader`` is reaped there
     only, because a zombie keeps its group alive).
     Refuses (``ValueError``) the caller's own session unless ``allow_own`` is set (a CI worker's leader that stops its own session when the dispatcher
     has died; the caller is never signalled, by the listing stop or by the fallback group stop, which skips the caller's own group and reports instead).
@@ -456,29 +461,26 @@ def stop_sessions(
     targets = set(sessions)
     if os.getsid(0) in targets and not allow_own:
         raise ValueError(f"refusing to stop session {os.getsid(0)}: it is the caller's own session")
-    grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
     owner = None if leader is not None and leader.returncode is not None else (os.getpid() if parent is None else parent)
     members: set[int] = set()
     claims = Claims()
     try:
-        frozen = freeze_members(targets, owner, claims)
-        for signal_number, wait_seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, CONFIRM_SECONDS)):
-            signalled: set[int] = set()
-            end = time.monotonic() + wait_seconds
-            while True:
-                members = session_members(targets, owner, claims=claims)
-                for pid in members - signalled:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.kill(pid, signal_number)
-                        # A stopped member gets the signal only when it runs again.
-                        if pid in frozen and signal_number == signal.SIGTERM:
-                            os.kill(pid, signal.SIGCONT)
-                signalled |= members
-                if not session_left(members):
-                    return StopOutcome()
-                if time.monotonic() >= end:
-                    break
-                time.sleep(POLL_SECONDS)
+        freeze_members(targets, owner, claims)
+        # Frozen members get KILL, never TERM and CONT: a resumed member's TERM handler could fork into a new session and exit before the next listing,
+        # and that child would be invisible (review round 2, finding 1; owner B). A member that shows up after the freeze gets KILL too.
+        signalled: set[int] = set()
+        end = time.monotonic() + CONFIRM_SECONDS
+        while True:
+            members = session_members(targets, owner, claims=claims)
+            for pid in members - signalled:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+            signalled |= members
+            if not session_left(members):
+                return StopOutcome()
+            if time.monotonic() >= end:
+                break
+            time.sleep(POLL_SECONDS)
     except SessionListingFailed as listing_failure:
         reason = f"the sessions could not be listed: {listing_failure}"
         # The leaders' pids are the session ids. They are proof of ownership only while the leaders are unreaped children (``owner``): once a leader is reaped,
@@ -670,6 +672,8 @@ class LaunchPool(ThreadPoolExecutor):
         # Any exit of the block with an exception (an interrupt, an alarm handler's SystemExit, an error) cancels the jobs and drains them within the bound;
         # only a normal exit waits for the jobs to end on their own deadlines.
         abnormal = exc_value is not None
+        # An exception raised inside the normal shutdown wait (an alarm handler's SystemExit) gets the same bounded cancellation as one from the block.
+        late: BaseException | None = None
         problems: list[str] = []
         try:
             if interrupt is None and not abnormal:
@@ -678,6 +682,9 @@ class LaunchPool(ThreadPoolExecutor):
                         self.shutdown(wait=True)
                 except KeyboardInterrupt as error:
                     interrupt = error
+                except BaseException as error:
+                    late = error
+                    abnormal = True
             # A job that ended is no proof that its program was stopped: the stops that were not confirmed count, with or without an interrupt.
             problems = self.unconfirmed_problems()
             if interrupt is not None or abnormal or self.cancellation.cancelled():
@@ -685,17 +692,33 @@ class LaunchPool(ThreadPoolExecutor):
         finally:
             self.release_interrupts()
         if problems:
-            raise LaunchesNotStopped("; ".join(problems), [pid for pid, _text in self.cancellation.unconfirmed]) from (interrupt or exc_value)
+            raise LaunchesNotStopped("; ".join(problems), [pid for pid, _text in self.cancellation.unconfirmed]) from (interrupt or late or exc_value)
         if interrupt is not None and interrupt is not exc_value:
             raise interrupt
+        if late is not None:
+            raise late
 
     def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
         self.closed = True
-        super().shutdown(wait=wait, cancel_futures=cancel_futures)
+        if cancel_futures:
+            super().shutdown(wait=False, cancel_futures=True)
+            self.notify_cancelled()
+        super().shutdown(wait=wait)
 
     def cancel_queued(self) -> None:
         """Drop the queued jobs at once (a stop that is not confirmed blocks the pool); the running jobs are left to end."""
         super().shutdown(wait=False, cancel_futures=True)
+        self.notify_cancelled()
+
+    def notify_cancelled(self) -> None:
+        """Tell the waiters of ``as_completed`` and ``wait`` about the queued jobs that ``shutdown(cancel_futures=True)`` cancelled.
+
+        The executor drops those jobs from its queue, so no worker ever moves them to the notified state, and an iterator without a timeout would wait forever.
+        """
+        for job in self.jobs:
+            if job.cancelled():
+                with contextlib.suppress(RuntimeError):
+                    job.set_running_or_notify_cancel()
 
     def submit(self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
         if self.cancellation.refuses():
@@ -802,7 +825,8 @@ def run_command(
     own_session : bool
         Start the program in its own session, so a signal sent to this process's terminal group (Ctrl-C) does not reach it.
     grace_seconds : float, optional
-        Seconds between TERM and KILL when the group is stopped; ``STOP_GRACE_SECONDS`` when omitted. A caller whose own deadline must hold
+        Seconds between TERM and KILL when a nested launch's group is stopped; ``STOP_GRACE_SECONDS`` when omitted. A top-level launch's session stop
+        sends KILL to its frozen members without a grace period. A caller whose own deadline must hold
         within a bound shorter than that passes a smaller value.
 
     Returns

@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from scripts.process import LaunchCancelled, LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
+from scripts.process import LaunchCancelled, LaunchesNotStopped, LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
 from scripts.quality import dbt_manifest_labels, label_guard_fixtures
 from scripts.quality.hook_stage import hook_stage
 
@@ -1615,7 +1615,7 @@ def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = C
             "direct_tail": direct_tail,
             "seconds": round(time.monotonic() - began, 2),
         }
-    except ProcessGroupSurvived:
+    except (ProcessGroupSurvived, LaunchesNotStopped):
         # The survivors' files stay in the scratch folder for the owner to read; nothing else removes them.
         survivors = True
         raise
