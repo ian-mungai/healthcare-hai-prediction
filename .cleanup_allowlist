@@ -81,7 +81,10 @@ config scripts/quality/ci_hooks.py -- local_ci is the id of the pre-commit hook 
 config scripts/quality/pre_push.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
 config scripts/quality/run_ci_groups_e2e.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
 config .pre-commit-config.yaml -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
-script docs/aws_control_plane.md -- tracked development document: it moves to the local project guide before the documents are deleted (D23), and the owner rule bars edits to it; compile_lock.sh was replaced by the uv.lock groups
-script docs/aws_training_run.md -- tracked development document: it moves to the local project guide before the documents are deleted (D23), and the owner rule bars edits to it; compile_lock.sh was replaced by the uv.lock groups
-script docs/model_api.md -- tracked development document: it moves to the local project guide before the documents are deleted (D23), and the owner rule bars edits to it; compile_lock.sh was replaced by the uv.lock groups
-script docs/streamlit_app.md -- tracked development document: it moves to the local project guide before the documents are deleted (D23), and the owner rule bars edits to it; compile_lock.sh was replaced by the uv.lock groups
+docs-path scripts/acquisition/run_single_copy_index_e2e.py -- synthetic output path that the tool must refuse because Git does not ignore it
+docs-path scripts/lakehouse/run_layer_acceptance_e2e.py -- synthetic report path that the tool must refuse inside the repository
+docs-path scripts/quality/run_checks_e2e.py -- the scratch repositories of the cases hold their own docs/ files
+docs-path scripts/quality/run_ci_groups_e2e.py -- the scratch repositories of the cases hold their own docs/ files
+docs-path scripts/quality/run_documentation_review_e2e.py -- the scratch repositories of the cases hold their own docs/ files
+docs-path scripts/quality/run_lint_tools_e2e.py -- the scratch copy of the tree gets a planted docs/ file
+docs-path scripts/training/lane_b_cases.py -- the case renames the plan in a scratch copy to plan_original.md

@@ -144,6 +144,14 @@ def lock_files(groups: dict[str, tuple[dict[str, str], dict[str, str]]]) -> dict
 # A runtime map with an image whose lock group pins a package and a transitive pin, and a package the image provides. The host provides
 # jsonschema as the real map does, because the scratch repository holds the launcher, which imports it. The map names the dependency
 # groups, the one direct group and the tools; a tool is used as a command, so nothing imports it.
+# The scratch repository holds this repository's scripts, whose fixtures name docs/ paths of their own.
+DOCS_ALLOWED = (
+    COPIED_ALLOWED
+    + "docs-path scripts/* -- check scripts copied into the scratch repository\n"
+    + "docs-path config/quality/launcher_inputs.json -- the copied input list names the analysis plan, which the scratch repository lacks\n"
+)
+# A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
+# jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
 RUNTIME_MAP = "config/quality/dependency_runtimes.json"
 PROVIDED_MODULE = "spark" + "lib"
 RUNTIME_MAP_SOURCE = (
@@ -437,6 +445,33 @@ CASES = [
         True,
         {"README.md": f"Run `python -m tools.{DASH_M_MODULE}`.\n", f"tools/{DASH_M_MODULE}.py": "print(1)\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
+    Case(
+        "docs reference to a tracked file",
+        "docs-references",
+        True,
+        {"README.md": "Read [the guide](docs/guide.md).\n", "docs/guide.md": "# Guide\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs reference to a missing file",
+        "docs-references",
+        False,
+        {"README.md": "Read [the guide](docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs reference kept by an allowlist entry",
+        "docs-references",
+        True,
+        {"README.md": "Read [the guide](docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED + "docs-path README.md -- quotes a deleted guide\n"},
+    ),
+    Case(
+        "docs words that are not references",
+        "docs-references",
+        True,
+        {
+            "README.md": "Edit docs/*.md or the docs/ folder; see https://example.invalid/geo/docs/reference/page.html and ../docs.\n",
+            ".cleanup_allowlist": DOCS_ALLOWED,
+        },
+    ),
     Case("used Terraform variable", "terraform-unused", True, {"infra/main.tf": USED_TF}),
     Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
     # Only folders that hold a tracked .tf file are checked; an ignored folder is out of scope, as in CI.
@@ -703,6 +738,7 @@ BLOCK_REASONS = {
     "dependency nothing imports": f"pyproject.toml: {UNUSED_PACKAGE} is declared but nothing imports it",
     "import missing from requirements": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "file nothing references": f"docs/{OLD_NOTES}: no other tracked file references it",
+    "docs reference to a missing file": "README.md:1: docs/missing_guide.md is not a tracked file",
     "unused Terraform variable": f'infra/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
     "unused variable in a nested folder": f'infra/iam/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
     "image package imported by host code": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
@@ -825,7 +861,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
-        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", *CLEANUP_HOOKS):
+        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", "docs-references", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
             reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"

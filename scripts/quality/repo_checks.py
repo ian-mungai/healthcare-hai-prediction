@@ -63,7 +63,7 @@ FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 CLEANUP_ALLOWLIST = ".cleanup_allowlist"
 CLEANUP_RULE = f"{POLICY}: removed and unused code"
 REMOVED_KINDS = ["script", "flag", "env", "python", "config", "terraform", "dbt", "airflow", "dependency"]
-UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused"]
+UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused", "docs-path"]
 CODE_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts", ".sql", ".tf", ".yaml", ".yml", ".toml", ".json", ".ini", ".cfg", ".j2", ".jinja"}
 CODE_NAMES = {"Dockerfile", "Makefile", ".env.example"}
 CONFIG_SUFFIXES = {".yaml", ".yml", ".toml", ".json", ".ini", ".cfg"}
@@ -824,6 +824,32 @@ def orphan_files() -> list[Finding]:
     return findings
 
 
+DOCS_RULE = f"{POLICY}: a document reference names a tracked file"
+# A docs/ path in tracked text: not preceded by a path character, so a URL or an absolute path is not read, and not followed by a glob or an f-string brace.
+DOCS_PATH = re.compile(r"(?<![\w./~$-])docs/([\w.-]+(?:/[\w.-]+)*)")
+
+
+def docs_references() -> list[Finding]:
+    """No tracked text file names a docs/ path that is not tracked (a deleted or never committed document)."""
+    globs, findings = allowed_paths("docs-path")
+    tracked = git("ls-files").splitlines()
+    known = {*tracked, *(parent.as_posix() for path in tracked for parent in Path(path).parents)}
+    for path in tracked:
+        if any(fnmatch.fnmatch(path, glob) for glob in globs):
+            continue
+        try:
+            text = Path(path).read_text()
+        except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            for match in DOCS_PATH.finditer(line):
+                target = "docs/" + match.group(1).rstrip(".-")
+                if target not in known:
+                    fix = f"point it at a tracked file, remove the reference, or add 'docs-path {path} -- <why it stays>' to {CLEANUP_ALLOWLIST}"
+                    findings.append(Finding(f"{path}:{number}", f"{target} is not a tracked file", DOCS_RULE, fix))
+    return findings
+
+
 def terraform_unused() -> list[Finding]:
     """No Terraform variable, local, data source or module output that nothing uses (tflint, every module)."""
     globs, findings = allowed_paths("terraform-unused")
@@ -1284,7 +1310,7 @@ def main() -> int:
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
     checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter"])
+    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references"])
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
@@ -1315,6 +1341,7 @@ def main() -> int:
         "orphan-files": orphan_files,
         "terraform-unused": terraform_unused,
         "front-matter": front_matter,
+        "docs-references": docs_references,
         "commit-msg": lambda: commit_message(args.paths[0]),
         "commit-range": lambda: commit_range(args.paths[0], args.paths[1]),
     }
