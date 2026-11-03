@@ -1,4 +1,4 @@
-# Exceptions to the linters in scripts/quality/lint_tools.py: <check> <key> -- <reason> (docs/quality_checks.md, Linters beside lint_sources).
+# Exceptions to the linters in scripts/quality/lint_tools.py: <check> <key> -- <reason>.
 # A key is path:rule (tflint, trivy-config, zizmor) or path:package==version (osv-scanner); it may use * as a wildcard. An entry that matches nothing is a finding.
 tflint infra/services/tests/flow/main.tf:terraform_required_version -- test-only stand-in network that the jobs stack tests load as a module; it never plans or applies on its own, so it needs no Terraform version constraint
 osv-scanner uv.lock:pillow==12.3.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it

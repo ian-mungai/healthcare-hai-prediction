@@ -69,7 +69,7 @@ SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
 # The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
 OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
-# The gate never reuses a local pass of a check group (docs/quality_checks.md; scripts/quality/ci_main_passes.py).
+# The gate never reuses a local pass of a check group (scripts/quality/ci_main_passes.py).
 NO_REUSE = {"HAI_CI_REUSE": "off"}
 EXECUTION_CONTROLS = (
     "CI_SCOPE",

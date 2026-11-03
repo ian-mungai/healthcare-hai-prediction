@@ -1,4 +1,4 @@
-# Pre-commit checks for this repository; docs/quality_checks.md lists what each one enforces.
+# Pre-commit checks for this repository; scripts/quality/repo_checks.py and the hook entries below hold what each one enforces.
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from the host group of uv.lock in .venv, gitleaks, TFLint and uv
 # from scripts/quality/install_tools.py in .tools. Install once with `.venv/bin/pre-commit install`: default_install_hook_types covers all three hook types.
 # Then run `.venv/bin/python -m scripts.quality.pre_push install-shim` once: the pre-push run is a Git config hook (Git 2.54 or newer) that Git starts for

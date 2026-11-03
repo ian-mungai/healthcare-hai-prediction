@@ -175,7 +175,7 @@ BASE = {
 }
 ALL_FILES_SCOPE = "all"
 STAGED_SCOPE = "staged"
-CANNOT_RUN_DETAILS = ("Fix:", "ask the owner", "docs/quality_checks.md#model-metadata")
+CANNOT_RUN_DETAILS = ("Fix:", "ask the owner", "scripts/quality/model_metadata.py")
 
 
 @dataclass(frozen=True)

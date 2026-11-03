@@ -195,9 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     for finding in findings:
         sys.stderr.write(finding + "\n")
     if findings:
-        sys.stderr.write(
-            f"{len(findings)} problem(s) with the check group body files. Fix the file named in each line (docs/quality_checks.md, Check group files).\n"
-        )
+        sys.stderr.write(f"{len(findings)} problem(s) with the check group body files. Fix the file named in each line (scripts/quality/ci_group_files.py).\n")
         return 1
     count = len(json.loads((args.root / CONFIG).read_text(encoding="utf-8"))["groups"])
     sys.stdout.write(f"CI group files: {count} groups, {count} body files, no drift\n")

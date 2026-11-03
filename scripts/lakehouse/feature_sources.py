@@ -1,4 +1,4 @@
-"""Check of the feature phase: it reads gold, never silver, and the gold selections leave it out (docs/feature_phase_saved.md).
+"""Check of the feature phase: it reads gold, never silver, and the gold selections leave it out.
 
 Run from the repository root:
 

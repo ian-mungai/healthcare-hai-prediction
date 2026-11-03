@@ -1,4 +1,4 @@
-"""Allow lists of the feature guard, and the check of a parsed dbt project against them (docs/feature_phase_saved.md).
+"""Allow lists of the feature guard, and the check of a parsed dbt project against them.
 
 Run in the SQLFluff tool environment (it holds dbt and its Jinja) from the repository root, by ``feature_sources``:
 

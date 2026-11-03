@@ -6367,7 +6367,7 @@ def geography_real(database: str, init: str) -> dict[str, Any]:
     }
     checks["geography_sheet_rows_reconcile"] = sheets[0] == sheets[1] and sheets[2] == sheets[3] and int(sheets[1]) > 0 and int(sheets[3]) > 0
     # The CSV of a workbook holds its distinct rows; only the 2014 Q2 workbook with the recorded exact-repeat exception repeats rows, by its recorded
-    # count, and every other workbook must have none (docs/data_collection.md, 2014 Q2 repeats).
+    # count, and every other workbook must have none (the 2014 Q2 repeats).
     approved = json.loads((REPO_ROOT / "config/acquisition/hud_xlsx_exact_repeats_2014q2.json").read_text())
     repeats = {quarter["sha256"]: int(quarter["exact_repeat_rows"]) for quarter in approved["quarters"]}
     twins = duckdb_csv(database, GEOGRAPHY_TWINS_SQL, init)
@@ -6932,7 +6932,7 @@ def preflight_launcher() -> str | None:
         size = "of unknown size"
     return (
         f"refused before any build: the launcher {what}. registry.json is {size}. One fix to try is compaction: the launcher moves finished records "
-        "older than 1 hour to its history folder once the file passes 1 MB (docs/lakehouse_usage.md, Registry history)."
+        "older than 1 hour to its history folder once the file passes 1 MB (registry history)."
     )
 
 

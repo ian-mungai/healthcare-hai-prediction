@@ -1,5 +1,5 @@
 {
-  "note": "The longest hosted wall time of each job of .github/workflows/ci.yml and its timeout, in minutes, by expanded job name. A job whose basis says estimate has no hosted measurement yet: resize it from its first complete hosted run. scripts/quality/run_ci_groups_e2e.py (job_timeouts_match_the_measured_durations) requires each workflow job to have an entry, its timeout to equal timeout_minutes and timeout_minutes to lie between 1.5 and 2.6 times measured_minutes (at least 5 minutes). Update the entry with each CI change. This file replaces the Measured durations table of docs/quality_checks.md, which no check reads.",
+  "note": "The longest hosted wall time of each job of .github/workflows/ci.yml and its timeout, in minutes, by expanded job name. A job whose basis says estimate has no hosted measurement yet: resize it from its first complete hosted run. scripts/quality/run_ci_groups_e2e.py (job_timeouts_match_the_measured_durations) requires each workflow job to have an entry, its timeout to equal timeout_minutes and timeout_minutes to lie between 1.5 and 2.6 times measured_minutes (at least 5 minutes). Update the entry with each CI change.",
   "schema_version": 1,
   "jobs": [
     {

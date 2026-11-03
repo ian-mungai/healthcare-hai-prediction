@@ -176,7 +176,7 @@ class Case:
     message: str | None = None
 
 
-POLICY_DOCUMENT = "docs/quality_checks.md"
+POLICY_DOCUMENT = "scripts/quality/repo_checks.py"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
 
 CASES = [
@@ -1135,7 +1135,7 @@ SLASH_LINE = "Read and/or write the file.\n"
 ALL_KINDS = DASH_LINE + SEMICOLON_LINE + SLASH_LINE
 PUNCTUATION_PROSE = (
     "Rules help when they are checked. Read `a/b;c`, see [the log](https://example.invalid/a;b-c) &amp; write it.\n"
-    "Open docs/quality_checks.md or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
+    "Open scripts/quality/timing.sh or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
 )
 CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
 BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")

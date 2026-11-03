@@ -27,7 +27,7 @@ from scripts.quality.repo_checks import read_allowlist
 ROOT = Path(__file__).resolve().parents[2]
 CHECKS = ("tflint", "trivy-config", "osv-scanner", "zizmor", "import-linter", "typos", "check-jsonschema")
 ALLOWLIST = ".linter_allowlist"
-RULE = "docs/quality_checks.md (Linters beside lint_sources)"
+RULE = "scripts/quality/lint_tools.py"
 TFLINT_CONFIG = ROOT / ".tflint.hcl"
 TRIVY_SKIPS = ("--skip-files", "**/*.tfvars.json", "--skip-files", "**/*.tfvars", "--skip-files", "**/terraform.tfstate*", "--skip-dirs", "**/.terraform")
 SCHEMA_MAP = "config/quality/json_schemas.json"

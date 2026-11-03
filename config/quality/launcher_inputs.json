@@ -1034,7 +1034,6 @@
     "dbt/tests/features/assert_validation_measures_overlap.sql",
     "docker-compose.yaml",
     "docs/analysis_plan.md",
-    "docs/feature_phase_saved.md",
     "feature_store/definitions.py",
     "feature_store/feature_store.yaml",
     "feature_store/feature_store_aws.yaml",

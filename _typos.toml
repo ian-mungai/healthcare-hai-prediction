@@ -7,7 +7,6 @@ extend-exclude = [
   "data_contracts/**",                               # saved suites and contracts that hold column names, hashes and sample values
   "features/**/*.json",                              # saved suites and manifests of the same kind
   "dbt/seeds/**",                                    # CSV seeds of codes, labels and publisher column headings
-  "docs/architecture/architecture.html",             # generated from docs/architecture/architecture.json
   "services/orchestration/constraints-*.txt",        # pip constraints: package names such as vertica
 ]
 

@@ -24,7 +24,7 @@ set -euo pipefail
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
 # runs in its own shell process (run_group) that loads only scripts/quality/timing.sh and that one file, so the shell state of a group (functions, variables, options,
-# working directory) cannot reach another group or this file. Files and signals are shared (docs/quality_checks.md, Check group files). A missing file fails the run with its name (require_group_file). Only this file, the selector and the shared workflow parts select every group; a
+# working directory) cannot reach another group or this file. Files and signals are shared (scripts/quality/ci_group_files.py). A missing file fails the run with its name (require_group_file). Only this file, the selector and the shared workflow parts select every group; a
 # body file selects its own group. In the full scope of part "all" the acquisition gate runs as GitHub CI runs it: four
 # shards in the parallel set (each with its own folder, ACQUISITION_PART=shard) and then the combining step (ACQUISITION_PART=combine) with the 90% gate.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

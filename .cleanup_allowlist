@@ -41,18 +41,14 @@ unused-code scripts/lakehouse/run_bronze_cutover_e2e.py -- http.server dispatche
 unused-code scripts/lakehouse/run_aws_catalog_setup_e2e.py -- http.server dispatches do_GET, do_POST and do_PUT of the loopback Polaris stand-in by method name and reads its close_connection and daemon_threads; mock reads side_effect
 dbt dbt/models/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
 dbt dbt/tests/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
-dbt docs/feature_phase_saved.md -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
 unused-code feature_store/definitions.py -- feast apply scans the module for Entity and FeatureView objects, so each view the generated file assigns to a module-level name is read by Feast, not imported
 config .pre-commit-config.yaml -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 config config/quality/ci_groups.json -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
-config docs/quality_checks.md -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 config scripts/quality/lint_tools.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 config scripts/quality/run_ci_groups_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 config scripts/quality/run_lint_tools_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
 flag data_contracts/orchestration/examples/job_templates.json -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 flag dbt/tests/assert_bronze_datasets_placed_or_listed.sql -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag docs/aws_broker.md -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag docs/aws_training_run.md -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 flag orchestration/catalog_transport_child.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 flag orchestration/launcher.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 flag scripts/lakehouse/feature_columns.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone

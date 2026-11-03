@@ -371,7 +371,7 @@ def run_case(scenario: str) -> tuple[bool, str]:
         valid_rejection = (
             result.returncode != 0
             and "documentation review: BLOCK" in output
-            and "docs/quality_checks.md" in output
+            and "scripts/quality/documentation_review.py" in output
             and REASONS.get(scenario, "") in output
             and "Traceback" not in output
         )
