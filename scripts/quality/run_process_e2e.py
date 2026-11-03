@@ -787,8 +787,8 @@ def member_leaves_before_signal(base: Path) -> dict[str, Any]:
         real_members = process.session_members
         synchronized: list[bool] = []
 
-        def members_then_escape(sessions: Any, parent: int) -> set[int]:
-            members = real_members(sessions, parent)
+        def members_then_escape(sessions: Any, parent: int, **keywords: Any) -> set[int]:
+            members = real_members(sessions, parent, **keywords)
             escaper = int((scratch.folder / "escaper.pid").read_text())
             if escaper in members and not synchronized:
                 synchronized.append(True)
@@ -801,10 +801,12 @@ def member_leaves_before_signal(base: Path) -> dict[str, Any]:
                 return {"escaper_started": False}
             with mock.patch("scripts.process.session_members", members_then_escape):
                 survived = process.stop_sessions({leader.pid}, grace_seconds=0.2, leader=leader)
-            time.sleep(0.3)
+            escaper = int((scratch.folder / "escaper.pid").read_text())
             return {
                 "member_left_after_the_listing": bool(synchronized) and (scratch.folder / "escaped").exists(),
-                "member_outside_the_session_not_signalled": not (scratch.folder / "term_session").exists(),
+                # Review finding 1: a member that left the session is still a descendant of the launch: it is signalled and it is gone.
+                "escaped_member_was_signalled": (scratch.folder / "term_session").exists(),
+                "escaped_member_is_gone": gone_within(escaper),
                 "stop_confirmed": not survived,
                 "leader_gone": leader.poll() is not None,
             }
@@ -814,7 +816,46 @@ def member_leaves_before_signal(base: Path) -> dict[str, Any]:
             process.close_pipes(leader)
             leader.wait(timeout=CASE_GRACE_SECONDS + 5)
 
-    return case("member_that_leaves_before_the_signal_is_skipped", base, body)
+    return case("member_that_leaves_the_session_before_the_signal_is_still_stopped", base, body)
+
+
+# Review finding 1: a descendant that starts a session of its own (setsid) while its parent is alive. The child ignores TERM and has a child of its own in
+# the new session. argv: the case folder.
+ESCAPING_DESCENDANT = """
+import os, signal, sys, time
+from pathlib import Path
+folder = Path(sys.argv[1])
+if os.fork() == 0:
+    os.setsid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    (folder / 'escaper.pid').write_text(str(os.getpid()))
+    if os.fork() == 0:
+        (folder / 'escaper_child.pid').write_text(str(os.getpid()))
+        while True:
+            time.sleep(1)
+    while True:
+        time.sleep(1)
+(folder / 'leader.pid').write_text(str(os.getpid()))
+while True:
+    time.sleep(1)
+"""
+
+
+def escaped_descendant(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        caught, _elapsed = timed_out_with(
+            lambda: run_command(sys.executable, ["-B", "-c", ESCAPING_DESCENDANT, str(scratch.folder)], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS)
+        )
+        pids = scratch.pids()
+        return {
+            "raised_the_timeout": isinstance(caught, TimeoutExpired) and not isinstance(caught, ProcessGroupSurvived),
+            "program_started": {"leader", "escaper", "escaper_child"} <= set(pids),
+            "leader_gone": gone_within(pids.get("leader")),
+            "descendant_with_its_own_session_is_gone": gone_within(pids.get("escaper")),
+            "its_child_is_gone": gone_within(pids.get("escaper_child")),
+        }
+
+    return case("descendant_with_its_own_session_is_stopped", base, body)
 
 
 # A program that prints its first argument.
@@ -1705,7 +1746,8 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "session_listing_does_not_depend_on_path": listing_without_path,
     "stalled_listing_is_bounded": stalled_listing,
     "second_interrupt_during_cleanup_is_deferred": second_interrupt,
-    "member_that_leaves_before_the_signal_is_skipped": member_leaves_before_signal,
+    "member_that_leaves_the_session_before_the_signal_is_still_stopped": member_leaves_before_signal,
+    "descendant_with_its_own_session_is_stopped": escaped_descendant,
     "threaded_interrupt_stops_the_launch": threaded_interrupt,
     "threaded_interrupt_survivor_fails_visibly": threaded_survivor,
     "threaded_normal_run_unchanged": threaded_normal_run,
