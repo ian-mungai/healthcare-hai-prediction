@@ -38,6 +38,13 @@
         "marquez_enabled": {
           "type": "boolean"
         },
+        "openmetadata_persistent_enabled": {
+          "type": "boolean"
+        },
+        "openmetadata_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:openmetadata_host_task)_(dev|prod)$"
+        },
         "model_api_enabled": {
           "type": "boolean"
         },

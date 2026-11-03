@@ -39,6 +39,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "model_api_prediction_writes",
     "openmetadata_prepared",
     "openmetadata_marquez_reachable",
+    "openmetadata_persistent_prepared",
     "serve_prepared",
 )
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.

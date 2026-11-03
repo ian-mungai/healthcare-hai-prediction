@@ -115,6 +115,7 @@ ROWS: list[Row] = [
         "model_api_prediction_writes",
         "openmetadata_prepared",
         "openmetadata_marquez_reachable",
+        "openmetadata_persistent_prepared",
         "serve_prepared",
         "training_prepared",
         "monitoring_enabled",
@@ -140,7 +141,17 @@ ROWS: list[Row] = [
         PLATFORM_DEFAULT_LOG_GROUPS,
         (["mlflow"], [*PLATFORM_DEFAULT_LOG_GROUPS, "unreviewed_group"], PLATFORM_LOG_GROUPS[1:]),
     ),
-    *flags("services", "model_api_enabled", "streamlit_enabled", "marquez_enabled", "mlflow_enabled", "broker_enabled", "monitoring_enabled"),
+    *flags(
+        "services",
+        "model_api_enabled",
+        "streamlit_enabled",
+        "marquez_enabled",
+        "mlflow_enabled",
+        "broker_enabled",
+        "monitoring_enabled",
+        "openmetadata_persistent_enabled",
+    ),
+    Row("services", "openmetadata_task_role_arn", ROLE % "openmetadata_host_task", "arn:aws:iam::1:role/x"),
     Row("services", "model_api_task_role_arn", ROLE % "model_api_task", "arn:aws:iam::1:role/x"),
     Row("services", "streamlit_task_role_arn", ROLE % "streamlit_task", "arn:aws:iam::1:role/x"),
     Row("services", "broker_task_role_arn", ROLE % "broker_task", "arn:aws:iam::1:role/x"),
@@ -215,6 +226,7 @@ ROWS: list[Row] = [
     Row("jobs", "openmetadata_lifetime_seconds", 3600, "3600"),
     Row("jobs", "openmetadata_cpu_architecture", "ARM64", "POWER"),
     Row("jobs", "openmetadata_marquez_url", "http://10.0.1.20:5000", 5),
+    Row("jobs", "openmetadata_server_url", "http://10.0.1.20:8585", 5),
 ]
 # Inputs that no row needs, with the reason. The storage retention flags have their own wrapper options and cases in run_e2e.
 EXEMPT = {
