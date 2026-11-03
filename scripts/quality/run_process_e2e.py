@@ -167,6 +167,8 @@ class Scratch:
     def __init__(self, base: Path, name: str) -> None:
         self.folder = base / name
         self.folder.mkdir(parents=True)
+        # The start time of each recorded process when it was first seen (pid to start time); the teardown signals only a pid that still has it.
+        self.retained: dict[int, str] = {}
 
     def environment(self, grandchild_mode: str, child_mode: str) -> dict[str, str]:
         return {
@@ -856,6 +858,118 @@ def escaped_descendant(base: Path) -> dict[str, Any]:
         }
 
     return case("descendant_with_its_own_session_is_stopped", base, body)
+
+
+def recorded_group_signals() -> tuple[list[tuple[int, int]], Callable[[int, int], None]]:
+    """A replacement for ``os.killpg`` that records every signal other than the existence probe (0) and then sends it, and the list it fills."""
+    calls: list[tuple[int, int]] = []
+    real = os.killpg
+
+    def recording(group: int, number: int) -> None:
+        if number != 0:
+            calls.append((group, number))
+        real(group, number)
+
+    return calls, recording
+
+
+def unproven_group_spared(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # Review finding 3: the leader of the session has been reaped, so its pid is only a session id and another process may use it now. The decoy plays that
+        # process: it leads a group under the id that the stop is given. A failed listing must not turn that id into a signal.
+        decoy = process.start([sys.executable, "-B", "-c", "import time; time.sleep(60)"], ROOT, None, new_session=True)
+        reaped = process.start([sys.executable, "-B", "-c", "pass"], ROOT, None, new_session=True)
+        reaped.wait(timeout=20)
+        (scratch.folder / "decoy.pid").write_text(str(decoy.pid))
+        try:
+            with mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)):
+                outcome = process.stop_sessions({decoy.pid}, grace_seconds=0.2, leader=reaped)
+            time.sleep(0.3)
+            return {
+                "decoy_group_was_not_signalled": decoy.poll() is None,
+                "stop_is_unconfirmed": bool(outcome),
+                "reason_says_the_group_is_not_proven": "not proven" in outcome.reason,
+            }
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                decoy.kill()
+            process.close_pipes(decoy)
+            process.close_pipes(reaped)
+            decoy.wait(timeout=CASE_GRACE_SECONDS + 5)
+
+    return case("failed_listing_after_the_reap_signals_no_unproven_group", base, body)
+
+
+QUICK_PROGRAM = "import os, sys; open(sys.argv[1], 'w').write(str(os.getpid()))"
+
+
+def reaped_leader_run(scratch: Scratch, plant: Any = None) -> tuple[BaseException | None, list[tuple[int, int]], int]:
+    """Run a program that ends at once while the stop of its session fails; return what the call raised, the group signals sent and the program's pid."""
+    calls, recording = recorded_group_signals()
+    pidfile = scratch.folder / "program.pid"
+    caught: BaseException | None = None
+    with contextlib.ExitStack() as patches:
+        patches.enter_context(mock.patch("os.killpg", recording))
+        if plant is None:
+            patches.enter_context(mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)))
+        else:
+            patches.enter_context(plant)
+        try:
+            run_command(sys.executable, ["-B", "-c", QUICK_PROGRAM, str(pidfile)], cwd=ROOT, timeout=20)
+        except BaseException as error:
+            caught = error
+    return caught, calls, int(pidfile.read_text()) if pidfile.exists() else -1
+
+
+def finalization_listing_failure(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        caught, calls, leader = reaped_leader_run(scratch)
+        acknowledge_unconfirmed()
+        return {
+            "program_ran": leader > 0,
+            "failure_is_raised_as_unconfirmed": isinstance(caught, process.LaunchesNotStopped),
+            "no_signal_reached_the_reaped_leaders_group": not [call for call in calls if call[0] == leader],
+        }
+
+    return case("failed_listing_at_the_normal_end_signals_no_group", base, body)
+
+
+def finalization_stop_failure(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        def broken(*_arguments: Any, **_keywords: Any) -> bool:
+            raise SystemExit("alarm in the stop")
+
+        caught, calls, leader = reaped_leader_run(scratch, mock.patch("scripts.process.stop_launch", broken))
+        acknowledge_unconfirmed()
+        return {
+            "program_ran": leader > 0,
+            "failure_is_raised_as_unconfirmed": isinstance(caught, process.LaunchesNotStopped),
+            "no_last_kill_reached_the_reaped_leaders_group": not [call for call in calls if call[0] == leader],
+        }
+
+    return case("failed_stop_at_the_normal_end_kills_no_unproven_group", base, body)
+
+
+def teardown_spares_a_reused_pid(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The teardown signals the pids that the case programs recorded; a pid whose process is not the one seen first (a reused pid) is spared.
+        bystander = process.start([sys.executable, "-B", "-c", "import time; time.sleep(60)"], ROOT, None, new_session=True)
+        (scratch.folder / "bystander.pid").write_text(str(bystander.pid))
+        try:
+            scratch.pids()
+            scratch.retained[bystander.pid] = "another process started at another time"
+            scratch.cleanup()
+            time.sleep(0.2)
+            spared = bystander.poll() is None
+            scratch.retained.pop(bystander.pid, None)
+            return {"recorded_pid_of_another_process_is_spared": spared}
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                bystander.kill()
+            process.close_pipes(bystander)
+            bystander.wait(timeout=CASE_GRACE_SECONDS + 5)
+
+    return case("teardown_spares_a_pid_that_is_not_the_recorded_process", base, body)
 
 
 # A program that prints its first argument.
@@ -1748,6 +1862,10 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "second_interrupt_during_cleanup_is_deferred": second_interrupt,
     "member_that_leaves_the_session_before_the_signal_is_still_stopped": member_leaves_before_signal,
     "descendant_with_its_own_session_is_stopped": escaped_descendant,
+    "failed_listing_after_the_reap_signals_no_unproven_group": unproven_group_spared,
+    "failed_listing_at_the_normal_end_signals_no_group": finalization_listing_failure,
+    "failed_stop_at_the_normal_end_kills_no_unproven_group": finalization_stop_failure,
+    "teardown_spares_a_pid_that_is_not_the_recorded_process": teardown_spares_a_reused_pid,
     "threaded_interrupt_stops_the_launch": threaded_interrupt,
     "threaded_interrupt_survivor_fails_visibly": threaded_survivor,
     "threaded_normal_run_unchanged": threaded_normal_run,
