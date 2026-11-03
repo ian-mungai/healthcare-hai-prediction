@@ -171,6 +171,10 @@
     "scripts/lakehouse/run_duckdb_bounds_cases.py": {
       "runtime": "analytics",
       "reason": "Library stubs not installed for \"yaml\""
+    },
+    "scripts/quality/run_model_metadata_e2e.py": {
+      "runtime": "analytics",
+      "reason": "Library stubs not installed for \"yaml\""
     }
   }
 }
