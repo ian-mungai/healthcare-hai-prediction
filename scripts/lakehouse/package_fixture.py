@@ -285,7 +285,13 @@ def dbt(case: Case, args: list[str], session: Session | None = None) -> tuple[in
     results = case.folder / "target" / "run_results.json"
     results.unlink(missing_ok=True)
     result = session.run("fixture_dbt", f"dbt-{uuid.uuid4().hex[:10]}", args, case.params)
-    statuses = {item["unique_id"]: item["status"] for item in json.loads(results.read_text())["results"]} if results.exists() else {}
+    statuses: dict[str, str] = {}
+    if results.exists():
+        for item in json.loads(results.read_text())["results"]:
+            unique_id = item["unique_id"]
+            if unique_id in statuses:
+                raise FixtureError(f"duplicate dbt result for {unique_id}")
+            statuses[unique_id] = item["status"]
     return (result.exit_code if result.exit_code is not None else 1), (result.stdout + result.stderr).strip()[-800:], statuses
 
 
@@ -424,13 +430,16 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
             ]
         code, tail, statuses = dbt(case, ["build", "--select", *expression, *exclusion, "--indirect-selection", "cautious"], session)
         not_passed = sorted(node for node, status in statuses.items() if status not in ("success", "pass"))
+        unreported = sorted(node for node in nodes if node.startswith(("model.", "seed.", "snapshot.", "test.")) and node not in statuses)
+        problems += [f"dbt exited {code}"] if code else []
         problems += [f"node {node} {statuses[node]}" for node in not_passed]
+        problems += [f"selected node not run: {node}" for node in unreported]
         problems += [
             f"required test not run: {test}"
             for test in selector["required_tests"]
             if test not in missing and test not in {node_name(node) for node in statuses}
         ]
-        comparisons = compare(case, selector, session) if not not_passed else {}
+        comparisons = compare(case, selector, session) if not code and not not_passed and not unreported else {}
         problems += [f"{model} {verdict}" for model, verdict in comparisons.items() if verdict.startswith("differs")]
         mutations = {}
         for item in expected_failures:
