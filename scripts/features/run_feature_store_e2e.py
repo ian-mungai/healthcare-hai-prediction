@@ -51,7 +51,7 @@ from scripts.features import features_input, features_publish
 from scripts.lakehouse import feature_columns as columns
 from scripts.lakehouse import gold_publish
 from scripts.lakehouse.gold_publish_record import PublishError
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "feature_store"
@@ -583,6 +583,7 @@ def static(report: Report) -> None:
     plan_cases(report)
     settings_cases(report)
     pipeline_quality_case(report)
+    build_process_cases(report)
     report.pending("E01", "A1, A3, A21", "the pinned build receipt passes in the launcher (publish_offline)", "lead", "needs the launcher; see publish_offline")
 
 
@@ -605,7 +606,6 @@ class LocalBuild:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.shell: Path | None = None
-        self.failures: dict[str, str] = {}
         self.environment: dict[str, str] = {}  # the task's variables, for the case that builds as the task does
 
     def make_shell(self) -> Path:
@@ -638,7 +638,7 @@ class LocalBuild:
             (folder / "gold_input/manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         result = self.build(folder, run)
         if result.returncode != 0:
-            self.failures[name] = (result.stdout + result.stderr)[-600:]
+            raise RuntimeError(f"features build exited {result.returncode}: {(result.stdout + result.stderr)[-600:]}")
         return folder
 
     def build(self, folder: Path, run: str, extra: list[str] | None = None) -> Any:
@@ -662,6 +662,41 @@ class LocalBuild:
             *(extra or []),
         ]
         return run_tool(arguments, 1500, self.environment)
+
+
+def build_process_cases(report: Report) -> None:
+    """Check child exit handling with completed synthetic artifacts and a build stand-in, without running dbt."""
+
+    def completed_build(folder: Path, run: str, returncode: int) -> CompletedProcess[str]:
+        (folder / "staging.duckdb").write_bytes(b"synthetic artifact stand-in")
+        (folder / "build_receipt.json").write_text(json.dumps({"run_id": run, "nodes": 151}))
+        return CompletedProcess([sys.executable], returncode, "", "synthetic child status")
+
+    with tempfile.TemporaryDirectory(prefix="feature_build_process_") as temporary:
+        base = Path(temporary)
+        source = base / "source"
+        (source / "gold_input").mkdir(parents=True)
+        for path in (source / "gold_pins.json", source / "gold_input/manifest.json"):
+            path.write_text("{}\n")
+        for code in (0, 7, -15):
+            name = f"build_{abs(code)}"
+            build = LocalBuild(base)
+            error, returned = "", None
+            with mock.patch.object(build, "build", side_effect=partial(completed_build, returncode=code)) as child:
+                try:
+                    returned = build.run_folder(name, RUN, 1, source)
+                except RuntimeError as caught:
+                    error = str(caught)
+            folder = base / name
+            outputs = (folder / "staging.duckdb").is_file() and (folder / "build_receipt.json").is_file()
+            expected = returned == folder and not error if code == 0 else error == f"features build exited {code}: synthetic child status"
+            report.case(
+                "E01",
+                "H5",
+                f"completed fixture artifacts {'pass' if code == 0 else 'are refused'} with child exit {code}",
+                child.call_count == 1 and outputs and expected,
+                child_exit=code,
+            )
 
 
 def rows(connection: Any, sql: str, parameters: list[Any] | None = None) -> list[tuple[Any, ...]]:
@@ -842,7 +877,6 @@ def task_environment_case(report: Report, build: LocalBuild, base: Path, first: 
             "H5",
             "the fixture builds with the variables of the task and leaves no write-ahead log beside the staging file",
             staging.is_file() and (folder / "build_receipt.json").is_file() and not list(folder.glob("staging*.wal")),
-            failure=build.failures.get("run_task", ""),
         )
         if not staging.is_file():
             return
@@ -875,7 +909,6 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
         bool(receipt) and receipt.get("nodes", 0) > 150,
         nodes=receipt.get("nodes"),
         seconds=round(time.monotonic() - started),
-        failure=build.failures.get("run_a", ""),
     )
     if not staging.is_file():
         report.case("E01", "H5", "the build wrote staging.duckdb", False)
