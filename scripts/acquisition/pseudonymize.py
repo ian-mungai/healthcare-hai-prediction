@@ -61,6 +61,7 @@ MIN_NAME_CHARACTERS = 2
 NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not available", "not applicable", "[redacted]"})
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
+APOSTROPHE_FORMS = dict.fromkeys(map(ord, "‘’ʼ`´＇"), "'")
 TEXT_CONNECTORS = "'‘’ʼ`´."
 TEXT_TOKEN = re.compile(r"[^\W_]+(?:['‘’ʼ`´.]+[^\W_]+)*")
 POSSESSIVE_END = re.compile(r"['‘’ʼ`´]s$")
@@ -349,7 +350,7 @@ def contains_name(text: str, index: dict[str, list[tuple[str, ...]]]) -> bool:
     Each word is matched as written or with one possessive ending removed, after combining marks are dropped and connectors deleted. Text words are
     never discarded, so a word that is an empty marker in an identity field (for example "na") still has to match.
     """
-    plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(text)) if not unicodedata.combining(c))
+    plain = "".join(c for c in unicodedata.normalize("NFKD", base_text(text.translate(APOSTROPHE_FORMS))) if not unicodedata.combining(c))
     options = [{text_word(token), text_word(POSSESSIVE_END.sub("", token))} - {""} for token in TEXT_TOKEN.findall(plain)]
     for start, forms in enumerate(options):
         for first in forms:
