@@ -2585,6 +2585,7 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.lakehouse.run_bronze_run_e2e",),
     ("scripts.orchestration.run_lineage_completion_e2e",),
     ("scripts.orchestration.run_lineage_openmetadata_e2e",),
+    ("scripts.orchestration.run_openmetadata_comparison_e2e",),
     ("scripts.orchestration.run_lineage_amendment_e2e",),
     ("scripts.orchestration.run_publish_contracts",),
     ("scripts.orchestration.run_pipeline_light",),
