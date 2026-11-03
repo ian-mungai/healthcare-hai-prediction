@@ -31,6 +31,7 @@ from typing import Any
 import yaml
 
 from scripts.process import TimeoutExpired, clear_git_environment, run_command
+from scripts.quality import dbt_manifest_labels, label_guard_fixtures
 from scripts.quality.hook_stage import hook_stage
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,7 +58,7 @@ CONFIDENTIAL = "    meta:\n      classification: Confidential\n"
 FUTURE_SOURCE = "raw_future_restricted"
 FUTURE_STAGING = "dbt/models/silver/staging/stg_raw_future_restricted.sql"
 FUTURE_INTERMEDIATE = "dbt/models/silver/intermediate/int_future_restricted.sql"
-OUTSIDE_PUBLIC_SCOPE: tuple[str, ...] = ()
+OUTSIDE_PUBLIC_SCOPE = dbt_manifest_labels.OUTSIDE_PUBLIC_SCOPE
 REPOSITORY_LABEL_FILES = (
     "config/lakehouse/bronze_tables.json",
     "data_contracts/lakehouse/silver_publish.json",
@@ -325,38 +326,36 @@ def future_source_cases() -> list[Case]:
     ]
 
 
-CONFIDENTIAL_KEYS = ("confidential_columns", "confidential_columns_reason", "proposed_confidential_columns")
+CONFIDENTIAL_KEYS = dbt_manifest_labels.CONFIDENTIAL_KEYS
+confidential_markers = dbt_manifest_labels.confidential_markers
 
 
-def meta_blocks(entry: Any) -> list[dict[str, Any]]:
-    """Every metadata block of one dbt entry, `meta` and `config.meta`, checked separately so no precedence can hide a Confidential one."""
-    if not isinstance(entry, dict):
-        return []
-    config = entry.get("config") if isinstance(entry.get("config"), dict) else {}
-    return [block for block in (entry.get("meta"), config.get("meta")) if isinstance(block, dict)]
+def block_problems(node: Any, label: str, outside: Collection[str], found: dict[str, list[str]]) -> None:
+    """Walk one raw dbt properties document: every `meta` or `+meta` block under an entry not named in outside is checked, wherever it sits.
 
-
-def confidential_markers(block: dict[str, Any]) -> list[str]:
-    found = ["classification Confidential"] if block.get("classification") == "Confidential" else []
-    return found + [key for key in CONFIDENTIAL_KEYS if key in block]
-
-
-def entry_problems(path: str, kind: str, name: Any, entry: Any, outside: Collection[str]) -> list[str]:
-    """One dbt entry and its columns: a research entry (not named in outside) may not carry a Confidential label in any metadata location."""
-    if not isinstance(entry, dict) or name in outside:
-        return []
-    found = [marker for block in meta_blocks(entry) for marker in confidential_markers(block)]
-    columns = entry.get("columns")
-    for column in columns if isinstance(columns, list) else []:
-        found += [f"column {column.get('name')} {marker}" for block in meta_blocks(column) for marker in confidential_markers(block)]
-    return [f"{path}: {kind} {name}: {', '.join(found)}"] if found else []
-
-
-PROJECT_RESOURCE_SECTIONS = ("models", "seeds", "snapshots", "sources", "data_tests", "tests")
+    The nearest named ancestor labels a finding. An ancestor named in outside exempts its whole subtree, so a complete future source keeps its columns,
+    versions and tests. `meta` and `config.meta` are separate blocks, so no dbt precedence can hide a Confidential one.
+    """
+    if isinstance(node, list):
+        for item in node:
+            block_problems(item, label, outside, found)
+    elif isinstance(node, dict):
+        name = node.get("name")
+        if isinstance(name, str):
+            if name in outside:
+                return
+            label = name
+        for key, value in node.items():
+            if key in ("meta", "+meta") and isinstance(value, dict):
+                markers = confidential_markers(value)
+                if markers:
+                    found.setdefault(label, []).extend(markers)
+            else:
+                block_problems(value, label, outside, found)
 
 
 def project_meta_problems(path: str, document: Any) -> list[str]:
-    """Project-level metadata in the resource sections of dbt_project.yml may not carry a Confidential label; `vars` and other keys are not configuration.
+    """Project-level metadata in every section of dbt_project.yml except `vars` may not carry a Confidential label; `vars` holds values, not configuration.
 
     A `+meta` key is always configuration. A plain `meta` key is checked as configuration and also walked as a folder, because dbt allows a folder named meta.
     """
@@ -374,8 +373,9 @@ def project_meta_problems(path: str, document: Any) -> list[str]:
                     continue
             walk(value, where)
 
-    for section in PROJECT_RESOURCE_SECTIONS:
-        walk(document.get(section) if isinstance(document, dict) else None, section)
+    for section, value in document.items() if isinstance(document, dict) else []:
+        if section != "vars":
+            walk(value, section)
     return problems
 
 
@@ -390,16 +390,9 @@ def label_problems(files: dict[str, str], outside: Collection[str] = OUTSIDE_PUB
         if path.endswith(("dbt_project.yml", "dbt_project.yaml")):
             problems += project_meta_problems(path, yaml.safe_load(text) or {})
         elif path.endswith((".yml", ".yaml")):
-            document = yaml.safe_load(text) or {}
-            sources = document.get("sources") if isinstance(document, dict) else None
-            for source in sources if isinstance(sources, list) else []:
-                problems += entry_problems(path, "source", source.get("name"), {k: v for k, v in source.items() if k != "tables"}, outside)
-                for table in source.get("tables") or []:
-                    problems += entry_problems(path, "source table", table.get("name"), table, outside)
-            for kind in ("models", "seeds", "snapshots"):
-                entries = document.get(kind) if isinstance(document, dict) else None
-                for entry in entries if isinstance(entries, list) else []:
-                    problems += entry_problems(path, kind[:-1], entry.get("name"), entry, outside)
+            found: dict[str, list[str]] = {}
+            block_problems(yaml.safe_load(text) or {}, "", outside, found)
+            problems += [f"{path}: {label or 'document'}: {', '.join(markers)}" for label, markers in found.items()]
         elif path == BRONZE_MAP:
             document = json.loads(text)
             rules = [("collection", name, rule, name) for name, rule in document["classification"]["collections"].items()]
@@ -476,6 +469,7 @@ def config_meta_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
         ("guard_project_meta_fails", len(label_problems({"dbt/dbt_project.yml": project}, outside)) == 1),
         ("guard_project_meta_public_passes", label_problems({"dbt/dbt_project.yml": clean_project}, outside) == []),
         *more_location_cases(outside),
+        *section_cases(outside),
     ]
 
 
@@ -505,6 +499,32 @@ def more_location_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
         ("guard_project_vars_pass", label_problems({"dbt/dbt_project.yml": variables}, outside) == []),
         ("guard_yaml_extension_fails", len(label_problems({"dbt/models/m.yaml": model_column}, outside)) == 1),
     ]
+
+
+def manifest_cases() -> list[tuple[str, bool]]:
+    """The manifest check names every resolved Confidential label by unique_id, passes a clean tree and passes an excepted future source."""
+    outside = frozenset({"future_entry"})
+    results = []
+    for name, files, expected in label_guard_fixtures.manifest_fixtures():
+        problems = dbt_manifest_labels.project_problems(files, outside)
+        results.append((name, problems == [] if not expected else len(problems) == 1 and expected in problems[0]))
+    future, mixed = label_guard_fixtures.future_entry_projects()
+    results.append(("manifest_future_entry_passes", dbt_manifest_labels.project_problems(future, outside) == []))
+    results.append(("manifest_research_entry_still_fails", len(dbt_manifest_labels.project_problems(mixed, outside)) == 1))
+    return results
+
+
+def section_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
+    """Raw property blocks in every dbt resource section, version blocks and test blocks, and every project section except vars."""
+    results = [
+        (f"guard_{name}_meta_fails", len(label_problems({f"dbt/models/{name}.yml": text}, outside)) == 1)
+        for name, text in label_guard_fixtures.SECTIONS.items()
+    ]
+    future = label_guard_fixtures.FUTURE_UNIT_TEST
+    results.append(("guard_excepted_unit_test_passes", label_problems({"dbt/models/f.yml": future}, frozenset({"future_ut"})) == []))
+    for key, text in label_guard_fixtures.project_sections().items():
+        results.append((f"guard_project_{key.replace('-', '_')}_meta_fails", len(label_problems({"dbt/dbt_project.yml": text}, outside)) == 1))
+    return results
 
 
 def onc_read(table: str, sql: str, class_name: str = "Public", reason: str | None = ALL_COLUMNS_REASON, *, all_columns: bool = True) -> dict[str, str]:
@@ -1845,10 +1865,14 @@ def main() -> int:
     if unknown:
         sys.stderr.write(f"unknown cases: {', '.join(unknown)}\n")
         return 1
-    guards = [] if args.case else guard_cases()
+    guards = [] if args.case else [*guard_cases(), *manifest_cases()]
     for name, passed in guards:
         sys.stdout.write(f"{'ok' if passed else 'WRONG':<6} {name}\n")
     leftover = [] if args.case else repository_label_problems()
+    manifest_seconds = 0.0
+    if not args.case:
+        manifest_found, manifest_seconds = dbt_manifest_labels.repository_problems(ROOT, OUTSIDE_PUBLIC_SCOPE)
+        leftover = [*leftover, *manifest_found]
     for line in leftover[:12]:
         sys.stdout.write(f"WRONG  repository_labels_public {line}\n")
     if leftover:
@@ -1892,6 +1916,7 @@ def main() -> int:
         "passed": len(results) - failures,
         "total": len(results),
         "repository_label_problems": len(leftover),
+        "manifest_parse_seconds": round(manifest_seconds, 1),
         "guard_cases": dict(guards),
         "cases": results,
     }
