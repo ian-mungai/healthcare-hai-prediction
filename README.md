@@ -23,8 +23,9 @@ The launcher (`orchestration/launcher.py`) computes a memory plan for every job 
 
    ```sh
    python3.12 -m venv .venv
-   .venv/bin/python -m pip install -r requirements.txt
    .venv/bin/python scripts/quality/install_tools.py
+   .venv/bin/python -m scripts.quality.lock_env export host --output "$TMPDIR/host_lock"
+   .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r "$TMPDIR/host_lock/requirements.txt"
    .venv/bin/python -m scripts.quality.install_markdownlint
    .venv/bin/python -m scripts.quality.install_sqlfluff
    .venv/bin/python -m scripts.quality.install_dvc
@@ -37,7 +38,7 @@ The launcher (`orchestration/launcher.py`) computes a memory plan for every job 
 2. Fill every value in `.env`. Git ignores the file. `AWS_PROFILE` is the project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM user. IAM changes use a separate administrator profile that is never stored in `.env`.
 3. Store no secret in `.env` or in any other file on the host. Every project secret lives in AWS Systems Manager Parameter Store. The four shared API keys live in AWS Secrets Manager (`docs/install_details.md`).
 
-The `install_dvc` command in step 1 puts the pinned Data Version Control (DVC 3.67.1 with its S3 remote, dvc-s3 3.3.0) into its own environment, `.tools/dvc`, from `scripts/quality/dvc/requirements.txt`. It records a hash for every package on Apple silicon and Linux AMD64 and verifies each one at install. Only `antlr4-python3-runtime`, a dependency of DVC, is published as a source archive. Its build tool is pinned in `build_requirements.txt` and installed first, so the build downloads nothing unpinned. The project owner accepted this one source build as the only exception to wheels only. A rerun changes nothing and a failed install leaves nothing that looks current.
+The `install_dvc` command in step 1 puts the pinned Data Version Control (DVC 3.67.1 with its S3 remote, dvc-s3 3.3.0) into its own environment, `.tools/dvc`, from the `dvc` group of `uv.lock`. The lock records a hash for every package on Apple silicon and Linux AMD64. The install verifies each one. Only `antlr4-python3-runtime`, a dependency of DVC, is published as a source archive. Its build tool is pinned in the lock export and installed first, so the build downloads nothing unpinned. The project owner accepted this one source build as the only exception to wheels only. A rerun changes nothing and a failed install leaves nothing that looks current.
 
 The repository tracks DVC's `.dvc/config` (analytics and autostage off, `core.no_scm` on, no remote) and `.dvcignore`. DVC runs without Git because the training matrix and its metafile live under the ignored `data/`. The metafile is stored in the MLflow run, not in Git. The remote is the `dvc/` prefix of the private data bucket. It exists only in the ignored `.dvc/config.local`, which the renderer writes from `.env` without printing it. Run the renderer again after a `.env` change. Its `--check` option reports a stale file:
 
