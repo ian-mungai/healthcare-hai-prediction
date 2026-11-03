@@ -150,6 +150,10 @@ SCRUB_ROWS = [
     ["7", "", "", "Zelda's Clinic"],
     ["8", "", "", "Zelda\u2019s Clinic"],
     ["9", "", "", "O'Hare Plain Co"],
+    ["10", "", "Ali", "ALİ's Clinic"],
+    ["11", "", "O'S", "O'S Clinic"],
+    ["12", "", "", "ALİ\u2019s Clinic"],
+    ["13", "", "", "Zelda's_Clinic"],
 ]
 SCRUB_POLICY: dict[str, Any] = {
     "policy_id": "synthetic_scrub_rows",
@@ -713,10 +717,11 @@ def check_scrub(run: Run) -> None:
             module.REPLACEMENT,
             module.REPLACEMENT,
             "O'Hare Plain Co",
+            *[module.REPLACEMENT] * 4,
         ],
         f"scrub differs: {notes}",
     )
-    ensure(contract["scrubbed_cells"] == 6, f"scrubbed count differs: {contract['scrubbed_cells']}")
+    ensure(contract["scrubbed_cells"] == 10, f"scrubbed count differs: {contract['scrubbed_cells']}")
     text = "".join((folder / "derivative" / n).read_text().casefold() for n in (module.DATA_NAME, module.CONTRACT_NAME))
     ensure("zelda" not in text and "0123456789" not in text and "01234 56789" not in text, "a known name or identifier remained")
     for name, edit, code in (
