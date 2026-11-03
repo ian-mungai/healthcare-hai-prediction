@@ -5,7 +5,7 @@ locals {
       image             = local.image["polaris"]
       user              = "10000:10001"
       memory            = 2048
-      memoryReservation = 1536
+      memoryReservation = 320
       stopTimeout       = 60
       environment = [
         { name = "AWS_REGION", value = var.aws_region },

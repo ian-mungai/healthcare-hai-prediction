@@ -337,7 +337,7 @@ run "host_launch_template" {
   assert {
     condition = (
       aws_launch_template.host.name == "example_project_host_dev" &&
-      aws_launch_template.host.instance_type == "r7g.large" &&
+      aws_launch_template.host.instance_type == "r7g.xlarge" &&
       can(regex("^[a-z][0-9]+g[a-z]*\\.[a-z0-9]+$", aws_launch_template.host.instance_type)) &&
       aws_launch_template.host.image_id == "ami-0123456789abcdef0" &&
       data.aws_ssm_parameter.ecs_ami.name == "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id" &&
@@ -345,7 +345,7 @@ run "host_launch_template" {
       one(aws_launch_template.host.network_interfaces).security_groups == toset(["sg-0000000000000host0"]) &&
       aws_launch_template.host.tags["Project"] == "example_project" && aws_launch_template.host.tags["Name"] == "example_project_host_dev"
     )
-    error_message = "The host is an r7g.large on the arm64 ECS-optimized image with the host instance profile and the host security group, and the template carries the dashed Project tag."
+    error_message = "The host is an r7g.xlarge on the arm64 ECS-optimized image with the host instance profile and the host security group, and the template carries the dashed Project tag."
   }
 
   assert {

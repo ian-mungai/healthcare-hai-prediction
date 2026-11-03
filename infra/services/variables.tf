@@ -370,9 +370,9 @@ variable "dag_code_path" {
 }
 
 variable "host_memory_mib" {
-  description = "Memory of the container host in MiB (r7g.large: 16384). The resize to r7g.xlarge changes this value."
+  description = "Memory of the container host in MiB (r7g.xlarge: 32768)."
   type        = number
-  default     = 16384
+  default     = 32768
 
   validation {
     condition     = var.host_memory_mib >= 8192

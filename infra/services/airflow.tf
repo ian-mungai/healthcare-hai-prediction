@@ -102,7 +102,7 @@ locals {
     merge(local.airflow_container_defaults, {
       name              = "airflow_apiserver"
       memory            = 1536
-      memoryReservation = 1024
+      memoryReservation = 256
       command           = ["bash", "-ec", local.airflow_apiserver_script]
       mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
       portMappings      = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
@@ -123,7 +123,7 @@ locals {
     merge(local.airflow_container_defaults, {
       name              = "airflow_scheduler"
       memory            = 1536
-      memoryReservation = 1024
+      memoryReservation = 320
       command           = ["bash", "-ec", "${var.broker_enabled ? local.broker_session_script : ""}${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
       mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
       portMappings      = [{ containerPort = 8974, hostPort = 8974, protocol = "tcp" }]
@@ -153,7 +153,7 @@ locals {
     merge(local.airflow_container_defaults, {
       name              = "airflow_dag_processor"
       memory            = 1280
-      memoryReservation = 768
+      memoryReservation = 192
       command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow dag-processor"]
       healthCheck = {
         command     = ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --local"]
@@ -171,7 +171,7 @@ locals {
     merge(local.airflow_container_defaults, {
       name              = "airflow_triggerer"
       memory            = 768
-      memoryReservation = 512
+      memoryReservation = 256
       command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow triggerer --skip-serve-logs"]
       healthCheck = {
         command     = ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --local"]

@@ -38,7 +38,7 @@ locals {
       image             = local.image["postgres"]
       user              = "999:999"
       memory            = 2048
-      memoryReservation = 1536
+      memoryReservation = 128
       stopTimeout       = 120
       command = [
         "postgres",
