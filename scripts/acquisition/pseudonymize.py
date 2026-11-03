@@ -327,19 +327,20 @@ def scrub_name_words(value: str) -> tuple[str, ...]:
 def person_words(policy: dict, row: dict[str, str]) -> Iterator[tuple[str, ...]]:
     """The name word sequences of the people one row names, for matching inside kept text cells; a single-word name counts.
 
-    A name counts only when it has an identity (identity normalization decides that), but its words come from the shared scrub rules, never from the
-    identity normalization, so the name list and the text can never be normalized differently.
+    A name counts for scrubbing when at least one of its fields holds a real name word, even when identity normalization treats another field as
+    empty (an empty marker such as ``Na``): scrub eligibility is separate from HMAC identity eligibility, which stays unchanged. Its words come
+    from the shared scrub rules, never from the identity normalization, so the name list and the text can never be normalized differently.
     """
     for rule in policy["pseudonyms"]:
         if rule["kind"] != "name" or not matches(rule.get("when"), row):
             continue
         values = [row[c] for c in rule["columns"]]
-        if normalized_parts("name", values) is None:
+        if not any(normalize_name(value) for value in values):
             continue
         words = scrub_name_words(" ".join(values))
         if words:
             yield words
-        if rule.get("middle_column") and normalize_name(row[rule["middle_column"]]):
+        if rule.get("middle_column") and scrub_name_words(row[rule["middle_column"]]):
             *first, last = values
             middle = scrub_name_words(" ".join([*first, row[rule["middle_column"]], last]))
             if middle:

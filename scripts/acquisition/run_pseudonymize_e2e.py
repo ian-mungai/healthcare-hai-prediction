@@ -813,6 +813,47 @@ SOURCE_SPELLING_ROWS = [
 ]
 
 
+SPLIT_HEADERS = ["ROW", "FIRST", "MIDDLE", "LAST", "NOTE"]
+SPLIT_POLICY: dict[str, Any] = {
+    "policy_id": "synthetic_split_name_rows",
+    "policy_version": 1,
+    "source_id": "SYNTHETIC_SPLIT",
+    "normalization_version": "norm_v1",
+    "headers": SPLIT_HEADERS,
+    "treatments": {
+        "ROW": {"treatment": "keep"},
+        "FIRST": {"treatment": "drop"},
+        "MIDDLE": {"treatment": "drop"},
+        "LAST": {"treatment": "drop"},
+        "NOTE": {"treatment": "scrub_names"},
+    },
+    "pseudonyms": [
+        {"output": "person_name_match_pseudonym", "kind": "name", "namespace": "person_name", "columns": ["FIRST", "LAST"], "middle_column": "MIDDLE"},
+    ],
+    "max_bytes": 1024**2,
+    "min_rows": 1,
+}
+SPLIT_ROWS = [
+    ["1", "Zelda", "", "Na", "Plain Co"],
+    ["2", "Yara", "Na", "Quimby", "Plain Co"],
+    ["3", "", "", "", "Zelda Na Clinic"],
+    ["4", "", "", "", "Yara Na Quimby Clinic"],
+    ["5", "", "", "", "Yara Quimby Clinic"],
+    ["6", "", "", "", "Unrelated Na Clinic"],
+]
+
+
+def check_scrub_split_empty_markers(run: Run) -> None:
+    """Known names whose words sit in separate first, middle and last columns keep their empty-marker words for scrubbing (HMAC rules unchanged)."""
+    folder = run.case_dir("scrub_split_empty_markers")
+    source = write_csv(folder / "in.csv", SPLIT_HEADERS, SPLIT_ROWS)
+    contract = module.transform(source, folder / "derivative", SPLIT_POLICY, "v1", reader_for(KEYS))
+    notes = [r["NOTE"] for r in table(folder / "derivative")]
+    expected = ["Plain Co", "Plain Co", module.REPLACEMENT, module.REPLACEMENT, module.REPLACEMENT, "Unrelated Na Clinic"]
+    ensure(notes == expected, f"split-column empty-marker scrub differs: {notes}")
+    ensure(contract["scrubbed_cells"] == 3, f"split-column count differs: {contract['scrubbed_cells']}")
+
+
 def check_scrub_source_spellings(run: Run) -> None:
     """Known names whose source spelling holds an apostrophe form are matched with the same word rules as the text, in every apostrophe form."""
     folder = run.case_dir("scrub_source_spellings")
@@ -1107,6 +1148,7 @@ def main() -> None:
         check_scrub_text_words,
         check_scrub_apostrophe_forms,
         check_scrub_source_spellings,
+        check_scrub_split_empty_markers,
         check_known_answer,
         check_isolation,
         check_sdk_logging,
