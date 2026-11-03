@@ -275,6 +275,11 @@ def producer_records(records: Records, layer: str, folder: Path, source: Any, na
     return named and commit.get("snapshot_set") == snapshots, ["publish/commit.json", "publish/candidates.json"]
 
 
+def report_passed(document: Mapping[str, Any]) -> bool:
+    checks = mapping(document.get("checks"))
+    return document.get("passed") is True and bool(checks) and all(value is True for value in checks.values())
+
+
 def producer_checks(
     records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None
 ) -> dict[str, bool]:
@@ -301,7 +306,7 @@ def producer_checks(
         and set(snapshots) == tables
         and all(count(value) and value > 0 for value in snapshots.values()),
         f"H3: the pin names the {below} run and its complete snapshot set": named,
-        f"the {below} producer is signed: its report passed, covers its record and matches its signature": report.get("passed") is True
+        f"the {below} producer is signed: its report passed, covers its record and matches its signature": report_passed(report)
         and (report.get("layer"), report.get("run_id")) == (below, source)
         and all(mapping(report.get("file_sha256")).get(name) == records.sha256[f"input/{name}"] for name in covered)
         and signature.get("report_sha256") == digest
@@ -569,7 +574,7 @@ def sign(report_path: Path, owner: str, confirmation: str) -> dict[str, Any]:
         document = mapping(json.loads(raw))
     except ValueError:
         raise AcceptanceError("the report is not JSON") from None
-    if document.get("passed") is not True or not RUN_ID.fullmatch(str(document.get("run_id"))) or document.get("layer") not in LAYERS:
+    if not report_passed(document) or not RUN_ID.fullmatch(str(document.get("run_id"))) or document.get("layer") not in LAYERS:
         raise AcceptanceError("only a report that passed is signed")
     wanted = f"sign-{document['layer']}-{document['run_id']}-{digest[:12]}"
     if confirmation != wanted or not owner.strip() or len(owner) > 100 or not owner.isprintable():
