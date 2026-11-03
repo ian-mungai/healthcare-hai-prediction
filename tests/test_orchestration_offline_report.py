@@ -314,6 +314,28 @@ def test_constraint_failures_cannot_be_overwritten_by_incoming_ok(boundary: Imag
     _released(boundary)
 
 
+@pytest.mark.parametrize(
+    "tools",
+    [
+        pytest.param({"pip": {"ok": True}}, id="uv_record_removed"),
+        pytest.param({"uv": {"ok": True}}, id="pip_record_removed"),
+        pytest.param({}, id="both_records_removed"),
+        pytest.param({"pip": {"ok": True}, "uv": {"ok": True}, "setuptools": {"ok": True}}, id="unexpected_tool_record"),
+        pytest.param({"pip": {"ok": True}, "uv": {"ok": "true"}}, id="string_verdict"),
+        pytest.param({"pip": {"ok": True}, "uv": {}}, id="verdict_removed"),
+    ],
+)
+def test_incomplete_build_tool_inventory_cannot_pass(boundary: ImageBoundary, tools: dict[str, Any]) -> None:
+    document = _document()
+    document["constraints"]["build_tools"] = tools
+    boundary.transport.attempt.stdout = _stdout(document)
+    code, report = _run_cli(boundary)
+    check(code == 1 and report["status"] == "fail", "a build tool inventory other than pip and uv with Boolean verdicts is a failed run")
+    check(report["results"]["in-image checks ran"]["ok"] is False, "the report boundary refuses the incomplete build tool evidence")
+    check(PINS_CHECK not in report["results"] or report["results"][PINS_CHECK]["ok"] is False, "no aggregate pass remains for the package check")
+    _released(boundary)
+
+
 @pytest.mark.parametrize("graph_kind", ["transform", "pipeline_violations", "pipeline_absent"])
 def test_graph_failures_cannot_be_overwritten_by_incoming_ok(boundary: ImageBoundary, graph_kind: str) -> None:
     document = _document(graph_kind == "transform")

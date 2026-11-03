@@ -360,3 +360,89 @@ def test_parse_cause_bracket_control(field: str, channel: str) -> None:
         check(not matches(f"required key: [{name}]"), "longer, multiple and nested bracket names remain distinct")
     check(not matches(f"KeyError: '[{field}]'"), "a quoted literal bracket key is not the bare field")
     check(not matches(f"required unrelated dependency missing while checking field '[{field}]'"), "an unrelated missing dependency is not a field diagnostic")
+
+
+OFFLINE_ENTRIES = ("mutation: first guard", "graph (plain): second guard", "distribution check: third guard")
+
+
+def offline_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    results: Any,
+    code: int,
+    *,
+    required: frozenset[str] = frozenset(),
+    expected: frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Run the real offline reader against a synthetic report and exit code of the offline checks."""
+
+    def command(executable: str, arguments: list[str], *, cwd: Path, **options: Any) -> SimpleNamespace:
+        report = cwd / "data" / "e2e" / "orchestration_offline" / "synthetic" / "report.json"
+        report.parent.mkdir(parents=True)
+        report.write_text(json.dumps({"results": results}), encoding="utf-8")
+        return SimpleNamespace(returncode=code, stdout="", stderr="")
+
+    monkeypatch.setattr(reader, "run_command", command)
+    return reader.offline_result(tmp_path, required=required, expected=expected)
+
+
+def offline_results(*, failing: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {name: {"ok": name not in failing} for name in OFFLINE_ENTRIES}
+
+
+def test_offline_complete_control_and_deliberate_mutant(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    required = frozenset(OFFLINE_ENTRIES)
+    control = offline_read(monkeypatch, tmp_path / "control", offline_results(), 0, required=required)
+    mutant = offline_read(monkeypatch, tmp_path / "mutant", offline_results(failing=(OFFLINE_ENTRIES[0],)), 1, expected=frozenset(control["checks"]))
+    check(control["passed"] is True and control["error"] == "", "a complete passing report with exit 0 is a usable control")
+    check(mutant["passed"] is False and mutant["error"] == "", "a complete report with one false entry and exit 1 is a deliberate failure")
+    check(mutant["checks"][OFFLINE_ENTRIES[0]] is False, "the failed entry is retained")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "partial_string_verdict_exit_7",
+        "partial_report_exit_0",
+        "string_verdict",
+        "integer_verdict",
+        "missing_verdict",
+        "passing_report_nonzero_exit",
+        "failing_report_exit_0",
+        "empty_report",
+    ],
+)
+def test_offline_control_refuses_incomplete_or_inconsistent_report(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str) -> None:
+    results: Any = offline_results()
+    code = 0
+    if case == "partial_string_verdict_exit_7":
+        results, code = {"only_one": {"ok": "false"}}, 7
+    elif case == "partial_report_exit_0":
+        results = {OFFLINE_ENTRIES[0]: {"ok": True}}
+    elif case == "string_verdict":
+        results[OFFLINE_ENTRIES[1]]["ok"] = "true"
+    elif case == "integer_verdict":
+        results[OFFLINE_ENTRIES[1]]["ok"] = 1
+    elif case == "missing_verdict":
+        del results[OFFLINE_ENTRIES[2]]["ok"]
+    elif case == "passing_report_nonzero_exit":
+        code = 7
+    elif case == "failing_report_exit_0":
+        results = offline_results(failing=(OFFLINE_ENTRIES[0],))
+    elif case == "empty_report":
+        results = {}
+    result = offline_read(monkeypatch, tmp_path, results, code, required=frozenset(OFFLINE_ENTRIES))
+    check(result["passed"] is False, f"offline control {case} must remain a failed result")
+    check(bool(result["error"]), f"offline control {case} must say why it was refused")
+    if case == "partial_string_verdict_exit_7":
+        check("7" in result["error"], "the nonzero runner exit stays in the refusal evidence")
+
+
+def test_offline_mutant_inventory_must_equal_the_control(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    expected = frozenset(OFFLINE_ENTRIES)
+    short = {name: row for name, row in offline_results(failing=(OFFLINE_ENTRIES[0],)).items() if name != OFFLINE_ENTRIES[2]}
+    result = offline_read(monkeypatch, tmp_path, short, 1, expected=expected)
+    check(result["passed"] is False and bool(result["error"]), "a mutant report that lost an entry is refused, not accepted as a failure")
+    extra = {**offline_results(failing=(OFFLINE_ENTRIES[0],)), "unexpected entry": {"ok": True}}
+    result = offline_read(monkeypatch, tmp_path / "extra", extra, 1, expected=expected)
+    check(result["passed"] is False and bool(result["error"]), "a mutant report with an unexpected entry is refused")
