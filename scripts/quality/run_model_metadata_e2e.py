@@ -328,38 +328,54 @@ def future_source_cases() -> list[Case]:
 CONFIDENTIAL_KEYS = ("confidential_columns", "confidential_columns_reason", "proposed_confidential_columns")
 
 
-def entry_problem(path: str, kind: str, name: str, meta: Any, outside: Collection[str]) -> list[str]:
-    """One dbt source table or model entry: a research entry (not named in outside) may not be Confidential or list confidential columns."""
-    meta = meta if isinstance(meta, dict) else {}
-    if name in outside:
+def meta_blocks(entry: Any) -> list[dict[str, Any]]:
+    """Every metadata block of one dbt entry, `meta` and `config.meta`, checked separately so no precedence can hide a Confidential one."""
+    if not isinstance(entry, dict):
         return []
-    found = [f"classification {meta['classification']}"] if meta.get("classification") == "Confidential" else []
-    found += [key for key in CONFIDENTIAL_KEYS if key in meta]
+    config = entry.get("config") if isinstance(entry.get("config"), dict) else {}
+    return [block for block in (entry.get("meta"), config.get("meta")) if isinstance(block, dict)]
+
+
+def confidential_markers(block: dict[str, Any]) -> list[str]:
+    found = ["classification Confidential"] if block.get("classification") == "Confidential" else []
+    return found + [key for key in CONFIDENTIAL_KEYS if key in block]
+
+
+def entry_problems(path: str, kind: str, name: Any, entry: Any, outside: Collection[str]) -> list[str]:
+    """One dbt entry and its columns: a research entry (not named in outside) may not carry a Confidential label in any metadata location."""
+    if not isinstance(entry, dict) or name in outside:
+        return []
+    found = [marker for block in meta_blocks(entry) for marker in confidential_markers(block)]
+    columns = entry.get("columns")
+    for column in columns if isinstance(columns, list) else []:
+        found += [f"column {column.get('name')} {marker}" for block in meta_blocks(column) for marker in confidential_markers(block)]
     return [f"{path}: {kind} {name}: {', '.join(found)}"] if found else []
 
 
-def entry_meta(entry: Any) -> dict[str, Any]:
-    """The metadata of one dbt entry from both supported locations, `meta` and `config.meta`."""
-    if not isinstance(entry, dict):
-        return {}
-    config = entry.get("config") if isinstance(entry.get("config"), dict) else {}
-    merged = dict(config.get("meta") or {}) if isinstance(config.get("meta"), dict) else {}
-    merged.update(entry.get("meta") if isinstance(entry.get("meta"), dict) else {})
-    return merged
+PROJECT_RESOURCE_SECTIONS = ("models", "seeds", "snapshots", "sources", "data_tests", "tests")
 
 
-def project_meta_problems(path: str, document: Any, trail: str = "") -> list[str]:
-    """Project-level `+meta` or `meta` blocks may not carry a Confidential label: they apply to whole folders, which no exemption names."""
+def project_meta_problems(path: str, document: Any) -> list[str]:
+    """Project-level metadata in the resource sections of dbt_project.yml may not carry a Confidential label; `vars` and other keys are not configuration.
+
+    A `+meta` key is always configuration. A plain `meta` key is checked as configuration and also walked as a folder, because dbt allows a folder named meta.
+    """
     problems: list[str] = []
-    if isinstance(document, dict):
-        for key, value in document.items():
-            where = f"{trail}.{key}" if trail else str(key)
+
+    def walk(node: Any, trail: str) -> None:
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            where = f"{trail}.{key}"
             if key in ("+meta", "meta") and isinstance(value, dict):
-                found = ["classification Confidential"] if value.get("classification") == "Confidential" else []
-                found += [k for k in CONFIDENTIAL_KEYS if k in value]
-                problems += [f"{path}: {where}: {', '.join(found)}"] if found else []
-            else:
-                problems += project_meta_problems(path, value, where)
+                found = confidential_markers(value)
+                problems.extend([f"{path}: {where}: {', '.join(found)}"] if found else [])
+                if key == "+meta":
+                    continue
+            walk(value, where)
+
+    for section in PROJECT_RESOURCE_SECTIONS:
+        walk(document.get(section) if isinstance(document, dict) else None, section)
     return problems
 
 
@@ -371,18 +387,19 @@ def label_problems(files: dict[str, str], outside: Collection[str] = OUTSIDE_PUB
     """
     problems: list[str] = []
     for path, text in files.items():
-        if path.endswith("dbt_project.yml"):
+        if path.endswith(("dbt_project.yml", "dbt_project.yaml")):
             problems += project_meta_problems(path, yaml.safe_load(text) or {})
-        elif path.endswith(".yml"):
+        elif path.endswith((".yml", ".yaml")):
             document = yaml.safe_load(text) or {}
-            sources = document.get("sources")
+            sources = document.get("sources") if isinstance(document, dict) else None
             for source in sources if isinstance(sources, list) else []:
+                problems += entry_problems(path, "source", source.get("name"), {k: v for k, v in source.items() if k != "tables"}, outside)
                 for table in source.get("tables") or []:
-                    problems += entry_problem(path, "source", table.get("name"), entry_meta(table), outside)
+                    problems += entry_problems(path, "source table", table.get("name"), table, outside)
             for kind in ("models", "seeds", "snapshots"):
-                entries = document.get(kind)
+                entries = document.get(kind) if isinstance(document, dict) else None
                 for entry in entries if isinstance(entries, list) else []:
-                    problems += entry_problem(path, kind[:-1], entry.get("name"), entry_meta(entry), outside)
+                    problems += entry_problems(path, kind[:-1], entry.get("name"), entry, outside)
         elif path == BRONZE_MAP:
             document = json.loads(text)
             rules = [("collection", name, rule, name) for name, rule in document["classification"]["collections"].items()]
@@ -400,7 +417,7 @@ def label_problems(files: dict[str, str], outside: Collection[str] = OUTSIDE_PUB
 
 def repository_label_problems(root: Path = ROOT, outside: Collection[str] = OUTSIDE_PUBLIC_SCOPE) -> list[str]:
     """The label guard over this repository's tracked dbt properties, bronze table map and publish contracts."""
-    tracked = run_command("git", ["ls-files", "dbt/*.yml"], cwd=root, check=True).stdout.split()
+    tracked = run_command("git", ["ls-files", "dbt/*.yml", "dbt/*.yaml"], cwd=root, check=True).stdout.split()
     return label_problems({relative: (root / relative).read_text() for relative in [*tracked, *REPOSITORY_LABEL_FILES]}, outside)
 
 
@@ -458,6 +475,35 @@ def config_meta_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
         ("guard_seed_config_meta_fails", len(label_problems({"dbt/seeds/x.yml": seed_config}, outside)) == 1),
         ("guard_project_meta_fails", len(label_problems({"dbt/dbt_project.yml": project}, outside)) == 1),
         ("guard_project_meta_public_passes", label_problems({"dbt/dbt_project.yml": clean_project}, outside) == []),
+        *more_location_cases(outside),
+    ]
+
+
+def more_location_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
+    """Source-level and column metadata, either metadata location of one entry, folders named meta, project variables and .yaml files."""
+    confidential = "classification: Confidential"
+    source_meta = f"version: 2\nsources:\n  - name: bronze\n    meta:\n      {confidential}\n    tables:\n      - name: raw_public\n"
+    source_config = f"version: 2\nsources:\n  - name: bronze\n    config:\n      meta:\n        {confidential}\n    tables:\n      - name: raw_public\n"
+    model_column = f"version: 2\nmodels:\n  - name: stg_raw_public\n    columns:\n      - name: value\n        meta:\n          {confidential}\n"
+    seed_column = (
+        "version: 2\nseeds:\n  - name: seed_public\n    columns:\n      - name: value\n"
+        "        config:\n          meta:\n            confidential_columns: [value]\n"
+    )
+    mixed = (
+        "version: 2\nsources:\n  - name: bronze\n    tables:\n      - name: raw_public\n        meta:\n          classification: Public\n"
+        f"        config:\n          meta:\n            {confidential}\n"
+    )
+    folder = f"name: hai\nmodels:\n  hai:\n    meta:\n      nested:\n        +meta:\n          {confidential}\n"
+    variables = f"name: hai\nvars:\n  meta:\n    {confidential}\nmodels:\n  hai:\n    +materialized: table\n"
+    return [
+        ("guard_source_level_meta_fails", len(label_problems({"dbt/models/s.yml": source_meta}, outside)) == 1),
+        ("guard_source_level_config_meta_fails", len(label_problems({"dbt/models/s.yml": source_config}, outside)) == 1),
+        ("guard_model_column_meta_fails", len(label_problems({"dbt/models/m.yml": model_column}, outside)) == 1),
+        ("guard_seed_column_config_meta_fails", len(label_problems({"dbt/seeds/s.yml": seed_column}, outside)) == 1),
+        ("guard_mixed_meta_locations_fail", len(label_problems({"dbt/models/s.yml": mixed}, outside)) == 1),
+        ("guard_folder_named_meta_fails", len(label_problems({"dbt/dbt_project.yml": folder}, outside)) == 1),
+        ("guard_project_vars_pass", label_problems({"dbt/dbt_project.yml": variables}, outside) == []),
+        ("guard_yaml_extension_fails", len(label_problems({"dbt/models/m.yaml": model_column}, outside)) == 1),
     ]
 
 
