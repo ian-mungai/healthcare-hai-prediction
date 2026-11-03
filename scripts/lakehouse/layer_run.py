@@ -6,7 +6,7 @@ Each ECS container of a job runs one phase on the shared ``/workspace`` (the con
 
 - silver: ``pin``, ``build``, ``validate``, ``verify``, ``export``, ``publish``, ``upload``
 - gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``
-- features: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``feast``
+- features: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``feast``
 
 The first container of the task (``fetch``) has already downloaded and unpacked ``code.tar.gz``. ``pin`` checks its SHA-256 again, records the code
 identity and pins the input layer: bronze for silver, the silver run ``--input-run`` for gold, the gold run for features. Every later digest comes
@@ -16,9 +16,10 @@ folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/r
 ``publish`` runs the publish steps of the layer and the acceptance checks of the first publish (rows and content fingerprints of every table against
 its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). Before any catalog
 write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin, and the pin must name exactly the
-configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold). Two extra checks run beside them: the staged
-code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast`` run only for a run that passed
-them. Any failed check exits 1 and names the phase.
+configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold) or the gold publish contract (features). Two extra
+checks run beside them: the staged code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast``
+run only for a run that passed them. Any failed check exits 1 and names the phase. Features uploads its run records before ``feast``, because the commit is
+already done and a Feast failure must not lose its evidence. ``feast`` then adds the records of its own two steps.
 
 A run ID is used once. The first real pin writes ``lakehouse/layer_runs/<layer>/<run>/state/pinned.json`` only if it does not exist. A second pin of the
 same run ID fails with a named error before it writes anything shared. An interrupted run is not resumed: it restarts under a new run ID after the owner has
@@ -61,7 +62,7 @@ from scripts.process import TimeoutExpired, run_command
 PHASES = {
     "silver": ("pin", "build", "validate", "verify", "export", "publish", "upload"),
     "gold": ("pin", "build", "validate", "export", "publish", "upload"),
-    "features": ("pin", "build", "validate", "export", "publish", "feast"),
+    "features": ("pin", "build", "validate", "export", "publish", "upload", "feast"),
 }
 STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
@@ -77,7 +78,9 @@ STAGE_PREFIX = "lakehouse/run_stage"
 STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
 DBT_ARTIFACTS = ("manifest.json", "catalog.json", "run_results.json")
 DBT_ARTIFACT_PREFIX = "metadata/dbt/"
-NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb")  # the code copy, the bulk input extracts and the build file the sealed copy repeats
+# The code copy, the bulk input extracts, the build file the sealed copy repeats and the working databases of the features build, which hold a copy of gold.
+NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb", "features_work")
+FEAST_RECORDS = ("feast_apply.json", "feast_materialize.json")
 DRY_ENV = "LAYER_DRY_RUN"
 DRY_MARKER = "dry_run"  # in the run folder: once a task has a dry phase, every later phase of it is dry
 PLAN_FILE = "publish/dry_run_plan.json"
@@ -311,9 +314,10 @@ def check_input_versions(job: Job, bucket: str, client: Any) -> None:
 
 
 def check_pin_tables(job: Job) -> None:
-    """Silver: the pin names exactly the configured bronze tables. Gold: the pin step has already read the selected silver publish_runs row and pinned its
-    snapshot set, so this compares the pin's table list with the tables of the silver publish contract. The first gold run adds the hand check of
-    scripts.lakehouse.layer_acceptance. Features has no check here: its builder compares the gold pin with the gold contract."""
+    """Silver: the pin names exactly the configured bronze tables. Gold and features: the pin step has already read the publish_runs row of the input run and
+    pinned its snapshot set, so this compares the pin's table list with the tables of the input layer's publish contract. The publish container holds the
+    writer pair, which has no grant on the input namespace, so it cannot read the row again. scripts.lakehouse.layer_acceptance compares the pin with the
+    signed records of the input run."""
     if job.layer == "silver":
         pinned = set(json.loads((job.folder / PIN_FILE["silver"]).read_text()))
         wanted, source = set(pins.mapped_tables(BRONZE_TABLES)), BRONZE_TABLES.name
@@ -321,9 +325,10 @@ def check_pin_tables(job: Job) -> None:
         pinned = set(read_record(job.folder, PIN_FILE["gold"])[0].get("snapshot_set", {}))
         wanted, source = set(publish_contract(replace(job, layer="silver")).tables), "the silver publish contract"
     else:
-        return
+        pinned = set(read_record(job.folder, PIN_FILE["features"])[0].get("snapshot_set", {}))
+        wanted, source = set(publish_contract(replace(job, layer="gold")).tables), "the gold publish contract"
     if pinned != wanted:
-        kind = " (a contract check, not a publish_runs row comparison)" if job.layer == "gold" else ""
+        kind = " (a contract check, not a publish_runs row comparison)" if job.layer != "silver" else ""
         raise StepError(f"the {job.layer} pin's table list differs from {source}{kind}: missing {sorted(wanted - pinned)}, extra {sorted(pinned - wanted)}")
 
 
@@ -422,6 +427,8 @@ def pin(job: Job) -> None:
         "scripts.features.features_input",
         ["read", "--run", job.run, "--mode", job.mode, "--expected-pin-sha256", digest_file(record), "--folder", job.folder, *job.local_flags],
     )
+    if read_record(job.folder, PIN_FILE["features"])[0].get("source_run_id") != job.input_run:
+        raise StepError("the features pin names another gold run than INPUT_RUN_ID")
 
 
 def verify(job: Job) -> None:
@@ -691,10 +698,13 @@ def upload_dbt_artifacts(job: Job, bucket: str, client: Any) -> list[str]:
     return sent
 
 
-def feast(job: Job) -> None:
+def feast(job: Job, bucket: str, client: Any) -> None:
+    """Apply and materialize the committed publication, then add the records of the two steps to the run's upload, which ran before this phase."""
     accepted_publish(job)
     for step in ("apply", "materialize"):
         run_module(job, "scripts.features.feast_job", [step, "--run", job.run, "--mode", job.mode])
+    for name in FEAST_RECORDS:
+        client.upload_file(str(job.folder / name), bucket, f"{UPLOAD_PREFIX}/{job.layer}/{job.run}/{name}")
 
 
 def count(value: object) -> int | None:
@@ -856,10 +866,12 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
         client = s3_client()
         uploaded = upload(job, args.bucket, client)
         sys.stdout.write(json.dumps({"uploaded": uploaded, "dbt_files": upload_dbt_artifacts(job, args.bucket, client)}) + "\n")
+    elif phase == "feast":
+        feast(job, args.bucket, s3_client())
     elif phase == "publish":
         publish(job, args.bucket, s3_client() if job.mode == "real" and job.local is None else None)
     else:
-        {"build": build, "validate": validate, "verify": verify, "export": export, "feast": feast}[phase](job)
+        {"build": build, "validate": validate, "verify": verify, "export": export}[phase](job)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -897,7 +909,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if dry:
             mark_dry(job)
             job = replace(job, dry_run=True)
-        if args.phase in ("publish", "upload") and not args.bucket and args.mode == "real" and not dry:
+        if args.phase in ("publish", "upload", "feast") and not args.bucket and args.mode == "real" and not dry:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
         if not args.code_run_id or not RUN_ID.fullmatch(args.code_run_id):
             raise StepError("CODE_RUN_ID is not set to a run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)")

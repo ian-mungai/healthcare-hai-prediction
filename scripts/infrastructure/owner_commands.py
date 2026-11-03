@@ -76,6 +76,7 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "APPROVAL_ID": "approval-1",
         "RUN_ID": "20261031T120000Z-abcdef12",
         "SILVER_RUN_ID": "20261031T080000Z-12345678",
+        "GOLD_RUN_ID": "20261031T100000Z-23456789",
         "CODE_SHA256": "a" * 64,
         "CODE_SHA256_FIRST_12": "a" * 12,
         "SHA256": "b" * 64,
@@ -277,6 +278,13 @@ def example_json(body: str) -> dict[str, Any] | None:
         "SILVER_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_write_silver_task_dev",
         "ID_NAME": "/example_project/aws_polaris_silver_client_id",
         "SECRET_NAME": "/example_project/aws_polaris_silver_client_secret",
+        "FEATURE_STORE_REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_feature_store_dev@sha256:{'f' * 64}",
+        "GOLD_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_write_gold_task_dev",
+        "FEATURES_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_write_features_task_dev",
+        "GOLD_ID_NAME": "/example_project/aws_polaris_gold_client_id",
+        "GOLD_SECRET_NAME": "/example_project/aws_polaris_gold_client_secret",
+        "FEATURES_ID_NAME": "/example_project/aws_polaris_features_client_id",
+        "FEATURES_SECRET_NAME": "/example_project/aws_polaris_features_client_secret",
     }
     try:
         return json.loads(filled(found.group(1), table))

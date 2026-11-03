@@ -594,9 +594,9 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run_tool(arguments: list[str], seconds: int) -> Any:
+def run_tool(arguments: list[str], seconds: int, extra: dict[str, str] | None = None) -> Any:
     """Run this Python interpreter (the tool environment's) with the arguments in the repository root, with a deadline."""
-    return run_command(sys.executable, arguments, cwd=ROOT, env=columns.tool_environment(ROOT), timeout=seconds)
+    return run_command(sys.executable, arguments, cwd=ROOT, env={**columns.tool_environment(ROOT), **(extra or {})}, timeout=seconds)
 
 
 class LocalBuild:
@@ -606,6 +606,7 @@ class LocalBuild:
         self.base = base
         self.shell: Path | None = None
         self.failures: dict[str, str] = {}
+        self.environment: dict[str, str] = {}  # the task's variables, for the case that builds as the task does
 
     def make_shell(self) -> Path:
         if self.shell is None:
@@ -660,7 +661,7 @@ class LocalBuild:
             sha256(folder / "gold_input/manifest.json"),
             *(extra or []),
         ]
-        return run_tool(arguments, 1500)
+        return run_tool(arguments, 1500, self.environment)
 
 
 def rows(connection: Any, sql: str, parameters: list[Any] | None = None) -> list[tuple[Any, ...]]:
@@ -816,6 +817,51 @@ def mutated_validation(folder: Path, old: str, new: str) -> Any:
     return module
 
 
+def task_environment_case(report: Report, build: LocalBuild, base: Path, first: Path) -> None:
+    """The build and the validation with the variables that the driver and the task definition give them. The silver marker defect stayed hidden because no
+    fixture ran with those values. Each step ends as it does in the task, and a new process reads the file, as the validate container does."""
+    packages = base / "task_packages"
+    shutil.copytree(Path(columns.tool_environment(ROOT).get("DBT_PACKAGES_INSTALL_PATH", ROOT / "data/analytics/dbt/dbt_packages")), packages)
+    folder = base / "run_task"
+    build.environment = {
+        "HAI_DUCKDB_TEMP_DIRECTORY": str(base / "task_spill"),
+        "HAI_DUCKDB_MAX_TEMP_BYTES": str(1 << 30),
+        "DUCKDB_MEMORY_LIMIT": "2GB",
+        "JOB_THREADS": "2",
+        "DBT_PACKAGES_INSTALL_PATH": str(packages),
+        "DBT_TARGET_PATH": str(folder / "target"),
+        "DBT_LOG_PATH": str(folder / "logs"),
+        "STAGING_E2E_CASE": str(folder),
+        "DBT_SEND_ANONYMOUS_USAGE_STATS": "false",
+    }
+    try:
+        build.run_folder("run_task", RUN, 1, first)
+        staging = folder / "staging.duckdb"
+        report.case(
+            "E01",
+            "H5",
+            "the fixture builds with the variables of the task and leaves no write-ahead log beside the staging file",
+            staging.is_file() and (folder / "build_receipt.json").is_file() and not list(folder.glob("staging*.wal")),
+            failure=build.failures.get("run_task", ""),
+        )
+        if not staging.is_file():
+            return
+        output = folder / "quality_features.json"
+        arguments = ["-m", "scripts.features.feature_validation", "--database", str(staging), "--output", str(output), "--suites", str(ROOT / SUITE_FOLDER)]
+        arguments += ["--schema", str(ROOT / schema_module.SCHEMA), "--contract", str(ROOT / "data_contracts/lakehouse/features_publish.json")]
+        done = run_tool(arguments, 600, build.environment)
+        counts = json.loads(output.read_text()).get("counts", {}) if output.is_file() else {}
+        report.case(
+            "E01",
+            "H5",
+            "a new process validates that file with the variables of the task: every expectation passes",
+            done.returncode == 0 and counts.get("fail") == 0 and counts.get("pass", 0) > 0,
+            counts=counts,
+        )
+    finally:
+        build.environment = {}
+
+
 def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
     """The cases that need the fixture build."""
     started = time.monotonic()
@@ -834,6 +880,7 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
     if not staging.is_file():
         report.case("E01", "H5", "the build wrote staging.duckdb", False)
         return
+    task_environment_case(report, build, base, first)
     from scripts.features.delta_cases import built_support
 
     built_support(report, staging, ROOT, first)

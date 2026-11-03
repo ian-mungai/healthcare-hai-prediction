@@ -18,6 +18,7 @@ import importlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
@@ -29,6 +30,7 @@ from typing import Any
 from scripts.features import feast_job, historical
 from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker
+from scripts.process import run_command
 
 RUN_A = "20261022T120000Z-0a1b2c3d"
 RUN_B = "20261022T130000Z-1a2b3c4d"
@@ -652,6 +654,40 @@ def case_e32(c: Checker) -> None:
             drop(fixture)
 
 
+REST_SERVER = """
+import http.server, json, sys, threading
+seen = []
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        seen.append(self.headers.get("X-Iceberg-Access-Delegation", "absent"))
+        body = json.dumps({"defaults": {}, "overrides": {}}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *arguments):
+        pass
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+from pyiceberg.catalog import load_catalog
+catalog = load_catalog("hai", type="rest", uri=f"http://127.0.0.1:{server.server_port}/api/catalog", warehouse="hai_lakehouse", token="example")
+catalog._session.get(f"http://127.0.0.1:{server.server_port}/api/catalog/v1/config")
+server.shutdown()
+sys.stdout.write(json.dumps(seen))
+"""
+
+
+def case_e33(c: Checker) -> None:
+    """The real PyIceberg of the image: without the variable of the AWS profile it asks for vended credentials, with it the header has no delegation mode."""
+    from scripts.features import feast_aws
+
+    def headers(extra: dict[str, str]) -> list[str]:
+        environment = {key: value for key, value in os.environ.items() if key != feast_aws.NO_DELEGATION_VARIABLE} | extra
+        done = run_command(sys.executable, ["-c", REST_SERVER], env=environment, timeout=60)
+        return json.loads(done.stdout) if done.returncode == 0 else [done.stderr[-300:]]
+
+    c.check("PyIceberg asks for vended credentials by default", set(headers({})) == {"vended-credentials"})
+    c.check("the variable of the AWS profile takes that request away", set(headers({feast_aws.NO_DELEGATION_VARIABLE: ""})) == {""})
+
+
 IMAGE_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E17_support": (case_e17_support, "DT2 DT4"),
     "E11": (case_e11, "LC10 LC11 LC17 B1 B2 B6"),
@@ -663,4 +699,5 @@ IMAGE_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E16": (case_e16, "LH6 C3 C4 D8"),
     "E17": (case_e17, "LC5 LC6 A10 C5"),
     "E32": (case_e32, "LH3 LH8 B4"),
+    "E33": (case_e33, "the AWS catalog cannot vend credentials"),
 }

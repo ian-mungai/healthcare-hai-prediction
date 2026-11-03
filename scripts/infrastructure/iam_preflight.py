@@ -7,7 +7,8 @@ keys of the row, and prints one line, ``PASS`` or ``FAIL``. Only ``allowed`` pas
 role, an answer that is not understood, a decision that needs a condition key the row lacks and a call that outlives its deadline all fail. The exit
 status is 0 when every row passes, 1 when one fails and 2 when the setup is wrong (no configuration, a wrong identity or a table that does not parse).
 ``--scope silver`` runs only the rows of the first Silver run: the image pull and parameter reads of the execution role, the calls of the Silver writer task and
-the RunTask, PassRole, describe and log calls of the project user. Each denied call is a ``FAIL`` line with its role, action and resource.
+the RunTask, PassRole, describe and log calls of the project user. ``--scope features`` does the same for the first features run. Each denied call is a ``FAIL``
+line with its role, action and resource.
 Output names the table's resource text, never an account ID. The project profile needs ``iam:SimulatePrincipalPolicy`` on the roles and on its own user,
 which the IAM policy files grant after the owner applies them.
 """

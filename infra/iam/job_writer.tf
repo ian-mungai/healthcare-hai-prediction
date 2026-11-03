@@ -238,9 +238,23 @@ output "job_layer_runs_contract" {
   value = {
     prepared              = var.job_layer_runs_prepared
     inputs                = var.job_layer_runs_prepared ? local.job_layer_run_inputs : {}
-    uploads               = var.job_layer_runs_prepared ? { for layer in local.job_layer_run_upload_layers : layer => "lakehouse/layer_runs/${layer}/" } : {}
+    uploads               = var.job_layer_runs_prepared ? { for layer in concat(local.job_layer_run_upload_layers, var.job_features_image_prepared ? ["features"] : []) : layer => "lakehouse/layer_runs/${layer}/" } : {}
     production_activation = false
   }
+}
+
+# The features job uploads its run records for the acceptance report, and Feast calls HeadBucket before it reads its registry object. HeadBucket needs s3:ListBucket
+# and sends no prefix, so the prefix condition of the layer storage policy refuses it. These two grants belong to the features activation, so a silver or gold
+# window changes nothing on this role.
+resource "aws_iam_role_policy" "job_writer_features_activation" {
+  count = var.job_features_image_prepared ? 1 : 0
+
+  name = "features_run_upload_and_registry_check"
+  role = aws_iam_role.job_write_layer_task["features"].name
+  policy = templatefile("${path.module}/owner_policies/job_writer_features_activation.json", {
+    BUCKET_ARN      = local.bronze_bucket_arn
+    RUN_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/lakehouse/layer_runs/features/*"])
+  })
 }
 
 # The shared execution policy names three image repositories. The features layer job also runs the feature store image, and the training grant for that

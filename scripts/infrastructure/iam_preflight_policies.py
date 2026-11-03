@@ -47,7 +47,7 @@ EVIDENCE_SOURCES = (
     "pipeline_quality.py",
     "pins.py",
 )
-SCOPES = ("silver",)
+SCOPES = ("silver", "features")
 KINDS = ("role", "user")
 # The project user holds every policy file of ``infra/iam/policies``: the owner attaches them with ``manage_policies``, not Terraform.
 USER_POLICIES = "policies/*.json"
@@ -216,6 +216,8 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
         # Silver and gold upload their run folder. Features attaches the same template for its run claim object only.
         rest = "*/state/*" if role["layer"] == "features" else "*"
         return {"UPLOAD_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/{role['layer']}/{rest}"])}
+    if policy.endswith("job_writer_features_activation.json"):
+        return {"BUCKET_ARN": f"arn:aws:s3:::{bucket}", "RUN_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/features/*"])}
     if policy.endswith("job_writer_features_feast.json"):
         return {
             "REGISTRY_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/{layer_registry_key(infra)}"]),
@@ -337,6 +339,17 @@ def grant_problems(documents: list[dict[str, Any]], request: Request, shared: li
 
 LAKEHOUSE = REPO_ROOT / "scripts" / "lakehouse"
 RUN_PREFIX = "lakehouse/layer_runs/silver/example_run/"
+FEATURES_RUN_PREFIX = "lakehouse/layer_runs/features/example_run/"
+# The files of a features run beside the evidence list that every layer has: what the owner's report reads and what shows the build and the checks passed.
+FEATURES_RUN_FILES = (
+    "gold_pins.json",
+    "features_snapshot.json",
+    "feast_apply.json",
+    "feast_materialize.json",
+    "state/pinned.json",
+    "build_receipt.json",
+    "quality_features/result.json",
+)
 # Every JSON name that the publish code and the build and quality steps put in a string, and where the upload sends it: the path under the run's upload
 # prefix, or the reason it is not part of a silver upload. ``layer_acceptance`` is the list of what the owner reads. Every uploaded file needs a writer row
 # and an owner row.
@@ -366,6 +379,8 @@ NOT_UPLOADED = {
     "silver_pins.json": "gold layer",
     "gold_pins.json": "features layer",
     "features_snapshot.json": "features layer",
+    "feast_apply.json": "features layer",
+    "feast_materialize.json": "features layer",
     "baselines.json": "a quality input the task reads",
     "fixture_baselines.json": "a quality input the task reads",
     "mirror.json": "the Glue mirror covers gold only",
@@ -429,12 +444,17 @@ def evidence_problems(table: Mapping[str, Any], lakehouse: Path = LAKEHOUSE) -> 
     found += [f"{name} is classified but no publish code names it any more" for name in sorted((RUN_FILES.keys() | NOT_UPLOADED.keys()) - named.keys())]
     uploaded = set(RUN_FILES.values())
     found += [f"layer_acceptance reads {name}, which no writer in RUN_FILES produces" for name in sorted(reads - uploaded)]
-    rows = {(row["role"], row["action"], row["resource"]) for row in table["checks"] if row.get("scope") == "silver"}
     bucket = "arn:aws:s3:::${DATA_BUCKET_NAME}/"
-    for name in sorted(uploaded | reads):
-        for role, action, who in (("write_silver", "s3:PutObject", "no writer row"), ("project_user", "s3:GetObject", "no owner row")):
-            if (role, action, bucket + RUN_PREFIX + name) not in rows:
-                found.append(f"{name}: {who} ({role} {action} {RUN_PREFIX}{name})")
+    features = {*(path for path in reads if path not in {"pins.json", "silver_snapshot.json"}), *FEATURES_RUN_FILES}
+    for scope, writer, prefix, files in (
+        ("silver", "write_silver", RUN_PREFIX, uploaded | reads),
+        ("features", "write_features", FEATURES_RUN_PREFIX, features),
+    ):
+        rows = {(row["role"], row["action"], row["resource"]) for row in table["checks"] if row.get("scope") == scope}
+        for name in sorted(files):
+            for role, action, who in ((writer, "s3:PutObject", "no writer row"), ("project_user", "s3:GetObject", "no owner row")):
+                if (role, action, bucket + prefix + name) not in rows:
+                    found.append(f"{name}: {who} ({role} {action} {prefix}{name})")
     return found
 
 

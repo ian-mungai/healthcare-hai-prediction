@@ -1,4 +1,4 @@
-"""The owner's acceptance of a first layer publish: the run approval, the task result, the evidence checks and the signed local report.
+"""The owner's acceptance of a layer publish by hand: the run approval, the task result, the evidence checks and the signed local report.
 
 Run from the repository root with files that the owner saved from AWS read calls. Nothing here calls AWS.
 
@@ -19,7 +19,10 @@ namespace equals the contract. The task is this run's real task: its definition,
 ID, the sealed identity and the consumer result, manifest and candidate hashes agree. The rows and content fingerprints, the commit record that follows the
 backup and the reconcile and names every snapshot ID, the pinned table set (H3) and the input listing before and after (H2) are checked. The listing digest
 is computed again in the way the driver computes it and compared with the pin. Every object version the task added lies under a prefix the layer writer role
-may write. A gold report also needs the signed silver report and its records: the producer is accepted only with a matching signature.
+may write. A gold report also needs the signed silver report and its records, and a features report the signed gold report and its records: the producer is
+accepted only with a matching signature. The features pin must be complete and equal the commit of the signed gold run (H3). The input check of features cannot
+read the gold ``publish_runs`` row, because this command reads saved files, so it reads the commit record that the signed gold report covers. A features report
+also requires the two Feast records to name this run's publication: the snapshot set that Feast applied and the one it loaded into the online store.
 
 Inputs are regular files that are not links, within a size limit, and every record is a JSON object. Errors are fixed texts that echo nothing from an input.
 The report names the SHA-256 of every file it read, computed from the bytes it parsed. It is written only to a Git-ignored path. A report that passed is
@@ -45,13 +48,23 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 JOBS_FILE = ROOT / "config/orchestration/ecs_broker_jobs.json"
-LAYERS = ("silver", "gold")
-CONTRACT = {"silver": "data_contracts/lakehouse/silver_publish.json", "gold": "data_contracts/lakehouse/gold_contract.json"}
+LAYERS = ("silver", "gold", "features")
+CONTRACT = {
+    "silver": "data_contracts/lakehouse/silver_publish.json",
+    "gold": "data_contracts/lakehouse/gold_contract.json",
+    "features": "data_contracts/lakehouse/features_publish.json",
+}
 BRONZE_MAP = "config/lakehouse/bronze_tables.json"
-INPUT_PREFIX = {"silver": "lakehouse/bronze/", "gold": "lakehouse/silver/"}
+INPUT_PREFIX = {"silver": "lakehouse/bronze/", "gold": "lakehouse/silver/", "features": "lakehouse/gold/"}
+PRODUCER = {"gold": "silver", "features": "gold"}  # the layer whose signed run this layer reads
 # The prefixes of the layer writer role (infra/iam/job_writer.tf) beside the run's own upload prefix.
-WRITE_PREFIXES = {"silver": ("lakehouse/silver/",), "gold": ("lakehouse/gold/", "lakehouse/catalog_backups/", "metadata/dbt/")}
-PIN_FILE = {"silver": "pins.json", "gold": "silver_pins.json"}
+WRITE_PREFIXES = {
+    "silver": ("lakehouse/silver/",),
+    "gold": ("lakehouse/gold/", "lakehouse/catalog_backups/", "metadata/dbt/"),
+    "features": ("lakehouse/features/", "lakehouse/feast/registry.pb"),
+}
+PIN_FILE = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}
+FEATURES_RECORD, FEAST_APPLY, FEAST_LOAD = "features_snapshot.json", "feast_apply.json", "feast_materialize.json"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 SHA256 = re.compile(r"[a-f0-9]{64}")
 REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -248,38 +261,91 @@ def bronze_tables(revision: str) -> set[str]:
         raise AcceptanceError("the bronze table map of the run's revision has an unexpected shape") from None
 
 
-def producer_checks(records: Records, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None) -> dict[str, bool]:
-    """The gold pin is complete and names the silver run, and that silver run is signed: its report passed, covers its record and matches its signature."""
+def producer_records(records: Records, layer: str, folder: Path, source: Any, namespace: str, snapshots: Mapping[str, Any]) -> tuple[bool, list[str]]:
+    """Whether the signed producer's records name the pinned run and snapshot set, and the records whose digests its report must cover. Silver writes a snapshot
+    record. Gold writes none: its set is the commit record, and its candidates record names the mode and namespace of that commit."""
+    if layer == "gold":
+        producer = records.load_in(folder, "silver_snapshot.json", "input/")
+        named = (producer.get("run_id"), producer.get("mode"), producer.get("namespace")) == (source, "real", namespace)
+        return named and producer.get("snapshot_set") == snapshots, ["silver_snapshot.json"]
+    commit = records.load_in(folder, "publish/commit.json", "input/")
+    candidates = records.load_in(folder, "publish/candidates.json", "input/")
+    named = (commit.get("run_id"), commit.get("state")) == (source, "committed")
+    named = named and (candidates.get("run_id"), candidates.get("mode"), candidates.get("namespace")) == (source, "real", namespace)
+    return named and commit.get("snapshot_set") == snapshots, ["publish/commit.json", "publish/candidates.json"]
+
+
+def producer_checks(
+    records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None
+) -> dict[str, bool]:
+    """The pin is complete and names the run of the layer below, and that run is signed: its report passed, covers its record and matches its signature."""
+    below = PRODUCER[layer]
     if folder is None or report_path is None:
-        raise AcceptanceError("a gold report needs the silver records and the signed silver report")
-    silver_tables, silver_namespace = contract("silver", revision)
-    producer = records.load_in(folder, "silver_snapshot.json", "input/")
-    report = records.load(report_path, "input/report")
-    signature = records.load(report_path.with_suffix(".signed.json"), "input/signature")
+        raise AcceptanceError(f"a {layer} report needs the {below} records and the signed {below} report")
+    tables, namespace = contract(below, revision)
     source = pinned.get("source_run_id")
     snapshots = mapping(pinned.get("snapshot_set"))
+    named, covered = producer_records(records, layer, folder, source, namespace, snapshots)
+    report = records.load(report_path, "input/report")
+    signature = records.load(report_path.with_suffix(".signed.json"), "input/signature")
     digest = records.sha256["input/report"]
     owner = signature.get("owner")
     return {
-        "H3: the gold pin is complete: its run, mode, namespace and the silver contract's tables": (
+        f"H3: the {layer} pin is complete: its run, mode, namespace and the {below} contract's tables": (
             pinned.get("run_id"),
             pinned.get("mode"),
             pinned.get("namespace"),
         )
-        == (run, "real", silver_namespace)
+        == (run, "real", namespace)
         and bool(RUN_ID.fullmatch(str(source)))
-        and set(snapshots) == silver_tables
+        and set(snapshots) == tables
         and all(count(value) and value > 0 for value in snapshots.values()),
-        "H3: the pin names the silver run and its complete snapshot set": (producer.get("run_id"), producer.get("mode"), producer.get("namespace"))
-        == (source, "real", silver_namespace)
-        and producer.get("snapshot_set") == snapshots,
-        "the silver producer is signed: its report passed, covers its record and matches its signature": report.get("passed") is True
-        and (report.get("layer"), report.get("run_id")) == ("silver", source)
-        and mapping(report.get("file_sha256")).get("silver_snapshot.json") == records.sha256["input/silver_snapshot.json"]
+        f"H3: the pin names the {below} run and its complete snapshot set": named,
+        f"the {below} producer is signed: its report passed, covers its record and matches its signature": report.get("passed") is True
+        and (report.get("layer"), report.get("run_id")) == (below, source)
+        and all(mapping(report.get("file_sha256")).get(name) == records.sha256[f"input/{name}"] for name in covered)
         and signature.get("report_sha256") == digest
-        and signature.get("confirmation") == f"sign-silver-{source}-{digest[:12]}"
+        and signature.get("confirmation") == f"sign-{below}-{source}-{digest[:12]}"
         and isinstance(owner, str)
         and bool(owner.strip()),
+    }
+
+
+def snapshot_set_digest(snapshot_set: Mapping[str, Any]) -> str:
+    """The digest that the Feast jobs record for a publication: ``publication_reads.Publication.snapshot_set_sha256``."""
+    return hashlib.sha256(json.dumps(dict(sorted(snapshot_set.items())), separators=(",", ":")).encode()).hexdigest()
+
+
+def features_checks(records: Records, run: str, namespace: str, folder: Path, snapshot_set: Mapping[str, Any]) -> dict[str, bool]:
+    """The features record equals the commit, and Feast applied and loaded exactly this run's publication."""
+    record, applied, loaded = (records.load_in(folder, name) for name in (FEATURES_RECORD, FEAST_APPLY, FEAST_LOAD))
+    digest = snapshot_set_digest(snapshot_set)
+    publication, load = mapping(applied.get("publication")), mapping(loaded.get("publication"))
+    objects = mapping(applied.get("objects"))
+    return {
+        "the features record equals the commit": (record.get("run_id"), record.get("mode"), record.get("namespace")) == (run, "real", namespace)
+        and record.get("snapshot_set") == snapshot_set,
+        "Feast applied this run's publication: its run, namespace, table count and snapshot set": (
+            applied.get("step"),
+            applied.get("run_id"),
+            applied.get("mode"),
+            applied.get("namespace"),
+        )
+        == ("apply", run, "real", namespace)
+        and publication.get("run_id") == run
+        and publication.get("tables") == len(snapshot_set)
+        and publication.get("snapshot_set_sha256") == digest
+        and all(count(objects.get(kind)) and objects[kind] > 0 for kind in ("entity", "feature_view", "data_source")),
+        "Feast loaded this run's publication into the online store: its run, snapshot set and a positive entity count": (
+            loaded.get("step"),
+            loaded.get("run_id"),
+            loaded.get("mode"),
+        )
+        == ("materialize", run, "real")
+        and load.get("run_id") == run
+        and load.get("snapshot_set_sha256") == digest
+        and count(loaded.get("entities"))
+        and loaded["entities"] > 0,
     }
 
 
@@ -361,8 +427,10 @@ def evidence_checks(
         checks["the records name the layer's own namespace in real mode"] &= record.get("mode") == "real" and record.get("namespace") == namespace
         checks["H3: the pinned table set is the bronze table map of the run's revision"] = set(pinned) == bronze_tables(revision) and all(pinned.values())
     else:
-        checks |= producer_checks(records, run, revision, pinned, arguments.input_evidence, arguments.input_report)
+        checks |= producer_checks(records, layer, run, revision, pinned, arguments.input_evidence, arguments.input_report)
         input_run = str(pinned.get("source_run_id"))
+    if layer == "features":
+        checks |= features_checks(records, run, namespace, folder, snapshot_set)
     return checks, summary, {"identity": identity, "input_run": input_run}
 
 
@@ -373,6 +441,29 @@ def moment(value: Any) -> datetime | None:
     except (ValueError, OverflowError, OSError):
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def online_entity_limit() -> int:
+    """How many entities the Feast job accepts in the online store: its memory guard over the Redis size of the services stack and the schema's predictors."""
+    from scripts.features import online_protocol, publication_reads
+
+    size = re.search(r"maxmemory (\d+)mb", (ROOT / "infra/services/redis.tf").read_text())
+    if size is None:
+        raise AcceptanceError("infra/services/redis.tf names no maxmemory")
+    predictors, _ = publication_reads.reference_lists(publication_reads.read_schema()[0])
+    columns = len({reference.split(":", 1)[1] for reference in predictors})
+    return int(online_protocol.MEMORY_SHARE * int(size.group(1)) * (1 << 20)) // (columns * online_protocol.BYTES_PER_FIELD)
+
+
+def online_load_problems(plan: Mapping[str, Any]) -> list[str]:
+    """The Feast phase refuses a load above its memory guard only after the publish is committed. The rows of the entity table in the plan show it earlier."""
+    tables = [item for item in plan.get("tables") or [] if isinstance(item, dict)]
+    rows = [item.get("rows") for item in tables if str(item.get("table")).endswith(".int_hospital_spine")]
+    entities = rows[0] if len(rows) == 1 else None
+    if type(entities) is not int or entities < 0:
+        return ["the plan does not name the entity table of the online store"]
+    limit = online_entity_limit()
+    return [f"the online store would refuse this load: the guard accepts {limit} entities and the plan holds {entities}"] if entities > limit else []
 
 
 def plan_problems(layer: str, run: str, document: Any) -> list[str]:
@@ -393,7 +484,7 @@ def plan_problems(layer: str, run: str, document: Any) -> list[str]:
     problems += ["the catalog could not be read"] if plan.get("catalog_error") else []
     problems += ["the real publish would be refused"] if plan.get("blocked") else []
     problems += [f"the log holds a {word} line" for word in ("UNKNOWN", "CATALOG", "BLOCKED") if any(message.startswith(word) for message in messages)]
-    return problems
+    return [*problems, *(online_load_problems(plan) if layer == "features" else [])]
 
 
 def host_problems(status: Any) -> list[str]:

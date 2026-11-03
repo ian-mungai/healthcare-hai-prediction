@@ -101,6 +101,7 @@ locals {
       validate = ["RUN_ID", "CODE_RUN_ID"]
       export   = ["RUN_ID", "CODE_RUN_ID"]
       publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
+      upload   = ["RUN_ID", "CODE_RUN_ID"]
       feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
     }
   }
@@ -124,7 +125,7 @@ locals {
   layer_phases = {
     silver   = ["fetch", "pin", "build", "validate", "verify", "export", "publish", "upload"]
     gold     = ["fetch", "pin", "build", "validate", "export", "publish", "upload"]
-    features = ["fetch", "pin", "build", "validate", "export", "publish", "feast"]
+    features = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "feast"]
   }
   layer_steps = {
     for layer in local.layer_jobs : layer => concat(

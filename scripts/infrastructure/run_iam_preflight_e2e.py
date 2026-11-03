@@ -269,6 +269,10 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
 
     containers = ("init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload")
     silver_scope = ["--scope", "silver"]
+    features_scope = ["--scope", "features"]
+    no_features_upload = [("owner_policies/job_writer_features_activation.json", '"Action": ["s3:PutObject"],', '"Action": ["example:Unused"],')]
+    no_registry_bucket_check = [("owner_policies/job_writer_features_activation.json", '"Action": ["s3:ListBucket"],', '"Action": ["example:Unused"],')]
+    no_feast_pull = [("owner_policies/job_features_image.json", '"ecr:BatchGetImage"', '"example:Unused"')]
 
     def failed(run: Run, *words: str) -> list[str]:
         """Each word must appear in a FAIL line, so that the denied call is named by role, action and resource."""
@@ -501,6 +505,49 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
                 ],
             ),
             lambda r: expect(r, 1) + ([] if "extra_record.json" in r.out and "not classified" in r.out else ["unclassified file not named"]),
+        ),
+        (
+            "live features scope real tree",
+            "none",
+            live_run(extra=features_scope),
+            lambda r: (
+                expect(r, 0, FAIL=0)
+                + reads_only(r)
+                + ([] if "features checks passed" in r.out and count(r, "PASS") > 40 else ["the summary does not name the features scope and its rows"])
+            ),
+        ),
+        (
+            "live features scope names the denied upload of the features run",
+            "the features role has no upload grant",
+            live_run(planted(no_features_upload), extra=features_scope),
+            lambda r: (
+                expect(r, 1)
+                + (
+                    []
+                    if "FAIL write_features s3:PutObject" in r.out and "layer_runs/features/example_run/publish/commit.json" in r.out
+                    else ["upload not named"]
+                )
+            ),
+        ),
+        (
+            "live features scope names the denied bucket check of the Feast registry",
+            "the bucket check is removed",
+            live_run(planted(no_registry_bucket_check), extra=features_scope),
+            lambda r: expect(r, 1) + ([] if "FAIL write_features s3:ListBucket" in r.out else ["bucket check not named"]),
+        ),
+        (
+            "live features scope names the denied pull of the feature store image",
+            "the feature store pull is removed",
+            live_run(planted(no_feast_pull), extra=features_scope),
+            lambda r: expect(r, 1) + ([] if "FAIL job_execution ecr:BatchGetImage" in r.out and "feature_store" in r.out else ["image pull not named"]),
+        ),
+        (
+            "offline a features evidence file needs a writer row and an owner row",
+            "the feast record has no rows",
+            lambda: execute(root, OFFLINE_MODULE, ["--table", str(table_without("feast_apply.json"))], environment_for(root, INFRA, "ok")),
+            lambda r: (
+                expect(r, 1) + ([] if "feast_apply.json: no writer row" in r.out and "feast_apply.json: no owner row" in r.out else ["evidence rows not named"])
+            ),
         ),
         (
             "live unknown scope",
