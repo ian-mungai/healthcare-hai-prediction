@@ -1708,6 +1708,11 @@ def run_lint_coverage_case() -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
+def run_worktree_checks_case() -> tuple[bool, str]:
+    result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.run_worktree_checks_e2e"], cwd=ROOT, timeout=1200)
+    return result.returncode == 0, result.stdout + result.stderr
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1739,6 +1744,7 @@ def main() -> int:
             ("typecheck pending manifest", run_typecheck_manifest_case),
             ("typecheck cold caches", run_typecheck_cold_case),
             ("source lint coverage", run_lint_coverage_case),
+            ("head and pinned-tools checks", run_worktree_checks_case),
         ):
             extra += 1
             ok, output = runner()

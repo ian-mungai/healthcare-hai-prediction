@@ -3876,6 +3876,8 @@ def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 
 FAST_COMMIT_HOOKS = frozenset(
     {
+        "check-head",
+        "check-tools",
         "gitleaks",
         "credential-files",
         "data-files",
@@ -3952,7 +3954,7 @@ MANUAL_FINGERPRINTS = {
     "check-jsonschema": "3b0e5a36602c",
     "typos": "61801f4f88b0",
     "osv-scanner": "6cccadc5d95b",
-    "test-checks": "6b851bc67275",
+    "test-checks": "587d4d8d14b5",
     "dependency-lock": "161d1011d863",
     "test-lock": "54d78b27f865",
     "test-documentation-review": "db426284e54a",
@@ -4260,6 +4262,8 @@ def pre_push_repo(
     (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
     (root / "scripts/quality/lint_tools.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "osv_scanner", "OSV_SCANNER"))
+    for checked in ("check_head", "check_tools"):  # The worktree checks have their own E2E; the push gate cases only need them to pass.
+        (root / f"scripts/quality/{checked}.py").write_text("raise SystemExit(0)\n")
     for package in ("scripts", "scripts/quality", "orchestration"):
         (root / package / "__init__.py").write_text("")
     (root / "orchestration/launcher.py").write_text(STUB_LAUNCHER % INHERITED_PATTERN)

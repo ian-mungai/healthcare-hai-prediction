@@ -14,6 +14,22 @@ fail_fast: false
 repos:
   - repo: local
     hooks:
+      - id: check-head
+        # The bundle's head check (git_and_ci commit.md): a named branch other than main, no operation in progress, current origin/main contained. It fetches main, so it needs the network.
+        name: The head is a current named branch
+        entry: .venv/bin/python -m scripts.quality.check_head
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
+      - id: check-tools
+        # The bundle's pinned-tools check: the worktree links point at the main checkout, every pinned tool executable and the dbt package archive are in place and the push gate is installed.
+        name: The worktree has its pinned tools, archive and push gate
+        entry: .venv/bin/python -m scripts.quality.check_tools
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
       - id: gitleaks
         name: Scan staged changes for secrets
         entry: .venv/bin/python -m scripts.quality.scan_secrets --staged
@@ -301,7 +317,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff|install_dvc|lock_env))\.py|scripts/quality/markdownlint/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff|install_dvc|lock_env|run_worktree_checks_e2e|check_head|check_tools))\.py|scripts/quality/markdownlint/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
         stages: [manual]
       - id: test-lock
         name: The lock exports are pinned with hashes and its checks block their planted defects
