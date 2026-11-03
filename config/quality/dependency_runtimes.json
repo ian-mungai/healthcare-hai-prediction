@@ -25,9 +25,7 @@
     ],
     "provided": {
       "hai_bootstrap": "the first-party services/hai/bootstrap sources exposed as hai_bootstrap by the runner image; the host uses services.hai.bootstrap",
-      "dbt": "the pinned dbt-core and dbt-duckdb of the sqlfluff group (.tools/sqlfluff), which scripts/lakehouse/run_duckdb_spill_cases.py runs under (.tools/sqlfluff/bin/python); .venv has neither",
-      "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json",
-      "referencing": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json"
+      "dbt": "the pinned dbt-core and dbt-duckdb of the sqlfluff group (.tools/sqlfluff), which scripts/lakehouse/run_duckdb_spill_cases.py runs under (.tools/sqlfluff/bin/python); .venv has neither"
     }
   },
   "runtimes": {

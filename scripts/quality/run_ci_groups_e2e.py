@@ -1547,6 +1547,9 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         acquisition_selection_case(work, "scripts/quality/typecheck.py", True),
         acquisition_selection_case(work, "config/quality/mypy_runtimes.json", True),
         acquisition_selection_case(work, "config/lakehouse/bronze_tables.json", True),
+        acquisition_selection_case(work, "uv.lock", True),
+        acquisition_selection_case(work, "pyproject.toml", True),
+        acquisition_selection_case(work, "requirements.txt", False),
         acquisition_selection_case(work, "docs/quality_checks.md", False),
     ]
     return cases
@@ -3935,7 +3938,7 @@ MANUAL_FINGERPRINTS = {
     "container-mounts": "8be103fa11d5",
     "gofmt": "de0cf2f5169c",
     "go-vet": "5bcd441b4c87",
-    "model-metadata": "061f6b23b32a",
+    "model-metadata": "0c3e9bd37b2b",
     "documentation-review-untracked": "f6fa8c87e0d3",
     "lint-settings": "60a35b84518b",
     "suppressions": "eda6794008b9",
@@ -3987,6 +3990,25 @@ def hook_config_problems(
     }
 
 
+ROOT_MANIFESTS = ("uv.lock", "pyproject.toml")
+
+
+def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """The root dependency manifest and lock select every hook that depends on the locked environment; the retired requirements.txt selects none."""
+    hooks = hook_table(document)
+    wanted = ("acquisition-checks", "model-metadata", "dependency-lock", "test-lock", "osv-scanner")
+    cases = []
+    for name in wanted:
+        pattern = re.compile(str(hooks[name]["files"])) if name in hooks and hooks[name].get("files") else None
+        missed = [path for path in ROOT_MANIFESTS if pattern is None or not pattern.search(path)]
+        if name == "osv-scanner":
+            missed = [path for path in missed if path != "pyproject.toml"]
+        cases.append({"case": f"hook_{name}_selects_the_lock_and_manifest", "passed": not missed, "missed": missed})
+    acquisition = re.compile(str(hooks["acquisition-checks"]["files"]))
+    cases.append({"case": "hook_acquisition_checks_ignores_the_retired_requirements_file", "passed": acquisition.search("requirements.txt") is None})
+    return cases
+
+
 def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
     """The commit stage holds only the fast hooks, the push stage holds the pre-push run, the manual stage is what hosted CI ran before."""
     document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text())
@@ -4004,6 +4026,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
         "moved_hooks_run_before_push": ("moved_not_run_before_push",),
     }
     results = [{"case": case, "passed": not any(real[key] for key in keys), **{key: real[key] for key in keys}} for case, keys in names.items()]
+    results += hook_path_cases(document)
 
     def planted(label: str, mutate: Callable[[dict[str, Any], dict[str, list[str]]], None], key: str, case: str) -> dict[str, Any]:
         damaged = copy.deepcopy(document)

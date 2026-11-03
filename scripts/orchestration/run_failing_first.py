@@ -34,7 +34,9 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "orchestration_failing_first"
 LOGS = ROOT / "plans" / "wp" / "a1_logs" / "r3" / "failing_first"
 # What a runner needs from the repository; the copy leaves out data, plans, documents and the Git folder.
-SOURCE = ("scripts", "orchestration", "config", "data_contracts", "services", "dags", "dbt", "docker-compose.yaml", "pyproject.toml")
+SOURCE = ("scripts", "orchestration", "config", "data_contracts", "services", "dags", "dbt", "docker-compose.yaml", "pyproject.toml", "uv.lock")
+# The offline checks regenerate the Airflow pin list from the lock in each copy, so a copy holds the lock and a link to the verified exporter in .tools/bin/uv.
+TOOLS = ".tools"
 # The folder under data/e2e where each runner writes its report.
 RUNNERS = {"broker": "orchestration_broker", "supervisor": "orchestration_supervisor", "stack": "orchestration_stack"}
 LEFTOVER = "nothing of the case is left over"
@@ -50,6 +52,7 @@ def copy_tree(destination: Path) -> Path:
             shutil.copytree(source, destination / name, ignore=shutil.ignore_patterns("__pycache__", ".mypy_cache", ".ruff_cache"), symlinks=True)
         else:
             shutil.copy2(source, destination / name)
+    (destination / TOOLS).symlink_to(ROOT / TOOLS)
     return destination
 
 

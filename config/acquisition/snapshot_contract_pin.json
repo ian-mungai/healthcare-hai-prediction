@@ -1,0 +1,5 @@
+{
+  "snapshot_contract_version": "1.0.0",
+  "snapshot_contract_file_sha256": "24ecc5c4fb70bede2b99e7603ffb7fce4b759b038875843d07598a8bf80d34fc",
+  "scope": "The SHA-256 of config/acquisition/snapshot_contract.schema.json that the committed receipts were validated against; the packages that validate them are in the host group of uv.lock."
+}

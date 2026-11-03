@@ -249,6 +249,48 @@ def hashed_install() -> Problems:
     return problems
 
 
+FORMAT_PROBE = (
+    "import json, sys\n"
+    "sys.path[:0] = [sys.argv[1], sys.argv[2]]\n"
+    "from scripts.acquisition import capture\n"
+    "checker = capture.receipt_validator().format_checker\n"
+    "cases = [['not-a-date', 'date'], ['not-a-date', 'date-time'], ['not a URI', 'uri']]\n"
+    "cases += [['2026-11-03', 'date'], ['2026-11-03T10:00:00Z', 'date-time'], ['https://example.org/a', 'uri']]\n"
+    "print(json.dumps([checker.conforms(value, name) for value, name in cases]))\n"
+)
+
+
+def acquisition_formats_enforced() -> Problems:
+    """The locked host environment rejects a bad date, date-time and URI in a receipt and accepts good ones (the jsonschema format extra is locked)."""
+    problems: Problems = []
+    with tempfile.TemporaryDirectory(prefix="lock_e2e_") as folder:
+        top = Path(folder)
+        requirements = lock_env.write_files("host", top / "export")[0]
+        arguments = [
+            "-m",
+            "pip",
+            "install",
+            "--quiet",
+            "--require-hashes",
+            "--only-binary=:all:",
+            "--no-deps",
+            "--target",
+            str(top / "site"),
+            "-r",
+            str(requirements),
+        ]
+        installed = run_command(sys.executable, arguments, timeout=PIP_DEADLINE)
+        if installed.returncode:
+            return [f"the host group did not install with its hashes: {installed.stderr[-300:]}"]
+        probe = run_command(sys.executable, ["-S", "-c", FORMAT_PROBE, str(top / "site"), str(ROOT)], cwd=ROOT, timeout=120)
+        if probe.returncode:
+            return [f"the format probe failed: {probe.stderr[-300:]}"]
+        found = json.loads(probe.stdout)
+        if found != [False, False, False, True, True, True]:
+            problems.append(f"expected bad date, date-time and URI rejected and good ones accepted, got {found}")
+    return problems
+
+
 CASES: tuple[tuple[str, Callable[[], Problems]], ...] = (
     ("declared groups", declared_groups),
     ("every export is pinned with hashes", exports_are_pinned),
@@ -258,6 +300,7 @@ CASES: tuple[tuple[str, Callable[[], Problems]], ...] = (
     ("the real lock passes its checks", real_lock_passes),
     ("planted defects are reported", planted_defects),
     ("image requirement files", image_files_written),
+    ("acquisition formats are enforced in the locked host environment", acquisition_formats_enforced),
     ("hash-checked install", hashed_install),
 )
 
