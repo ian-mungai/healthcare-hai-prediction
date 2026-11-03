@@ -643,7 +643,9 @@ class LaunchPool(ThreadPoolExecutor):
     the pool's cancellation and raises ``KeyboardInterrupt``; later ones are held until the pool is left. Leaving the block after an interrupt drops the
     queued jobs, waits for every running job (each stops its own session within its ``run_command``) and only then forwards the interrupt. A job that
     ends in a stop that is not confirmed, or a job that does not end within ``CANCEL_WAIT_SECONDS``, raises ``LaunchesNotStopped`` instead, chained
-    from the interrupt. In another thread no handler is installed and the pool behaves as a plain one. SIGTERM is not handled.
+    from the interrupt. Any other exception that ends the block (a SystemExit of an alarm handler, an error) is handled the same way: the jobs are cancelled and
+    drained within ``CANCEL_WAIT_SECONDS``, and a job that does not end is reported as an unconfirmed cleanup failure chained from that exception. In another
+    thread no handler is installed and the pool behaves as a plain one. SIGTERM is not handled.
     """
 
     def __init__(self, max_workers: int | None = None) -> None:
@@ -665,9 +667,12 @@ class LaunchPool(ThreadPoolExecutor):
 
     def __exit__(self, _exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
         interrupt = exc_value if isinstance(exc_value, KeyboardInterrupt) else None
+        # Any exit of the block with an exception (an interrupt, an alarm handler's SystemExit, an error) cancels the jobs and drains them within the bound;
+        # only a normal exit waits for the jobs to end on their own deadlines.
+        abnormal = exc_value is not None
         problems: list[str] = []
         try:
-            if interrupt is None:
+            if interrupt is None and not abnormal:
                 try:
                     if not self.closed:
                         self.shutdown(wait=True)
@@ -675,7 +680,7 @@ class LaunchPool(ThreadPoolExecutor):
                     interrupt = error
             # A job that ended is no proof that its program was stopped: the stops that were not confirmed count, with or without an interrupt.
             problems = self.unconfirmed_problems()
-            if interrupt is not None or self.cancellation.cancelled():
+            if interrupt is not None or abnormal or self.cancellation.cancelled():
                 problems = self.stop_jobs()
         finally:
             self.release_interrupts()
