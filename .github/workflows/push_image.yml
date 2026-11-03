@@ -62,10 +62,10 @@ jobs:
           registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
           echo "::add-mask::$registry"
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" > /dev/null
-          context="$(jq -r --arg name "$IMAGE" '.images[$name].context' infra/services/images.json)"
           tag="$(jq -r --arg name "$IMAGE" '.images[$name].tag' infra/services/images.json)-${GITHUB_SHA::12}"
-          mapfile -t extra < <(jq -r --arg name "$IMAGE" '.images[$name].build_contexts // {} | to_entries[] | "--build-context=\(.key)=\(.value)"' infra/services/images.json)
-          docker buildx build --platform linux/arm64 --provenance=false "${extra[@]}" --tag "$registry/$REPOSITORY:$tag" --push "$context"
+          # The script prints the Dockerfile, the named build contexts and, last, the build context, as push_images.py plans them.
+          mapfile -t build_args < <(bash .github/scripts/image_build_args.sh infra/services/images.json "$IMAGE")
+          docker buildx build --platform linux/arm64 --provenance=false --tag "$registry/$REPOSITORY:$tag" --push "${build_args[@]}"
           digest="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids "imageTag=$tag" --query 'imageDetails[0].imageDigest' --output text)"
           {
             echo "### Pushed $IMAGE"

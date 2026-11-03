@@ -37,6 +37,12 @@ jobs:
       TASK_DEFINITION: ${{ inputs.task_definition }}
       CLUSTER: ${{ vars.ECS_CLUSTER_NAME }}
     steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
       - name: Check the inputs
         run: |
           [[ "$SERVICE" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Use an exact service name." >&2; exit 1; }
@@ -51,10 +57,12 @@ jobs:
           role-session-name: gh_deploy_model_api
           mask-aws-account-id: true
 
-      - name: Roll the service and wait with a deadline
+      - name: Roll the service, wait with a deadline and verify the rollout
         run: |
-          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$TASK_DEFINITION" --output text --query 'service.serviceName' > /dev/null
+          arn="$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION" --query 'taskDefinition.taskDefinitionArn' --output text)"
+          deployment="$(aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$arn" --output json | jq -r '[.service.deployments[] | select(.status == "PRIMARY")][0].id // empty')"
+          [[ "$deployment" =~ ^ecs-svc/[0-9]+$ ]] || { echo "The update did not start a deployment." >&2; exit 1; }
           timeout 1500 aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
-          running="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].runningCount' --output text)"
-          [[ "$running" -ge 1 ]] || { echo "No task runs after the deploy." >&2; exit 1; }
-          echo "Service $SERVICE runs $running task(s) of $TASK_DEFINITION." >> "$GITHUB_STEP_SUMMARY"
+          # A stable service can be the old revision after a rollback, so the final deployment and its task definition are checked, not the task count.
+          aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" | bash .github/scripts/deployment_check.sh "$arn" "$deployment"
+          echo "Service $SERVICE runs $TASK_DEFINITION (deployment $deployment completed)." >> "$GITHUB_STEP_SUMMARY"
