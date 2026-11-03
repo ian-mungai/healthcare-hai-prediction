@@ -1,0 +1,251 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GetRegistryToken",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "PushAndReadProjectImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeImages",
+        "ecr:DescribeRepositories",
+        "ecr:GetLifecyclePolicy",
+        "ecr:InitiateLayerUpload",
+        "ecr:ListImages",
+        "ecr:ListTagsForResource",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_*_${ENVIRONMENT}"
+    },
+    {
+      "Sid": "ReadProjectCluster",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeCapacityProviders",
+        "ecs:DescribeClusters",
+        "ecs:DescribeContainerInstances",
+        "ecs:DescribeTasks",
+        "ecs:ListContainerInstances",
+        "ecs:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:capacity-provider/${PROJECT_NAME}_host_${ENVIRONMENT}",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:container-instance/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*"
+      ]
+    },
+    {
+      "Sid": "ReadProjectServices",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServiceDeployments",
+        "ecs:DescribeServices",
+        "ecs:ListServiceDeployments",
+        "ecs:ListServices",
+        "ecs:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_*",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service-deployment/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_*/*"
+      ]
+    },
+    {
+      "Sid": "UpdateProjectServices",
+      "Effect": "Allow",
+      "Action": "ecs:UpdateService",
+      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_*"
+    },
+    {
+      "Sid": "ListProjectClusterTasks",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:ListServices",
+        "ecs:ListTasks"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+        }
+      }
+    },
+    {
+      "Sid": "RegisterTaskDefinitions",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "PassProjectTaskRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_model_api_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_streamlit_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_task_execution_${ENVIRONMENT}"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "RegionalReads",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeAutoScalingInstances",
+        "autoscaling:DescribeScalingActivities",
+        "cloudwatch:DescribeAlarms",
+        "dlm:GetLifecyclePolicies",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeAddressesAttribute",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeTags",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVolumesModifications",
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeVpcs",
+        "ecs:ListClusters",
+        "ecs:ListTaskDefinitionFamilies",
+        "ecs:ListTaskDefinitions",
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "ReadProjectMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:ListTagsForResource",
+        "logs:ListTagsForResource",
+        "logs:ListTagsLogGroup",
+        "secretsmanager:DescribeSecret",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:cloudwatch:${AWS_REGION}:${AWS_ACCOUNT_ID}:alarm:${PROJECT_NAME}_*_${ENVIRONMENT}",
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_*_${ENVIRONMENT}*",
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
+        "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:*_api_key-??????"
+      ]
+    },
+    {
+      "Sid": "ReadSnapshotSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:GetLifecyclePolicy",
+        "dlm:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:dlm:${AWS_REGION}:${AWS_ACCOUNT_ID}:policy/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "ReadProjectBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucket*",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}-logs"
+      ]
+    },
+    {
+      "Sid": "ProjectTerraformState",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/platform/terraform.tfstate*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/services/terraform.tfstate*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/jobs/terraform.tfstate*"
+      ]
+    },
+    {
+      "Sid": "ReleaseProjectTerraformLocks",
+      "Effect": "Allow",
+      "Action": "s3:DeleteObject",
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/platform/terraform.tfstate.tflock",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/services/terraform.tfstate.tflock",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/jobs/terraform.tfstate.tflock"
+      ]
+    },
+    {
+      "Sid": "DenyIamExceptPassRoleToEcsTasks",
+      "Effect": "Deny",
+      "Action": "iam:*",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOrganizationsAccountAndBudgets",
+      "Effect": "Deny",
+      "Action": [
+        "account:*",
+        "budgets:*",
+        "organizations:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyAssumeRoleOutsideProject",
+      "Effect": "Deny",
+      "Action": "sts:AssumeRole",
+      "NotResource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_*"
+    }
+  ]
+}

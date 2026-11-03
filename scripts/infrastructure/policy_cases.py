@@ -1508,6 +1508,135 @@ def boundary_scope_cases(case: Callable[..., Case]) -> Iterator[Case]:
     yield case("wide role registers a project instance with another Name", register, INSTANCE, False, extra={**host, "ssm:resourceTag/Name": f"{P}_other_{E}"})
 
 
+# The four GitHub delivery roles (infra/iam/github_oidc.tf) hold the delivery boundary, a second managed policy beside the role boundary:
+# the role boundary has no room for them (it renders at 4,391 of 6,144 characters and the delivery grants need about 1,900 more).
+DELIVERY_BOUNDARY = "delivery_boundary"
+DELIVERY_ROLES = ("image_push", "deploy", "terraform_plan", "terraform_apply")
+DELIVERY_WIDE = "delivery_wide"
+STATE_PREFIX = "terraform_state"
+STATE_STACKS = ("platform", "services", "jobs")
+STATE_KEYS = tuple(f"{BUCKET}/{STATE_PREFIX}/{stack}/terraform.tfstate" for stack in STATE_STACKS)
+LOCK_KEYS = tuple(f"{key}.tflock" for key in STATE_KEYS)
+DEPLOY_SERVICE = arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_model_api")
+DEPLOY_TASK_ROLES = tuple(f"arn:aws:iam::{A}:role/{P}_{name}_{E}" for name in ("model_api_task", "streamlit_task", "task_execution"))
+ECS_TASKS = "ecs-tasks.amazonaws.com"
+# A delivery role whose own policy grants far more than the delivery work: only the delivery boundary stands between it and the account.
+DELIVERY_WIDE_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Everything",
+            "Effect": "Allow",
+            "Action": ["ecr:*", "ecs:*", "s3:*", "ec2:*", "iam:*", "logs:*", "ssm:*", "secretsmanager:*", "sns:*", "sts:AssumeRole", "budgets:*"],
+            "Resource": "*",
+        }
+    ],
+}
+
+
+def delivery_cases() -> Iterator[Case]:
+    """The deploy role's work with the requests AWS sends for it, and what stays refused for every delivery role under the delivery boundary.
+
+    The image push, plan and apply requests come from their policies in ``coverage_cases``; the deploy role's policy names ``*`` for actions that
+    AWS authorizes on one service, task or cluster, so its requests are written out.
+    """
+
+    def deploy(label: str, action: str, resource: str, extra: dict[str, str] | None = None) -> Case:
+        return Case(f"delivery allowed: deploy {label}", request(action, resource, extra=extra), True, None, f"delivery_{DELIVERY_ROLES[1]}")
+
+    yield deploy("describes the cluster", "ecs:DescribeClusters", CLUSTER)
+    yield deploy("describes its service", "ecs:DescribeServices", DEPLOY_SERVICE)
+    yield deploy("describes a task of the cluster", "ecs:DescribeTasks", TASK)
+    yield deploy("lists the tasks of the project cluster", "ecs:ListTasks", "*", {"ecs:cluster": CLUSTER})
+    yield deploy("updates its service", "ecs:UpdateService", DEPLOY_SERVICE)
+    yield deploy("registers a task definition", "ecs:RegisterTaskDefinition", "*")
+    yield deploy("describes a task definition", "ecs:DescribeTaskDefinition", "*")
+    for role in DEPLOY_TASK_ROLES:
+        yield deploy(f"passes {role.rsplit('/', 1)[-1]} to ECS tasks", "iam:PassRole", role, {"iam:PassedToService": ECS_TASKS})
+
+    def wide(label: str, action: str, resource: str, extra: dict[str, str] | None = None, sid: str | None = None) -> Case:
+        return Case(f"delivery refused: {label}", request(action, resource, extra=extra), False, sid, DELIVERY_WIDE)
+
+    other_repository = arn("ecr", f"repository/other_project_spark_{E}")
+    for label, resource in (
+        ("another project's repository", other_repository),
+        ("a repository of another environment", arn("ecr", f"repository/{P}_spark_prod")),
+        ("a repository without the environment", arn("ecr", f"repository/{P}_spark")),
+        ("a repository in another account", REPOSITORY.replace(A, "222222222222")),
+    ):
+        yield wide(f"push to {label}", "ecr:PutImage", resource)
+    for action in (
+        "CreateRepository",
+        "DeleteRepository",
+        "BatchDeleteImage",
+        "PutLifecyclePolicy",
+        "SetRepositoryPolicy",
+        "DeleteLifecyclePolicy",
+        "PutImageTagMutability",
+    ):
+        yield wide(f"ecr:{action} on a project repository", f"ecr:{action}", REPOSITORY)
+    for action in (
+        "CreateService",
+        "DeleteService",
+        "DeleteCluster",
+        "RunTask",
+        "StartTask",
+        "StopTask",
+        "DeregisterTaskDefinition",
+        "CreateCluster",
+        "PutClusterCapacityProviders",
+    ):
+        yield wide(f"ecs:{action}", f"ecs:{action}", SERVICE if "Service" in action else CLUSTER)
+    for label, resource in (
+        ("a service of another cluster", arn("ecs", f"service/other_cluster/{P}_{E}_model_api")),
+        ("a service outside the project service names", arn("ecs", f"service/{P}_cluster_{E}/other_service")),
+        ("a service of another environment", arn("ecs", f"service/{P}_cluster_prod/{P}_prod_model_api")),
+    ):
+        yield wide(f"ecs:UpdateService on {label}", "ecs:UpdateService", resource)
+    for role in (f"{P}_ecs_host_{E}", f"{P}_job_write_bronze_task_{E}", f"{P}_gh_terraform_apply_{E}", "administrator", f"{P}_model_api_task_prod"):
+        yield wide(f"passes {role} to ECS tasks", "iam:PassRole", f"arn:aws:iam::{A}:role/{role}", {"iam:PassedToService": ECS_TASKS})
+    for service in ("ec2.amazonaws.com", "lambda.amazonaws.com"):
+        yield wide(f"passes a task role to {service}", "iam:PassRole", DEPLOY_TASK_ROLES[0], {"iam:PassedToService": service})
+    yield wide("passes a task role without a service", "iam:PassRole", DEPLOY_TASK_ROLES[0], sid="DenyIamExceptPassRoleToEcsTasks")
+    for action in ("iam:CreateRole", "iam:AttachRolePolicy", "iam:PutRolePolicy", "iam:CreateUser", "iam:GetRole"):
+        yield wide(action, action, f"arn:aws:iam::{A}:role/{P}_x_{E}", sid="DenyIamExceptPassRoleToEcsTasks")
+    yield wide("budgets:ModifyBudget", "budgets:ModifyBudget", BUDGET, sid="DenyOrganizationsAccountAndBudgets")
+    yield wide("organizations:LeaveOrganization", "organizations:LeaveOrganization", "*", sid="DenyOrganizationsAccountAndBudgets")
+    for name in (f"{P}_gh_terraform_apply_{E}", "administrator"):
+        yield wide(f"assumes {name}", "sts:AssumeRole", f"arn:aws:iam::{A}:role/{name}")
+    yield wide("assumes a role of another project", "sts:AssumeRole", f"arn:aws:iam::{A}:role/other_project_x", sid="DenyAssumeRoleOutsideProject")
+    states = f"{BUCKET}/{STATE_PREFIX}"
+    for label, resource in (
+        ("the IAM stack state", f"{states}/iam/terraform.tfstate"),
+        ("the storage stack state", f"{states}/storage/terraform.tfstate"),
+        ("the state of a stack the delivery roles do not apply", f"{states}/network/terraform.tfstate"),
+        ("a lakehouse object", f"{BUCKET}/lakehouse/silver/x"),
+        ("a source object", f"{BUCKET}/census/x"),
+        ("another bucket's state", f"arn:aws:s3:::other-bucket/{STATE_PREFIX}/platform/terraform.tfstate"),
+    ):
+        yield wide(f"reads {label}", "s3:GetObject", resource)
+    for label, resource in (
+        ("the IAM stack state", f"{states}/iam/terraform.tfstate"),
+        ("a lakehouse object", f"{BUCKET}/lakehouse/silver/x"),
+        ("the bucket root", f"{BUCKET}/x"),
+    ):
+        yield wide(f"writes {label}", "s3:PutObject", resource)
+    for label, resource in (
+        ("a state object", STATE_KEYS[0]),
+        ("the lock of the IAM stack", f"{states}/iam/terraform.tfstate.tflock"),
+        ("a lakehouse object", f"{BUCKET}/lakehouse/silver/x"),
+    ):
+        yield wide(f"deletes {label}", "s3:DeleteObject", resource)
+    yield wide("lists another bucket", "s3:ListBucket", "arn:aws:s3:::other-bucket")
+    yield wide("reads a state version", "s3:GetObjectVersion", STATE_KEYS[0])
+    yield wide("reads a parameter", "ssm:GetParameters", arn("ssm", f"parameter/{P}/x"))
+    yield wide("reads a secret value", "secretsmanager:GetSecretValue", arn("secretsmanager", "secret:census_api_key-abcdef"))
+    yield wide("reads log events", "logs:GetLogEvents", f"{LOG_GROUP}:log-stream:x")
+    yield wide("launches an instance", "ec2:RunInstances", INSTANCE)
+    yield wide("terminates an instance", "ec2:TerminateInstances", INSTANCE)
+    yield wide("publishes to the alert topic", "sns:Publish", TOPIC)
+
+
 def coverage_requests(statement: dict[str, Any], tag_context: dict[str, tuple[str, ...]]) -> Iterator[Request]:
     """Requests that one role statement allows: each action on each resource, with every condition value the statement accepts.
 
@@ -1538,8 +1667,16 @@ def coverage_requests(statement: dict[str, Any], tag_context: dict[str, tuple[st
 
 
 def coverage_cases(documents: dict[str, dict[str, Any]]) -> Iterator[Case]:
-    """Every request a role's own policies allow today is allowed under the boundary: the boundary covers all current role access."""
+    """Every request a role's own policies allow today is allowed under the boundary: the boundary covers all current role access.
+
+    The delivery roles' requests follow the same rule against the delivery boundary. The deploy role is covered by ``delivery_cases``.
+    """
     held_by = principals(documents)
+    for role in (name for name in DELIVERY_ROLES if name != "deploy"):
+        for statement in documents[f"delivery/{role}/access"]["Statement"]:
+            if statement["Effect"] == "Allow":
+                for item in coverage_requests(statement, {}):
+                    yield Case(f"delivery allowed: {role} {statement.get('Sid')} {item.action} {item.resource}", item, True, None, f"delivery_{role}")
     for name in ROLES:
         allows = [statement for document in held_by[name] for statement in document["Statement"] if statement["Effect"] == "Allow"]
         for statement in allows:
@@ -1796,6 +1933,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     current = list(current_cases(operations))
     yield from current
     yield from bounded_role_cases()
+    yield from delivery_cases()
 
 
 def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
@@ -1859,6 +1997,8 @@ def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str,
     every role of the IAM stack and the wide test role."""
     user = [document for name, document in documents.items() if name.startswith("healthcare_hai_prediction_")]
     roles = {name: [document for key, document in documents.items() if key.startswith(f"role/{name}/")] for name in ROLES}
+    # A delivery role holds its inline policy and, for the apply role, the project service policies it attaches by ARN.
+    delivery = {f"delivery_{name}": [document for key, document in documents.items() if key.startswith(f"delivery/{name}/")] for name in DELIVERY_ROLES}
     return {
         **roles,
         "user": user,
@@ -1866,13 +2006,17 @@ def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str,
         "execution": [documents["owner_task_execution"]],
         "task_execution": [documents["owner_task_execution"]],
         WIDE_ROLE: [WIDE_ROLE_POLICY],
+        **delivery,
+        DELIVERY_WIDE: [DELIVERY_WIDE_POLICY],
     }
 
 
 def boundaries(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """The permissions boundary of each bounded principal: every role, never the project user."""
+    """The permissions boundary of each bounded principal: every role, never the project user. The delivery roles hold the delivery boundary."""
     return {
         **{name: [documents[BOUNDARY]] for name in ("snapshots", "execution", *ROLES, WIDE_ROLE)},
+        **{f"delivery_{name}": [documents[DELIVERY_BOUNDARY]] for name in DELIVERY_ROLES},
+        DELIVERY_WIDE: [documents[DELIVERY_BOUNDARY]],
     }
 
 
@@ -2368,8 +2512,79 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def boundary_writes_every_object(documents: dict[str, dict[str, Any]]) -> None:
         boundary_statement(documents, "ProjectLakehouseObjects")["Resource"] = f"{BUCKET}/*"
 
+    def delivery_statement(documents: dict[str, dict[str, Any]], sid: str) -> dict[str, Any]:
+        return next(statement for statement in documents[DELIVERY_BOUNDARY]["Statement"] if statement["Sid"] == sid)
+
+    def delivery_without_action(sid: str, action: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = delivery_statement(documents, sid)
+            statement["Action"] = [item for item in as_list(statement["Action"]) if item != action]
+
+        return mutation
+
+    def delivery_resource(sid: str, resource: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            delivery_statement(documents, sid)["Resource"] = resource
+
+        return mutation
+
+    def delivery_pass_any_service(documents: dict[str, dict[str, Any]]) -> None:
+        del delivery_statement(documents, "DenyIamExceptPassRoleToEcsTasks")["Condition"]
+
+    def delivery_without_iam_deny(documents: dict[str, dict[str, Any]]) -> None:
+        documents[DELIVERY_BOUNDARY]["Statement"] = [
+            statement for statement in documents[DELIVERY_BOUNDARY]["Statement"] if statement["Sid"] != "DenyIamExceptPassRoleToEcsTasks"
+        ]
+
+    state = f"{BUCKET}/{STATE_PREFIX}"
+    delivery_defects: dict[str, tuple[str, Mutation]] = {
+        "delivery defect: image push reaches the repositories of every environment": (
+            "delivery refused: push to a repository of another environment",
+            delivery_resource("PushAndReadProjectImages", arn("ecr", f"repository/{P}_*")),
+        ),
+        "delivery defect: the boundary lacks ecr:PutImage": (
+            "delivery allowed: image_push PushProjectImages ecr:PutImage",
+            delivery_without_action("PushAndReadProjectImages", "ecr:PutImage"),
+        ),
+        "delivery defect: UpdateService reaches every service of the cluster": (
+            "delivery refused: ecs:UpdateService on a service outside the project service names",
+            delivery_resource("UpdateProjectServices", arn("ecs", f"service/{P}_cluster_{E}/*")),
+        ),
+        "delivery defect: the boundary lacks ecs:RegisterTaskDefinition": (
+            "delivery allowed: deploy registers a task definition",
+            delivery_without_action("RegisterTaskDefinitions", "ecs:RegisterTaskDefinition"),
+        ),
+        "delivery defect: PassRole reaches every project role": (
+            "delivery refused: passes",
+            delivery_resource("PassProjectTaskRoles", f"arn:aws:iam::{A}:role/{P}_*"),
+        ),
+        "delivery defect: the IAM deny has no PassRole exception": ("delivery allowed: deploy passes", delivery_pass_any_service),
+        "delivery defect: the IAM deny is missing": ("delivery refused: iam:CreateRole", delivery_without_iam_deny),
+        "delivery defect: state access covers the whole bucket": (
+            "delivery refused: reads a lakehouse object",
+            delivery_resource("ProjectTerraformState", f"{BUCKET}/*"),
+        ),
+        "delivery defect: state access covers every stack": (
+            "delivery refused: reads the IAM stack state",
+            delivery_resource("ProjectTerraformState", f"{state}/*"),
+        ),
+        "delivery defect: lock release deletes state objects": (
+            "delivery refused: deletes a state object",
+            delivery_resource("ReleaseProjectTerraformLocks", f"{state}/*"),
+        ),
+        "delivery defect: the boundary lacks lock release": (
+            "delivery allowed: terraform_apply HoldStateLocks s3:DeleteObject",
+            delivery_without_action("ReleaseProjectTerraformLocks", "s3:DeleteObject"),
+        ),
+        "delivery defect: the boundary lacks a plan read": (
+            "delivery allowed: terraform_plan Readec2DescribeProjectInfrastructure ec2:DescribeVpcs",
+            delivery_without_action("RegionalReads", "ec2:DescribeVpcs"),
+        ),
+    }
+
     return {
         **job_defects,
+        **delivery_defects,
         **aws_pair_defects,
         **openmetadata_defects,
         "DescribeContainerInstances is granted on the cluster ARN instead of the container-instance ARN (review round 5 finding 6)": (

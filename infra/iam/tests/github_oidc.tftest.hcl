@@ -286,13 +286,13 @@ run "deploy_role_is_limited_to_named_services_and_roles" {
 
   variables {
     github_oidc_enabled                = true
-    github_oidc_deploy_services        = ["example_project_model_api_dev"]
+    github_oidc_deploy_services        = ["example_project_dev_model_api"]
     github_oidc_deploy_task_role_names = ["example_project_model_api_task_dev"]
   }
 
   assert {
     condition = (
-      strcontains(aws_iam_role_policy.github["deploy"].policy, "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_model_api_dev") &&
+      strcontains(aws_iam_role_policy.github["deploy"].policy, "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_model_api") &&
       strcontains(aws_iam_role_policy.github["deploy"].policy, "arn:aws:iam::111111111111:role/example_project_model_api_task_dev") &&
       strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs-tasks.amazonaws.com")
     )
@@ -569,7 +569,7 @@ run "plan_role_wildcard_reads_match_the_approved_wildcards" {
   }
 }
 
-run "every_delivery_role_carries_the_project_role_boundary" {
+run "every_delivery_role_carries_the_delivery_boundary" {
   command = plan
 
   variables {
@@ -579,8 +579,98 @@ run "every_delivery_role_carries_the_project_role_boundary" {
   assert {
     condition = (
       length(aws_iam_role.github) == 4 &&
-      alltrue([for role in values(aws_iam_role.github) : role.permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_role_boundary"])
+      alltrue([for role in values(aws_iam_role.github) : role.permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary"])
     )
-    error_message = "The push, deploy, plan and apply roles must all carry the project role boundary."
+    error_message = "The push, deploy, plan and apply roles must all carry the delivery boundary."
+  }
+}
+
+run "the_delivery_boundary_allows_every_action_of_the_delivery_roles" {
+  command = plan
+
+  variables {
+    github_oidc_enabled                = true
+    github_oidc_deploy_services        = ["example_project_dev_model_api"]
+    github_oidc_deploy_task_role_names = ["example_project_model_api_task_dev", "example_project_streamlit_task_dev", "example_project_task_execution_dev"]
+  }
+
+  assert {
+    condition     = length(output.github_oidc_actions_outside_boundary) == 0
+    error_message = "A delivery role allows an action that the delivery boundary does not allow, so the boundary would refuse it."
+  }
+}
+
+run "the_delivery_boundary_allows_every_named_resource_of_the_delivery_roles" {
+  command = plan
+
+  variables {
+    github_oidc_enabled                = true
+    github_oidc_deploy_services        = ["example_project_dev_model_api"]
+    github_oidc_deploy_task_role_names = ["example_project_model_api_task_dev", "example_project_streamlit_task_dev", "example_project_task_execution_dev"]
+  }
+
+  assert {
+    condition     = length(output.github_oidc_grants_outside_boundary) == 0
+    error_message = "A delivery role grants an action on a resource that the delivery boundary does not allow for that action."
+  }
+}
+
+run "a_service_or_role_outside_the_boundary_names_fails_the_plan" {
+  command = plan
+
+  variables {
+    github_oidc_enabled                = true
+    github_oidc_deploy_services        = ["example_project_model_api_dev", "other_project_dev_model_api"]
+    github_oidc_deploy_task_role_names = ["example_project_admin_dev", "example_project_model_api_task_prod"]
+  }
+
+  expect_failures = [aws_iam_role_policy.github]
+}
+
+run "the_delivery_boundary_holds_no_action_beyond_the_delivery_work" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = length(setintersection(toset(output.github_oidc_boundary_allowed_actions), toset([
+      "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:BatchDeleteImage", "ecr:PutLifecyclePolicy", "ecr:SetRepositoryPolicy",
+      "ecs:CreateService", "ecs:DeleteService", "ecs:RunTask", "ecs:StopTask", "ecs:DeleteCluster", "ecs:DeregisterTaskDefinition",
+      "s3:DeleteObjectVersion", "s3:PutBucketPolicy", "s3:PutLifecycleConfiguration", "s3:GetObjectVersion",
+      "ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter", "secretsmanager:GetSecretValue", "logs:GetLogEvents", "logs:PutLogEvents",
+      "ec2:RunInstances", "ec2:TerminateInstances", "iam:CreateRole", "iam:AttachRolePolicy", "iam:GetRole", "sts:AssumeRole", "budgets:ModifyBudget",
+    ]))) == 0
+    error_message = "The delivery boundary allows an action outside image push, deploy, plan reads and Terraform state."
+  }
+}
+
+run "the_delivery_boundary_names_one_action_with_a_wildcard" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition     = [for action in output.github_oidc_boundary_allowed_actions : action if strcontains(action, "*")] == ["s3:GetBucket*"]
+    error_message = "Only the bucket configuration reads may use a wildcard action, to keep the boundary under 6,144 characters."
+  }
+}
+
+run "the_delivery_boundary_allows_pass_role_only_inside_the_iam_exception" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      contains(output.github_oidc_boundary_allowed_actions, "iam:PassRole") &&
+      length([for action in output.github_oidc_boundary_allowed_actions : action if startswith(action, "iam:") && action != "iam:PassRole"]) == 0
+    )
+    error_message = "The only IAM action the delivery boundary allows is iam:PassRole."
   }
 }
