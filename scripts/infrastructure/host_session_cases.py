@@ -15,7 +15,19 @@ from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, Session
-from scripts.infrastructure.host_session_stand_in import CLUSTER, FAMILIES, GROUP, PROFILE, PROJECT, PROVIDER, REGION, SERVICES, StandInHost
+from scripts.infrastructure.host_session_stand_in import (
+    CLUSTER,
+    FAMILIES,
+    GROUP,
+    OPENMETADATA_FAMILY,
+    OPENMETADATA_SERVICE,
+    PROFILE,
+    PROJECT,
+    PROVIDER,
+    REGION,
+    SERVICES,
+    StandInHost,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
@@ -27,17 +39,19 @@ def session_module() -> Any:
     return importlib.import_module("scripts.infrastructure.host_session")
 
 
-def names() -> Names:
-    """The names the stand-in knows."""
-    return Names(CLUSTER, GROUP, PROVIDER, PROJECT, dict(sorted(SERVICES.items(), key=lambda item: item[0] != "postgres")), dict(FAMILIES))
+def names(openmetadata: bool = False) -> Names:
+    """The names the stand-in knows; ``openmetadata`` adds the persistent catalog service and its bootstrap task."""
+    services = dict(SERVICES, **({"openmetadata": OPENMETADATA_SERVICE} if openmetadata else {}))
+    families = dict(FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}))
+    return Names(CLUSTER, GROUP, PROVIDER, PROJECT, dict(sorted(services.items(), key=lambda item: item[0] != "postgres")), families)
 
 
-def build(faults: set[str] | None = None, marker: Path | None = None) -> tuple[StandInHost, Session, list[str]]:
+def build(faults: set[str] | None = None, marker: Path | None = None, openmetadata: bool = False) -> tuple[StandInHost, Session, list[str]]:
     """A stand-in host and a session wired to it; the third value collects the session's report lines."""
-    host, lines = StandInHost(faults), list[str]()
+    host, lines = StandInHost(faults, openmetadata=openmetadata), list[str]()
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
     marker = marker or Path(tempfile.mkdtemp(prefix="host_session_case_")) / "polaris_bootstrap.launched"
-    return host, Session(cli, names(), Clock(lambda: host.now, host.advance), marker, lines.append), lines
+    return host, Session(cli, names(openmetadata), Clock(lambda: host.now, host.advance), marker, lines.append), lines
 
 
 def failure(action: Callable[[], object]) -> str | None:
@@ -435,6 +449,104 @@ def status_read_only() -> dict[str, bool]:
     }
 
 
+def openmetadata_start() -> dict[str, bool]:
+    host, session, lines = build(openmetadata=True)
+    session.start()
+    log = [entry for entry in host.log if entry["operation"] in {"set-desired-capacity", "run-task", "update-service"}]
+    updates = {entry["options"]["--service"][0]: entry["options"] for entry in log if entry["operation"] == "update-service"}
+    runs = [entry for entry in log if entry["operation"] == "run-task"]
+    last_update = max(index for index, entry in enumerate(log) if entry["operation"] == "update-service")
+    bootstrap_run = next(
+        index for index, entry in enumerate(log) if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [OPENMETADATA_FAMILY]
+    )
+    return {
+        "the catalog service runs one task": host.services[OPENMETADATA_SERVICE]["running"] == 1
+        and host.services[OPENMETADATA_SERVICE]["state"] == "COMPLETED",
+        "its deployment also sets the desired count to one": updates[OPENMETADATA_SERVICE].get("--desired-count") == ["1"],
+        "no other service gets a desired count": all("--desired-count" not in options for name, options in updates.items() if name != OPENMETADATA_SERVICE),
+        "the bootstrap runs once, after every deployment": len(runs) == 2 and bootstrap_run > last_update,
+        "the bootstrap used the Project tag and propagation": log[bootstrap_run]["options"].get("--tags") == [f"key=Project,value={PROJECT}"],
+        "the bootstrap finished with exit code zero": any(line.startswith("openmetadata_bootstrap: exit codes") for line in lines),
+        "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def openmetadata_bootstrap_failure_keeps_the_chain_running() -> dict[str, bool]:
+    host, session, lines = build({"exit_code:openmetadata_bootstrap=1"}, openmetadata=True)
+    session.start()
+    return {
+        "the host stays on": host.desired == 1,
+        "every service stays stable": all(service["state"] == "COMPLETED" and service["running"] == 1 for service in host.services.values()),
+        "the failure is reported by name": any(line.startswith("openmetadata_bootstrap_failed") for line in lines),
+        "the report says the data chain is not affected": any("data chain is not affected" in line for line in lines),
+    }
+
+
+def openmetadata_bootstrap_absent_without_the_flag() -> dict[str, bool]:
+    host, session, lines = build()
+    session.start()
+    return {
+        "only host_prepare runs": [entry["options"]["--task-definition"][0] for entry in host.log if entry["operation"] == "run-task"]
+        == [FAMILIES["host_prepare"]],
+        "no desired count is sent": all("--desired-count" not in entry["options"] for entry in host.log if entry["operation"] == "update-service"),
+        "no catalog line is reported": not any("openmetadata" in line for line in lines),
+    }
+
+
+def openmetadata_stops_before_the_host() -> dict[str, bool]:
+    host, session, lines = build(openmetadata=True)
+    session.start()
+    count = len(host.log)
+    session.stop()
+    new = [entry for entry in host.log[count:] if entry["operation"] in {"set-desired-capacity", "update-service"}]
+    return {
+        "the catalog service is scaled to zero first": new[0]["operation"] == "update-service"
+        and new[0]["options"]["--service"] == [OPENMETADATA_SERVICE]
+        and new[0]["options"]["--desired-count"] == ["0"],
+        "then the host is turned off": new[1]["operation"] == "set-desired-capacity" and new[1]["options"]["--desired-capacity"] == ["0"],
+        "nothing else is touched": len(new) == 2,
+        "the catalog task was gone before the host went": host.services[OPENMETADATA_SERVICE]["running"] == 0,
+        "the host is off and verified": host.desired == 0 and host.instance_up_at is None,
+        "both steps are reported": any(line.startswith("openmetadata_stopped") for line in lines)
+        and any(line.startswith("host_off_verified") for line in lines),
+    }
+
+
+def openmetadata_that_will_not_stop_does_not_hold_the_host() -> dict[str, bool]:
+    host, session, lines = build({"never_stop_openmetadata"}, openmetadata=True)
+    session.start()
+    session.stop()
+    return {
+        "the host is still turned off and verified": host.desired == 0 and host.instance_up_at is None,
+        "the stop failure is reported": any(line.startswith("openmetadata_stop_failed") for line in lines),
+        "the report says the host is stopped anyway": any("stopping the host anyway" in line for line in lines),
+    }
+
+
+def openmetadata_restart_after_a_stop() -> dict[str, bool]:
+    host, session, _ = build(openmetadata=True)
+    session.start()
+    session.stop()
+    session.start()
+    return {
+        "the catalog service runs again after the next start": host.services[OPENMETADATA_SERVICE]["running"] == 1
+        and host.services[OPENMETADATA_SERVICE]["desired"] == 1,
+        "the bootstrap ran again and is repeatable": sum(
+            1 for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [OPENMETADATA_FAMILY]
+        )
+        == 2,
+    }
+
+
+def stop_without_the_catalog_only_turns_the_host_off() -> dict[str, bool]:
+    host, session, _ = build()
+    session.start()
+    count = len(host.log)
+    session.stop()
+    new = [entry["operation"] for entry in host.log[count:] if entry["operation"] in {"set-desired-capacity", "update-service", "run-task"}]
+    return {"stop only sets the capacity to zero": new == ["set-desired-capacity"], "the host is off": host.desired == 0 and host.instance_up_at is None}
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "happy_start": happy_start,
     "registration_timeout": registration_timeout,
@@ -459,4 +571,11 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "failure_output_privacy": failure_output_privacy,
     "load_names_order": load_names_order,
     "status_read_only": status_read_only,
+    "openmetadata_start": openmetadata_start,
+    "openmetadata_bootstrap_failure_keeps_the_chain_running": openmetadata_bootstrap_failure_keeps_the_chain_running,
+    "openmetadata_bootstrap_absent_without_the_flag": openmetadata_bootstrap_absent_without_the_flag,
+    "openmetadata_stops_before_the_host": openmetadata_stops_before_the_host,
+    "openmetadata_that_will_not_stop_does_not_hold_the_host": openmetadata_that_will_not_stop_does_not_hold_the_host,
+    "openmetadata_restart_after_a_stop": openmetadata_restart_after_a_stop,
+    "stop_without_the_catalog_only_turns_the_host_off": stop_without_the_catalog_only_turns_the_host_off,
 }

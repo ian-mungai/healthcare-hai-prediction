@@ -25,6 +25,8 @@ PROVIDER = "stand-in-provider"
 PROJECT = "stand-in-project"
 FAMILIES = {"host_prepare": "stand-in-host-prepare", "polaris_bootstrap": "stand-in-polaris-bootstrap"}
 SERVICES = {"airflow_scheduler": "stand-in-airflow-scheduler", "polaris": "stand-in-polaris", "postgres": "stand-in-postgres"}
+OPENMETADATA_SERVICE = "stand-in-openmetadata"
+OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
 ACCOUNT_MARK = "arn:aws:ecs:stand-in:000000000000:"
 BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
@@ -83,8 +85,9 @@ class StandInHost:
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
-    def __init__(self, faults: set[str] | None = None) -> None:
+    def __init__(self, faults: set[str] | None = None, openmetadata: bool = False) -> None:
         self.faults = set(faults or ())
+        self.families = dict(FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}))
         self.now = 0.0
         self.desired = 0
         self.instance_up_at: float | None = None
@@ -92,7 +95,10 @@ class StandInHost:
         self.prepared = False
         self.bootstrap_runs = 0
         self.tasks: dict[str, dict[str, Any]] = {}
-        self.services: dict[str, dict[str, Any]] = {name: {"desired": 1, "forced_at": None, "state": "IN_PROGRESS", "running": 0} for name in SERVICES.values()}
+        self.services: dict[str, dict[str, Any]] = {
+            name: {"desired": 1, "forced_at": None, "state": "IN_PROGRESS", "running": 0, "stop_at": None}
+            for name in [*SERVICES.values(), *([OPENMETADATA_SERVICE] if openmetadata else [])]
+        }
         self.log: list[dict[str, Any]] = []
         self.tokens: dict[str, str] = {}
         self.lost_replies = next((int(fault.split(":")[1]) if ":" in fault else 1 for fault in self.faults if fault.startswith("lose_run_task_reply")), 0)
@@ -141,7 +147,11 @@ class StandInHost:
                 if task["key"] == "host_prepare" and task["exit"] == 0:
                     self.prepared = True
         for name, service in self.services.items():
+            if service["stop_at"] is not None and self.now >= service["stop_at"] and "never_stop_openmetadata" not in self.faults:
+                service.update(running=0, stop_at=None)
             forced = service["forced_at"]
+            if service["desired"] == 0:
+                continue
             if forced is not None and service["state"] == "IN_PROGRESS" and self.now >= forced + SERVICE_START_SECONDS and "never_stable" not in self.faults:
                 postgres_up = self.services[SERVICES["postgres"]]["running"] == 1
                 if self.instance_active() and self.prepared and (name == SERVICES["postgres"] or postgres_up):
@@ -274,7 +284,7 @@ class StandInHost:
             return {"tasks": [{"taskArn": self.tokens[token]}], "failures": []}
         if "run_task_failure" in self.faults or not self.instance_active():
             return {"tasks": [], "failures": [{"reason": f"RESOURCE:MEMORY {LEAK}" if "leaky_reasons" in self.faults else "RESOURCE:MEMORY"}]}
-        key = next(name for name, value in FAMILIES.items() if value == family)
+        key = next(name for name, value in self.families.items() if value == family)
         if key == "polaris_bootstrap":
             self.bootstrap_runs += 1
         code = next(
@@ -313,7 +323,13 @@ class StandInHost:
 
     def ecs_update_service(self, options: dict[str, list[str]]) -> dict[str, Any]:
         service = self.services[options["--service"][0]]
-        service.update(forced_at=self.now, state="IN_PROGRESS", running=0)
+        count = options.get("--desired-count")
+        if count is not None and int(count[0]) == 0:
+            service.update(desired=0, forced_at=None, state="COMPLETED", stop_at=self.now + STOP_TASK_SECONDS)
+            return {}
+        if count is not None:
+            service["desired"] = int(count[0])
+        service.update(forced_at=self.now, state="IN_PROGRESS", running=0, stop_at=None)
         return {}
 
     def ecs_describe_services(self, options: dict[str, list[str]]) -> dict[str, Any]:
