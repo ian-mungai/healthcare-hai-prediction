@@ -342,20 +342,73 @@ def apply(tree: Path, mutant: Mutant) -> str:
     return "\n".join(diff)
 
 
+def rejected_report(report: dict[str, Any], reason: str, returncode: int) -> dict[str, Any]:
+    checks: dict[str, bool] = {}
+    errors = [reason, f"runner exit {returncode}"]
+    if isinstance(report.get("error"), str) and report["error"]:
+        errors.append(report["error"])
+    cases = report.get("cases")
+    for row in cases if isinstance(cases, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if isinstance(row.get("checks"), dict):
+            for name, ok in row["checks"].items():
+                checks[name] = checks.get(name, True) and ok is True
+        if isinstance(row.get("error"), str) and row["error"]:
+            errors.append(row["error"])
+    return {"passed": False, "checks": checks, "error": "\n".join(errors), "seconds": 0}
+
+
+def case_result(report: dict[str, Any], case: str, returncode: int) -> dict[str, Any]:
+    for field in ("cases", "passed", "total"):
+        if field not in report:
+            return rejected_report(report, f"missing required field {field}", returncode)
+    cases = report["cases"]
+    if not isinstance(cases, list) or len(cases) != 1 or not isinstance(cases[0], dict):
+        return rejected_report(report, "the report must contain exactly one case object", returncode)
+    row = cases[0]
+    for field in ("case", "status", "passed", "checks", "error", "seconds", "leftovers"):
+        if field not in row:
+            return rejected_report(report, f"missing required field {field}", returncode)
+    if row["case"] != case:
+        return rejected_report(report, "the report does not name the requested case", returncode)
+    checks = row["checks"]
+    if not isinstance(checks, dict) or not checks or any(type(ok) is not bool for ok in checks.values()):
+        return rejected_report(report, "the case checks must be nonempty Boolean evidence", returncode)
+    if not isinstance(row["error"], str) or not isinstance(row["leftovers"], list):
+        return rejected_report(report, "the case error or leftovers field has an invalid type", returncode)
+    if type(row["seconds"]) not in (int, float) or not 0 <= row["seconds"] < float("inf"):
+        return rejected_report(report, "the case seconds field must be a finite nonnegative number", returncode)
+    passed = all(checks.values()) and not row["error"] and not row["leftovers"]
+    if type(row["passed"]) is not bool or row["passed"] != passed or row["status"] != ("pass" if passed else "fail"):
+        return rejected_report(report, "the case status, passed flag and checks disagree", returncode)
+    if type(report["total"]) is not int or report["total"] != 1 or type(report["passed"]) is not int or report["passed"] != int(passed):
+        return rejected_report(report, "the report summary disagrees with the selected case", returncode)
+    if report.get("error", "") != "" or row["error"]:
+        return rejected_report(report, "the report or case contains an error", returncode)
+    if row["leftovers"] or checks.get(LEFTOVER) is not True:
+        return rejected_report(report, "the case cleanup did not pass", returncode)
+    if returncode != (0 if passed else 1):
+        return rejected_report(report, "the runner exit does not match the reported result", returncode)
+    return {"passed": passed, "checks": checks, "error": "", "seconds": row["seconds"]}
+
+
 def run_case(tree: Path, case: str) -> dict[str, Any]:
     environment = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR") if name in os.environ}
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     process = run_command(sys.executable, ["-m", RUNNER, "--case", case], cwd=tree, env=environment, timeout=900)
     reports = sorted((tree / "data" / "e2e" / REPORTS).glob("*/report.json"))
-    if not reports:
-        return {
-            "passed": False,
-            "checks": {},
-            "error": f"the runner wrote no report (exit {process.returncode}): {(process.stderr or process.stdout)[-300:]}",
-            "seconds": 0,
-        }
-    result = json.loads(reports[-1].read_text())["cases"][0]
-    return {"passed": result["status"] == "pass", "checks": result["checks"], "error": result["error"], "seconds": result["seconds"]}
+    if len(reports) != 1:
+        return rejected_report({}, "the runner wrote no report" if not reports else "the runner wrote multiple reports", process.returncode)
+    try:
+        report = json.loads(reports[0].read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return rejected_report({}, "JSONDecodeError: invalid JSON", process.returncode)
+    except UnicodeError:
+        return rejected_report({}, "the report is not valid UTF-8", process.returncode)
+    if not isinstance(report, dict):
+        return rejected_report({}, "the report must be an object", process.returncode)
+    return case_result(report, case, process.returncode)
 
 
 def failed(result: dict[str, Any]) -> list[str]:
@@ -402,6 +455,8 @@ def main() -> int:
             f"control: an unchanged copy of the tree: {'pass' if control['passed'] else 'FAIL'} ({control['seconds']} s)",
             *lines_of(control["checks"]),
         ]
+        if control["error"]:
+            log += [f"  error: {line}" for line in control["error"].splitlines()]
         log += [
             "",
             f"mutant {guard.mutant}: {MUTANTS[guard.mutant].what}",
@@ -410,7 +465,7 @@ def main() -> int:
         ]
         log += ["  the code change:", *[f"    {line}" for line in diff.splitlines()], *lines_of(result["checks"])]
         if result["error"]:
-            log.append(f"  error: {result['error'].splitlines()[0]}")
+            log += [f"  error: {line}" for line in result["error"].splitlines()]
         (LOGS / f"{guard.case}__{guard.mutant}.log").write_text("\n".join(log) + "\n")
         summary.append({"case": guard.case, "mutant": guard.mutant, "verified": ok, "why": why, "failed_checks": failed(result)})
         sys.stdout.write(f"{'ok' if ok else 'FAIL':<5} {guard.case} / {guard.mutant}: {why}\n")
