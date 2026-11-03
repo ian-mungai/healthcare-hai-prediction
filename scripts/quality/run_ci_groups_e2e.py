@@ -151,6 +151,8 @@ COPIED = (
     "config/quality/ci_jobs.json",
     "scripts/quality/run_ci_reuse_e2e.py",
     "scripts/quality/run_model_metadata_e2e.py",
+    "scripts/quality/dbt_manifest_labels.py",
+    "scripts/quality/label_guard_fixtures.py",
     "scripts/acquisition/run_checks_shard.sh",
     "scripts/acquisition/run_checks_combine.sh",
 )

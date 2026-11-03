@@ -84,13 +84,21 @@ def names_of(unique_id: str, entry: dict[str, Any]) -> set[str]:
     return names
 
 
+def tested_model(entry: dict[str, Any]) -> str | None:
+    """The unique_id of the model a unit test tests: the dependency node whose name is the unit test's model, or None for other entries."""
+    model = entry.get("model")
+    nodes = (entry.get("depends_on") or {}).get("nodes") or []
+    matches = [node for node in nodes if isinstance(node, str) and node.startswith("model.") and node.split(".")[-1] == model]
+    return matches[0] if model and len(matches) == 1 else None
+
+
 def manifest_problems(manifest: dict[str, Any], outside: Collection[str] = OUTSIDE_PUBLIC_SCOPE) -> list[str]:
     """One line per manifest entry that resolves a Confidential label or confidential key and is not excepted; each line starts with the unique_id."""
     entries = list(manifest_entries(manifest))
     excepted = {unique_id for unique_id, entry in entries if names_of(unique_id, entry) & set(outside)}
     problems = []
     for unique_id, entry in entries:
-        if unique_id in excepted or entry.get("attached_node") in excepted or entry.get("model") in {*excepted, *outside}:
+        if unique_id in excepted or entry.get("attached_node") in excepted or entry.get("model") in outside or tested_model(entry) in excepted:
             continue
         findings = list(dict.fromkeys(meta_findings(entry)))
         if findings:
@@ -101,7 +109,9 @@ def manifest_problems(manifest: dict[str, Any], outside: Collection[str] = OUTSI
 def parse_environment(work: Path, packages: Path | None, profiles: Path) -> dict[str, str]:
     """The environment of one parse: the host environment without dbt variables, and every dbt output redirected into the scratch folder."""
     environment = {key: value for key, value in os.environ.items() if not key.startswith("DBT_")}
-    environment.update(DBT_PROFILES_DIR=str(profiles), DBT_TARGET_PATH=str(work / "target"), DBT_LOG_PATH=str(work / "logs"))
+    environment.update(
+        DBT_SEND_ANONYMOUS_USAGE_STATS="false", DBT_PROFILES_DIR=str(profiles), DBT_TARGET_PATH=str(work / "target"), DBT_LOG_PATH=str(work / "logs")
+    )
     if packages is not None:
         environment["DBT_PACKAGES_INSTALL_PATH"] = str(packages)
     return environment
@@ -111,7 +121,7 @@ def parse_manifest(project_dir: Path, profiles: Path, work: Path, packages: Path
     """Run the pinned ``dbt parse`` on one project and return its manifest; a failed or missing parse raises ManifestError."""
     if not DBT.exists():
         raise ManifestError("dbt is missing: run .venv/bin/python -m scripts.quality.install_sqlfluff")
-    arguments = ["parse", "--project-dir", str(project_dir), "--target", TARGET, "--no-partial-parse", "--no-use-colors"]
+    arguments = ["parse", "--project-dir", str(project_dir), "--target", TARGET, "--no-partial-parse", "--no-use-colors", "--no-send-anonymous-usage-stats"]
     result = run_command(str(DBT), arguments, cwd=work, env=parse_environment(work, packages, profiles), timeout=PARSE_SECONDS)
     manifest = work / "target" / "manifest.json"
     if result.returncode != 0 or not manifest.exists():

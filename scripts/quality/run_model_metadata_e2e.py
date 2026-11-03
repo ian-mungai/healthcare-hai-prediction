@@ -501,6 +501,31 @@ def more_location_cases(outside: Collection[str]) -> list[tuple[str, bool]]:
     ]
 
 
+def unit_test_exemption_cases() -> list[tuple[str, bool]]:
+    """A unit test of an excepted model is excepted through its tested-model dependency; a unit test of a research model is still checked."""
+
+    def entry(unique_id: str, **fields: Any) -> dict[str, Any]:
+        return {"unique_id": unique_id, **fields}
+
+    confidential = {"meta": {"classification": "Confidential"}}
+    manifest = {
+        "nodes": {"model.hai.future_entry": entry("model.hai.future_entry", resource_type="model", name="future_entry", config=confidential)},
+        "unit_tests": {
+            "unit_test.hai.future_entry.t1": entry(
+                "unit_test.hai.future_entry.t1", name="t1", model="future_entry", depends_on={"nodes": ["model.hai.future_entry"]}, config=confidential
+            ),
+            "unit_test.hai.public_entry.t2": entry(
+                "unit_test.hai.public_entry.t2", name="t2", model="public_entry", depends_on={"nodes": ["model.hai.public_entry"]}, config=confidential
+            ),
+        },
+    }
+    found = dbt_manifest_labels.manifest_problems(manifest, {"model.hai.future_entry"})
+    return [
+        ("manifest_unit_test_of_excepted_model_passes", not any("future_entry.t1" in line for line in found)),
+        ("manifest_unit_test_of_research_model_fails", any("public_entry.t2" in line for line in found)),
+    ]
+
+
 def manifest_cases() -> list[tuple[str, bool]]:
     """The manifest check names every resolved Confidential label by unique_id, passes a clean tree and passes an excepted future source."""
     outside = frozenset({"future_entry"})
@@ -1865,7 +1890,7 @@ def main() -> int:
     if unknown:
         sys.stderr.write(f"unknown cases: {', '.join(unknown)}\n")
         return 1
-    guards = [] if args.case else [*guard_cases(), *manifest_cases()]
+    guards = [] if args.case else [*guard_cases(), *manifest_cases(), *unit_test_exemption_cases()]
     for name, passed in guards:
         sys.stdout.write(f"{'ok' if passed else 'WRONG':<6} {name}\n")
     leftover = [] if args.case else repository_label_problems()
