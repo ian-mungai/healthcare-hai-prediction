@@ -1,4 +1,4 @@
-"""Cases of the gold publish host driver itself: start-up and clean-up failures and the sentinel scan of the final report.
+"""Cases of publication host report completeness, start-up, clean-up and the sentinel scan of the final report.
 
 Run ``.venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode runner``. Each case runs the driver's own ``main`` with a stand-in for the launcher
 client, so no launcher process, container or Docker call exists: the stand-in records what the driver asks of it, and a case reads the report the driver
@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -27,6 +28,7 @@ from typing import Any
 from unittest.mock import patch
 
 from orchestration import launcher
+from scripts.features import run_feature_store_e2e as feature_driver
 from scripts.lakehouse import run_gold_publish_e2e as driver
 
 FAKE_PID = 2**30
@@ -46,6 +48,8 @@ class Behavior:
     shutdown_fails: bool = False
     stays_alive: bool = False
     containers: list[str] = field(default_factory=list)
+    containers_after_attempt: list[str] = field(default_factory=list)
+    attempt: Callable[[str, str, list[str], dict[str, Any]], Any] | None = None
 
 
 class FakeClient:
@@ -105,6 +109,15 @@ class FakeClient:
     def release_allocation(self, alloc_id: str) -> None:
         self.calls.append("release_allocation")
 
+    def run_attempt(self, principal: Any, template: str, launch: str, args: list[str], params: dict[str, Any], **_: Any) -> Any:
+        self.calls.append(f"attempt:{launch}")
+        if FakeClient.behavior.attempt is None:
+            raise RuntimeError("no synthetic transport configured")
+        result = FakeClient.behavior.attempt(template, launch, args, params)
+        if FakeClient.behavior.containers_after_attempt:
+            FakeClient.behavior.containers = list(FakeClient.behavior.containers_after_attempt)
+        return result
+
 
 @dataclass
 class Outcome:
@@ -122,15 +135,26 @@ class Outcome:
         return sum(client.calls.count("shutdown") for client in self.clients)
 
 
-def drive(root: Path, mode: str, behavior: Behavior, steps: Callable[[Any, Path], list[dict[str, Any]]] | None = None) -> Outcome:
+def drive(
+    root: Path,
+    mode: str,
+    behavior: Behavior,
+    steps: Callable[[Any, Path], list[dict[str, Any]]] | None = None,
+    *,
+    real_readers: bool = False,
+    selected: list[str] | None = None,
+    feature: bool = False,
+) -> Outcome:
     """Run ``main`` of the driver once with the stand-in client; a folder the driver preserved is removed here, after it is recorded."""
     RUNS[0] += 1
     out = OUT_ROOT[0] / f"driver_run_{RUNS[0]:02d}"
+    if feature:
+        out = feature_driver.OUT / "report_consumers" / OUT_ROOT[0].parent.name / OUT_ROOT[0].name / out.name
     folders: list[Path] = []
     real_mkdtemp = tempfile.mkdtemp
 
-    def mkdtemp(*args: Any, **kwargs: Any) -> str:
-        path = real_mkdtemp(*args, **{**kwargs, "dir": str(root)})
+    def mkdtemp(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        path = real_mkdtemp(suffix=suffix, prefix=prefix, dir=str(root))
         folders.append(Path(path))
         return path
 
@@ -138,19 +162,28 @@ def drive(root: Path, mode: str, behavior: Behavior, steps: Callable[[Any, Path]
     FakeClient.behavior = behavior
     produced = steps or (lambda session, report: [driver.step("a stand-in step", True)])
     stdout = io.StringIO()
+    stderr = io.StringIO()
     with (
         patch.object(driver, "OUT", out),
-        patch.object(driver.sys, "argv", ["runner", "--mode", mode]),
+        patch.object(driver.sys, "argv", ["runner", "--mode", mode, *(["--case", *selected] if selected else [])]),
         patch.object(driver.tempfile, "mkdtemp", mkdtemp),
         patch.object(launcher, "docker_socket_path", return_value=str(root / "engine.sock")),
         patch.object(launcher, "LauncherClient", FakeClient),
         patch.object(driver, "EXIT_SECONDS", 1.0, create=True),
         patch.object(driver, "CONTAINER_SECONDS", 1.0, create=True),
-        patch.object(driver, "suite", lambda session, report, selected=None: produced(session, report)),
-        patch.object(driver, "publish_offline", lambda session, report: produced(session, report)),
+        contextlib.ExitStack() as substitutes,
         contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(stderr),
     ):
-        status = driver.main()
+        if not real_readers:
+            substitutes.enter_context(patch.object(driver, "suite", lambda session, report, selected=None: produced(session, report)))
+            substitutes.enter_context(patch.object(driver, "publish_offline", lambda session, report: produced(session, report)))
+        if feature:
+            substitutes.enter_context(patch.object(feature_driver, "OUT", out))
+            substitutes.enter_context(patch.object(feature_driver, "publish_exports", synthetic_feature_exports))
+        status = feature_driver.main() if feature else driver.main()
+    (out / "driver_stdout.log").write_text(stdout.getvalue())
+    (out / "driver_stderr.log").write_text(stderr.getvalue())
     reports = sorted(out.glob("*/report.json"))
     text = reports[-1].read_text() if reports else ""
     outcome = Outcome(status, json.loads(text) if text else {}, text, list(folders), list(FakeClient.instances), any(folder.exists() for folder in folders))
@@ -684,6 +717,449 @@ def no_signal_cases(root: Path) -> Check:
     return checks
 
 
+GOLD_DEFAULT = (
+    "iceberg_check",
+    "happy_path",
+    "branch_isolation",
+    "interruptions",
+    "retry_no_double_commit",
+    "tamper_and_order",
+    "main_moved_refused",
+    "export_and_consumer",
+    "rejected_result_commit",
+    "namespace_guard",
+    "backup_store",
+    "maintenance",
+    "maintenance_protection",
+    "reader_discovery",
+    "contract_plan",
+)
+FEATURE_DEFAULT = ("happy_and_types", "retry_and_new_publication", "version_two", "interruption_between_fast_forwards", "tamper")
+
+
+def passing_rows(names: tuple[str, ...]) -> list[dict[str, Any]]:
+    return [{"case": name, "status": "pass", "checks": {f"synthetic assertion {name}": True}, "error": ""} for name in names]
+
+
+def synthetic_feature_exports(base: Path, report: Path) -> dict[str, Any]:
+    document: dict[str, Any] = {"runs": {}}
+    (report / "inputs.json").write_text(json.dumps(document))
+    return document
+
+
+@dataclass
+class ReportReplay:
+    """Synthetic fixture effects and job transport, with host file readers and publication aggregation left real."""
+
+    files: dict[str, str | None]
+    failed_launch: str = ""
+    versions: bool = True
+    folder: Path | None = None
+    requests: list[tuple[str, list[str]]] = field(default_factory=list)
+
+    def __call__(self, template: str, launch: str, args: list[str], params: dict[str, Any]) -> SimpleNamespace:
+        self.requests.append((launch, list(args)))
+        ok = launch != self.failed_launch
+        if template == "fixture_init":
+            self.folder = Path(params["case_host"]).parent
+            (self.folder / "case" / "sealed.duckdb").write_bytes(b"synthetic sealed fixture, not a database")
+        elif template == "gold_export":
+            folder = Path(params["publish_host"])
+            digest = driver.gold_publish.sha256_file(Path(params["sealed_host"]))
+            tables: dict[str, dict[str, Any]] = {name: {"columns": []} for name in driver.gold_publish.load_plan().tables}
+            tables["dim_release"]["columns"] = [["publication_dates", "DATE[]"], ["download_run_ids", "VARCHAR[]"]]
+            manifest = json.dumps({"tables": tables})
+            if launch == "export":
+                (folder / "export").mkdir()
+                (folder / "export" / "manifest.json").write_text(manifest)
+            else:
+                ok = False
+            (folder / "consumer_result.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": params["run"],
+                        "in_container_sha256": digest,
+                        "expected_sha256": params["sealed_sha256"],
+                        "exported": launch == "export",
+                        "manifest_sha256": driver.hashlib.sha256(manifest.encode()).hexdigest(),
+                    }
+                )
+            )
+        elif template == "spark_e2e" and params["job"] == "gold_publish_local":
+            if self.folder is None:
+                raise RuntimeError("synthetic publication ran before fixture transport")
+            namespace = self.folder / "multi" / "warehouse" / "gold_e2e"
+            namespace.mkdir(parents=True, exist_ok=True)
+            for name in (*gold_table_names(), *(("publish_runs",) if launch == "commit" else ())):
+                (namespace / name).mkdir(exist_ok=True)
+        elif template == "spark_e2e" and params["job"] in ("gold_publish_e2e", "features_publish_e2e"):
+            base = feature_driver.OUT if params["job"] == "features_publish_e2e" else driver.OUT
+            folder = base / args[args.index("--stamp") + 1]
+            name = "cases_readback.json" if launch == "readback" else "cases_iceberg_check.json" if launch == "iceberg" else "cases_all.json"
+            if "--case" in args and launch == "suite":
+                selected = args[args.index("--case") + 1 : args.index("--stamp")]
+                name = f"cases_{'_'.join(selected)}.json"
+            payload = self.files[name]
+            if payload is not None:
+                (folder / name).write_text(payload)
+            if launch == "iceberg" and self.versions:
+                (folder / "iceberg_versions.json").write_text(json.dumps({"spark": "synthetic", "iceberg": "synthetic"}))
+        else:
+            raise RuntimeError(f"unexpected synthetic transport: {template} {launch}")
+        return SimpleNamespace(ok=ok, exit_code=0 if ok else 7, reason="" if ok else "synthetic transport failure", stdout="", stderr="")
+
+
+def gold_table_names() -> tuple[str, ...]:
+    return tuple(driver.gold_publish.load_plan().tables)
+
+
+@dataclass
+class ReportInput:
+    label: str
+    payload: str | None
+    reason: tuple[str, ...]
+    failed_row: dict[str, Any] | None = None
+
+
+def report_inputs(names: tuple[str, ...]) -> list[ReportInput]:
+    """Malformed evidence and contradictory rows, each paired with its intended diagnostic or failed case."""
+    rows = passing_rows(names)
+    inputs = [
+        ReportInput("absent report", None, ("missing",)),
+        ReportInput("zero bytes", "", ("JSON",)),
+        ReportInput("whitespace", " \n\t", ("JSON",)),
+        ReportInput("invalid JSON", "[", ("JSON",)),
+        ReportInput("empty inventory", "[]", (names[0],)),
+        ReportInput("object instead of list", "{}", ("list",)),
+        ReportInput("null instead of list", "null", ("list",)),
+        ReportInput("string instead of list", '"not a list"', ("list",)),
+        ReportInput("non-object row", json.dumps([None, *rows[1:]]), ("row",)),
+        ReportInput("unknown case", json.dumps([{**rows[0], "case": "unrequested_case"}, *rows[1:]]), ("unrequested_case",)),
+        ReportInput("extra passing duplicate", json.dumps([*rows, rows[0]]), (names[0],)),
+    ]
+    if len(names) > 1:
+        inputs += [
+            ReportInput("partial inventory", json.dumps(rows[:1]), (names[1],)),
+            ReportInput("duplicate replaces expected case", json.dumps([rows[0], rows[0], *rows[2:]]), (names[0], names[1])),
+        ]
+    for field_name in ("case", "status", "checks", "error"):
+        missing = dict(rows[0])
+        del missing[field_name]
+        inputs.append(ReportInput(f"missing {field_name}", json.dumps([missing, *rows[1:]]), (field_name,)))
+    for field_name, value in (("case", 1), ("status", True), ("checks", []), ("error", False)):
+        inputs.append(ReportInput(f"wrong {field_name} type", json.dumps([{**rows[0], field_name: value}, *rows[1:]]), (field_name,)))
+    for label, changes, reason in (
+        ("empty checks", {"checks": {}}, ("checks",)),
+        ("false check despite pass", {"checks": {"synthetic assertion": False}}, ("checks",)),
+        ("integer check despite pass", {"checks": {"synthetic assertion": 1}}, ("checks",)),
+        ("string check despite pass", {"checks": {"synthetic assertion": "true"}}, ("checks",)),
+        ("error despite pass", {"error": "synthetic producer error"}, ("error",)),
+        ("failed status with true checks", {"status": "fail"}, ("status",)),
+        ("pending status", {"status": "pending"}, ("status",)),
+        ("unknown status", {"status": "unrecognized"}, ("status",)),
+    ):
+        row = {**rows[0], **changes}
+        inputs.append(ReportInput(label, json.dumps([row, *rows[1:]]), reason, row))
+    failed = {**rows[0], "status": "fail", "error": "synthetic duplicate failure"}
+    inputs.append(ReportInput("failed row among passing duplicates", json.dumps([*rows, failed]), (names[0],), failed))
+    inputs.append(ReportInput("only first-row checks", json.dumps([{"checks": {}}]), ("case",)))
+    return inputs
+
+
+def replay_run(
+    root: Path,
+    mode: str,
+    filename: str,
+    payload: str | None,
+    *,
+    feature: bool = False,
+    selected: tuple[str, ...] = (),
+    behavior: Behavior | None = None,
+    failed_launch: str = "",
+    versions: bool = True,
+) -> tuple[Outcome, ReportReplay]:
+    files = {
+        "cases_all.json": json.dumps(passing_rows(FEATURE_DEFAULT if feature else GOLD_DEFAULT)),
+        "cases_readback.json": json.dumps(passing_rows(("readback",))),
+        "cases_iceberg_check.json": json.dumps(passing_rows(("iceberg_check",))),
+        filename: payload,
+    }
+    replay = ReportReplay(files, failed_launch, versions)
+    behavior = behavior or Behavior()
+    behavior.attempt = replay
+    return drive(root, mode, behavior, real_readers=True, selected=list(selected), feature=feature), replay
+
+
+def cleanup_of(outcome: Outcome) -> dict[str, Any]:
+    if "cleanup" in outcome.report:
+        return dict(outcome.report["cleanup"])
+    return next((dict(item["cleanup"]) for item in outcome.report.get("steps", []) if "cleanup" in item), {})
+
+
+def cleaned(outcome: Outcome) -> bool:
+    cleanup = cleanup_of(outcome)
+    return (
+        bool(cleanup)
+        and cleanup.get("launcher_left") is False
+        and cleanup.get("containers_left") == []
+        and cleanup.get("errors") == []
+        and cleanup.get("registry_kept") is None
+        and len(outcome.clients) == 1
+        and outcome.shutdowns == 1
+        and outcome.clients[0].calls.count("release_allocation") == 1
+        and not outcome.clients[0].alive
+        and not outcome.preserved
+    )
+
+
+def case_names(outcome: Outcome) -> list[str]:
+    return [name.removeprefix("case ") for item in outcome.report.get("steps", []) if (name := item.get("step", item.get("name", ""))).startswith("case ")]
+
+
+def complete_control(outcome: Outcome, names: tuple[str, ...], probes: tuple[str, ...] = ()) -> bool:
+    text = json.dumps(outcome.report.get("steps", []))
+    case_steps = [item for item in outcome.report.get("steps", []) if item.get("step", item.get("name", "")).startswith("case ")]
+    return (
+        outcome.status == 0
+        and outcome.report.get("status") == "pass"
+        and outcome.report.get("error") == ""
+        and case_names(outcome) == list(names)
+        and [item.get("checks") for item in case_steps] == [row["checks"] for row in passing_rows(names)]
+        and all(item.get("error") == "" for item in case_steps)
+        and all(f"synthetic assertion {name}" in text for name in (*names, *probes))
+        and all(item.get("ok", item.get("verdict") == "pass") is True for item in outcome.report.get("steps", []))
+        and cleaned(outcome)
+    )
+
+
+def refused_for(outcome: Outcome, filename: str, invalid: ReportInput) -> bool:
+    failed = [item for item in outcome.report.get("steps", []) if item.get("ok") is False or item.get("verdict") == "fail"]
+    messages = [outcome.report.get("error"), *(item.get("error") for item in failed)]
+    for message in messages:
+        if not isinstance(message, str) or not message:
+            continue
+        diagnostic = message.splitlines()[0].lower()
+        reason = re.sub(r"\S*" + re.escape(filename.lower()), "", diagnostic)
+        if filename.lower() in diagnostic and all(re.search(r"(?<!\w)" + re.escape(word.lower()) + r"(?!\w)", reason) for word in invalid.reason):
+            return True
+    row = invalid.failed_row
+    return row is not None and any(
+        item.get("step", item.get("name")) == f"case {row['case']}" and item.get("checks") == row["checks"] and item.get("error") == row["error"]
+        for item in failed
+    )
+
+
+def diagnostic_reason_cases(root: Path) -> Check:
+    """Reject generic report refusals that identify no defective field."""
+    filename = "cases_all.json"
+    checks: Check = {}
+    for field_name in ("case", "error"):
+        invalid = ReportInput(f"missing {field_name}", None, (field_name,))
+        for label, message, expected in (
+            ("generic filename only", f"{filename}: invalid report", False),
+            ("traceback source text", f"{filename}: invalid report\nTraceback mentions {field_name}", False),
+            ("specific missing field", f"{filename}: missing {field_name}", True),
+        ):
+            outcome = Outcome(1, {"status": "fail", "error": message, "steps": []}, "", [], [], False)
+            checks[f"{field_name}: {label}"] = refused_for(outcome, filename, invalid) is expected
+    return checks
+
+
+def report_consumer_cases(root: Path, boundary: str) -> Check:
+    feature = boundary == "feature"
+    mode = "publish_offline" if boundary in ("feature", "publish", "readback") else "local_iceberg" if boundary == "iceberg" else "suite"
+    names = FEATURE_DEFAULT if feature else ("readback",) if boundary == "readback" else ("iceberg_check",) if boundary == "iceberg" else GOLD_DEFAULT
+    filename = "cases_readback.json" if boundary == "readback" else "cases_iceberg_check.json" if boundary == "iceberg" else "cases_all.json"
+    expected = GOLD_DEFAULT if boundary == "readback" else () if boundary == "iceberg" else names
+    probes = names if boundary in ("readback", "iceberg") else ()
+    launch = "readback" if boundary == "readback" else "iceberg" if boundary == "iceberg" else "suite"
+    control, transport = replay_run(root, mode, filename, json.dumps(passing_rows(names)), feature=feature)
+    checks = {f"{boundary}: complete positive control has exact inventory, exit 0 and persisted cleanup": complete_control(control, expected, probes)}
+    checks[f"{boundary}: positive control reaches the requested transport"] = sum(name == launch for name, _ in transport.requests) == 1
+    if feature:
+        checks["feature: default contains exactly five cases and two host controls"] = control.report.get("counts") == {"pass": 7, "fail": 0, "pending": 0}
+    for invalid in report_inputs(names):
+        outcome, transport = replay_run(root, mode, filename, invalid.payload, feature=feature)
+        label = f"{boundary}: {invalid.label}"
+        checks[f"{label}: exit 1 and persisted fail"] = outcome.status == 1 and outcome.report.get("status") == "fail"
+        checks[f"{label}: failure names the intended report defect"] = refused_for(outcome, filename, invalid)
+        checks[f"{label}: real session cleanup is persisted and resolved"] = cleaned(outcome)
+        checks[f"{label}: report transport was reached once"] = sum(name == launch for name, _ in transport.requests) == 1
+    return checks
+
+
+def selected_report_cases(root: Path) -> Check:
+    checks: Check = {}
+    for selected in (("contract_plan",), ("happy_path", "contract_plan"), ("contract_plan", "contract_plan")):
+        filename = f"cases_{'_'.join(selected)}.json"
+        control, transport = replay_run(root, "suite", filename, json.dumps(passing_rows(selected)), selected=selected)
+        checks[f"{selected}: exact requested order and multiplicity pass"] = complete_control(control, selected)
+        checks[f"{selected}: transport receives the explicit selection unchanged"] = transport.requests[0][1][:-2] == ["--case", *selected]
+        missing = ReportInput("requested occurrence missing", json.dumps(passing_rows(selected[:-1])), (selected[-1],))
+        outcome, _ = replay_run(root, "suite", filename, missing.payload, selected=selected)
+        checks[f"{selected}: a missing requested occurrence fails for its name with cleanup"] = (
+            outcome.status == 1 and outcome.report.get("status") == "fail" and refused_for(outcome, filename, missing) and cleaned(outcome)
+        )
+    return checks
+
+
+def report_lifecycle_cases(root: Path) -> Check:
+    checks: Check = {}
+    for feature in (False, True):
+        mode = "publish_offline" if feature else "suite"
+        names: tuple[str, ...] = FEATURE_DEFAULT if feature else GOLD_DEFAULT
+        payload = json.dumps(passing_rows(names))
+        label = "feature" if feature else "gold"
+        control, _ = replay_run(root, mode, "cases_all.json", payload, feature=feature)
+        checks[f"{label}: lifecycle positive control is complete"] = complete_control(control, names)
+        failed, _ = replay_run(root, mode, "cases_all.json", payload, feature=feature, failed_launch="suite")
+        checks[f"{label}: complete passing report cannot override failed transport"] = (
+            failed.status == 1
+            and failed.report.get("status") == "fail"
+            and any(
+                item.get("step", item.get("name")) == "the case suite ran in the Spark image"
+                and item.get("ok", item.get("verdict") == "pass") is False
+                and item.get("exit") == 7
+                for item in failed.report.get("steps", [])
+            )
+            and case_names(failed) == list(names)
+            and cleaned(failed)
+        )
+        for body in (payload, "["):
+            unresolved, _ = replay_run(root, mode, "cases_all.json", body, feature=feature, behavior=Behavior(status_fails=True))
+            cleanup = cleanup_of(unresolved)
+            checks[f"{label}: cleanup error survives {'invalid JSON' if body == '[' else 'complete report'}"] = (
+                unresolved.status == 1
+                and unresolved.report.get("status") == "fail"
+                and unresolved.preserved
+                and bool(cleanup.get("registry_kept"))
+                and "the containers cannot be read: ClientError" in cleanup.get("errors", [])
+                and unresolved.shutdowns == 1
+            )
+            if body == "[":
+                checks[f"{label}: invalid JSON and cleanup failure are both persisted"] = refused_for(
+                    unresolved, "cases_all.json", ReportInput("invalid JSON", "[", ("JSON",))
+                )
+        left, _ = replay_run(root, mode, "cases_all.json", payload, feature=feature, behavior=Behavior(stays_alive=True))
+        checks[f"{label}: launcher left after valid report fails and retains its registry"] = (
+            left.status == 1
+            and left.report.get("status") == "fail"
+            and cleanup_of(left).get("launcher_left") is True
+            and bool(cleanup_of(left).get("registry_kept"))
+            and left.preserved
+            and left.shutdowns == 1
+        )
+        containers, _ = replay_run(
+            root, mode, "cases_all.json", payload, feature=feature, behavior=Behavior(containers_after_attempt=["synthetic-leftover-container"])
+        )
+        checks[f"{label}: container left after valid report fails and retains its registry"] = (
+            containers.status == 1
+            and containers.report.get("status") == "fail"
+            and cleanup_of(containers).get("containers_left") == ["synthetic-leftover-container"]
+            and bool(cleanup_of(containers).get("registry_kept"))
+            and containers.preserved
+            and containers.shutdowns == 1
+        )
+    for mode, filename, names, expected, launch in (
+        ("publish_offline", "cases_all.json", GOLD_DEFAULT, GOLD_DEFAULT, "suite"),
+        ("publish_offline", "cases_readback.json", ("readback",), GOLD_DEFAULT, "readback"),
+        ("local_iceberg", "cases_iceberg_check.json", ("iceberg_check",), (), "iceberg"),
+    ):
+        payload = json.dumps(passing_rows(names))
+        control, _ = replay_run(root, mode, filename, payload)
+        checks[f"{mode} {launch}: complete transport positive control"] = complete_control(control, expected, names)
+        failed, _ = replay_run(root, mode, filename, payload, failed_launch=launch)
+        checks[f"{mode} {launch}: failed transport cannot be hidden by passing report"] = (
+            failed.status == 1
+            and failed.report.get("status") == "fail"
+            and any(item.get("ok") is False and item.get("exit") == 7 for item in failed.report.get("steps", []))
+            and all(f"synthetic assertion {name}" in failed.text for name in names)
+            and cleaned(failed)
+        )
+    control, _ = replay_run(root, "local_iceberg", "cases_iceberg_check.json", json.dumps(passing_rows(("iceberg_check",))))
+    checks["iceberg: versions positive control is complete"] = complete_control(control, (), ("iceberg_check",))
+    missing_versions, _ = replay_run(root, "local_iceberg", "cases_iceberg_check.json", json.dumps(passing_rows(("iceberg_check",))), versions=False)
+    checks["iceberg: missing versions fail their existing gate despite complete case evidence"] = (
+        missing_versions.status == 1
+        and missing_versions.report.get("status") == "fail"
+        and any(item.get("step") == "Spark and Iceberg versions" and item.get("ok") is False for item in missing_versions.report.get("steps", []))
+        and cleaned(missing_versions)
+    )
+    return checks
+
+
+def producer_report_cases(root: Path) -> Check:
+    """Retain producer defaults, selection grammar and failure serialization without Spark case execution."""
+    from scripts.features import features_publish_cases as features
+    from scripts.lakehouse import run_gold_publish_cases as gold
+
+    checks: Check = {}
+    for module, names, harness_name in ((gold, GOLD_DEFAULT, "Harness"), (features, FEATURE_DEFAULT, "Features")):
+        checks[f"{module.__name__}: production default inventory matches the fixed contract"] = tuple(n for n in module.CASES if n != "readback") == names
+        scenarios = (
+            ((), "pass"),
+            ((names[-1],), "pass"),
+            ((names[-1], names[-1]), "pass"),
+            ((names[0],), "empty"),
+            ((names[0],), "false"),
+            ((names[0],), "raise"),
+        )
+        for index, (selection, kind) in enumerate(scenarios):
+            out = OUT_ROOT[0] / "producer_reports" / module.__name__.split(".")[-1] / str(index)
+            (out / "probe").mkdir(parents=True)
+            (out / "probe" / "inputs.json").write_text('{"runs": {}}')
+            seen: list[str] = []
+            stopped: list[bool] = []
+
+            def one(name: str, harness: Any, kind: str = kind, seen: list[str] = seen) -> Check:
+                seen.append(name)
+                if kind == "raise":
+                    harness.partial = {"synthetic partial assertion": True}
+                    raise RuntimeError("synthetic producer failure after partial checks")
+                return {} if kind == "empty" else {"synthetic assertion": kind != "false"}
+
+            harness = SimpleNamespace(spark=SimpleNamespace(stop=partial(stopped.append, True)), partial={})
+            with (
+                patch.object(module, "REPORT_ROOT", out),
+                patch.object(module, "STAMP", ""),
+                patch.object(module, harness_name, return_value=harness),
+                patch.dict(module.CASES, {name: partial(one, name) for name in module.CASES}),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                status = module.main(["--stamp", "probe", *(["--case", *selection] if selection else [])])
+            filename = f"cases_{'_'.join(selection) if selection else 'all'}.json"
+            rows = json.loads((out / "probe" / filename).read_text())
+            expected = list(selection or names)
+            label = f"{module.__name__}: {kind} {selection}"
+            checks[f"{label}: real serialization preserves exact names and Spark stop"] = [row["case"] for row in rows] == expected == seen and stopped == [
+                True
+            ]
+            checks[f"{label}: exit and status agree with independent expectations"] = status == (0 if kind == "pass" else 1) and all(
+                row["status"] == ("pass" if kind == "pass" else "fail") for row in rows
+            )
+            expected_checks = {} if kind == "empty" else {"synthetic partial assertion": True} if kind == "raise" else {"synthetic assertion": kind != "false"}
+            checks[f"{label}: exact checks and intended error survive"] = all(
+                row["checks"] == expected_checks
+                and ("RuntimeError: synthetic producer failure after partial checks" in row["error"] if kind == "raise" else row["error"] == "")
+                for row in rows
+            )
+        errors = io.StringIO()
+        with (
+            patch.object(module, harness_name) as construction,
+            contextlib.redirect_stderr(errors),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                module.main(["--case", "unrequested_case"])
+            except SystemExit as error:
+                checks[f"{module.__name__}: unknown explicit case rejected by parser before harness"] = (
+                    error.code == 2 and not construction.called and "invalid choice: 'unrequested_case'" in errors.getvalue() and "--case" in errors.getvalue()
+                )
+            else:
+                checks[f"{module.__name__}: unknown explicit case rejected by parser before harness"] = False
+    return checks
+
+
 CASES: dict[str, Callable[[Path], Check]] = {
     "startup_cleanup": startup_cases,
     "final_report_scan": sentinel_cases,
@@ -692,6 +1168,15 @@ CASES: dict[str, Callable[[Path], Check]] = {
     "real_process": real_process_cases,
     "final_report_keys": key_cases,
     "no_pid_signal": no_signal_cases,
+    "diagnostic_reason": diagnostic_reason_cases,
+    "suite_report_consumer": partial(report_consumer_cases, boundary="suite"),
+    "publish_report_consumer": partial(report_consumer_cases, boundary="publish"),
+    "readback_report_consumer": partial(report_consumer_cases, boundary="readback"),
+    "iceberg_report_consumer": partial(report_consumer_cases, boundary="iceberg"),
+    "feature_report_consumer": partial(report_consumer_cases, boundary="feature"),
+    "selected_report_consumer": selected_report_cases,
+    "report_transport_cleanup": report_lifecycle_cases,
+    "producer_report_semantics": producer_report_cases,
 }
 
 

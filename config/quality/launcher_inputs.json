@@ -1350,6 +1350,7 @@
     "scripts/lakehouse/pos_file_periods.py",
     "scripts/lakehouse/principal_credentials.py",
     "scripts/lakehouse/provenance.py",
+    "scripts/lakehouse/publish_case_report.py",
     "scripts/lakehouse/publish_plan.py",
     "scripts/lakehouse/query.sh",
     "scripts/lakehouse/register_aws_catalog.py",
