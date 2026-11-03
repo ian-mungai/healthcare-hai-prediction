@@ -322,3 +322,113 @@ run "refuses_enabling_without_images" {
 
   expect_failures = [var.openmetadata_images, var.openmetadata_roles]
 }
+
+# With openmetadata_server_url set, the catalog task keeps its container names, so the broker table still binds it, but runs only the two ingestion steps against the
+# persistent catalog on the host: no database, search, migration, server or bootstrap, and no Marquez step. The ingestion bot token comes from Parameter Store.
+run "persistent_server_makes_an_ingestion_only_task" {
+  command = plan
+
+  variables {
+    openmetadata_enabled              = true
+    openmetadata_server_url           = "http://10.0.1.20:8585"
+    openmetadata_ingestion_token_name = "/example_project/openmetadata_bot_ingestion"
+    openmetadata_marquez_url          = "http://10.0.1.20:5000"
+    openmetadata_images = {
+      ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+    openmetadata_roles = {
+      execution         = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
+      openmetadata_task = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
+    }
+  }
+
+  assert {
+    condition     = [for c in jsondecode(output.openmetadata_container_definitions) : c.name] == ["init", "ingest_polaris", "ingest_dbt"]
+    error_message = "The persistent mode runs the init step and the two ingestion steps only, and no Marquez step even when an address is set."
+  }
+
+  assert {
+    condition = (
+      alltrue([for c in jsondecode(output.openmetadata_container_definitions) : endswith(c.image, "example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222")])
+      && [for c in jsondecode(output.openmetadata_container_definitions) : c.essential] == [false, false, true]
+    )
+    error_message = "Every step runs the one ingestion image, and the task ends when the last ingestion step ends."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in jsondecode(output.openmetadata_container_definitions) : c.name == "init" || (
+        contains(c.entryPoint, "--token-env") && contains(c.entryPoint, "OM_INGESTION_TOKEN") && contains(c.entryPoint, "--server-url") && contains(c.entryPoint, "http://10.0.1.20:8585/api") && !contains(c.entryPoint, "--token-file")
+      )
+    ])
+    error_message = "The ingestion steps read the token from the environment and call the persistent catalog at the host address."
+  }
+
+  assert {
+    condition = (
+      [for c in jsondecode(output.openmetadata_container_definitions) : [for s in c.secrets : s.valueFrom if s.name == "OM_INGESTION_TOKEN"] if c.name == "ingest_dbt"][0] == ["arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_ingestion"]
+      && [for c in jsondecode(output.openmetadata_container_definitions) : length([for s in c.secrets : s if s.name == "OM_INGESTION_TOKEN"]) if c.name == "ingest_polaris"][0] == 1
+      && [for c in jsondecode(output.openmetadata_container_definitions) : length(c.secrets) if c.name == "init"][0] == 0
+    )
+    error_message = "Each ingestion step receives exactly the ingestion bot token parameter, and the init step receives no secret."
+  }
+
+  assert {
+    condition = (
+      toset([for c in jsondecode(output.openmetadata_container_definitions) : c.name if length([for variable in c.environment : variable.name if variable.value == ""]) > 0]) ==
+      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers))
+    )
+    error_message = "The persistent mode keeps the containers and the empty variables that the broker table names."
+  }
+
+  assert {
+    condition     = output.openmetadata_secret_flow.violations == [] && output.openmetadata_secret_flow.mutation_mismatches == []
+    error_message = "A secret reaches a file, an argument, the log or a dump in the persistent mode."
+  }
+}
+
+run "persistent_server_needs_only_the_ingestion_image" {
+  command = plan
+
+  variables {
+    openmetadata_enabled              = true
+    openmetadata_server_url           = "http://10.0.1.20:8585"
+    openmetadata_ingestion_token_name = "/example_project/openmetadata_bot_ingestion"
+    openmetadata_images               = {}
+    openmetadata_roles = {
+      execution         = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
+      openmetadata_task = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
+    }
+  }
+
+  expect_failures = [var.openmetadata_images]
+}
+
+run "refuses_a_public_or_other_port_server_address" {
+  command = plan
+
+  variables {
+    openmetadata_server_url = "http://203.0.113.9:8585"
+  }
+
+  expect_failures = [var.openmetadata_server_url]
+}
+
+run "refuses_a_plain_name_other_than_the_project_token" {
+  command = plan
+
+  variables {
+    openmetadata_enabled              = true
+    openmetadata_server_url           = "http://10.0.1.20:8585"
+    openmetadata_ingestion_token_name = "/example_project/openmetadata_admin_password"
+    openmetadata_images = {
+      ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+    openmetadata_roles = {
+      execution         = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
+      openmetadata_task = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"
+    }
+  }
+
+  expect_failures = [var.openmetadata_ingestion_token_name]
+}

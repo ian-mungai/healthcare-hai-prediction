@@ -1,10 +1,10 @@
 """Run one OpenMetadata ingestion source of the catalog task, after proving its configuration has no profiler and no sampling.
 
-Runs inside the ingestion image as ``python openmetadata_ingest.py polaris|dbt --config-dir D --token-file F --work-dir W``. It refuses a configuration that
-profiles, samples or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables can hold personal
-fields outside the Public research-data scope, which is why this guard exists beside the read-only role and the server setting that disables
-ingestion pipelines. Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a
-value.
+Runs inside the ingestion image as ``python openmetadata_ingest.py polaris|dbt --config-dir D --token-file F --work-dir W``. The persistent catalog
+gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. It refuses a configuration that profiles, samples
+or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables can hold personal fields outside
+the Public research-data scope, which is why this guard exists beside the read-only role and the server setting that disables ingestion pipelines.
+Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a value.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ BANNED_KEYS = frozenset(
 )
 OFF_VALUES = frozenset({"false", "0", "off", "no", "none", "null", ""})
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
+SERVER_URL = re.compile(r"^http://(?:[0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{2,5}/api$")
 DBT_FILES = ("manifest.json", "catalog.json", "run_results.json")
 DBT_PREFIX = "metadata/dbt/"
 DBT_PATH_KEYS = {"catalog.json": "dbtCatalogFilePath", "run_results.json": "dbtRunResultsFilePath"}
@@ -129,7 +130,9 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", choices=SOURCES)
     parser.add_argument("--config-dir", type=Path, required=True)
-    parser.add_argument("--token-file", type=Path, required=True)
+    parser.add_argument("--token-file", type=Path, help="file that holds the ingestion bot token (the finite catalog task)")
+    parser.add_argument("--token-env", help="name of the environment variable that holds the ingestion bot token (the persistent catalog)")
+    parser.add_argument("--server-url", help="OpenMetadata API address that replaces the one in the configuration, for example http://10.0.1.20:8585/api")
     parser.add_argument("--work-dir", type=Path, required=True)
     options = parser.parse_args(argv)
     environment = dict(os.environ if env is None else env)
@@ -139,12 +142,26 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     if refused:
         sys.stderr.write(f"openmetadata_ingest: refused {options.source}.json: {'; '.join(refused)}\n")
         return 2
-    values = dict(environment)
-    try:
-        values["OM_INGESTION_TOKEN"] = options.token_file.read_text().strip()
-    except OSError:
-        sys.stderr.write("openmetadata_ingest: the ingestion token file cannot be read\n")
+    if (options.token_file is None) == (options.token_env is None):
+        sys.stderr.write("openmetadata_ingest: give exactly one token source, --token-file or --token-env\n")
         return 2
+    if options.server_url is not None and not SERVER_URL.fullmatch(options.server_url):
+        sys.stderr.write("openmetadata_ingest: the server address must be an http address with a private IPv4 address, a port and the path /api\n")
+        return 2
+    values = dict(environment)
+    if options.token_env is not None:
+        values["OM_INGESTION_TOKEN"] = environment.get(options.token_env, "").strip()
+        if not values["OM_INGESTION_TOKEN"]:
+            sys.stderr.write(f"openmetadata_ingest: the variable {options.token_env} is not set\n")
+            return 2
+    else:
+        try:
+            values["OM_INGESTION_TOKEN"] = options.token_file.read_text().strip()
+        except OSError:
+            sys.stderr.write("openmetadata_ingest: the ingestion token file cannot be read\n")
+            return 2
+    if options.server_url is not None:
+        config["workflowConfig"]["openMetadataServerConfig"]["hostPort"] = options.server_url
     if options.source == "dbt":
         folder = options.work_dir / "dbt"
         client = s3_client

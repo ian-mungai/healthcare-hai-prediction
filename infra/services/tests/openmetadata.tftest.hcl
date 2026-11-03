@@ -40,7 +40,7 @@ variables {
     marquez_web            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
-    opensearch             = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/opensearch"
+    openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
   }
 
   image_digests = {
@@ -53,7 +53,7 @@ variables {
     marquez_web            = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     openmetadata_server    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     openmetadata_ingestion = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
-    opensearch             = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+    openmetadata_search    = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
   }
 }
 
@@ -140,14 +140,14 @@ run "flag_on_adds_one_service_and_one_bootstrap_task" {
   assert {
     condition = alltrue([
       for container in concat(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions), jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)) :
-      can(regex("^111111111111\\.dkr\\.ecr\\.us-west-2\\.amazonaws\\.com/example_project/(openmetadata_server|openmetadata_ingestion|opensearch)@sha256:[0-9a-f]{64}$", container.image))
+      can(regex("^111111111111\\.dkr\\.ecr\\.us-west-2\\.amazonaws\\.com/example_project/(openmetadata_server|openmetadata_ingestion|openmetadata_search)@sha256:[0-9a-f]{64}$", container.image))
     ])
     error_message = "Every image runs by digest from the project registry."
   }
 
   assert {
     condition = (
-      jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/opensearch@${var.image_digests["opensearch"]}"
+      jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search@${var.image_digests["openmetadata_search"]}"
       && jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[2].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server@${var.image_digests["openmetadata_server"]}"
       && jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion@${var.image_digests["openmetadata_ingestion"]}"
     )
