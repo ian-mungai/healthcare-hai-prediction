@@ -23,6 +23,7 @@ import tempfile
 import traceback
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -392,6 +393,46 @@ def case_check_refuses_a_bad_report(case: Case) -> None:
         require("bronze_chain_dag" not in case.out, defect)
 
 
+def contradict_table_check(report: dict[str, Any], field: str) -> None:
+    report["checks"]["beta_data"][field] = False
+
+
+def case_report_table_checks(case: Case, change: Callable[[dict[str, Any]], object] | None = None, tables: str = "alpha_data,beta_data") -> None:
+    label = "report_checks"
+    require(case.phase("pin", label=label, tables=tables) == 0, case.err)
+    require(case.phase("load", label=label, tables=tables) == 0, case.err)
+    require(LOADS[-1][LOADS[-1].index("--tables") + 1] == tables, LOADS)
+    reports = sorted((case.work(label) / "code" / bronze_run.REPORT_FOLDER).glob("report_*.json"))
+    require(len(reports) == 1, reports)
+    report = json.loads(reports[0].read_text())
+    names = tables.split(",")
+    require(sorted(report["tables"]) == sorted(names) and set(report["checks"]) == set(names), report)
+    for name in names:
+        report["checks"][name] |= {
+            "objects": 1,
+            "rows": 0,
+            "distinct_files": 1,
+            "distinct_rows": 0,
+            "copies": 1,
+            "one_loaded_copy_per_file": True,
+            "loaded_copies_match_rows": True,
+            "distinct_files_match_expected": True,
+            "distinct_rows_match_expected": True,
+        }
+    if change is not None:
+        change(report)
+    reports[0].write_text(json.dumps(report, sort_keys=True) + "\n")
+    before, loads = writes(), len(LOADS)
+    case.err, case.out = "", ""
+    code = case.phase("check", label=label, tables=tables)
+    require(writes() == before and len(LOADS) == loads, "the report check must not load or write tables")
+    if change is None:
+        require(code == 0 and "bronze_chain_dag" in case.out, (code, case.err, case.out))
+        return
+    require(code == 1 and "a table check of the loader report did not pass" in case.err, (code, case.err))
+    require("bronze_chain_dag" not in case.out, case.out)
+
+
 def case_phase_outside_the_job(case: Case) -> None:
     require(case.phase("publish") != 0, case.err)
     require(writes() == [] and LOADS == [], "nothing runs")
@@ -626,7 +667,31 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a raw-only capture gives no objects and is refused by name": case_a_raw_only_capture_is_refused_by_name,
     "the raw location is one function and stays off": case_the_raw_location_is_one_function_and_stays_off,
     "the owner cannot stage an inventory with an empty table": case_the_owner_cannot_stage_an_inventory_with_an_empty_table,
+    "the check phase accepts complete table checks with numeric rows zero": case_report_table_checks,
 }
+
+for label, tables, change in (
+    ("missing table checks", "alpha_data,beta_data", lambda d: d.pop("checks")),
+    ("empty table checks", "alpha_data,beta_data", lambda d: d.update(checks={})),
+    ("partial table checks", "alpha_data,beta_data", lambda d: d["checks"].pop("beta_data")),
+    ("partial checks of another pinned table set", "beta_data,gamma_data", lambda d: d["checks"].pop("gamma_data")),
+    ("an unrequested table check", "alpha_data,beta_data", lambda d: d["checks"].update(gamma_data={"passed": True, "objects_match_inputs": True})),
+    ("a failed table under a passing summary", "alpha_data,beta_data", lambda d: d["checks"]["beta_data"].update(passed=False)),
+    ("a missing objects_match_inputs assertion", "alpha_data,beta_data", lambda d: d["checks"]["beta_data"].pop("objects_match_inputs")),
+    ("a nonboolean objects_match_inputs assertion", "alpha_data,beta_data", lambda d: d["checks"]["beta_data"].update(objects_match_inputs=1)),
+):
+    CASES[f"the check phase refuses {label}"] = partial(case_report_table_checks, change=change, tables=tables)
+
+for assertion in (
+    "objects_match_inputs",
+    "one_loaded_copy_per_file",
+    "loaded_copies_match_rows",
+    "distinct_files_match_expected",
+    "distinct_rows_match_expected",
+):
+    CASES[f"the check phase refuses passed true with {assertion} false"] = partial(
+        case_report_table_checks, change=partial(contradict_table_check, field=assertion)
+    )
 
 
 def run_all(selected: Sequence[str]) -> list[dict[str, Any]]:

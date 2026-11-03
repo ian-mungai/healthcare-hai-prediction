@@ -237,6 +237,13 @@ def load(job: Job) -> None:
     run_module(job, "scripts.lakehouse.bronze", arguments)
 
 
+def table_check_passed(check: object) -> bool:
+    if not isinstance(check, dict):
+        return False
+    optional = ("one_loaded_copy_per_file", "loaded_copies_match_rows", "distinct_files_match_expected", "distinct_rows_match_expected")
+    return check.get("passed") is True and check.get("objects_match_inputs") is True and all(check[name] is True for name in optional if name in check)
+
+
 def accept_report(job: Job) -> None:
     """The loader wrote exactly one report, it passed, and it names the requested tables and no others."""
     reports = sorted((job.code / REPORT_FOLDER).glob("report_*.json"))
@@ -248,7 +255,7 @@ def accept_report(job: Job) -> None:
     if sorted(report.get("tables", [])) != sorted(job.tables):
         raise StepError("the loader report names other tables than the dispatch")
     checks = report.get("checks", {})
-    if not set(checks) <= set(job.tables) or any(check.get("passed") is not True for check in checks.values()):
+    if not isinstance(checks, dict) or set(checks) != set(job.tables) or not all(table_check_passed(check) for check in checks.values()):
         raise StepError("a table check of the loader report did not pass")
 
 

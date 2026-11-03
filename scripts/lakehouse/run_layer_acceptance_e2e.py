@@ -2,6 +2,7 @@
 
     .venv/bin/python -m scripts.lakehouse.run_layer_acceptance_e2e --out <NEW_DIRECTORY>
 
+Every approval, signature and owner identity in this suite is SYNTHETIC and stays in its isolated SYNTHETIC fixture folder.
 The records have the shapes the driver writes (``layer_run.bundle``, ``gold_export.export_sealed``, ``gold_publish.publish_candidates``,
 ``reconcile_candidates``, ``catalog_backup``, ``commit_receipt``, ``silver_publish.record_committed``, ``feast_job.apply`` and
 ``feast_materialize.run_materialize``) with the tables of the frozen publish contract.
@@ -45,6 +46,8 @@ SILVER_RUN, OTHER_SILVER_RUN, GOLD_RUN, OTHER_GOLD_RUN, FEATURES_RUN, OTHER_FEAT
 ACCOUNT = "111111111111"
 INPUTS = 1500  # more than one page of 1000, so the page structure of the digest is exercised
 MARKER = "9x<bad>-fingerprint"
+SYNTHETIC_OWNER = "SYNTHETIC fixture owner"
+ReportChange = Callable[[dict[str, Any]], object]
 
 
 @functools.cache
@@ -390,7 +393,7 @@ def accept(env: Env) -> tuple[int, list[str], str]:
 def sign(env: Env) -> int:
     out = env.root / "qualification.json"
     text = f"sign-{env.spec.layer}-{env.spec.run}-{digest(out)[:12]}"
-    return run_cli(["sign", "--report", str(out), "--owner", "Example Owner"], {"CONFIRM_SIGN": text})[0]
+    return run_cli(["sign", "--report", str(out), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": text})[0]
 
 
 def make(work: Path, name: str, item: Spec, producer: Env | None = None, signed: bool = True) -> Env:
@@ -812,6 +815,139 @@ def cases(work: Path, layer: str) -> dict[str, bool]:
     return checks
 
 
+def report_check_defects() -> list[tuple[str, ReportChange]]:
+    return [
+        ("missing checks", lambda d: d.pop("checks")),
+        ("empty checks", lambda d: d.update(checks={})),
+        ("nonmapping checks", lambda d: d.update(checks=[])),
+        ("null checks", lambda d: d.update(checks=None)),
+        ("a false check", lambda d: d["checks"].update({"SYNTHETIC additional assertion": False})),
+        ("an integer check", lambda d: d["checks"].update({"SYNTHETIC additional assertion": 1})),
+        ("a string check", lambda d: d["checks"].update({"SYNTHETIC additional assertion": "true"})),
+        ("a null check", lambda d: d["checks"].update({"SYNTHETIC additional assertion": None})),
+    ]
+
+
+def dynamic_report_checks(document: dict[str, Any]) -> None:
+    document["checks"] = {f"SYNTHETIC dynamic assertion {index}: {name}": value for index, (name, value) in enumerate(document["checks"].items())}
+
+
+def signing_report_cases(work: Path) -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    variants: list[tuple[str, ReportChange | None]] = [
+        ("complete checks", None),
+        ("valid dynamic check labels", dynamic_report_checks),
+        *report_check_defects(),
+    ]
+    for layer in acceptance.LAYERS:
+        for label, change in variants:
+            env, _ = scenario(work, layer, f"signing {label}")
+            code, failed, _ = accept(env)
+            if code != 0 or failed:
+                raise RuntimeError(f"the SYNTHETIC {layer} signing control does not pass: {failed}")
+            path = env.root / "qualification.json"
+            document = json.loads(path.read_text())
+            if change is not None:
+                change(document)
+            write(path, document)
+            raw = path.read_bytes()
+            confirmation = f"sign-{layer}-{env.spec.run}-{digest(path)[:12]}"
+            code, _, error = run_cli(["sign", "--report", str(path), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": confirmation})
+            signature = path.with_suffix(".signed.json")
+            positive = label in ("complete checks", "valid dynamic check labels")
+            if positive:
+                signed = json.loads(signature.read_text()) if signature.is_file() else {}
+                checks[f"{layer}: signing accepts {label}"] = (
+                    code == 0
+                    and signed.get("report_sha256") == digest(path)
+                    and signed.get("confirmation") == confirmation
+                    and signed.get("owner") == SYNTHETIC_OWNER
+                )
+            else:
+                checks[f"{layer}: signing refuses passed true with {label}"] = (
+                    code == 1 and "only a report that passed is signed" in error and not signature.exists()
+                )
+            checks[f"{layer}: signing {label} preserves report bytes"] = path.read_bytes() == raw
+        env, _ = scenario(work, layer, "signing stale digest confirmation")
+        code, failed, _ = accept(env)
+        if code != 0 or failed:
+            raise RuntimeError(f"the SYNTHETIC {layer} stale-confirmation control does not pass: {failed}")
+        path = env.root / "qualification.json"
+        stale = f"sign-{layer}-{env.spec.run}-{digest(path)[:12]}"
+        path.write_bytes(path.read_bytes() + b" ")
+        raw = path.read_bytes()
+        code, _, error = run_cli(["sign", "--report", str(path), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": stale})
+        checks[f"{layer}: signing refuses a stale digest confirmation"] = (
+            code == 1 and "set CONFIRM_SIGN" in error and not path.with_suffix(".signed.json").exists() and path.read_bytes() == raw
+        )
+    return checks
+
+
+def replace_synthetic_signed_report(env: Env, change: ReportChange) -> None:
+    """Bind changed SYNTHETIC producer bytes to a fixture signature so dependency tests reach semantic validation independently of the signing gate."""
+    path = env.root / "qualification.json"
+    edit(path, change)
+    document = json.loads(path.read_text())
+    report_sha256 = digest(path)
+    write(
+        path.with_suffix(".signed.json"),
+        {
+            "schema": 1,
+            "report_sha256": report_sha256,
+            "owner": SYNTHETIC_OWNER,
+            "signed_at": "2026-11-02T00:00:00Z",
+            "confirmation": f"sign-{document['layer']}-{document['run_id']}-{report_sha256[:12]}",
+        },
+    )
+
+
+def signed_dependency_cases(work: Path) -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for layer in ("gold", "features"):
+        below = "silver" if layer == "gold" else "gold"
+        expected = NAMES["signed" if layer == "gold" else "features_signed"]
+        covered = ("silver_snapshot.json",) if layer == "gold" else ("publish/commit.json", "publish/candidates.json")
+        reports: list[tuple[str, ReportChange]] = [
+            ("valid dynamic check labels", dynamic_report_checks),
+            *report_check_defects(),
+            ("a failed summary", lambda d: d.update(passed=False)),
+            ("another report layer", lambda d: d.update(layer="features")),
+            ("another report run", lambda d: d.update(run_id="20261030T000000Z-00000000")),
+            *[(f"a wrong covered hash for {name}", lambda d, key=name: d["file_sha256"].update({key: "0" * 64})) for name in covered],
+        ]
+        variants: list[tuple[str, ReportChange | None, ReportChange | None]] = [("complete checks", None, None)]
+        variants += [(label, change, None) for label, change in reports]
+        variants += [
+            ("a stale signature digest", None, lambda d: d.update(report_sha256="0" * 64)),
+            ("a wrong signature confirmation", None, lambda d: d.update(confirmation="sign-other")),
+            ("a blank signature owner", None, lambda d: d.update(owner=" ")),
+        ]
+        for label, report_change, signature_change in variants:
+            env, _ = scenario(work, layer, f"signed dependency {label}")
+            producer = env.source
+            if report_change is not None:
+                replace_synthetic_signed_report(producer, report_change)
+            if signature_change is not None:
+                edit(producer.root / "qualification.signed.json", signature_change)
+            report_path, signature_path = producer.root / "qualification.json", producer.root / "qualification.signed.json"
+            raw = report_path.read_bytes(), signature_path.read_bytes()
+            code, failed, _ = accept(env)
+            result_path = env.root / "qualification.json"
+            result = json.loads(result_path.read_text()) if result_path.is_file() else {}
+            positive = label in ("complete checks", "valid dynamic check labels")
+            checks[f"{layer}: signed {below} dependency with {label}"] = (
+                code == (0 if positive else 1) and failed == ([] if positive else [expected]) and result.get("passed") is positive
+            )
+            hashes = result.get("file_sha256", {})
+            checks[f"{layer}: {label} reaches the signed dependency reader"] = (
+                expected in result.get("checks", {})
+                and hashes.get("input/report") == digest(report_path)
+                and hashes.get("input/signature") == digest(signature_path)
+            )
+            checks[f"{layer}: {label} preserves signed dependency bytes"] = raw == (report_path.read_bytes(), signature_path.read_bytes())
+    return checks
+
+
 def good_cases(work: Path) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     silver = make(work, "good_silver", spec("silver", SILVER_RUN, "a"))
@@ -851,12 +987,14 @@ def good_cases(work: Path) -> dict[str, bool]:
         checks[f"{layer}: each hash is the hash of the file's bytes"] = all(
             report["file_sha256"][name] == digest(env.evidence / name) for name in wanted if (env.evidence / name).is_file()
         )
-        code, _, _ = run_cli(["sign", "--report", str(env.root / "qualification.json"), "--owner", "Owner"], {"CONFIRM_SIGN": signature["confirmation"]})
+        code, _, _ = run_cli(
+            ["sign", "--report", str(env.root / "qualification.json"), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": signature["confirmation"]}
+        )
         checks[f"{layer}: a second signature is refused"] = code == 1
         wrong = env.root / "wrong.json"
         wrong.write_text((env.root / "qualification.json").read_text())
         checks[f"{layer}: a wrong confirmation does not sign"] = (
-            run_cli(["sign", "--report", str(wrong), "--owner", "Owner"], {"CONFIRM_SIGN": "sign-other"})[0] == 1
+            run_cli(["sign", "--report", str(wrong), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": "sign-other"})[0] == 1
         )
     return checks
 
@@ -1037,12 +1175,14 @@ def main() -> int:
     args = parser.parse_args()
     out = args.out.expanduser().absolute()
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
-    work = Path(tempfile.mkdtemp(prefix="layer_acceptance_", dir=out))
+    work = Path(tempfile.mkdtemp(prefix="SYNTHETIC_layer_acceptance_", dir=out))
     results: dict[str, dict[str, bool]] = {"features is accepted": {"the acceptance command covers features": "features" in acceptance.LAYERS}}
     results["static"] = static_cases()
     try:
         with mock.patch.object(acceptance, "ignored", lambda path: str(path).startswith(str(work))):
             results["good"] = group("good", good_cases, work)
+            results["signing reports"] = group("signing reports", signing_report_cases, work)
+            results["signed dependencies"] = group("signed dependencies", signed_dependency_cases, work)
             for layer in acceptance.LAYERS:
                 results[f"defects {layer}"] = group(f"defects {layer}", cases, work, layer)
             results["inputs"] = group("inputs", input_cases, work)
