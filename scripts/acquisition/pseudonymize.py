@@ -335,16 +335,18 @@ def person_words(policy: dict, row: dict[str, str]) -> Iterator[tuple[str, ...]]
         if rule["kind"] != "name" or not matches(rule.get("when"), row):
             continue
         values = [row[c] for c in rule["columns"]]
-        if not any(normalize_name(value) for value in values):
-            continue
-        words = scrub_name_words(" ".join(values))
-        if words:
-            yield words
+        if any(normalize_name(value) for value in values):
+            words = scrub_name_words(" ".join(values))
+            if words:
+                yield words
         if rule.get("middle_column") and scrub_name_words(row[rule["middle_column"]]):
             *first, last = values
-            middle = scrub_name_words(" ".join([*first, row[rule["middle_column"]], last]))
-            if middle:
-                yield middle
+            with_middle = [*first, row[rule["middle_column"]], last]
+            # The middle variant is eligible on its own fields, so a real middle name with empty-marker first and last names is still indexed.
+            if any(normalize_name(value) for value in with_middle):
+                middle = scrub_name_words(" ".join(with_middle))
+                if middle:
+                    yield middle
 
 
 def person_identifiers(policy: dict, row: dict[str, str]) -> Iterator[str]:

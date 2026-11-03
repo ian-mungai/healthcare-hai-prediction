@@ -840,6 +840,8 @@ SPLIT_ROWS = [
     ["4", "", "", "", "Yara Na Quimby Clinic"],
     ["5", "", "", "", "Yara Quimby Clinic"],
     ["6", "", "", "", "Unrelated Na Clinic"],
+    ["7", "Na", "Wren", "Na", "Plain Co"],
+    ["8", "", "", "", "Na Wren Na Clinic"],
 ]
 
 
@@ -849,9 +851,9 @@ def check_scrub_split_empty_markers(run: Run) -> None:
     source = write_csv(folder / "in.csv", SPLIT_HEADERS, SPLIT_ROWS)
     contract = module.transform(source, folder / "derivative", SPLIT_POLICY, "v1", reader_for(KEYS))
     notes = [r["NOTE"] for r in table(folder / "derivative")]
-    expected = ["Plain Co", "Plain Co", module.REPLACEMENT, module.REPLACEMENT, module.REPLACEMENT, "Unrelated Na Clinic"]
+    expected = ["Plain Co", "Plain Co", module.REPLACEMENT, module.REPLACEMENT, module.REPLACEMENT, "Unrelated Na Clinic", "Plain Co", module.REPLACEMENT]
     ensure(notes == expected, f"split-column empty-marker scrub differs: {notes}")
-    ensure(contract["scrubbed_cells"] == 3, f"split-column count differs: {contract['scrubbed_cells']}")
+    ensure(contract["scrubbed_cells"] == 4, f"split-column count differs: {contract['scrubbed_cells']}")
 
 
 def check_scrub_source_spellings(run: Run) -> None:
