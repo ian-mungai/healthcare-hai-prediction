@@ -3,7 +3,8 @@
 The evaluator renders the policy templates in ``infra/iam/policies/`` and answers whether a request is allowed. A request lists only
 the condition keys that AWS sends for it. Key names match without regard to case, as in IAM, so ``aws:RequestTag/Project`` is satisfied
 by a tag written ``project``. A negated operator matches a missing key. An operator, a statement element or a policy variable that the
-evaluator does not model stops the run with ``UnsupportedPolicyElement`` instead of passing.
+evaluator does not model stops the run with ``UnsupportedPolicyElement`` instead of passing. A role with a permissions boundary is evaluated in two
+layers with ``decide_bounded``.
 """
 
 from __future__ import annotations
@@ -156,14 +157,17 @@ def condition_holds(operator: str, key: str, expected: Any, context: Mapping[str
 
 
 def statement_matches(statement: Mapping[str, Any], request: Request) -> bool:
-    """True when the statement's action, resource and every condition match the request."""
-    unsupported = {"NotAction", "NotResource", "Principal", "NotPrincipal"} & statement.keys()
+    """True when the statement's action, resource and every condition match the request; ``NotResource`` matches every resource it does not name."""
+    unsupported = {"NotAction", "Principal", "NotPrincipal"} & statement.keys()
     if unsupported:
         raise UnsupportedPolicyElement(f"statement {statement.get('Sid')} uses {', '.join(sorted(unsupported))}")
     context = {key.lower(): value for key, value in request.context.items()}
     if not any(glob_match(action, request.action, ignore_case=True) for action in as_list(statement.get("Action", []))):
         return False
-    if not any(glob_match(substitute(resource, context), request.resource) for resource in as_list(statement.get("Resource", []))):
+    if "NotResource" in statement:
+        if any(glob_match(substitute(resource, context), request.resource) for resource in as_list(statement["NotResource"])):
+            return False
+    elif not any(glob_match(substitute(resource, context), request.resource) for resource in as_list(statement.get("Resource", []))):
         return False
     return all(condition_holds(operator, key, expected, context) for operator, keys in statement.get("Condition", {}).items() for key, expected in keys.items())
 
@@ -179,6 +183,20 @@ def decide(documents: Iterable[Mapping[str, Any]], request: Request) -> Decision
                 return Decision("deny", (str(statement.get("Sid")),))
             allows.append(str(statement.get("Sid")))
     return Decision("allow", tuple(allows)) if allows else Decision("implicit_deny", ())
+
+
+def decide_bounded(identity: Iterable[Mapping[str, Any]], boundary: Iterable[Mapping[str, Any]], request: Request) -> Decision:
+    """Evaluate a role with a permissions boundary: an explicit Deny in either layer wins, else the request is allowed only when both allow.
+
+    https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html#access_policies_boundaries-eval-logic
+    """
+    own, limit = decide(identity, request), decide(boundary, request)
+    for layer in (own, limit):
+        if layer.effect == "deny":
+            return layer
+    if own.allowed and limit.allowed:
+        return Decision("allow", own.statements + limit.statements)
+    return Decision("implicit_deny", ())
 
 
 def allowed_actions(documents: Iterable[Mapping[str, Any]]) -> set[str]:

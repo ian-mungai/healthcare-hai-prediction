@@ -1,0 +1,202 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProjectLakehouseObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:AbortMultipartUpload",
+        "s3:DeleteObject",
+        "s3:GetObject",
+        "s3:ListMultipartUploadParts",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/*"
+    },
+    {
+      "Sid": "ProjectObjectVersions",
+      "Effect": "Allow",
+      "Action": "s3:GetObjectVersion",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/*"
+    },
+    {
+      "Sid": "ProjectBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+    },
+    {
+      "Sid": "InjectProjectParameters",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter/${PROJECT_NAME}/*",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter/healthcare_hai_prediction/*"
+      ]
+    },
+    {
+      "Sid": "PullProjectImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_*"
+    },
+    {
+      "Sid": "WriteProjectLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_*:log-stream:*"
+    },
+    {
+      "Sid": "JoinProjectCluster",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DeregisterContainerInstance",
+        "ecs:RegisterContainerInstance",
+        "ecs:SubmitAttachmentStateChanges",
+        "ecs:SubmitContainerStateChange",
+        "ecs:SubmitTaskStateChange"
+      ],
+      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+    },
+    {
+      "Sid": "ProjectAgentSessions",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:Poll",
+        "ecs:StartTelemetrySession"
+      ],
+      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:container-instance/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*"
+    },
+    {
+      "Sid": "ProjectHostSessionManager",
+      "Effect": "Allow",
+      "Action": "ssm:UpdateInstanceInformation",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}",
+          "ssm:resourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "RegionalCallsWithoutResource",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeAddresses",
+        "ec2:DescribeInstances",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeVolumes",
+        "ecr:GetAuthorizationToken",
+        "ecs:DiscoverPollEndpoint",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "HostAttachments",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AssociateAddress",
+        "ec2:AttachVolume"
+      ],
+      "Resource": [
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:elastic-ip/*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:network-interface/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "AttachAndSnapshotDataVolume",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:CreateSnapshot"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_data_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateProjectSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSnapshot",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "TagSnapshotsWhenCreated",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "CreateSnapshot"
+        }
+      }
+    },
+    {
+      "Sid": "DeleteScheduledSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSnapshot",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_data_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}",
+          "aws:ResourceTag/aws:dlm:lifecycle-schedule-name": "daily"
+        }
+      }
+    },
+    {
+      "Sid": "DenyIamOrganizationsAccountAndBudgets",
+      "Effect": "Deny",
+      "Action": [
+        "iam:*",
+        "organizations:*",
+        "account:*",
+        "budgets:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyAssumeRoleOutsideProject",
+      "Effect": "Deny",
+      "Action": "sts:AssumeRole",
+      "NotResource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_*"
+    }
+  ]
+}
