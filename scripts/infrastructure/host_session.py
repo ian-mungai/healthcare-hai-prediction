@@ -44,6 +44,10 @@ DESCRIBE_SERVICES_LIMIT = 10
 FIRST_SERVICE = "postgres"
 HOST_PREPARE = "host_prepare"
 POLARIS_BOOTSTRAP = "polaris_bootstrap"
+OPENMETADATA_SERVICE = "openmetadata"
+OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
+OPENMETADATA_BOOTSTRAP_SECONDS = 1500
+OPENMETADATA_STOP_SECONDS = 300
 FAILED_ROLLOUT = "FAILED"
 COMPLETED_ROLLOUT = "COMPLETED"
 OTHER_REASON = "other reason"
@@ -172,7 +176,10 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
         provider=output_value(platform, "ec2_capacity_provider_name", str),
         project_tag=output_value(platform, "project_tag", str),
         services=ordered,
-        one_shot={key: str(one_shot[key]["task_definition"]) for key in (HOST_PREPARE, POLARIS_BOOTSTRAP)},
+        one_shot={
+            key: str(one_shot[key]["task_definition"])
+            for key in (HOST_PREPARE, POLARIS_BOOTSTRAP, *([OPENMETADATA_BOOTSTRAP] if OPENMETADATA_BOOTSTRAP in one_shot else []))
+        },
     )
 
 
@@ -370,11 +377,53 @@ class Session:
 
     def deploy_services(self) -> None:
         """Force a new deployment of every project service, postgres first, then wait until all are stable."""
-        for name in self.names.services.values():
-            self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, "--force-new-deployment"])
+        for key, name in self.names.services.items():
+            # The catalog service is scaled to zero by stop, so its deployment also sets the count back to one.
+            count = ["--desired-count", "1"] if key == OPENMETADATA_SERVICE else []
+            self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, *count, "--force-new-deployment"])
         self.step("services_deployment_forced", ", ".join(self.names.services.values()))
         self.wait("services stable", self.services_stable, SERVICES_STABLE_SECONDS, POLL_SECONDS)
         self.step("services_stable", ", ".join(f"{item['serviceName']}={item['runningCount']}" for item in self.service_states()))
+
+    def openmetadata_bootstrap(self) -> None:
+        """Run the repeatable catalog bootstrap (administrator password, bot tokens) once the services are stable.
+
+        A failure is reported and never stops the session: the data chain does not depend on the catalog.
+        """
+        if OPENMETADATA_BOOTSTRAP not in self.names.one_shot:
+            return
+        try:
+            self.one_shot(OPENMETADATA_BOOTSTRAP, OPENMETADATA_BOOTSTRAP_SECONDS)
+        except HostSessionError as error:
+            self.step("openmetadata_bootstrap_failed", f"{error}; the host stays on and the data chain is not affected; run start again to repeat it")
+
+    def service_stopped(self, name: str) -> bool:
+        """True when ECS shows no running and no pending task for the named service."""
+        described = self.call("ecs", "describe-services", ["--cluster", self.names.cluster, "--services", name])
+        found = described.get("services", [])
+        if described.get("failures") or len(found) != 1:
+            raise HostSessionError("describe-services reported failures")
+        return found[0].get("runningCount") == 0 and not found[0].get("pendingCount")
+
+    def openmetadata_stop(self) -> None:
+        """Scale the catalog service to zero and wait, so OpenSearch and the server close their files before the instance goes.
+
+        A failure is reported and never holds the host on.
+        """
+        name = self.names.services.get(OPENMETADATA_SERVICE)
+        if name is None:
+            return
+        try:
+            self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, "--desired-count", "0"])
+            self.wait("catalog service stop", lambda: self.service_stopped(name), OPENMETADATA_STOP_SECONDS, POLL_SECONDS)
+            self.step("openmetadata_stopped")
+        except HostSessionError as error:
+            self.step("openmetadata_stop_failed", f"{error}; stopping the host anyway; the index rebuilds from the database after a restore")
+
+    def stop(self) -> None:
+        """Stop the catalog service first, then turn the host off and verify it."""
+        self.openmetadata_stop()
+        self.host_off()
 
     def stop_after_failure(self, command: str, keep_on: bool) -> None:
         """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates."""
@@ -395,6 +444,7 @@ class Session:
             self.host_on()
             self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
             self.deploy_services()
+            self.openmetadata_bootstrap()
             succeeded = True
         finally:
             if not succeeded:
@@ -467,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "stop":
-            session.host_off()
+            session.stop()
         else:
             sys.stdout.write(json.dumps(session.status(), indent=2, sort_keys=True) + "\n")
     except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
