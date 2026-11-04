@@ -2715,6 +2715,43 @@ def feature_listing(suite: str, *arguments: str) -> tuple[int, list[str], str]:
     return result.returncode, names, result.stderr
 
 
+def feature_count_drifts(workflow: dict[str, Any]) -> dict[str, list[str]]:
+    """What differs between the feature jobs of a workflow and the shard counts of the configuration: the shard argument of each job and the combining count."""
+    plan = github_plan_of(workflow)
+    shards = {f"{suite}:{index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)}
+    combines = {f"{suite}:{count}" for suite, count in FEATURE_COUNTS.items()}
+    return {
+        "shard_arguments": sorted(plan["feature_shards"] ^ shards),
+        "combine_counts": sorted(plan["feature_combines"] ^ combines),
+    }
+
+
+def feature_count_cases() -> list[dict[str, Any]]:
+    """The hosted feature jobs pass the configured shard count in the shard argument and to the combiner (a count left at 8 skipped half the cases)."""
+    real = feature_count_drifts(workflow_document())
+    argument = copy.deepcopy(workflow_document())
+    for entry in argument["jobs"]["feature_sources"]["steps"]:
+        if "FEATURE_SHARD" in entry.get("env", {}):
+            entry["env"]["FEATURE_SHARD"] = str(entry["env"]["FEATURE_SHARD"]).replace(f"/{FEATURE_COUNTS['sources']}", "/8")
+    combiner = copy.deepcopy(workflow_document())
+    for definition in combiner["jobs"].values():
+        for entry in definition.get("steps", []):
+            if "feature_shards combine --suite sources" in str(entry.get("run", "")):
+                entry["run"] = str(entry["run"]).replace(f"--suite sources --count {FEATURE_COUNTS['sources']}", "--suite sources --count 8")
+    planted = {"shard_argument": feature_count_drifts(argument), "combine_count": feature_count_drifts(combiner)}
+    return [
+        {"case": "feature_workflow_counts_equal_the_configuration", "passed": not any(real.values()), "differences": real},
+        {
+            "case": "feature_workflow_count_drift_is_reported",
+            "passed": bool(planted["shard_argument"]["shard_arguments"])
+            and not planted["shard_argument"]["combine_counts"]
+            and bool(planted["combine_count"]["combine_counts"])
+            and not planted["combine_count"]["shard_arguments"],
+            "differences": planted,
+        },
+    ]
+
+
 def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     """List the real feature runners without builds and verify complete, disjoint hosted shards and manual hooks."""
     inventory = json.loads((ROOT / "config/quality/feature_cases.json").read_text())
@@ -2755,6 +2792,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
                     "error": refused_error[-300:],
                 }
             )
+    results += feature_count_cases()
     hook_document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text())
     if not isinstance(hook_document, dict):
         raise ValueError(".pre-commit-config.yaml must contain a mapping")
