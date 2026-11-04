@@ -39,6 +39,7 @@ PLANTS: dict[str, tuple[str, str]] = {
         "        finally:\n            with deferred_signals(self.step):\n                self.host_off()\n\n    def stop_after_failure",
         "        finally:\n            self.host_off()\n\n    def stop_after_failure",
     ),
+    "shares the terminal group with every aws call": ("run_argv(*args, own_session=True, **kwargs)", "run_argv(*args, **kwargs)"),
     "launches without a client token": ('            "--client-token",\n            token,\n', ""),
     "keeps the token after a confirmed launch": ("            del self.launch_tokens[key]\n            return launched", "            return launched"),
     "treats a lost reply as absent": ("if UNCONFIRMED not in str(error):", "if True:"),

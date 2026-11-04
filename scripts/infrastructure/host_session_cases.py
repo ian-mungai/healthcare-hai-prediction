@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
+from scripts.infrastructure import host_session_group_signal
 from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, Session
 from scripts.infrastructure.host_session_stand_in import (
     CLUSTER,
@@ -581,6 +582,10 @@ def interrupted_catalog_stop() -> dict[str, bool]:
     return checks
 
 
+def terminal_interrupt_during_host_off() -> dict[str, bool]:
+    return host_session_group_signal.run(session_module())
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "happy_start": happy_start,
     "registration_timeout": registration_timeout,
@@ -613,4 +618,5 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "openmetadata_restart_after_a_stop": openmetadata_restart_after_a_stop,
     "stop_without_the_catalog_only_turns_the_host_off": stop_without_the_catalog_only_turns_the_host_off,
     "interrupted_catalog_stop": interrupted_catalog_stop,
+    "terminal_interrupt_during_host_off": terminal_interrupt_during_host_off,
 }

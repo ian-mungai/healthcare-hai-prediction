@@ -46,6 +46,7 @@ def run_command(
     env: Mapping[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     check: bool = False,
+    own_session: bool = False,
 ) -> CompletedProcess[str]:
     """Run ``program`` with ``args`` and return its exit code and captured text output.
 
@@ -63,6 +64,8 @@ def run_command(
         Seconds before the program is stopped.
     check : bool
         Raise when the program exits non-zero.
+    own_session : bool
+        Start the program in its own session, so a signal sent to this process's terminal group (Ctrl-C) does not reach it.
 
     Returns
     -------
@@ -90,4 +93,5 @@ def run_command(
         text=True,
         timeout=timeout,
         check=check,
+        start_new_session=own_session,
     )
