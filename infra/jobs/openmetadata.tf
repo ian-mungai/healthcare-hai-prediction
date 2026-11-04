@@ -23,13 +23,13 @@ variable "openmetadata_server_url" {
 }
 
 variable "openmetadata_ingestion_token_name" {
-  description = "Parameter Store SecureString name of the ingestion bot token of the persistent catalog. The execution role injects it into the ingestion steps. The persistent catalog bootstrap writes it."
+  description = "Parameter Store SecureString name of the ingestion bot token of the persistent catalog, one bot token per caller. The execution role injects it into the ingestion steps and into the metadata host task. The persistent catalog bootstrap writes it. Terraform references the name and never reads the value."
   type        = string
   default     = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
   nullable    = false
 
   validation {
-    condition     = !(var.openmetadata_enabled && var.openmetadata_server_url != "") || var.openmetadata_ingestion_token_name == "/${var.project_name}/openmetadata_bot_ingestion"
+    condition     = !((var.openmetadata_enabled && var.openmetadata_server_url != "") || (var.host_jobs_enabled && contains(var.host_jobs, "metadata"))) || var.openmetadata_ingestion_token_name == "/${var.project_name}/openmetadata_bot_ingestion"
     error_message = "Inject only the project ingestion bot token parameter."
   }
 }
