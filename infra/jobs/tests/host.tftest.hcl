@@ -65,6 +65,9 @@ variables {
   serve_manifest_prefix                 = "serving/deployments"
   layer_feast_redis_host                = "10.0.1.20"
   openmetadata_cpu_architecture         = "ARM64"
+  openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
+  host_openmetadata_api                 = "http://10.0.1.20:8585/api"
+  host_repo_path                        = "/data/repo"
   layer_jobs_enabled                    = true
   bronze_job_enabled                    = true
   train_enabled                         = true
@@ -84,10 +87,10 @@ run "flag_off" {
 
   assert {
     condition = (
-      length(output.host_task_definition_arns) == 0 && length(output.host_container_definitions) == 0 && length(output.host_run_tasks) == 0 &&
-      length(output.host_dispatch_contract.families) == 0 && length(output.host_dispatch_contract.writers) == 0 && length(output.host_secret_flow.containers_checked) == 0
+      output.host_task_definition_arns == null && output.host_container_definitions == null && output.host_run_tasks == null &&
+      output.host_dispatch_contract == null && output.host_secret_flow == null
     )
-    error_message = "Without host_jobs_enabled every host output is empty."
+    error_message = "Without host_jobs_enabled every host output is null, so the plan shows no output change."
   }
 
   assert {
@@ -124,11 +127,11 @@ run "flag_on_plans_the_nine_host_definitions" {
   assert {
     condition = alltrue([for family, size in {
       silver   = [3072, 16384], gold = [3072, 16384], features = [3072, 16384], bronze = [3072, 16384], train = [3072, 16384],
-      metadata = [3072, 16384], drift = [2048, 8192], promote = [1024, 4096], serve = [1024, 4096]
+      metadata = [1024, 2048], drift = [2048, 8192], promote = [1024, 4096], serve = [1024, 4096]
       } : (
       aws_ecs_task_definition.host[family].cpu == tostring(size[0]) && aws_ecs_task_definition.host[family].memory == tostring(size[1])
     )])
-    error_message = "A job reserves at most 3072 CPU units and 16 GiB at task level; the smaller families keep their Fargate size."
+    error_message = "A job reserves at most 3072 CPU units and 16 GiB at task level; the smaller families keep their Fargate size and the metadata job is sized for its one ingestion container."
   }
 
   assert {
@@ -186,8 +189,7 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       silver   = jsondecode(output.layer_container_definitions["silver"]), gold = jsondecode(output.layer_container_definitions["gold"]),
       features = jsondecode(output.layer_container_definitions["features"]), bronze = jsondecode(output.bronze_container_definitions),
       train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
-      promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions),
-      metadata = jsondecode(output.openmetadata_container_definitions)
+      promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
       } : (
       [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" }] ==
       [for container in fargate : { for key, value in container : key => value if key != "environment" }] &&
@@ -196,7 +198,7 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]] ==
       [for container in fargate : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]]
     )])
-    error_message = "A host container equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts."
+    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts."
   }
 
   assert {
@@ -204,8 +206,7 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       silver   = jsondecode(output.layer_container_definitions["silver"]), gold = jsondecode(output.layer_container_definitions["gold"]),
       features = jsondecode(output.layer_container_definitions["features"]), bronze = jsondecode(output.bronze_container_definitions),
       train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
-      promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions),
-      metadata = jsondecode(output.openmetadata_container_definitions)
+      promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
       } : (
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value if contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]] ==
       [for container in fargate : [for item in container.environment : item.value == "4" ? "3" : item.value if contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]]
@@ -243,18 +244,17 @@ run "scratch_is_a_host_path_per_family" {
       toset([for volume in aws_ecs_task_definition.host["silver"].volume : "${volume.name}=${volume.host_path}"]) ==
       toset(["workspace=/data/job_scratch/silver/work", "tmp=/data/job_scratch/silver/tmp"]) &&
       toset([for volume in aws_ecs_task_definition.host["metadata"].volume : "${volume.name}=${volume.host_path}"]) == toset([
-        "workspace=/data/job_scratch/metadata/work", "tmp=/data/job_scratch/metadata/tmp", "omrun=/data/job_scratch/metadata/omrun",
-        "pgdata=/data/job_scratch/metadata/pgdata", "osdata=/data/job_scratch/metadata/osdata"
+        "workspace=/data/job_scratch/metadata/work", "tmp=/data/job_scratch/metadata/tmp", "repo=/data/repo"
       ])
     )
-    error_message = "Workspace and tmp are host folders under the scratch root, one folder per family, and the catalog task keeps its three more volumes there."
+    error_message = "Workspace and tmp are host folders under the scratch root, one folder per family, and the metadata job also mounts the repository checkout."
   }
 
   assert {
     condition = alltrue([for family, task in aws_ecs_task_definition.host : alltrue([for volume in task.volume : (
-      startswith(volume.host_path, "/data/job_scratch/${family}/") && !strcontains(volume.host_path, "..") && !volume.configure_at_launch
+      volume.name == "repo" || startswith(volume.host_path, "/data/job_scratch/${family}/") && !strcontains(volume.host_path, "..") && !volume.configure_at_launch
     )])])
-    error_message = "No volume leaves the family's own scratch folder."
+    error_message = "No volume leaves the family's own scratch folder except the read-only repository checkout of the metadata job."
   }
 
   assert {
@@ -351,7 +351,7 @@ run "run_task_and_dispatch_contract" {
       output.host_run_tasks["drift"].container_environment == output.drift_run_task.container_environment &&
       output.host_run_tasks["promote"].container_environment == output.promote_run_task.container_environment &&
       output.host_run_tasks["serve"].container_environment == output.serve_run_task.container_environment &&
-      output.host_run_tasks["metadata"].container_environment == output.openmetadata_run_task.container_environment
+      jsonencode(output.host_run_tasks["metadata"].container_environment) == jsonencode({ ingest = ["RUN_ID", "POLARIS_URI"] })
     )
     error_message = "The host entries cover exactly the families of the job table and name the same container variables as the Fargate outputs."
   }
@@ -398,7 +398,7 @@ run "host_definitions_pass_the_secret_flow_check" {
     condition = toset(output.host_secret_flow.containers_checked) == toset([
       "host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_features/pin",
       "host_features/publish", "host_features/feast", "host_bronze/load", "host_train/extract", "host_train/train", "host_drift/baseline", "host_drift/current",
-      "host_promote/promote", "host_serve/serve", "host_metadata/bootstrap", "host_metadata/ingest_polaris"
+      "host_promote/promote", "host_serve/serve", "host_metadata/ingest"
     ])
     error_message = "The containers that receive a secret are the ones the Fargate twins have, and the flow check follows each of them."
   }
@@ -489,7 +489,234 @@ run "flag_off_registers_nothing_even_with_a_family_list" {
   }
 
   assert {
-    condition     = length(aws_ecs_task_definition.host) == 0 && length(output.host_run_tasks) == 0
+    condition     = length(aws_ecs_task_definition.host) == 0 && output.host_run_tasks == null
     error_message = "A family list alone registers nothing: only host_jobs_enabled does."
+  }
+}
+
+run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(output.host_container_definitions["metadata"])) == 1 &&
+      jsondecode(output.host_container_definitions["metadata"])[0].name == "ingest" && jsondecode(output.host_container_definitions["metadata"])[0].essential &&
+      jsondecode(output.host_container_definitions["metadata"])[0].image == var.openmetadata_images["ingestion"]
+    )
+    error_message = "The metadata host task holds exactly one container, the ingestion image, and not the database, search and server of the catalog."
+  }
+
+  assert {
+    condition = (
+      !strcontains(output.host_container_definitions["metadata"], "127.0.0.1") && !strcontains(output.host_container_definitions["metadata"], "localhost") &&
+      !strcontains(output.host_container_definitions["metadata"], "portMappings") && !strcontains(output.host_container_definitions["metadata"], "links")
+    )
+    error_message = "No loopback address, port mapping or link: peers in bridge mode are not reachable that way."
+  }
+
+  assert {
+    condition = alltrue([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : (
+      !startswith(item.name, "DB_") && !startswith(item.name, "ELASTICSEARCH_") && !startswith(item.name, "POSTGRES_") && !startswith(item.name, "OPENSEARCH_") &&
+      !contains(["SEARCH_TYPE", "PGDATA", "OM_DATABASE", "discovery.type", "OM_LIFETIME_SECONDS", "OM_INGESTION_TOKEN"], item.name)
+    )])
+    error_message = "The ingestion container carries no database or search setting, and the token is a secret, never a plain variable."
+  }
+
+  assert {
+    condition = (
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == "http://10.0.1.20:8585/api" &&
+      toset([for item in jsondecode(output.host_container_definitions["metadata"])[0].secrets : item.name]) == toset(["OM_INGESTION_TOKEN", "POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"]) &&
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[0].secrets : item.valueFrom if item.name == "OM_INGESTION_TOKEN"]) ==
+      "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_ingestion"
+    )
+    error_message = "The container is told the catalog API address and receives the ingestion bot token from its Parameter Store parameter."
+  }
+
+  assert {
+    condition = (
+      jsondecode(output.host_container_definitions["metadata"])[0].entryPoint == ["python", "-m", "scripts.infrastructure.openmetadata_host_ingest"] &&
+      jsondecode(output.host_container_definitions["metadata"])[0].command == ["--config-dir", "/opt/hai/repo/config/metadata/ingestion", "--work-dir", "/workspace", "polaris", "dbt"] &&
+      jsondecode(output.host_container_definitions["metadata"])[0].workingDirectory == "/opt/hai/repo"
+    )
+    error_message = "The container runs the host ingestion script from the mounted checkout for the Polaris and dbt sources."
+  }
+
+  assert {
+    condition = (
+      toset([for mount in jsondecode(output.host_container_definitions["metadata"])[0].mountPoints : "${mount.sourceVolume}:${mount.containerPath}:${mount.readOnly}"]) ==
+      toset(["workspace:/workspace:false", "tmp:/tmp:false", "repo:/opt/hai/repo:true"]) &&
+      !contains(keys(jsondecode(output.host_container_definitions["metadata"])[0]), "memory") && jsondecode(output.host_container_definitions["metadata"])[0].readonlyRootFilesystem &&
+      jsondecode(output.host_container_definitions["metadata"])[0].user == "10001:10001"
+    )
+    error_message = "The checkout is mounted read-only, the root filesystem stays read-only and the job user is not root."
+  }
+
+  assert {
+    condition = (
+      tonumber(aws_ecs_task_definition.host["metadata"].memory) <= 4096 && tonumber(aws_ecs_task_definition.host["metadata"].cpu) <= 1024 &&
+      aws_ecs_task_definition.host["metadata"].memory == "2048" && aws_ecs_task_definition.host["metadata"].cpu == "1024"
+    )
+    error_message = "The task is sized for one ingestion container: 1024 CPU units and 2 GiB, not the catalog's 24 GiB or the 16 GiB job cap."
+  }
+}
+
+run "the_metadata_job_needs_only_the_ingestion_image_and_the_catalog_roles" {
+  command = plan
+
+  variables {
+    host_jobs_enabled    = true
+    host_jobs            = ["metadata"]
+    openmetadata_enabled = false
+    openmetadata_images  = { ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222" }
+  }
+
+  assert {
+    condition     = toset(keys(aws_ecs_task_definition.host)) == toset(["metadata"]) && length(aws_ecs_task_definition.openmetadata) == 0
+    error_message = "The host metadata job does not depend on the Fargate catalog task or on the server, search and database images."
+  }
+}
+
+run "the_metadata_job_sizes_come_from_one_variable_within_a_small_cap" {
+  command = plan
+
+  variables {
+    host_jobs_enabled       = true
+    host_jobs               = ["metadata"]
+    host_metadata_resources = { cpu = 512, memory = 1024 }
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.host["metadata"].cpu == "512" && aws_ecs_task_definition.host["metadata"].memory == "1024"
+    error_message = "The ingestion task size is one input."
+  }
+}
+
+run "the_metadata_job_may_not_grow_back_to_a_catalog_sized_task" {
+  command = plan
+
+  variables {
+    host_jobs_enabled       = true
+    host_jobs               = ["metadata"]
+    host_metadata_resources = { cpu = 1024, memory = 16384 }
+  }
+
+  expect_failures = [var.host_metadata_resources]
+}
+
+run "the_metadata_job_may_not_ask_for_catalog_sized_cpu" {
+  command = plan
+
+  variables {
+    host_jobs_enabled       = true
+    host_jobs               = ["metadata"]
+    host_metadata_resources = { cpu = 3072, memory = 2048 }
+  }
+
+  expect_failures = [var.host_metadata_resources]
+}
+
+run "the_metadata_job_needs_a_catalog_address" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_jobs             = ["metadata"]
+    host_openmetadata_api = null
+  }
+
+  expect_failures = [var.host_openmetadata_api]
+}
+
+run "the_catalog_address_may_not_be_loopback" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_jobs             = ["metadata"]
+    host_openmetadata_api = "http://127.0.0.1:8585/api"
+  }
+
+  expect_failures = [var.host_openmetadata_api]
+}
+
+run "the_catalog_address_is_a_private_address_with_the_api_path" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_jobs             = ["metadata"]
+    host_openmetadata_api = "http://10.0.1.20:8585"
+  }
+
+  expect_failures = [var.host_openmetadata_api]
+}
+
+run "the_metadata_job_needs_the_repository_path" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_repo_path    = null
+  }
+
+  expect_failures = [var.host_repo_path]
+}
+
+run "the_repository_path_is_absolute_and_clean" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_repo_path    = "/data/../repo"
+  }
+
+  expect_failures = [var.host_repo_path]
+}
+
+run "the_ingestion_token_is_the_project_bot_parameter" {
+  command = plan
+
+  variables {
+    host_jobs_enabled                 = true
+    host_jobs                         = ["metadata"]
+    openmetadata_ingestion_token_name = "/example_project/openmetadata_bot_lineage"
+  }
+
+  expect_failures = [var.openmetadata_ingestion_token_name]
+}
+
+run "the_metadata_job_without_its_image_is_refused" {
+  command = plan
+
+  variables {
+    host_jobs_enabled    = true
+    host_jobs            = ["metadata"]
+    openmetadata_enabled = false
+    openmetadata_images  = {}
+  }
+
+  expect_failures = [var.host_jobs]
+}
+
+run "other_families_need_no_catalog_address" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_jobs             = ["silver"]
+    host_openmetadata_api = null
+    host_repo_path        = null
+  }
+
+  assert {
+    condition     = toset(keys(aws_ecs_task_definition.host)) == toset(["silver"])
+    error_message = "The catalog address and the checkout path matter only to the metadata job."
   }
 }

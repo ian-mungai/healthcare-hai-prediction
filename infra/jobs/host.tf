@@ -51,6 +51,46 @@ variable "host_scratch_root" {
   }
 }
 
+variable "host_metadata_resources" {
+  description = "CPU units and memory MiB of the metadata host task. It holds one ingestion container that sends Polaris and dbt metadata to the persistent catalog, so it is small: the catalog itself runs as a service."
+  type = object({
+    cpu    = number
+    memory = number
+  })
+  default  = { cpu = 1024, memory = 2048 }
+  nullable = false
+
+  validation {
+    condition = (
+      var.host_metadata_resources.cpu >= 256 && var.host_metadata_resources.cpu <= 2048 && var.host_metadata_resources.memory >= 512 && var.host_metadata_resources.memory <= 4096 &&
+      var.host_metadata_resources.cpu == floor(var.host_metadata_resources.cpu) && var.host_metadata_resources.memory == floor(var.host_metadata_resources.memory)
+    )
+    error_message = "Use 256 to 2048 CPU units and 512 to 4096 MiB. A larger task is not an ingestion client."
+  }
+}
+
+variable "host_openmetadata_api" {
+  description = "Address of the persistent OpenMetadata API for the metadata host task, for example http://10.0.1.20:8585/api. Use the private address of the host, because the bridge task reaches the host's services at that address and the host firewall opens the catalog port for it. Loopback is the task's own address in bridge mode, and the bridge gateway is not one of the addresses the firewall rules name. Required while the metadata host task is selected."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.host_openmetadata_api == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : can(regex("^http://(?:[0-9]{1,3}\\.){3}[0-9]{1,3}:[0-9]{2,5}/api$", var.host_openmetadata_api)) && !startswith(var.host_openmetadata_api, "http://127.")
+    error_message = "Supply the catalog API as http://<private IPv4 address>:<port>/api, not a loopback address, while the metadata host task is selected."
+  }
+}
+
+variable "host_repo_path" {
+  description = "Absolute host path of the repository checkout that the metadata host task mounts read-only to run the ingestion script and read its configuration. Use the checkout that Airflow mounts. Required while the metadata host task is selected."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.host_repo_path == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : can(regex("^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", var.host_repo_path)) && !strcontains(var.host_repo_path, "..")
+    error_message = "Supply an absolute path without a trailing slash or a parent step while the metadata host task is selected."
+  }
+}
+
 locals {
   host_families = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
@@ -71,7 +111,7 @@ locals {
     drift    = var.drift_enabled
     promote  = var.promote_enabled
     serve    = var.serve_enabled
-    metadata = var.openmetadata_enabled
+    metadata = contains(keys(var.openmetadata_images), "ingestion") && contains(keys(var.openmetadata_roles), "execution") && contains(keys(var.openmetadata_roles), "openmetadata_task") && var.log_group_name != null
   }
   # Roles, network class (the class of config/orchestration/ecs_broker_jobs.json, which a Terraform test compares) and the Fargate shape each host definition starts from.
   host_specs = {
@@ -83,7 +123,7 @@ locals {
     drift    = { execution = lookup(var.drift_roles, "execution", ""), task_key = "drift_task", task = lookup(var.drift_roles, "drift_task", ""), network = "training", shape = var.drift_resources }
     promote  = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training", shape = var.promote_resources }
     serve    = { execution = lookup(var.train_roles, "execution", ""), task_key = "serve_task", task = lookup(var.serve_roles, "serve_task", ""), network = "training", shape = var.serve_resources }
-    metadata = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse", shape = var.openmetadata_resources }
+    metadata = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse", shape = var.host_metadata_resources }
   }
   host_selected = {
     for family, spec in local.host_specs : family => spec
@@ -96,8 +136,48 @@ locals {
     drift    = local.drift_containers
     promote  = local.promote_containers
     serve    = local.serve_containers
-    metadata = local.om_containers
+    metadata = local.host_metadata_containers
   })
+  # The persistent catalog runs as a service on the host. The metadata job is only its client: one container sends the Polaris and dbt metadata to the catalog API.
+  host_repo_mount = "/opt/hai/repo"
+  host_metadata_containers = [{
+    name                   = "ingest"
+    image                  = lookup(var.openmetadata_images, "ingestion", "invalid")
+    essential              = true
+    privileged             = false
+    readonlyRootFilesystem = true
+    user                   = "10001:10001"
+    workingDirectory       = local.host_repo_mount
+    entryPoint             = ["python", "-m", "scripts.infrastructure.openmetadata_host_ingest"]
+    command                = ["--config-dir", "${local.host_repo_mount}/config/metadata/ingestion", "--work-dir", "/workspace", "polaris", "dbt"]
+    stopTimeout            = 60
+    linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
+    ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
+    dependsOn              = []
+    environment = concat(local.om_common_environment, [
+      { name = "OM_API", value = coalesce(var.host_openmetadata_api, "unset") },
+      { name = "RUN_ID", value = "" },
+      { name = "POLARIS_URI", value = "" },
+    ])
+    secrets = concat(local.reader_parameters, [
+      { name = "OM_INGESTION_TOKEN", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}" },
+    ])
+    mountPoints = [
+      { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
+      { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+      { sourceVolume = "repo", containerPath = local.host_repo_mount, readOnly = true },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = var.log_group_name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "metadata"
+        mode                  = "non-blocking"
+        max-buffer-size       = "16m"
+      }
+    }
+  }]
   host_containers = {
     for family in keys(local.host_selected) : family => [
       for container in lookup(local.host_source_containers, family, []) : merge(container, {
@@ -111,7 +191,7 @@ locals {
   host_volumes = {
     for family in keys(local.host_selected) : family => {
       for name in distinct(flatten([for container in local.host_containers[family] : [for mount in container.mountPoints : mount.sourceVolume]])) :
-      name => "${var.host_scratch_root}/${family}/${lookup(local.host_volume_directories, name, name)}"
+      name => name == "repo" ? coalesce(var.host_repo_path, "/unset") : "${var.host_scratch_root}/${family}/${lookup(local.host_volume_directories, name, name)}"
     }
   }
   host_resources = {
@@ -129,7 +209,7 @@ locals {
     drift    = local.drift_run_variables
     promote  = { for step in local.promote_steps : step.name => step.variables if length(step.variables) > 0 }
     serve    = { for step in local.serve_steps : step.name => step.variables if length(step.variables) > 0 }
-    metadata = { ingest_polaris = ["RUN_ID", "POLARIS_URI"], ingest_dbt = ["RUN_ID"] }
+    metadata = { ingest = ["RUN_ID", "POLARIS_URI"] }
   }
   host_dry_run = {
     silver   = { variable = "LAYER_DRY_RUN", value = "1" }
@@ -181,29 +261,29 @@ module "host_flow" {
 }
 
 output "host_task_definition_arns" {
-  description = "Registered host task revisions, keyed by family. Empty while host_jobs_enabled is false."
-  value       = { for family, task in aws_ecs_task_definition.host : family => task.arn }
+  description = "Registered host task revisions, keyed by family. Null while host_jobs_enabled is false."
+  value       = var.host_jobs_enabled ? { for family, task in aws_ecs_task_definition.host : family => task.arn } : null
 }
 
 output "host_container_definitions" {
   description = "Complete container JSON of each host task, keyed by family, for review and mocked plan assertions."
-  value       = { for family, task in aws_ecs_task_definition.host : family => task.container_definitions }
+  value       = var.host_jobs_enabled ? { for family, task in aws_ecs_task_definition.host : family => task.container_definitions } : null
 }
 
 output "host_secret_flow" {
   description = "Secret-flow and pin results of the shared flow module for the host tasks."
-  value = {
+  value = var.host_jobs_enabled ? {
     violations             = module.host_flow.violations
     alias_chains_converged = module.host_flow.alias_chains_converged
     containers_checked     = module.host_flow.containers_checked
     mutation_mismatches    = module.host_flow.mutation_mismatches
     mutations_checked      = module.host_flow.mutations_checked
-  }
+  } : null
 }
 
 output "host_run_tasks" {
   description = "What the launcher's run-task call needs for each registered host task, the host equivalent of layer_run_tasks and the other run-task outputs. The call sends the capacity provider strategy and no network configuration. Registration starts nothing."
-  value = {
+  value = var.host_jobs_enabled ? {
     for family, task in aws_ecs_task_definition.host : family => {
       task_definition       = task.family
       task_role_key         = local.host_selected[family].task_key
@@ -216,12 +296,12 @@ output "host_run_tasks" {
       dry_run_value         = try(local.host_dry_run[family].value, null)
       scratch               = local.host_volumes[family]
     }
-  }
+  } : null
 }
 
 output "host_dispatch_contract" {
   description = "Host equivalent of dispatch_contract and writer_dispatch_contracts: where a host job runs and what bounds it. The host firewall bounds the network, so the contract carries each family's class and no security group. Registration dispatches nothing."
-  value = {
+  value = var.host_jobs_enabled ? {
     capacity_provider = local.host_provider
     network_mode      = "bridge"
     propagate_tags    = "TASK_DEFINITION"
@@ -237,5 +317,5 @@ output "host_dispatch_contract" {
       }
       if startswith(spec.task_key, "write_")
     }
-  }
+  } : null
 }
