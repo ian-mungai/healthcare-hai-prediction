@@ -1177,6 +1177,7 @@ HOSTED_ENTRY_POINTS = {
     ),
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
+        ("scripts.infrastructure.run_push_images_e2e", ("scripts/infrastructure/run_push_images_e2e.py", "scripts/infrastructure/push_images.py")),
         ("scripts.infrastructure.run_host_session_e2e", ("scripts/infrastructure/run_host_session_e2e.py", "scripts/infrastructure/host_session.py")),
         ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
         ("scripts.infrastructure.run_aws_tasks_e2e", ("scripts/infrastructure/run_aws_tasks_e2e.py", "scripts/infrastructure/aws_tasks.py")),

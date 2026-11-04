@@ -198,6 +198,36 @@
       "tag": "1-arm64",
       "arm64": "base pin lists linux/arm64; the lock needs the owner's compile, and the linux/arm64 build has not been run yet",
       "runs_as": "ECS service on the host when streamlit_enabled is true"
+    },
+    "openmetadata_server": {
+      "kind": "mirror",
+      "source": "docker.io/openmetadata/server@sha256:010d63887c5b428d877a84e7edd65a152894145e0bb0a90aabf334cd70815a0c",
+      "tag": "2.0.7-arm64",
+      "local_reference": false,
+      "metadata_image": "server",
+      "read_back": "equal",
+      "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
+      "runs_as": "the persistent catalog server and its migration step on the host (openmetadata_persistent_enabled)"
+    },
+    "openmetadata_ingestion": {
+      "kind": "mirror",
+      "source": "docker.io/openmetadata/ingestion@sha256:cd28c0b1f64b9c3581badf996f7fef6ffea3918754d588095b2f04a8c9f3dca4",
+      "tag": "2.0.7-arm64",
+      "local_reference": false,
+      "metadata_image": "ingestion",
+      "read_back": "equal",
+      "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
+      "runs_as": "the one-shot catalog bootstrap on the host (openmetadata_persistent_enabled)"
+    },
+    "openmetadata_search": {
+      "kind": "mirror",
+      "source": "docker.io/opensearchproject/opensearch@sha256:6836708871685e272ad9042285e1c680790fe4315b047279ad16f761da2f4b70",
+      "tag": "3.3.2-arm64",
+      "local_reference": false,
+      "metadata_image": "search",
+      "read_back": "equal",
+      "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
+      "runs_as": "the persistent catalog's OpenSearch single node on the host (openmetadata_persistent_enabled)"
     }
   }
 }

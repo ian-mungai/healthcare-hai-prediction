@@ -17,6 +17,7 @@ configuration_checks() {
   timed "configuration_checks: persistent OpenMetadata bootstrap E2E" "$python_bin" -m scripts.infrastructure.run_openmetadata_persistent_e2e --output-root "$e2e_output/openmetadata_persistent"
   timed "configuration_checks: OpenMetadata catalog task E2E" "$python_bin" -m scripts.infrastructure.run_openmetadata_e2e --output-directory "$e2e_output/openmetadata"
   timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
+  timed "configuration_checks: OpenMetadata image mirror E2E" "$python_bin" -m scripts.infrastructure.run_push_images_e2e
   timed "configuration_checks: monitoring files E2E" "$python_bin" -m scripts.infrastructure.run_monitoring_e2e
   timed "configuration_checks: host session E2E" "$python_bin" -m scripts.infrastructure.run_host_session_e2e
   timed "configuration_checks: host session plants" "$python_bin" -m scripts.infrastructure.host_session_plants
