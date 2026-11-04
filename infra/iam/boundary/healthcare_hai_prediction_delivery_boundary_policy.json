@@ -67,7 +67,10 @@
       "Sid": "UpdateProjectServices",
       "Effect": "Allow",
       "Action": "ecs:UpdateService",
-      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_*"
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_model_api",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_streamlit"
+      ]
     },
     {
       "Sid": "ListProjectClusterTasks",
@@ -84,31 +87,13 @@
       }
     },
     {
-      "Sid": "RegisterTaskDefinitions",
+      "Sid": "DescribeTaskDefinitions",
       "Effect": "Allow",
-      "Action": [
-        "ecs:DescribeTaskDefinition",
-        "ecs:RegisterTaskDefinition"
-      ],
+      "Action": "ecs:DescribeTaskDefinition",
       "Resource": "*",
       "Condition": {
         "StringEquals": {
           "aws:RequestedRegion": "${AWS_REGION}"
-        }
-      }
-    },
-    {
-      "Sid": "PassProjectTaskRoles",
-      "Effect": "Allow",
-      "Action": "iam:PassRole",
-      "Resource": [
-        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_model_api_task_${ENVIRONMENT}",
-        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_streamlit_task_${ENVIRONMENT}",
-        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_task_execution_${ENVIRONMENT}"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "iam:PassedToService": "ecs-tasks.amazonaws.com"
         }
       }
     },
@@ -221,15 +206,10 @@
       ]
     },
     {
-      "Sid": "DenyIamExceptPassRoleToEcsTasks",
+      "Sid": "DenyIam",
       "Effect": "Deny",
       "Action": "iam:*",
-      "Resource": "*",
-      "Condition": {
-        "StringNotEquals": {
-          "iam:PassedToService": "ecs-tasks.amazonaws.com"
-        }
-      }
+      "Resource": "*"
     },
     {
       "Sid": "DenyOrganizationsAccountAndBudgets",
