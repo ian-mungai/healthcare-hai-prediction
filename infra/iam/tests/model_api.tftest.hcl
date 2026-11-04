@@ -298,7 +298,7 @@ run "the_four_owner_parameters_are_managed_only_while_the_model_api_is_prepared"
   }
 }
 
-run "the_four_owner_parameters_join_the_managed_inventory" {
+run "the_five_owner_parameters_join_the_managed_inventory" {
   command = plan
 
   variables {
@@ -309,13 +309,54 @@ run "the_four_owner_parameters_join_the_managed_inventory" {
 
   assert {
     condition = (
-      length(output.project_secret_names.managed_parameters) == 20 &&
+      length(output.project_secret_names.managed_parameters) == 21 &&
       alltrue([
-        for name in ["model_api_key_hashes", "model_api_mlflow_user", "model_api_mlflow_credential", "streamlit_model_api_key"] :
+        for name in ["model_api_key_hashes", "model_api_mlflow_user", "model_api_mlflow_credential", "model_api_redis_password", "streamlit_model_api_key"] :
         contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/${name}") && contains(output.project_secret_names.read_parameters, "/healthcare_hai_prediction/${name}")
       ]) &&
       !contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/aws_polaris_serving_client_id")
     )
-    error_message = "The four owner-set serving parameters are read and put by the project user while the model API is prepared. The serving pair stays with the catalog setup."
+    error_message = "The five serving parameters the project sets are read and put by the project user while the model API is prepared. The serving pair stays with the catalog setup."
+  }
+}
+
+# D18 Redis: the model API reads Feast through its own read-only Redis user, with a password of its own. The shared execution role injects that password into the
+# Redis task, which creates the user from it. The serving execution role injects it into the model API (see serving_execution.tftest.hcl).
+run "the_redis_task_gets_the_password_of_the_model_api_user_only_while_prepared" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.task_execution_redis_acl) == 0 && !contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/model_api_redis_password")
+    error_message = "While the model API is not prepared nothing names the password of its Redis user."
+  }
+}
+
+run "the_shared_execution_role_injects_the_model_api_redis_password_and_nothing_else_new" {
+  command = plan
+
+  variables {
+    model_api_prepared        = true
+    model_api_registry_key    = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix = "serving/deployments"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.task_execution_redis_acl[0].name == "task_execution_redis_acl" &&
+      jsondecode(aws_iam_role_policy.task_execution_redis_acl[0].policy).Statement == [
+        {
+          Sid      = "InjectModelApiRedisPassword"
+          Effect   = "Allow"
+          Action   = "ssm:GetParameters"
+          Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_redis_password"]
+        }
+      ]
+    )
+    error_message = "The shared execution role injects exactly the password of the model API's Redis user into the Redis task, in a policy of its own."
+  }
+
+  assert {
+    condition     = contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/model_api_redis_password") && var.model_api_redis_password_name != var.redis_password_name
+    error_message = "The project may create and put the password of the model API's Redis user, and it is not the shared Redis password."
   }
 }

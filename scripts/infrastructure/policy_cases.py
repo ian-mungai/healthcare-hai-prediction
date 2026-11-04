@@ -91,6 +91,7 @@ PARAMETERS = (
     "model_api_key_hashes",
     "model_api_mlflow_credential",
     "model_api_mlflow_user",
+    "model_api_redis_password",
     "polaris_gold_client_id",
     "polaris_gold_client_secret",
     "polaris_reader_client_id",
@@ -1554,6 +1555,7 @@ SERVING_PARAMETERS = (
     "aws_polaris_serving_client_secret",
     "model_api_mlflow_user",
     "model_api_mlflow_credential",
+    "model_api_redis_password",
     "streamlit_model_api_key",
 )
 SERVING_EXECUTION = "serving_execution"
@@ -2145,6 +2147,7 @@ def serving_execution_cases() -> Iterator[Case]:
 
     for name in SERVING_PARAMETERS:
         yield case(f"injects {name}", "ssm:GetParameters", parameter(name), True)
+    yield case("cannot inject the Redis password of the control plane, only its own read-only user's", "ssm:GetParameters", parameter("redis_password"), False)
     for name in EXECUTION_PARAMETERS:
         yield case(f"cannot inject the control-plane parameter {name}", "ssm:GetParameters", parameter(name), False)
     for name in ("airflow_admin", "other_secret", "mlflow_db_password", "mlflow_admin_password", "broker_token", "model_api_key_hashes_extra"):

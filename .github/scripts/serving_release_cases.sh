@@ -105,6 +105,8 @@ for name in /healthcare_hai_prediction/redis_password /healthcare_hai_prediction
   /other_project/model_api_key_hashes /healthcare_hai_prediction/*; do
   check "the parameter $name is refused for the model API" refusal model_api "$(vary model_api '.containerDefinitions[0].secrets += [{name: "X", valueFrom: env.V}]' "$(parameter "$name")")"
 done
+check "the Redis password of the model API's own read-only user passes" verdict model_api "$(vary model_api '.containerDefinitions[0].secrets += [{name: "REDIS_PASSWORD", valueFrom: env.V}]' "$(parameter /healthcare_hai_prediction/model_api_redis_password)")"
+check "the Redis password of the model API is refused for the dashboard" refusal streamlit "$(vary streamlit '.containerDefinitions[0].secrets += [{name: "X", valueFrom: env.V}]' "$(parameter /healthcare_hai_prediction/model_api_redis_password)")"
 check "a parameter of the model API is refused for the dashboard" refusal streamlit "$(vary streamlit '.containerDefinitions[0].secrets += [{name: "X", valueFrom: env.V}]' "$(parameter /healthcare_hai_prediction/model_api_key_hashes)")"
 check "a parameter in another region is refused" refusal model_api "$(vary model_api '.containerDefinitions[0].secrets[0].valueFrom |= sub("us-west-2"; "us-east-1")')"
 check "a parameter in another account is refused" refusal model_api "$(vary model_api '.containerDefinitions[0].secrets[0].valueFrom |= sub("1111"; "2222")')"
@@ -150,12 +152,12 @@ check "render keeps a foreign secret so that the check can refuse it" test "$(pr
 
 # --- the configuration ------------------------------------------------------------------------------------------------------------------------
 check "the configuration names exactly the two serving services" test "$(jq -r '.services | keys | join(",")' "$config")" = "model_api,streamlit"
-check "the configuration names no control-plane parameter" test "$(jq -r '[.services[].parameters[]] | map(select(test("postgres|redis|airflow|marquez|polaris_root|mlflow_db|mlflow_admin|broker|grafana"))) | length' "$config")" = "0"
+check "the configuration names no control-plane parameter" test "$(jq -r '[.services[].parameters[]] | map(select(test("postgres|/redis_password$|airflow|marquez|polaris_root|mlflow_db|mlflow_admin|broker|grafana"))) | length' "$config")" = "0"
 variables=infra/iam/variables.tf
 default_of() { grep -A6 "^variable \"$1\"" "$variables" | grep -m1 'default' | sed 's/.*= *"\(.*\)"/\1/'; }
 all_parameters_match_the_variables() {
   local name expected
-  expected="$(for name in model_api_key_hashes_name aws_polaris_serving_client_id_name aws_polaris_serving_client_secret_name model_api_mlflow_user_name model_api_mlflow_credential_name streamlit_model_api_key_name; do default_of "$name"; done | sort | tr '\n' ',')"
+  expected="$(for name in model_api_key_hashes_name aws_polaris_serving_client_id_name aws_polaris_serving_client_secret_name model_api_mlflow_user_name model_api_mlflow_credential_name model_api_redis_password_name streamlit_model_api_key_name; do default_of "$name"; done | sort | tr '\n' ',')"
   [[ -n "$expected" && "$expected" == "$(jq -r '[.services[].parameters[]] | sort | join(",")' "$config"),"  ]]
 }
 check "the configured parameters equal the defaults of the IAM stack variables" all_parameters_match_the_variables
