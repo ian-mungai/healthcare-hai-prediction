@@ -58,7 +58,7 @@ output "lakehouse_role_arns" {
 }
 
 output "project_secret_names" {
-  description = "The names the project user's policy files grant: the shared API keys in Secrets Manager (read only), the project parameters in Parameter Store (read), the managed ones among them (written) and the ten AWS Polaris pair names the project user sets up."
+  description = "The names the project user's policy files grant: the shared API keys in Secrets Manager (read only), the project parameters in Parameter Store (read), the managed ones among them (written), the ten AWS Polaris pair names and the two catalog password names the project user sets up."
   value = {
     shared_secrets     = local.shared_secret_names
     read_parameters    = local.read_parameter_names
@@ -70,6 +70,7 @@ output "project_secret_names" {
       var.aws_polaris_silver_client_id_name, var.aws_polaris_silver_client_secret_name,
       var.aws_polaris_gold_client_id_name, var.aws_polaris_gold_client_secret_name,
     ]
+    openmetadata_passwords = [var.openmetadata_admin_password_name, var.openmetadata_db_password_name]
   }
 
   precondition {

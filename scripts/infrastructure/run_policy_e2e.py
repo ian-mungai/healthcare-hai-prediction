@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.iam.scripts.render_policy import MAX_POLICY_CHARACTERS, non_whitespace_length, render_template, template_service, terraform_names
-from scripts.infrastructure import policy_cases
+from scripts.infrastructure import policy_cases, secret_store
 from scripts.infrastructure.policy_evaluator import Decision, Request, allowed_actions, as_list, decide, load_policies
 from scripts.infrastructure.policy_script_defects import run_script_defects
 from scripts.process import run_command
@@ -123,6 +123,8 @@ ROLE_PLACEHOLDERS = ("LAKEHOUSE_READER_ROLE_NAME", "LAKEHOUSE_WRITER_ROLE_NAME")
 EXECUTION_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.EXECUTION_PARAMETERS)
 AWS_POLARIS_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.AWS_POLARIS_PARAMETERS)
 AWS_PAIRS = ("ssm", "SetUpAwsPolarisPairs")
+OPENMETADATA_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.OPENMETADATA_PASSWORDS)
+OPENMETADATA_PASSWORDS = ("ssm", policy_cases.OPENMETADATA_STATEMENT)
 TASK_EXECUTION = "owner_task_execution"
 STS = ("sts", "AssumeLakehouseRolesOnly")
 INJECT = (TASK_EXECUTION, "InjectNamedParameters")
@@ -141,6 +143,7 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         STS: {role_arn(names[key]) for key in ROLE_PLACEHOLDERS},
         INJECT: {parameter_arn(names[key]) for key in EXECUTION_PLACEHOLDERS},
         AWS_PAIRS: {parameter_arn(names[key]) for key in AWS_POLARIS_PLACEHOLDERS},
+        OPENMETADATA_PASSWORDS: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
     }
 
 
@@ -218,6 +221,8 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
         approved[placeholder] = {folder + name}
     for placeholder, name in zip(AWS_POLARIS_PLACEHOLDERS, policy_cases.AWS_POLARIS_PARAMETERS, strict=True):
         approved[placeholder] = {folder + name}
+    for placeholder, name in zip(OPENMETADATA_PLACEHOLDERS, policy_cases.OPENMETADATA_PASSWORDS, strict=True):
+        approved[placeholder] = {folder + name}
     for placeholder, expected_names in approved.items():
         problems += difference(
             f"{placeholder} variable defaults against the approved list", {str(item) for item in as_list(names[placeholder])}, expected_names
@@ -253,7 +258,13 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         for resource in as_list(statement["Resource"])
         if ":parameter" in resource
     } - {public}
-    allowed = expected[("ssm", "ManageProjectParameters")] | expected[("ssm", "ReadAirflowAdminParameter")] | expected[INJECT] | expected[AWS_PAIRS]
+    allowed = (
+        expected[("ssm", "ManageProjectParameters")]
+        | expected[("ssm", "ReadAirflowAdminParameter")]
+        | expected[INJECT]
+        | expected[AWS_PAIRS]
+        | expected[OPENMETADATA_PASSWORDS]
+    )
     problems += difference("parameter resources of all policies against the injected names", granted, allowed)
     named_secrets = {
         resource
@@ -324,6 +335,14 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         "the Airflow administrator password is missing from its read grant",
         check_names(dropped(documents, "ssm", "ReadAirflowAdminParameter", "airflow_admin")),
     )
+    record(
+        "a catalog password is missing from its grant",
+        check_names(dropped(documents, "ssm", policy_cases.OPENMETADATA_STATEMENT, "openmetadata_db_password")),
+    )
+    record(
+        "a catalog password name in its grant drifts from its variable default",
+        check_names(drift(documents, "ssm", policy_cases.OPENMETADATA_STATEMENT, "openmetadata_admin_password", "openmetadata_admin_passwd")),
+    )
     record("a shared API key is missing from the Secrets Manager grant", check_names(dropped(documents, "secretsmanager", "ReadSharedApiKeys", "jev_api_key")))
     record(
         "a shared API key name drifts from its variable default", check_names(drift(documents, "secretsmanager", "ReadSharedApiKeys", "hud_api_key", "hud_key"))
@@ -331,6 +350,8 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="policy_name_defects_") as scratch:
         root = Path(scratch)
         original = VARIABLES.read_text(encoding="utf-8")
+        for sibling in secret_store.OPENMETADATA_FILES:
+            shutil.copy(VARIABLES.parent / sibling, root / sibling)
 
         def changed_variables(old: str, new: str, label: str) -> Path:
             path = root / f"{label}.tf"
