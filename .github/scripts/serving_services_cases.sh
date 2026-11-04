@@ -66,4 +66,20 @@ same_blocks() {
 }
 check "the serving resource keeps the capacity provider strategy and the circuit breaker" same_blocks
 
+# --- the proofs are in a gate ------------------------------------------------------------------------------------------------------------------------
+# A test that no gate runs protects nothing. The terraform_checks group runs the move proof, the release check on the real definitions and the Redis cases, and the
+# group is selected by the paths of the files they depend on.
+group=scripts/ci/groups/terraform_checks.sh
+selectors=config/quality/ci_groups.json
+runs_once() { [[ "$(grep -c -- "$1" "$group")" -eq 1 ]]; }
+check "the terraform_checks group runs the services move proof" runs_once 'scripts.infrastructure.run_services_move_e2e --output-directory'
+check "the terraform_checks group runs the release check on the real definitions" runs_once 'scripts.infrastructure.run_serving_release_real_e2e --output-directory'
+check "the terraform_checks group runs the Redis ACL cases" runs_once 'bash .github/scripts/redis_acl_cases.sh'
+selected() { jq -e --arg path "$1" '.groups.terraform_checks | any(. as $pattern | $path | test($pattern))' "$selectors" > /dev/null 2>&1; }
+check "a change of the move proof runner selects the group" selected scripts/infrastructure/run_services_move_e2e.py
+check "a change of the real definitions runner selects the group" selected scripts/infrastructure/run_serving_release_real_e2e.py
+check "a change of the serving release configuration selects the group" selected config/aws/serving_release.json
+check "a change of the Redis ACL cases selects the group" selected .github/scripts/redis_acl_cases.sh
+check "an unrelated runner does not select the group" test "$(selected scripts/infrastructure/run_policy_e2e.py && echo selected || echo not)" = not
+
 [[ $failures -eq 0 ]]

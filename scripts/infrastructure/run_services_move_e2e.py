@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -80,12 +81,9 @@ def variables() -> dict[str, Any]:
 
 def terraform(arguments: list[str], cwd: Path, extra_environment: Mapping[str, str] | None = None) -> tuple[int, str]:
     """Run terraform in ``cwd`` with no AWS profile or credential of the caller, and return its exit code and combined text."""
-    environment = {
-        "PATH": str(Path(sys.executable).parent) + ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
-        "TF_IN_AUTOMATION": "1",
-        "TF_INPUT": "0",
-        **(extra_environment or {}),
-    }
+    # Only what terraform needs: the caller's PATH (CI puts the pinned terraform there) and the provider cache. No AWS profile, key or token passes.
+    kept = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "TF_PLUGIN_CACHE_DIR") if name in os.environ}
+    environment = {**kept, "TF_IN_AUTOMATION": "1", "TF_INPUT": "0", **(extra_environment or {})}
     result = run_command("terraform", arguments, cwd=cwd, env=environment, timeout=TIMEOUT_SECONDS)
     return result.returncode, result.stdout + result.stderr
 
@@ -98,6 +96,8 @@ def prepare(source: Path, destination: Path, plugin_directory: Path | None) -> N
     arguments = ["init", "-backend=false", "-input=false", "-no-color"]
     if plugin_directory is not None:
         arguments.append(f"-plugin-dir={plugin_directory}")
+    elif (destination / ".terraform.lock.hcl").is_file():
+        arguments.append("-lockfile=readonly")
     code, text = terraform(arguments, destination)
     if code != 0:
         raise RuntimeError(f"terraform init failed:\n{text[-1500:]}")
@@ -219,6 +219,7 @@ DEFECTS: dict[str, Callable[[str], str]] = {
 
 def run(output: Path, plugin_directory: Path | None, stack: Path = STACK) -> dict[str, Any]:
     """Prove the move, then plant each defect and check that the same checks fail."""
+    output = output.absolute()
     output.mkdir(parents=True, exist_ok=False)
     base = output / "stack"
     prepare(stack, base, plugin_directory)

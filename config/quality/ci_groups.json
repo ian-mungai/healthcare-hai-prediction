@@ -168,7 +168,9 @@
       "^\\.github/scripts/",
       "^scripts/quality/(static_checks|install_tools)\\.py$",
       "^config/quality_tools\\.json$",
-      "^scripts/ci/groups/terraform_checks\\.sh$"
+      "^scripts/ci/groups/terraform_checks\\.sh$",
+      "^scripts/infrastructure/run_(services_move|serving_release_real)_e2e\\.py$",
+      "^config/aws/serving_release\\.json$"
     ],
     "launcher": [
       "^scripts/quality/(launcher_inputs|source_reads)\\.py$",
