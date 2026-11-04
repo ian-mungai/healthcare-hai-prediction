@@ -83,3 +83,4 @@ orphan orchestration/ecs_launch_provider.py -- the Airflow image imports the lau
 unused-code orchestration/ecs_launch_provider.py -- Airflow's DAG parser imports the operator class by name
 unused-code orchestration/ecs_launch_operator.py -- the provider operator's execute calls the four hooks by name, the task runner calls on_kill, and the unused started_by argument is part of the hook signature
 unused-code scripts/orchestration/ecs_launch_standin.py -- the stand-in keeps the signatures of the provider operator, so unused arguments and the hook names stay
+unused-code scripts/lakehouse/run_gold_publish_runner_cases.py -- the tempfile.mkdtemp stand-in keeps the dir keyword of the real signature, so callers that pass dir= still work
