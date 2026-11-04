@@ -170,22 +170,44 @@ def case_deadlines(c: Checker) -> None:
 def case_timeout_not_masked(c: Checker) -> None:
     """At the deadline the caller reports a timeout, even when the abandoned worker records a socket error before the caller reads its result."""
     error_set = threading.Event()
+    stalls: list[str] = []
 
     def late_exchange(connection: http.client.HTTPConnection, payload: bytes, headers: dict[str, str], abandoned: threading.Event, box: dict[str, Any]) -> None:
-        abandoned.wait(5)
+        if not abandoned.wait(5):
+            stalls.append("the caller never abandoned the worker")
+            return
         box["error"] = ConnectionResetError("closed at the deadline")
         error_set.set()
 
     original_close = http.client.HTTPConnection.close
 
     def close_after_error(self: http.client.HTTPConnection) -> None:
-        error_set.wait(5)
+        if not error_set.wait(5):
+            stalls.append("the worker never recorded its error")
         original_close(self)
 
     settings = client.load_settings({"MODEL_API_URL": "http://127.0.0.1:9", "MODEL_API_KEY": KEY, "MODEL_API_DEADLINE_SECONDS": "0.6"})
     with mock.patch.object(client, "exchange", late_exchange), mock.patch.object(http.client.HTTPConnection, "close", close_after_error):
         out = client.predict(settings, "HAI_1", CCN, YEAR)
+    c.check(f"the late error was injected in the intended order ({'; '.join(stalls) or 'yes'})", not stalls)
     c.check("a socket error after the deadline still reports a timeout", isinstance(out, client.Failure) and out.kind == "timeout")
+
+
+def case_early_error_kept(c: Checker) -> None:
+    """A failure the worker recorded before the deadline keeps its own kind, even when the worker is still alive at the deadline."""
+    released = threading.Event()
+
+    def refused_then_stalled(
+        connection: http.client.HTTPConnection, payload: bytes, headers: dict[str, str], abandoned: threading.Event, box: dict[str, Any]
+    ) -> None:
+        box["error"] = ConnectionRefusedError("refused before the deadline")
+        released.wait(5)
+
+    settings = client.load_settings({"MODEL_API_URL": "http://127.0.0.1:9", "MODEL_API_KEY": KEY, "MODEL_API_DEADLINE_SECONDS": "0.6"})
+    with mock.patch.object(client, "exchange", refused_then_stalled):
+        out = client.predict(settings, "HAI_1", CCN, YEAR)
+    released.set()
+    c.check("an error recorded before the deadline stays unreachable", isinstance(out, client.Failure) and out.kind == "unreachable")
 
 
 def case_bad_answers(c: Checker) -> None:
@@ -463,6 +485,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "client_retry_after": (case_retry_after, "api rate-limit"),
     "client_deadlines": (case_deadlines, "timeout network"),
     "client_timeout_not_masked": (case_timeout_not_masked, "timeout network"),
+    "client_early_error_kept": (case_early_error_kept, "timeout network"),
     "client_bad_answers": (case_bad_answers, "api malformed"),
     "client_key_stays_private": (case_key_stays_private, "secret logging"),
     "client_key_echo": (case_key_echo, "secret malformed"),

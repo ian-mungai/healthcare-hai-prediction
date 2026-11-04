@@ -238,6 +238,8 @@ def predict(settings: Settings, hai_type: str, ccn: str, window_year: int) -> Pr
     worker.start()
     worker.join(settings.deadline_seconds)
     kind = ""
+    # Freeze what the worker reported by the deadline: a later error comes from the shutdown below and must not change the outcome.
+    error = box.get("error")
     if worker.is_alive():
         abandoned.set()
         sock = connection.sock
@@ -246,10 +248,10 @@ def predict(settings: Settings, hai_type: str, ccn: str, window_year: int) -> Pr
                 sock.shutdown(socket.SHUT_RDWR)
         kind = "timeout"
     connection.close()
-    error = box.get("error")
+    if kind != "timeout":
+        error = box.get("error")
     status: int | None = box.get("status")
-    # A worker error that follows the deadline comes from the socket shut down above, so it never replaces the timeout.
-    if error is not None and kind != "timeout":
+    if error is not None:
         kind = "timeout" if isinstance(error, TimeoutError) else "unreachable"
     outcome: Prediction | Failure
     if not kind and status == 200:
