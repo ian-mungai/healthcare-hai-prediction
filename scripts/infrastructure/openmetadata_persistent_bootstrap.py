@@ -14,6 +14,7 @@ The routes and the role names are the ones of the OpenMetadata REST API as the a
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -23,9 +24,9 @@ from collections.abc import Mapping
 from typing import Any
 
 try:
-    from scripts.infrastructure import openmetadata_bootstrap as base
+    base = importlib.import_module("scripts.infrastructure.openmetadata_bootstrap")
 except ImportError:
-    import openmetadata_bootstrap as base
+    base = importlib.import_module("openmetadata_bootstrap")
 
 CALLER_ROLES = {"lineage": "IngestionBotRole", "ingestion": "IngestionBotRole", "comparison": "DataConsumer"}
 PARAMETER_PATTERN = re.compile(r"^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$")

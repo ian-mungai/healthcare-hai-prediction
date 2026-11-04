@@ -774,7 +774,7 @@ class CompletionWorker:
                 raise LineageError("lineage pass exceeded its deadline")
             return value
 
-        outcome = collect_provider(self.provider, self.outbox, limit=self.limit, deadline_seconds=remaining())
+        outcome: dict[str, Any] = collect_provider(self.provider, self.outbox, limit=self.limit, deadline_seconds=remaining())
         outcome.update(sweep(self.records, self.outbox, limit=self.limit, deadline_seconds=remaining(), require_provider=True))
         with Outbox(self.outbox) as box, box.queries_until(deadline):
             outcome["provider_queued"] += box.flush_provider(limit=self.limit, deadline_seconds=remaining())

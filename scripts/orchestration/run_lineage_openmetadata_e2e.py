@@ -83,6 +83,7 @@ def receivers(known: set[str]) -> Iterator[dict[str, Any]]:
 
         def do_POST(self) -> None:
             body = self.rfile.read(int(self.headers["Content-Length"]))
+            reply: dict[str, Any]
             state["om_requests"].append({"path": self.path, "authorization": self.headers.get("Authorization"), "body": body})
             if self.path != ROUTE:
                 status, reply = 404, {}
