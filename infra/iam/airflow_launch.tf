@@ -1,0 +1,125 @@
+variable "airflow_launch_prepared" {
+  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest, the job logs and the record of the signed first publishes, and write each launch record once under its own prefix."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "airflow_launch_families" {
+  description = "The job families the launch role may start. Each family is one host task definition <project>_<environment>_job_<family>_host and one task role."
+  type        = list(string)
+  default     = ["train"]
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for family in var.airflow_launch_families : contains(["train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata"], family)]) && length(var.airflow_launch_families) == length(distinct(var.airflow_launch_families))
+    error_message = "Name distinct job families from train, bronze, silver, gold, features, drift, promote, serve and metadata."
+  }
+
+  validation {
+    condition     = !var.airflow_launch_prepared || length(var.airflow_launch_families) > 0
+    error_message = "Name at least one job family, or set airflow_launch_prepared to false."
+  }
+}
+
+variable "airflow_launch_record_prefix" {
+  description = "Key prefix in the data bucket under which the launch role creates and reads its launch records. A record is created once, by a conditional write that fails when the object exists, and is never replaced or deleted."
+  type        = string
+  default     = "lakehouse/launch_records/"
+  nullable    = false
+
+  validation {
+    condition     = length(var.airflow_launch_record_prefix) <= 256 && can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/$", var.airflow_launch_record_prefix)) && !strcontains(var.airflow_launch_record_prefix, "..")
+    error_message = "Use a key prefix of at most 256 characters that does not start with a slash, ends with a slash and has parts of letters, digits, underscores, dots and dashes. Wildcards, policy variables, spaces and parent steps are not allowed."
+  }
+}
+
+locals {
+  # The task role each family runs with, as the host definitions of infra/jobs take them. Promote reuses the training role.
+  airflow_launch_family_roles = {
+    train    = "job_train_task"
+    bronze   = "job_write_bronze_task"
+    silver   = "job_write_silver_task"
+    gold     = "job_write_gold_task"
+    features = "job_write_features_task"
+    drift    = "job_drift_task"
+    promote  = "job_train_task"
+    serve    = "job_serve_task"
+    metadata = "job_openmetadata_task"
+  }
+  # The staged request a family's run reads before it starts. Only these two families stage one.
+  airflow_launch_request_files = {
+    bronze = "bronze_request.json"
+    serve  = "serving_request.json"
+  }
+  airflow_launch_families_sorted = sort(var.airflow_launch_families)
+  airflow_launch_request_arns = [
+    for family in local.airflow_launch_families_sorted : "arn:aws:s3:::${var.data_bucket_name}/lakehouse/run_stage/*/inputs/${local.airflow_launch_request_files[family]}"
+    if contains(keys(local.airflow_launch_request_files), family)
+  ]
+  airflow_launch_policy_values = merge(local.owner_policy_values, {
+    PROJECT_TAG                    = local.platform_project_tag
+    CLUSTER_ARN                    = "${local.ecs_arn}:cluster/${local.cluster_name}"
+    CONTAINER_INSTANCE_ARN_PATTERN = "${local.ecs_arn}:container-instance/${local.cluster_name}/*"
+    TASK_ARN_PATTERN               = "${local.ecs_arn}:task/${local.cluster_name}/*"
+    LOG_GROUP_NAME                 = format(local.platform_name, "jobs")
+    DATA_BUCKET_NAME               = var.data_bucket_name
+    SIGNED_PARAMETER_NAME          = var.broker_signed_parameter_name
+    RECORD_PREFIX                  = var.airflow_launch_record_prefix
+    REQUEST_OBJECT_ARNS            = jsonencode(local.airflow_launch_request_arns)
+    FAMILIES                       = jsonencode(local.airflow_launch_families_sorted)
+    TASK_DEFINITION_ARNS           = jsonencode([for family in local.airflow_launch_families_sorted : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}_host:*"])
+    ROLE_ARNS = jsonencode(sort(distinct(concat(
+      ["arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_execution")}"],
+      [for family in local.airflow_launch_families_sorted : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, local.airflow_launch_family_roles[family])}"]
+    ))))
+  })
+}
+
+resource "aws_iam_role" "airflow_launch_task" {
+  count = var.airflow_launch_prepared ? 1 : 0
+
+  name                 = format(local.platform_name, "airflow_launch_task")
+  description          = "Airflow scheduler: runs, stops and describes the host definitions of the named job families only, passes their roles, writes each launch record once and reads the code digest, the job logs and the signed publish record."
+  max_session_duration = 3600
+  assume_role_policy   = local.ecs_tasks_trust
+  tags                 = local.project_tags
+}
+
+resource "aws_iam_role_policy" "airflow_launch_jobs" {
+  count = var.airflow_launch_prepared ? 1 : 0
+
+  name   = "airflow_launch_jobs"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_jobs.json", local.airflow_launch_policy_values)
+}
+
+resource "aws_iam_role_policy" "airflow_launch_records" {
+  count = var.airflow_launch_prepared ? 1 : 0
+
+  name   = "airflow_launch_records"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_records.json", local.airflow_launch_policy_values)
+}
+
+# The staged request of a bronze run holds its tables, target and dry run flag, and that of a serving deployment names the HAI type, the mode and the candidate. Only a launch role that may start the bronze or serve family can read them.
+resource "aws_iam_role_policy" "airflow_launch_requests" {
+  count = var.airflow_launch_prepared && length(local.airflow_launch_request_arns) > 0 ? 1 : 0
+
+  name   = "airflow_launch_requests"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_requests.json", local.airflow_launch_policy_values)
+}
+
+output "airflow_launch_roles" {
+  description = "The prepared launch role name, ARN and unique ID, the job families it may start and its record prefix. Empty until airflow_launch_prepared is true. The services stack takes the ARN as the scheduler's task role."
+  value = {
+    for role in aws_iam_role.airflow_launch_task : "airflow_launch_task" => {
+      name          = role.name
+      arn           = role.arn
+      unique_id     = role.unique_id
+      families      = local.airflow_launch_families_sorted
+      record_prefix = var.airflow_launch_record_prefix
+    }
+  }
+}
