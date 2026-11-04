@@ -34,3 +34,6 @@ osv-scanner uv.lock:diskcache==5.6.3 -- no fixed release exists and dvc-data req
 osv-scanner uv.lock:joserfc==1.7.5 -- pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
 osv-scanner uv.lock:mlflow==3.17.0 -- fixed in 3.17.2 (GHSA-wqmh-qccw-pqwf, FileStore only); the server uses a Postgres backend store and training uses a client, so it moves to 3.17.2 at the owner's next lock update, before any MLflow image is pushed
 osv-scanner uv.lock:pyasn1==0.6.4 -- fixed in 0.6.5, pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
+osv-scanner uv.lock:asteval==1.0.6 -- checkov 3.3.19 pins this exact version, so it cannot move while checkov stays; checkov reads only the project's own Terraform files offline -- expires 2026-11-15
+osv-scanner uv.lock:virtualenv==21.14.5 -- checkov 3.3.19 caps packaging below 24 and the fixed virtualenv releases need a newer packaging, which holds virtualenv at this version; it is used in development and tool environments only -- expires 2026-11-15
+osv-scanner uv.lock:ecdsa==0.19.2 -- no fixed release exists; checkov uses it and reads only the project's own Terraform files offline -- expires 2026-11-15
