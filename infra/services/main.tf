@@ -323,6 +323,12 @@ resource "aws_ecs_service" "catalog" {
 # The model API and the dashboard are released by GitHub (owner decision D18): its deploy workflow registers a new task definition revision and rolls the service to it.
 # An owner apply must not roll such a release back, so these two services ignore changes to task_definition. They were services of the shared resource above, and the
 # moved blocks carry them over without a destroy or a replacement.
+# The revision that an existing service runs was registered before this change: it names the shared task execution role and, for the model API, the shared Redis
+# password. GitHub renders its next revision from the running one, and the release check refuses that password, so the first release would fail. So the first owner
+# apply after this change replaces each service once: replace_triggered_by watches the execution role of the stack's own task definition, which changes from the
+# shared role to the serving execution role in that apply and in no later one, and the new service starts on the stack's revision (the serving execution role and
+# the model API's own Redis user). The services stop for the drain and the start of that one apply, as the Redis service restarts in it too. Every later apply
+# leaves the running revision alone again, because the execution role stays the same.
 resource "aws_ecs_service" "serving" {
   for_each = { for key, service in local.services : key => service if contains(local.serving_keys, key) }
 
@@ -348,7 +354,8 @@ resource "aws_ecs_service" "serving" {
   }
 
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes       = [task_definition]
+    replace_triggered_by = [aws_ecs_task_definition.service[each.key].execution_role_arn]
   }
 }
 
