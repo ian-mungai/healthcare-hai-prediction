@@ -3127,8 +3127,9 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
     expected = [f"probe: {entry}" for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "configuration_checks"])]
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
-        expected += ["probe: lakehouse_features_store", "probe: lakehouse_features_combine sources/8", "probe: lakehouse_features_combine columns/4"]
-        expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in (("sources", 8), ("columns", 4)) for index in range(1, count + 1)]
+        expected += ["probe: lakehouse_features_store"]
+        expected += [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
+        expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)]
         expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "samples")]
         expected += [f"launcher E2E shard {index}/2" for index in (1, 2)]
         expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)] + ["probe: acquisition combine"]
