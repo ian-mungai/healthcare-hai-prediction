@@ -222,7 +222,7 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
     """The policies of the four GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
 
     The statements follow ``github_statements`` in infra/iam/github_oidc.tf. The deploy role's service and task role names are the test inputs
-    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_TASK_ROLES``. The apply role also holds the project service policies it attaches by ARN.
+    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_STREAMLIT``. The apply role also holds the project service policies it attaches by ARN.
     """
     state_read = [
         {"Sid": "ReadStateObjects", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": list(policy_cases.STATE_KEYS)},
@@ -240,10 +240,9 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
         "deploy": [
             {"Sid": "ReadCluster", "Effect": "Allow", "Resource": ["*"],
              "Action": ["ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTasks", "ecs:ListTasks"]},
-            {"Sid": "UpdateNamedServices", "Effect": "Allow", "Action": ["ecs:UpdateService"], "Resource": [policy_cases.DEPLOY_SERVICE]},
-            {"Sid": "RegisterTaskDefinitions", "Effect": "Allow", "Action": ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition"], "Resource": ["*"]},
-            {"Sid": "PassNamedTaskRoles", "Effect": "Allow", "Action": ["iam:PassRole"], "Resource": list(policy_cases.DEPLOY_TASK_ROLES),
-             "Condition": {"StringEquals": {"iam:PassedToService": policy_cases.ECS_TASKS}}},
+            {"Sid": "DescribeTaskDefinitions", "Effect": "Allow", "Action": ["ecs:DescribeTaskDefinition"], "Resource": ["*"]},
+            {"Sid": "UpdateNamedServices", "Effect": "Allow", "Action": ["ecs:UpdateService"],
+             "Resource": [policy_cases.DEPLOY_SERVICE, policy_cases.DEPLOY_STREAMLIT]},
         ],
         "terraform_plan": [
             {"Sid": "NeverReadObjectsExceptStateKeys", "Effect": "Deny", "NotResource": list(policy_cases.STATE_KEYS),

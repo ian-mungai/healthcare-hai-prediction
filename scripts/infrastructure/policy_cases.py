@@ -1509,7 +1509,7 @@ def boundary_scope_cases(case: Callable[..., Case]) -> Iterator[Case]:
 
 
 # The four GitHub delivery roles (infra/iam/github_oidc.tf) hold the delivery boundary, a second managed policy beside the role boundary:
-# the role boundary has no room for them (it renders at 4,391 of 6,144 characters and the delivery grants need about 1,900 more).
+# the role boundary has no room for them (it has no room for the delivery grants in the 6,144 characters IAM allows).
 DELIVERY_BOUNDARY = "delivery_boundary"
 DELIVERY_ROLES = ("image_push", "deploy", "terraform_plan", "terraform_apply")
 DELIVERY_WIDE = "delivery_wide"
@@ -1518,6 +1518,9 @@ STATE_STACKS = ("platform", "services", "jobs")
 STATE_KEYS = tuple(f"{BUCKET}/{STATE_PREFIX}/{stack}/terraform.tfstate" for stack in STATE_STACKS)
 LOCK_KEYS = tuple(f"{key}.tflock" for key in STATE_KEYS)
 DEPLOY_SERVICE = arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_model_api")
+DEPLOY_STREAMLIT = arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_streamlit")
+# Services of the cluster that no delivery role may update: they serve no user and hold the data stores or the orchestration.
+UNSERVED_SERVICES = tuple(arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_{name}") for name in ("airflow", "postgres", "polaris", "mlflow"))
 DEPLOY_TASK_ROLES = tuple(f"arn:aws:iam::{A}:role/{P}_{name}_{E}" for name in ("model_api_task", "streamlit_task", "task_execution"))
 ECS_TASKS = "ecs-tasks.amazonaws.com"
 # A delivery role whose own policy grants far more than the delivery work: only the delivery boundary stands between it and the account.
@@ -1548,11 +1551,22 @@ def delivery_cases() -> Iterator[Case]:
     yield deploy("describes its service", "ecs:DescribeServices", DEPLOY_SERVICE)
     yield deploy("describes a task of the cluster", "ecs:DescribeTasks", TASK)
     yield deploy("lists the tasks of the project cluster", "ecs:ListTasks", "*", {"ecs:cluster": CLUSTER})
-    yield deploy("updates its service", "ecs:UpdateService", DEPLOY_SERVICE)
-    yield deploy("registers a task definition", "ecs:RegisterTaskDefinition", "*")
+    yield deploy("updates the model API service", "ecs:UpdateService", DEPLOY_SERVICE)
+    yield deploy("updates the dashboard service", "ecs:UpdateService", DEPLOY_STREAMLIT)
     yield deploy("describes a task definition", "ecs:DescribeTaskDefinition", "*")
+
+    # The shared task execution role reads the PostgreSQL and Polaris root secrets for the tasks that name them. A delivery role that could register a
+    # task definition, pass that role to ECS and update a service could pull those secrets into a crafted task. The workflow only describes
+    # definitions and updates services, so each link is refused for the role itself and under the boundary alone.
+    def chain(label: str, action: str, resource: str, extra: dict[str, str] | None = None) -> Iterator[Case]:
+        for principal in (f"delivery_{DELIVERY_ROLES[1]}", DELIVERY_WIDE):
+            yield Case(f"delivery refused: crafted task definition chain: {label}", request(action, resource, extra=extra), False, None, principal)
+
+    yield from chain("registers a task definition", "ecs:RegisterTaskDefinition", "*")
     for role in DEPLOY_TASK_ROLES:
-        yield deploy(f"passes {role.rsplit('/', 1)[-1]} to ECS tasks", "iam:PassRole", role, {"iam:PassedToService": ECS_TASKS})
+        yield from chain(f"passes {role.rsplit('/', 1)[-1]} to ECS tasks", "iam:PassRole", role, {"iam:PassedToService": ECS_TASKS})
+    for service in UNSERVED_SERVICES:
+        yield from chain(f"updates a service that is not served: {service.rsplit('/', 1)[-1]}", "ecs:UpdateService", service)
 
     def wide(label: str, action: str, resource: str, extra: dict[str, str] | None = None, sid: str | None = None) -> Case:
         return Case(f"delivery refused: {label}", request(action, resource, extra=extra), False, sid, DELIVERY_WIDE)
@@ -1597,9 +1611,9 @@ def delivery_cases() -> Iterator[Case]:
         yield wide(f"passes {role} to ECS tasks", "iam:PassRole", f"arn:aws:iam::{A}:role/{role}", {"iam:PassedToService": ECS_TASKS})
     for service in ("ec2.amazonaws.com", "lambda.amazonaws.com"):
         yield wide(f"passes a task role to {service}", "iam:PassRole", DEPLOY_TASK_ROLES[0], {"iam:PassedToService": service})
-    yield wide("passes a task role without a service", "iam:PassRole", DEPLOY_TASK_ROLES[0], sid="DenyIamExceptPassRoleToEcsTasks")
+    yield wide("passes a task role without a service", "iam:PassRole", DEPLOY_TASK_ROLES[0], sid="DenyIam")
     for action in ("iam:CreateRole", "iam:AttachRolePolicy", "iam:PutRolePolicy", "iam:CreateUser", "iam:GetRole"):
-        yield wide(action, action, f"arn:aws:iam::{A}:role/{P}_x_{E}", sid="DenyIamExceptPassRoleToEcsTasks")
+        yield wide(action, action, f"arn:aws:iam::{A}:role/{P}_x_{E}", sid="DenyIam")
     yield wide("budgets:ModifyBudget", "budgets:ModifyBudget", BUDGET, sid="DenyOrganizationsAccountAndBudgets")
     yield wide("organizations:LeaveOrganization", "organizations:LeaveOrganization", "*", sid="DenyOrganizationsAccountAndBudgets")
     for name in (f"{P}_gh_terraform_apply_{E}", "administrator"):
@@ -2528,13 +2542,28 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
 
         return mutation
 
-    def delivery_pass_any_service(documents: dict[str, dict[str, Any]]) -> None:
-        del delivery_statement(documents, "DenyIamExceptPassRoleToEcsTasks")["Condition"]
+    def delivery_extra_statement(sid: str, action: str, resource: str | list[str], condition: dict[str, Any] | None = None) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement: dict[str, Any] = {"Sid": sid, "Effect": "Allow", "Action": action, "Resource": resource}
+            if condition:
+                statement["Condition"] = condition
+            documents[DELIVERY_BOUNDARY]["Statement"].insert(0, statement)
+
+        return mutation
+
+    def deploy_policy_extra_statement(sid: str, action: str, resource: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            documents[f"delivery/{DELIVERY_ROLES[1]}/access"]["Statement"].append({"Sid": sid, "Effect": "Allow", "Action": action, "Resource": resource})
+            documents[DELIVERY_BOUNDARY]["Statement"].insert(0, {"Sid": sid, "Effect": "Allow", "Action": action, "Resource": resource})
+
+        return mutation
+
+    def delivery_pass_roles_without_iam_deny(documents: dict[str, dict[str, Any]]) -> None:
+        delivery_without_iam_deny(documents)
+        delivery_extra_statement("PassAgain", "iam:PassRole", list(DEPLOY_TASK_ROLES), {"StringEquals": {"iam:PassedToService": ECS_TASKS}})(documents)
 
     def delivery_without_iam_deny(documents: dict[str, dict[str, Any]]) -> None:
-        documents[DELIVERY_BOUNDARY]["Statement"] = [
-            statement for statement in documents[DELIVERY_BOUNDARY]["Statement"] if statement["Sid"] != "DenyIamExceptPassRoleToEcsTasks"
-        ]
+        documents[DELIVERY_BOUNDARY]["Statement"] = [statement for statement in documents[DELIVERY_BOUNDARY]["Statement"] if statement["Sid"] != "DenyIam"]
 
     state = f"{BUCKET}/{STATE_PREFIX}"
     delivery_defects: dict[str, tuple[str, Mutation]] = {
@@ -2550,16 +2579,22 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             "delivery refused: ecs:UpdateService on a service outside the project service names",
             delivery_resource("UpdateProjectServices", arn("ecs", f"service/{P}_cluster_{E}/*")),
         ),
-        "delivery defect: the boundary lacks ecs:RegisterTaskDefinition": (
-            "delivery allowed: deploy registers a task definition",
-            delivery_without_action("RegisterTaskDefinitions", "ecs:RegisterTaskDefinition"),
+        "delivery defect: UpdateService reaches every service the project names": (
+            "delivery refused: crafted task definition chain: updates a service that is not served",
+            delivery_resource("UpdateProjectServices", arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_*")),
         ),
-        "delivery defect: PassRole reaches every project role": (
-            "delivery refused: passes",
-            delivery_resource("PassProjectTaskRoles", f"arn:aws:iam::{A}:role/{P}_*"),
+        "delivery defect: the boundary allows task definition registration": (
+            "delivery refused: crafted task definition chain: registers a task definition",
+            delivery_extra_statement("RegisterAgain", "ecs:RegisterTaskDefinition", "*"),
         ),
-        "delivery defect: the IAM deny has no PassRole exception": ("delivery allowed: deploy passes", delivery_pass_any_service),
-        "delivery defect: the IAM deny is missing": ("delivery refused: iam:CreateRole", delivery_without_iam_deny),
+        "delivery defect: the deploy role's own policy registers task definitions": (
+            "delivery refused: crafted task definition chain: registers a task definition",
+            deploy_policy_extra_statement("RegisterAgain", "ecs:RegisterTaskDefinition", "*"),
+        ),
+        "delivery defect: the boundary passes the shared task execution role and the IAM deny is missing": (
+            "delivery refused: crafted task definition chain: passes",
+            delivery_pass_roles_without_iam_deny,
+        ),
         "delivery defect: state access covers the whole bucket": (
             "delivery refused: reads a lakehouse object",
             delivery_resource("ProjectTerraformState", f"{BUCKET}/*"),
@@ -2570,7 +2605,7 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         ),
         "delivery defect: lock release deletes state objects": (
             "delivery refused: deletes a state object",
-            delivery_resource("ReleaseProjectTerraformLocks", f"{state}/*"),
+            delivery_extra_statement("DeleteStateAgain", "s3:DeleteObject", f"{state}/*"),
         ),
         "delivery defect: the boundary lacks lock release": (
             "delivery allowed: terraform_apply HoldStateLocks s3:DeleteObject",

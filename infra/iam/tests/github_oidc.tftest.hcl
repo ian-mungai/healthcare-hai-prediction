@@ -281,22 +281,21 @@ run "apply_role_refuses_more_than_the_managed_policy_quota" {
   expect_failures = [var.github_oidc_apply_policy_services]
 }
 
-run "deploy_role_is_limited_to_named_services_and_roles" {
+run "deploy_role_is_limited_to_named_services" {
   command = plan
 
   variables {
-    github_oidc_enabled                = true
-    github_oidc_deploy_services        = ["example_project_dev_model_api"]
-    github_oidc_deploy_task_role_names = ["example_project_model_api_task_dev"]
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
   }
 
   assert {
     condition = (
       strcontains(aws_iam_role_policy.github["deploy"].policy, "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_model_api") &&
-      strcontains(aws_iam_role_policy.github["deploy"].policy, "arn:aws:iam::111111111111:role/example_project_model_api_task_dev") &&
-      strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs-tasks.amazonaws.com")
+      strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService") &&
+      !strcontains(aws_iam_role_policy.github["deploy"].policy, "iam:PassRole")
     )
-    error_message = "Deploy may update only the named services and pass only the named task roles to ECS tasks."
+    error_message = "Deploy may update only the named services and passes no role."
   }
 }
 
@@ -309,7 +308,7 @@ run "deploy_without_a_named_service_updates_nothing" {
 
   assert {
     condition     = !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService") && !strcontains(aws_iam_role_policy.github["deploy"].policy, "iam:PassRole")
-    error_message = "Until the model API names its service and roles the deploy role must hold no update or pass-role grant."
+    error_message = "Until the model API names its service the deploy role must hold no update or pass-role grant."
   }
 }
 
@@ -589,9 +588,8 @@ run "the_delivery_boundary_allows_every_action_of_the_delivery_roles" {
   command = plan
 
   variables {
-    github_oidc_enabled                = true
-    github_oidc_deploy_services        = ["example_project_dev_model_api"]
-    github_oidc_deploy_task_role_names = ["example_project_model_api_task_dev", "example_project_streamlit_task_dev", "example_project_task_execution_dev"]
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
   }
 
   assert {
@@ -604,9 +602,8 @@ run "the_delivery_boundary_allows_every_named_resource_of_the_delivery_roles" {
   command = plan
 
   variables {
-    github_oidc_enabled                = true
-    github_oidc_deploy_services        = ["example_project_dev_model_api"]
-    github_oidc_deploy_task_role_names = ["example_project_model_api_task_dev", "example_project_streamlit_task_dev", "example_project_task_execution_dev"]
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
   }
 
   assert {
@@ -615,13 +612,12 @@ run "the_delivery_boundary_allows_every_named_resource_of_the_delivery_roles" {
   }
 }
 
-run "a_service_or_role_outside_the_boundary_names_fails_the_plan" {
+run "a_service_outside_the_boundary_names_fails_the_plan" {
   command = plan
 
   variables {
-    github_oidc_enabled                = true
-    github_oidc_deploy_services        = ["example_project_model_api_dev", "other_project_dev_model_api"]
-    github_oidc_deploy_task_role_names = ["example_project_admin_dev", "example_project_model_api_task_prod"]
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_model_api_dev", "other_project_dev_model_api"]
   }
 
   expect_failures = [aws_iam_role_policy.github]
@@ -659,7 +655,7 @@ run "the_delivery_boundary_names_one_action_with_a_wildcard" {
   }
 }
 
-run "the_delivery_boundary_allows_pass_role_only_inside_the_iam_exception" {
+run "the_delivery_boundary_allows_no_iam_action" {
   command = plan
 
   variables {
@@ -667,10 +663,60 @@ run "the_delivery_boundary_allows_pass_role_only_inside_the_iam_exception" {
   }
 
   assert {
-    condition = (
-      contains(output.github_oidc_boundary_allowed_actions, "iam:PassRole") &&
-      length([for action in output.github_oidc_boundary_allowed_actions : action if startswith(action, "iam:") && action != "iam:PassRole"]) == 0
-    )
-    error_message = "The only IAM action the delivery boundary allows is iam:PassRole."
+    condition     = length([for action in output.github_oidc_boundary_allowed_actions : action if startswith(action, "iam:")]) == 0
+    error_message = "No delivery role passes or manages a role, so the delivery boundary allows no IAM action."
   }
+}
+
+run "the_deploy_role_cannot_register_a_task_definition_or_pass_a_role" {
+  command = plan
+
+  variables {
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
+  }
+
+  # A crafted task definition that names the shared execution role would pull the PostgreSQL and Polaris root secrets. The workflow only describes
+  # definitions and updates services, so neither the role nor the boundary may register a definition or pass a role.
+  assert {
+    condition = (
+      !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:RegisterTaskDefinition") &&
+      !strcontains(aws_iam_role_policy.github["deploy"].policy, "iam:PassRole") &&
+      strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:DescribeTaskDefinition")
+    )
+    error_message = "The deploy role may describe task definitions and update the named services. It may not register a definition or pass a role."
+  }
+
+  assert {
+    condition = (
+      !contains(output.github_oidc_boundary_allowed_actions, "ecs:RegisterTaskDefinition") &&
+      !contains(output.github_oidc_boundary_allowed_actions, "iam:PassRole")
+    )
+    error_message = "The delivery boundary may not allow task definition registration or iam:PassRole for any delivery role."
+  }
+}
+
+run "the_deploy_role_updates_the_serving_services" {
+  command = plan
+
+  variables {
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api", "example_project_dev_streamlit"]
+  }
+
+  assert {
+    condition     = length(output.github_oidc_grants_outside_boundary) == 0 && length(output.github_oidc_actions_outside_boundary) == 0
+    error_message = "The model API and dashboard services must stay inside the delivery boundary."
+  }
+}
+
+run "the_deploy_role_cannot_name_a_service_that_is_not_served" {
+  command = plan
+
+  variables {
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_airflow"]
+  }
+
+  expect_failures = [aws_iam_role_policy.github]
 }

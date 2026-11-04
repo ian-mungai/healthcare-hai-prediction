@@ -17,7 +17,7 @@ locals {
   github_subject_base = "repo:${var.github_repository}"
   # Every delivery role carries one permissions boundary that the administrator creates at bootstrap from infra/iam/boundary/. The
   # boundary policy must exist before the owner applies this file with the flag on. The delivery boundary holds exactly the grants of
-  # the four roles below. The project role boundary cannot hold them: it renders at 4,391 of the 6,144 characters IAM allows.
+  # the four roles below. The project role boundary cannot hold them: it has no room for them in the 6,144 characters IAM allows.
   github_boundary_file = "healthcare_hai_prediction_delivery_boundary_policy.json"
   github_boundary_arn  = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_delivery_boundary"
   github_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
@@ -165,36 +165,34 @@ locals {
       }
     ]
 
-    # The model API lives on another branch. Until it names its service and task roles through the variables, the role can only
-    # look at the project cluster.
+    # The deploy role rolls a service to a task definition revision that already exists: it describes definitions and updates the named
+    # services. It cannot register a definition or pass a role. The shared task execution role reads the PostgreSQL and Polaris root secrets for
+    # the tasks that name them, so a role that registers a definition, passes that role and updates a service could pull those secrets into a
+    # crafted task. Terraform registers definitions, and the owner applies it. Until the services stack names the serving services through the
+    # variable, the role can only look at the project cluster.
     deploy = concat(
-      [{
-        Sid      = "ReadCluster"
-        Effect   = "Allow"
-        Action   = ["ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTasks", "ecs:ListTasks"]
-        Resource = ["*"]
-      }],
+      [
+        {
+          Sid      = "ReadCluster"
+          Effect   = "Allow"
+          Action   = ["ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTasks", "ecs:ListTasks"]
+          Resource = ["*"]
+        },
+        {
+          Sid      = "DescribeTaskDefinitions"
+          Effect   = "Allow"
+          Action   = ["ecs:DescribeTaskDefinition"]
+          Resource = ["*"]
+        }
+      ],
       length(var.github_oidc_deploy_services) == 0 ? [] : [
         {
           Sid      = "UpdateNamedServices"
           Effect   = "Allow"
           Action   = ["ecs:UpdateService"]
           Resource = [for name in var.github_oidc_deploy_services : "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}:service/${local.cluster_name}/${name}"]
-        },
-        {
-          Sid      = "RegisterTaskDefinitions"
-          Effect   = "Allow"
-          Action   = ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition"]
-          Resource = ["*"]
         }
-      ],
-      length(var.github_oidc_deploy_task_role_names) == 0 ? [] : [{
-        Sid       = "PassNamedTaskRoles"
-        Effect    = "Allow"
-        Action    = ["iam:PassRole"]
-        Resource  = [for name in var.github_oidc_deploy_task_role_names : "arn:aws:iam::${var.expected_account_id}:role/${name}"]
-        Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
-      }]
+      ]
     )
 
     # Any pull request job of this repository can use the plan role, and the data bucket holds Confidential tables. The explicit Deny

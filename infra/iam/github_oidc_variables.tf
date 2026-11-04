@@ -42,7 +42,7 @@ variable "github_oidc_apply_policy_services" {
 }
 
 variable "github_oidc_deploy_services" {
-  description = "Names of the ECS services in the project cluster that the deploy role may update. Each starts with <project>_<environment>_, the services stack naming, because the delivery boundary allows no other name. Empty until the model API names its service."
+  description = "Names of the ECS services in the project cluster that the deploy role may update. The delivery boundary allows only <project>_<environment>_model_api and <project>_<environment>_streamlit, the services stack naming of the two serving services. Empty until the model API names its service."
   type        = list(string)
   default     = []
   nullable    = false
@@ -50,17 +50,5 @@ variable "github_oidc_deploy_services" {
   validation {
     condition     = alltrue([for name in var.github_oidc_deploy_services : can(regex("^[A-Za-z0-9_-]{1,255}$", name))])
     error_message = "Use exact ECS service names, without pattern characters."
-  }
-}
-
-variable "github_oidc_deploy_task_role_names" {
-  description = "Names of the task roles the deploy role may pass to ECS tasks. The delivery boundary allows only <project>_model_api_task_<environment>, <project>_streamlit_task_<environment> and <project>_task_execution_<environment>. Empty until the model API names its roles."
-  type        = list(string)
-  default     = []
-  nullable    = false
-
-  validation {
-    condition     = alltrue([for name in var.github_oidc_deploy_task_role_names : can(regex("^[A-Za-z0-9_+=,.@-]{1,64}$", name))])
-    error_message = "Use exact IAM role names, without pattern characters."
   }
 }
