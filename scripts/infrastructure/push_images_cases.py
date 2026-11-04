@@ -1,9 +1,14 @@
-"""Offline cases for the OpenMetadata image mirror of ``push_images``; no program starts, no registry or AWS is contacted.
+"""Offline cases for the OpenMetadata image mirror of ``push_images``; no real registry, AWS service or Docker is contacted.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.push_images_cases``. ``scripts/infrastructure/run_push_images_e2e.py`` runs
 them and keeps the report. The cases call the command line of ``push_images`` (``check``, ``plan`` and ``record``) on a scratch copy of the two image
 files, and the list and plan functions on the real image list. The upstream digests below are the linux/arm64 entries of the selected releases that the
 owner read from the Docker Hub registry on Nov 3 2026; they are the oracle for the pins in ``infra/services/images.json``.
+
+The command line of ``push_images`` starts no program (the ``no_program`` case watches for one). Two cases do start local programs: ``plan_execution`` and
+``registry_file`` run the printed plan and small scripts with ``sh`` or ``bash`` in a scratch folder, against stand-in ``aws`` and ``docker`` commands
+(``push_images_fake_cloud.py``, run with the Python interpreter in isolated mode). Their PATH holds only the stand-ins, ``/usr/bin`` and ``/bin``, so no real
+``aws`` or ``docker`` can run.
 """
 
 from __future__ import annotations

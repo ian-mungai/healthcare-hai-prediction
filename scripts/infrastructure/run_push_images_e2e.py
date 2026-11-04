@@ -1,7 +1,8 @@
 """Run the OpenMetadata image mirror cases of ``push_images`` and keep the report under data/e2e/push_images/.
 
-Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.run_push_images_e2e``. No program starts and no registry or AWS service is
-contacted. A case that raises is recorded as failed with the type of its exception, and the report is still saved.
+Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.run_push_images_e2e``. No real registry, AWS service or Docker is contacted. The
+command line of ``push_images`` starts no program, but two cases run shell scripts against local stand-in ``aws`` and ``docker`` commands (see
+``push_images_cases``). A case that raises is recorded as failed with the type of its exception, and the report is still saved.
 """
 
 from __future__ import annotations
