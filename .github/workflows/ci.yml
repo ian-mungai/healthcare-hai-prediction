@@ -191,6 +191,8 @@ jobs:
 
       - name: Set up the checks
         uses: ./.github/actions/setup
+        with:
+          redis-server: "true"
 
       - name: Run local CI without the launcher E2E
         env:

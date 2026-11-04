@@ -66,12 +66,9 @@ terraform_checks() {
   # binary of the job and a new output folder each: the move of the model API and dashboard services, and the release check on the definitions the stack really plans.
   timed "terraform_checks: services move proof" "$python_bin" -m scripts.infrastructure.run_services_move_e2e --output-directory "$e2e_output/services_move"
   timed "terraform_checks: serving release on the real definitions" "$python_bin" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory "$e2e_output/serving_release_real"
-  # The Redis start script runs against a real redis-server. The hosted runner image has none (QUESTION FOR LEAD: which install is allowed), so there the case reports that it did not run.
-  if [[ -n "${GITHUB_ACTIONS:-}" ]] && ! command -v redis-server > /dev/null; then
-    printf '::warning::terraform_checks: redis_acl_cases did not run, because redis-server is not on this hosted runner. Local CI runs it.\n'
-  else
-    timed "terraform_checks: redis acl cases" bash .github/scripts/redis_acl_cases.sh
-  fi
+  # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that .github/actions/setup installs on a hosted runner. A
+  # missing server fails the case.
+  timed "terraform_checks: redis acl cases" bash .github/scripts/redis_acl_cases.sh
   static_failed=0
   for stack in storage iam platform services modules/bronze_writer_job jobs jobs/identity_probe; do
     source_dir="$repo_root/infra"
