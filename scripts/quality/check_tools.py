@@ -19,7 +19,6 @@ import contextlib
 import io
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,6 @@ GIT_SECONDS = 60
 LINKED = (".venv", ".tools")
 # Pinned tools that other installers place under .tools (SQLFluff, markdownlint and DVC have their own pins).
 OTHER_EXECUTABLES = (".tools/sqlfluff/bin/sqlfluff", ".tools/markdownlint-cli2/node_modules/.bin/markdownlint-cli2", ".tools/dvc/bin/dvc")
-HOOK_ENTRY = re.compile(r"^\.tools/\S+")
 
 
 def git(root: Path, *arguments: str) -> tuple[int, str]:
