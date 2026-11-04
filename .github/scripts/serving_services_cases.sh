@@ -49,8 +49,10 @@ serving_definitions_take_the_serving_role() {
 check "the task definitions of the serving services name the serving execution role, which the trigger watches" serving_definitions_take_the_serving_role
 check "the shared services do not ignore changes: an owner apply still rolls them to Terraform's revision" test -n "$shared" -a -z "$(grep 'ignore_changes\|lifecycle' <<< "$shared" || true)"
 
+# Whole for_each lines, so a changed operator or key expression fails: the shared resource leaves out the catalog and the serving services, the serving resource takes exactly the serving services.
 serving_set_is_one_local() {
-  grep -q 'if contains(local.serving_keys, key) }' <<< "$serving" && grep -q '!contains(local.serving_keys, key) }' <<< "$shared"
+  grep -Fqx '  for_each = { for key, service in local.services : key => service if contains(local.serving_keys, key) }' <<< "$serving" &&
+    grep -Fqx '  for_each = { for key, service in local.services : key => service if key != "openmetadata" && !contains(local.serving_keys, key) }' <<< "$shared"
 }
 check "the two resources split the services by the same local list" serving_set_is_one_local
 
