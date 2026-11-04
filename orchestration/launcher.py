@@ -9225,9 +9225,9 @@ class Launcher:
 
     @staticmethod
     def operation_key(name: str, record: Mapping[str, Any]) -> str:
-        """The worker key of one step of a recorded Docker Desktop operation, scoped to that record. An operation ends at its deadline while the stop of its
-        hung command still runs; a worker key shared by every operation would hold the next operation's command back and let the earlier command's result
-        end the next operation."""
+        """The worker key of one step of a recorded Docker Desktop operation or release, scoped to that record. An operation ends at its deadline while its
+        worker (the stop of a hung command, a slow listing) still runs; a worker key shared by every operation would hold the next operation's worker back
+        and let the earlier worker's result end or refuse the next operation."""
         return f"{name}:{record.get('id') or record.get('request') or ''}"
 
     def m_desktop_start(self, ctx: Ctx) -> Any:
@@ -9375,8 +9375,9 @@ class Launcher:
                 release["phase"] = "recheck"
             return
         else:
-            if "release:list" not in self.inflight:
-                actions.append(lambda: self.spawn("release:list", "releasecheck", lambda: self.docker.containers(all_states=False)))
+            list_key = self.operation_key("release:list", release)
+            if list_key not in self.inflight:
+                actions.append(lambda: self.spawn(list_key, "releasecheck", lambda: self.docker.containers(all_states=False)))
             return
         state["launcher"]["release"] = None
         actions.append(lambda: self.complete_request(request, result, error))
@@ -9387,7 +9388,7 @@ class Launcher:
         error: LauncherError | None = None
         with self.tx() as state:
             release = state["launcher"].get("release")
-            if not release or release["phase"] not in ("check", "recheck"):
+            if not release or release["phase"] not in ("check", "recheck") or key != self.operation_key("release:list", release):
                 return
             request = release["request"]
             if outcome != "ok":
