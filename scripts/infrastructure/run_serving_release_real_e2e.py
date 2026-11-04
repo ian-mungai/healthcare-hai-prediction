@@ -185,6 +185,7 @@ DEFECTS: list[tuple[str, str, str, str, Callable[[dict[str, Any]], None] | None]
 
 def run(output: Path, plugin_directory: Path | None, source: Path = stack.STACK) -> dict[str, Any]:
     """Check the real definitions, then plant each defect in a copy of the stack and require the check to refuse the result."""
+    output = output.absolute()
     output.mkdir(parents=True, exist_ok=False)
     base = output / "stack"
     stack.prepare(source, base, plugin_directory)
