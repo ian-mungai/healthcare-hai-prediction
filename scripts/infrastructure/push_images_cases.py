@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import push_images
+from scripts.infrastructure import push_images_fake_cloud as fake_cloud
+from scripts.process import run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = {
@@ -199,6 +201,74 @@ def plan_lines() -> dict[str, bool]:
     }
 
 
+def run_plan(
+    images: list[dict[str, str]], pushed_digest: str, name: str = "openmetadata_server", platform: str = "linux/arm64"
+) -> tuple[int, list[str], list[dict[str, str]]]:
+    """Run the printed plan of one image as shell against the fake registry: the exit code, the commands the stand-in saw and the registry afterwards."""
+    with tempfile.TemporaryDirectory(prefix="push_images_shell_") as directory:
+        folder = Path(directory)
+        bin_directory = folder / "bin"
+        bin_directory.mkdir()
+        for command in ("aws", "docker"):
+            shim = bin_directory / command
+            shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{Path(fake_cloud.__file__).resolve()}" {command} "$@"\n', encoding="utf-8")
+            shim.chmod(0o755)
+        (folder / "ecr.json").write_text(json.dumps(images), encoding="utf-8")
+        urls = push_images.repository_urls(repository_urls(folder))
+        (folder / "plan.sh").write_text("\n".join(push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name])) + "\n", encoding="utf-8")
+        environment = {
+            "PATH": f"{bin_directory}:/usr/bin:/bin",
+            "PUSH_IMAGES_FAKE_STATE": str(folder),
+            "PUSH_IMAGES_FAKE_DIGEST": pushed_digest,
+            "PUSH_IMAGES_FAKE_PLATFORM": platform,
+        }
+        result = run_command("sh", ["-e", "plan.sh"], cwd=folder, env=environment, timeout=60)
+        commands = (folder / "commands.log").read_text(encoding="utf-8").splitlines()
+        registry = json.loads((folder / "ecr.json").read_text(encoding="utf-8"))
+    return result.returncode, commands, registry
+
+
+def held(name: str, tag: str, digest: str | None = None) -> dict[str, str]:
+    """An image of the fake registry in the repository of ``name``."""
+    return {"repository": f"example_project_{name}_dev", "tag": tag, "digest": digest or UPSTREAM[name]}
+
+
+def plan_execution() -> dict[str, bool]:
+    """The printed plan runs as shell against a fake registry: a held image is skipped, a push is verified and a differing digest stops."""
+    name = "openmetadata_server"
+    pinned = UPSTREAM[name]
+    same_tag = f"2.0.7-arm64-{pinned.removeprefix('sha256:')[:12]}"
+    held_same = run_plan([held(name, same_tag)], pinned)
+    held_other = run_plan([held(name, "2.0.7-hand-pushed")], pinned)
+    empty = run_plan([], pinned)
+    differs = run_plan([], OTHER)
+    wrong_held = run_plan([held(name, same_tag, OTHER)], pinned)
+    wrong_platform = run_plan([], pinned, platform="linux/amd64")
+
+    def docker_ran(commands: list[str], word: str) -> bool:
+        return any(line.startswith(f"docker {word}") for line in commands)
+
+    def tag_lookups(commands: list[str]) -> list[str]:
+        return [line for line in commands if "imageTag=" in line]
+
+    return {
+        "an image held under the synthesized tag is skipped and verified": held_same[0] == 0
+        and not docker_ran(held_same[1], "pull")
+        and not docker_ran(held_same[1], "push"),
+        "an image held under another tag is skipped and verified": held_other[0] == 0
+        and not docker_ran(held_other[1], "pull")
+        and not docker_ran(held_other[1], "push"),
+        "an image that ECR does not hold is pulled and pushed once, then verified": empty[0] == 0
+        and sum(line.startswith("docker pull") for line in empty[1]) == 1
+        and sum(line.startswith("docker push") for line in empty[1]) == 1
+        and len(empty[2]) == 1,
+        "a push that lands under a different digest stops with the digest message": differs[0] == 1 and docker_ran(differs[1], "push"),
+        "a registry that holds only other digests is not taken for a match": wrong_held[0] == 1 and docker_ran(wrong_held[1], "push"),
+        "an image that is not linux/arm64 is not pushed": wrong_platform[0] != 0 and not docker_ran(wrong_platform[1], "push") and wrong_platform[2] == [],
+        "no verification reads an image by tag": not any(tag_lookups(result[1]) for result in (held_same, held_other, empty, differs, wrong_held)),
+    }
+
+
 def record_flow() -> dict[str, bool]:
     """Matching digests are written to both files, a rerun changes nothing and a partial record leaves the other images unresolved."""
     with tempfile.TemporaryDirectory(prefix="push_images_record_") as directory:
@@ -324,6 +394,7 @@ CASES: dict[str, Case] = {
     "list_pins": list_pins,
     "list_refusals": list_refusals,
     "plan_lines": plan_lines,
+    "plan_execution": plan_execution,
     "record_flow": record_flow,
     "record_refusals": record_refusals,
     "require_resolved": require_resolved,

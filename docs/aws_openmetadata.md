@@ -94,7 +94,7 @@ The persistent catalog runs three mirrored images: `openmetadata_server` and `op
 .venv/bin/python -m scripts.infrastructure.push_images plan --repository-urls <URLS_FILE> --profile <PROFILE> --region <REGION> --only openmetadata_server openmetadata_ingestion openmetadata_search
 ```
 
-The plan skips an image that ECR already holds with the pinned digest. After a push it reads the ECR digest back and stops when it differs from the pinned one. Then record the digests, which writes `infra/services/images.auto.tfvars.json` and the `digest` fields of `config/metadata/images.json` together. A digest that differs from the pin is refused and nothing is written:
+The plan skips an image that ECR already holds with the pinned digest, under any tag. It then asks ECR for the pinned digest itself and stops when ECR does not hold it, so an image that was pushed under another digest cannot pass. Then record the digests, which writes `infra/services/images.auto.tfvars.json` and the `digest` fields of `config/metadata/images.json` together. A digest that differs from the pin is refused and nothing is written:
 
 ```sh
 .venv/bin/python -m scripts.infrastructure.push_images record openmetadata_server=sha256:<DIGEST> openmetadata_ingestion=sha256:<DIGEST> openmetadata_search=sha256:<DIGEST>
