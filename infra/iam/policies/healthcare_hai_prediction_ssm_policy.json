@@ -89,6 +89,18 @@
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SERVING_CLIENT_ID_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SERVING_CLIENT_SECRET_NAME}"
       ]
+    },
+    {
+      "Sid": "SetUpOpenMetadataPasswords",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:PutParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${OPENMETADATA_ADMIN_PASSWORD_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${OPENMETADATA_DB_PASSWORD_NAME}"
+      ]
     }
   ]
 }

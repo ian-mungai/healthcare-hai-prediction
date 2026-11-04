@@ -76,6 +76,16 @@ Each apply is the owner's. Show the plan first and apply exactly that plan.
 9. Marquez step, off until after the batch merge: Marquez listens on `127.0.0.1` of the host today, so the task cannot reach it. Later, change its listener in the services stack to the host's private address, set `openmetadata_marquez_reachable = true` in `infra/iam` and set `openmetadata_marquez_url` in `infra/jobs`. In the same change add `ingest_marquez` with the variable `RUN_ID` to the `metadata` job of `config/orchestration/ecs_broker_jobs.json`, because the task then has that container and a plan test pins the difference. The step pages through all namespaces and datasets. Every request it makes ends within one five minute budget. The catalog database name `hai_lakehouse` is set in both `polaris.json` and `marquez.json`. An offline check compares them.
 10. Start `metadata_ingest_dag` by hand once with `{"run_id": "<RUN_ID>", "mode": "real"}` and read the logs of the stream `metadata/<container>/<task id>` in the jobs log group.
 
+## Persistent catalog passwords
+
+The persistent catalog needs two Parameter Store passwords: `/healthcare_hai_prediction/openmetadata_admin_password` and `/healthcare_hai_prediction/openmetadata_db_password`. The project user creates both with one command, which replaces the hand step above for the persistent catalog:
+
+```sh
+.venv/bin/python -m scripts.infrastructure.openmetadata_secrets
+```
+
+The command generates each value in memory only when its parameter is absent and writes it as a `SecureString` without overwrite. It reads the value back and prints only the parameter name with `created` or `present`. A rerun changes nothing. The administrator password has 40 characters with an upper-case letter, a lower-case letter, a digit and a special character. The database password holds only letters, digits, dash and underscore. IAM has no condition for the overwrite flag, so the project user's statement `SetUpOpenMetadataPasswords` allows `ssm:GetParameter` and `ssm:PutParameter` on exactly these two names. The command itself never overwrites. The statement needs no key permission, because both parameters use the AWS managed key `aws/ssm`. Run `manage_policies plan` and `manage_policies apply` once so that the project user receives the statement.
+
 ## Start by hand
 
 A hand start needs the cluster, the job subnet and the lakehouse job security group from the IAM outputs and the private address of the host. It needs no broker. The task runs the same containers and stops itself at the same deadline. Write the overrides with `scripts.orchestration.job_overrides`, which reads the container and its empty variables from the broker table and refuses by name when a value is missing:

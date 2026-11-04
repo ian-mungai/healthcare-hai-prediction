@@ -24,6 +24,8 @@ COPIED = (
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/secret_store.py",
     "infra/iam/variables.tf",
+    "infra/iam/openmetadata.tf",
+    "infra/iam/openmetadata_persistent.tf",
     "tests/test_iam_policy_scripts.py",
     "tests/support.py",
     "pyproject.toml",

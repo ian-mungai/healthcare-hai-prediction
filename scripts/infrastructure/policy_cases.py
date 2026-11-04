@@ -114,6 +114,17 @@ AWS_WRITER_PARAMETERS = tuple(
     f"aws_polaris_{identity}_client_{part}" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")
 )
 AWS_POLARIS_PARAMETERS = (*AWS_READER_PARAMETERS, *AWS_WRITER_PARAMETERS)
+# The catalog setup creates these two passwords as the project user. IAM has no condition key for the Overwrite flag of PutParameter, so create-only is held by
+# the setup code (openmetadata_secrets writes without overwrite) and the grant is limited to the two names.
+OPENMETADATA_PASSWORDS = ("openmetadata_admin_password", "openmetadata_db_password")
+OPENMETADATA_STATEMENT = "SetUpOpenMetadataPasswords"
+OPENMETADATA_NEIGHBORS = (
+    "openmetadata_bot_lineage",
+    "openmetadata_bot_ingestion",
+    "openmetadata_bot_comparison",
+    "openmetadata_admin",
+    "openmetadata_password",
+)
 JOB_TASK_ROLES = ("job_execution", "job_offline_task", "job_seal_task", "job_read_task")
 
 
@@ -1037,6 +1048,39 @@ def aws_polaris_pair_cases() -> Iterator[Case]:
     )
 
 
+def openmetadata_password_cases() -> Iterator[Case]:
+    """The catalog password setup under the project user: put and read exactly the two password names, nothing wider, no listing and no key use."""
+    for name in OPENMETADATA_PASSWORDS:
+        for action in ("PutParameter", "GetParameter"):
+            yield Case(f"openmetadata passwords: {action} {name}", request(f"ssm:{action}", parameter(name), region=None), True, OPENMETADATA_STATEMENT)
+        for action in ("GetParameters", "GetParametersByPath", "GetParameterHistory", "DeleteParameter", "DeleteParameters", "LabelParameterVersion"):
+            yield Case(f"openmetadata passwords: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+        for action in ("AddTagsToResource", "RemoveTagsFromResource"):
+            yield Case(f"openmetadata passwords: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+        for suffix in ("_extra", "/child"):
+            for action in ("PutParameter", "GetParameter"):
+                yield Case(f"openmetadata passwords: refuse {action} {name}{suffix}", request(f"ssm:{action}", parameter(name + suffix), region=None), False)
+        for label, resource in (
+            ("another region", parameter(name).replace(f":{R}:", ":eu-west-2:")),
+            ("another account", parameter(name).replace(f":{A}:", ":222222222222:")),
+            ("another folder", parameter(name).replace(f"/{PARAMETER_FOLDER}/", "/another_project/")),
+        ):
+            for action in ("PutParameter", "GetParameter"):
+                yield Case(f"openmetadata passwords: refuse {action} {name} in {label}", request(f"ssm:{action}", resource, region=None), False)
+    for name in OPENMETADATA_NEIGHBORS:
+        for action in ("PutParameter", "GetParameter"):
+            yield Case(f"openmetadata passwords: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    yield Case("openmetadata passwords: refuse the account-wide parameter listing", request("ssm:DescribeParameters", "*"), False)
+    yield Case(
+        "openmetadata passwords: refuse a listing scoped to a password name",
+        request("ssm:DescribeParameters", parameter(OPENMETADATA_PASSWORDS[0]), region=None),
+        False,
+    )
+    key = arn("kms", "key/00000000-0000-0000-0000-000000000000")
+    for action in ("Decrypt", "Encrypt", "GenerateDataKey"):
+        yield Case(f"openmetadata passwords: refuse kms:{action}", request(f"kms:{action}", key), False)
+
+
 FORBIDDEN = {
     "ec2": (
         "RunInstances",
@@ -1512,6 +1556,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from job_project_cases()
     yield from project_parameter_grid_cases()
     yield from aws_polaris_pair_cases()
+    yield from openmetadata_password_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
     yield from execution_cases()
@@ -1865,6 +1910,53 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             "account-wide parameter listing granted": ("aws pair: refuse the account-wide parameter listing", aws_pair_listing_granted),
         }
     )
+
+    def om_statement_action(action: str) -> Mutation:
+        def mutate(documents: dict[str, dict[str, Any]]) -> None:
+            add_action(documents, "ssm", OPENMETADATA_STATEMENT, action)
+
+        return mutate
+
+    def om_statement_dropped(documents: dict[str, dict[str, Any]]) -> None:
+        drop(documents, "ssm", OPENMETADATA_STATEMENT)
+
+    def om_neighbor_added(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "ssm", OPENMETADATA_STATEMENT)
+        statement["Resource"] = [*as_list(statement["Resource"]), parameter("openmetadata_bot_lineage")]
+
+    def om_key_use_granted(documents: dict[str, dict[str, Any]]) -> None:
+        documents["healthcare_hai_prediction_ssm_policy"]["Statement"].append({"Sid": "UseKey", "Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*"})
+
+    openmetadata_defects: dict[str, tuple[str, Mutation]] = {
+        f"openmetadata password resource {name} widened": (
+            f"openmetadata passwords: refuse PutParameter {name}_extra",
+            job_resource("ssm", OPENMETADATA_STATEMENT, index, parameter(name) + "*"),
+        )
+        for index, name in enumerate(OPENMETADATA_PASSWORDS)
+    }
+    openmetadata_defects.update(
+        {
+            "openmetadata password statement dropped": (f"openmetadata passwords: PutParameter {OPENMETADATA_PASSWORDS[1]}", om_statement_dropped),
+            "openmetadata password delete action added": (
+                f"openmetadata passwords: refuse DeleteParameter {OPENMETADATA_PASSWORDS[0]}",
+                om_statement_action("ssm:DeleteParameter"),
+            ),
+            "openmetadata password batch read added": (
+                f"openmetadata passwords: refuse GetParameters {OPENMETADATA_PASSWORDS[0]}",
+                om_statement_action("ssm:GetParameters"),
+            ),
+            "openmetadata password history read added": (
+                f"openmetadata passwords: refuse GetParameterHistory {OPENMETADATA_PASSWORDS[1]}",
+                om_statement_action("ssm:GetParameterHistory"),
+            ),
+            "openmetadata password tagging added": (
+                f"openmetadata passwords: refuse AddTagsToResource {OPENMETADATA_PASSWORDS[0]}",
+                om_statement_action("ssm:AddTagsToResource"),
+            ),
+            "openmetadata bot token name added to the grant": ("openmetadata passwords: refuse PutParameter openmetadata_bot_lineage", om_neighbor_added),
+            "openmetadata password key use granted on every key": ("openmetadata passwords: refuse kms:Decrypt", om_key_use_granted),
+        }
+    )
     job_defects: dict[str, tuple[str, Mutation]] = {
         f"job PassRole resource {name} widened": (
             "job pass: refuse job_try_writer",
@@ -1908,6 +2000,7 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     return {
         **job_defects,
         **aws_pair_defects,
+        **openmetadata_defects,
         "DescribeContainerInstances is granted on the cluster ARN instead of the container-instance ARN (review round 5 finding 6)": (
             "ecs:DescribeContainerInstances on container-instance",
             container_instance_on_cluster,

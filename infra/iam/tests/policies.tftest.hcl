@@ -836,6 +836,11 @@ run "project_secret_names" {
   }
 
   assert {
+    condition     = output.project_secret_names.openmetadata_passwords == ["/healthcare_hai_prediction/openmetadata_admin_password", "/healthcare_hai_prediction/openmetadata_db_password"]
+    error_message = "The project user sets up exactly the two catalog password names, admin first, under /healthcare_hai_prediction/."
+  }
+
+  assert {
     condition = alltrue([
       for name in concat(output.project_secret_names.shared_secrets, output.project_secret_names.read_parameters) : !strcontains(name, "*") && !strcontains(name, "?")
     ])

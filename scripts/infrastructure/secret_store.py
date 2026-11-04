@@ -80,6 +80,9 @@ AWS_POLARIS_VARIABLES = (
     *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")),
 )
 ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
+# The two catalog password names are declared beside the catalog's own IAM variables, not in variables.tf. Only the setup that creates them writes them.
+OPENMETADATA_VARIABLES = ("openmetadata_admin_password_name", "openmetadata_db_password_name")
+OPENMETADATA_FILES = ("openmetadata.tf", "openmetadata_persistent.tf")
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
 VARIABLES = "infra/iam/variables.tf"
 LOOPBACK = {"127.0.0.1", "localhost"}
@@ -182,7 +185,21 @@ def variable_names(variables: Path) -> dict[str, str]:
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
     wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES) or value.startswith(PREFIX)]
-    return {name.upper(): defaults[name] for name in wanted}
+    return {name.upper(): defaults[name] for name in wanted} | openmetadata_names(variables)
+
+
+def openmetadata_names(variables: Path) -> dict[str, str]:
+    """The two catalog password names by placeholder, read from the catalog's IAM variable files beside ``variables.tf``."""
+    found: dict[str, str] = {}
+    for file in OPENMETADATA_FILES:
+        try:
+            found.update(terraform_variables(variables.parent / file))
+        except OSError:
+            raise SecretStoreError(f"{file} is missing beside {variables.name}") from None
+    missing = [name for name in OPENMETADATA_VARIABLES if name not in found]
+    if missing:
+        raise SecretStoreError(f"{variables.parent.name}/ has no default for: {', '.join(missing)}")
+    return {name.upper(): found[name] for name in OPENMETADATA_VARIABLES}
 
 
 def project_settings(root: Path) -> dict[str, str]:
