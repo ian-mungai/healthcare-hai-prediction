@@ -262,6 +262,107 @@ def ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest() -> None:
     require(code == 1 and seen == [] and "manifest.json" in err, (code, err))
 
 
+HOST_API = "http://10.0.1.20:8585/api"
+
+
+def run_host_ingest(args: list[str], env: dict[str, str], workflow: Callable[[dict[str, Any]], None], **extra: Any) -> tuple[int, str, str]:
+    from scripts.infrastructure import openmetadata_host_ingest as host_ingest
+
+    with quiet() as (out, err):
+        code = host_ingest.main(args, env=env, workflow=workflow, **extra)
+    return code, out.getvalue(), err.getvalue()
+
+
+def host_ingest_environment(root: Path, **changes: str | None) -> tuple[list[str], dict[str, str]]:
+    """The command line and variables of the host ingestion container: no token file, the catalog address and the token as variables."""
+    _, env = ingest_environment(root)
+    env.update(OM_API=HOST_API, OM_INGESTION_TOKEN=BEARER_VALUE)
+    for name, value in changes.items():
+        if value is None:
+            env.pop(name, None)
+        else:
+            env[name] = value
+    return ["--config-dir", str(INGESTION), "--work-dir", str(root / "work"), "polaris", "dbt"], env
+
+
+def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
+    seen: list[dict[str, Any]] = []
+    keys = {f"metadata/dbt/{name}": b"{}" for name in ("manifest.json", "catalog.json", "run_results.json")}
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        code, out, err = run_host_ingest(args, env, seen.append, s3_client=FakeS3(keys))
+        require(code == 0, (code, err))
+        require(len(seen) == 2, f"polaris and dbt must each run once, got {len(seen)}")
+        for config in seen:
+            server = config["workflowConfig"]["openMetadataServerConfig"]
+            require(server["hostPort"] == HOST_API, f"the workflow does not name the persistent catalog: {server['hostPort']}")
+            require(server["securityConfig"]["jwtToken"] == BEARER_VALUE, "the workflow does not carry the ingestion token")
+            require("127.0.0.1" not in json.dumps(config) and "${" not in json.dumps(config), "a loopback address or placeholder is left")
+        require(env["POLARIS_URI"] in json.dumps(seen[0]) and CLIENT[1] in json.dumps(seen[0]), "the Polaris values must reach the first workflow")
+        for secret in (CLIENT[1], BEARER_VALUE):
+            require(secret not in out + err, "a secret reached the output")
+        written = [path for path in (Path(folder) / "work").rglob("*") if path.is_file()]
+        require(written, "the dbt artifacts must be in the work folder, or this check proves nothing")
+        for path in written:
+            require(BEARER_VALUE.encode() not in path.read_bytes(), f"the token was written to disk: {path.name}")
+
+
+def host_ingest_refuses_an_unusable_catalog_address() -> None:
+    for label, address in {
+        "loopback": "http://127.0.0.1:8585/api",
+        "missing": None,
+        "no api path": "http://10.0.1.20:8585",
+        "a name": "http://catalog.example.invalid:8585/api",
+        "tls": "https://10.0.1.20:8585/api",
+    }.items():
+        seen: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory() as folder:
+            args, env = host_ingest_environment(Path(folder), OM_API=address)
+            code, out, err = run_host_ingest(args, env, seen.append)
+        require(code == 2 and seen == [], f"{label}: code {code}, workflows {len(seen)}")
+        require("OM_API" in err and BEARER_VALUE not in out + err, f"{label}: {err}")
+
+
+def host_ingest_refuses_a_missing_token() -> None:
+    for label, token in {"missing": None, "empty": ""}.items():
+        seen: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory() as folder:
+            args, env = host_ingest_environment(Path(folder), OM_INGESTION_TOKEN=token)
+            code, _, err = run_host_ingest(args, env, seen.append)
+        require(code == 2 and seen == [], f"{label}: code {code}, workflows {len(seen)}")
+        require("OM_INGESTION_TOKEN" in err, f"{label}: {err}")
+
+
+def host_ingest_stops_at_the_first_failing_source() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def broken(config: dict[str, Any]) -> None:
+        seen.append(config)
+        raise RuntimeError(f"upstream said {config['workflowConfig']}")
+
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        code, out, err = run_host_ingest(args, env, broken)
+    require(code == 1 and len(seen) == 1, (code, len(seen)))
+    require("RuntimeError" in err and BEARER_VALUE not in out + err, err)
+
+
+def host_ingest_keeps_the_profiler_refusal() -> None:
+    seen: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        args, env = host_ingest_environment(root)
+        config = load("polaris")
+        config["source"]["sourceConfig"]["config"]["generateSampleData"] = True
+        bad = root / "bad"
+        bad.mkdir()
+        (bad / "polaris.json").write_text(json.dumps(config))
+        args[args.index("--config-dir") + 1] = str(bad)
+        code, _, err = run_host_ingest(args, env, seen.append)
+    require(code == 2 and seen == [], (code, seen))
+    require("generatesampledata" in err.lower(), err)
+
+
 def om_routes(state: dict[str, Any]) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
     """The routes of a stand-in OpenMetadata server. The paths are the bootstrap script's assumptions about the real server."""
 
@@ -905,6 +1006,11 @@ CASES: list[Callable[[], None]] = [
     ingest_names_a_missing_variable_but_not_a_value,
     ingest_fails_when_the_workflow_fails_without_echoing_the_config,
     ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest,
+    host_ingest_aims_both_sources_at_the_persistent_catalog,
+    host_ingest_refuses_an_unusable_catalog_address,
+    host_ingest_refuses_a_missing_token,
+    host_ingest_stops_at_the_first_failing_source,
+    host_ingest_keeps_the_profiler_refusal,
     bootstrap_changes_the_default_password_once_and_hands_over_a_token,
     bootstrap_marks_an_abort_when_the_server_never_gets_healthy,
     bootstrap_marks_an_abort_when_no_known_password_logs_in,
