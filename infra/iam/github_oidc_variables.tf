@@ -30,7 +30,7 @@ variable "github_oidc_provider_arn" {
 }
 
 variable "github_oidc_deploy_services" {
-  description = "Names of the ECS services in the project cluster that the deploy role may update. The delivery boundary allows only <project>_<environment>_model_api and <project>_<environment>_streamlit, the services stack naming of the two serving services. Empty until the model API names its service."
+  description = "Names of the ECS services in the project cluster that the deploy role may update. The deploy boundary allows only <project>_<environment>_model_api and <project>_<environment>_streamlit, the services stack naming of the two serving services. Empty until the model API names its service."
   type        = list(string)
   default     = []
   nullable    = false

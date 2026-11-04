@@ -64,15 +64,6 @@
       ]
     },
     {
-      "Sid": "UpdateProjectServices",
-      "Effect": "Allow",
-      "Action": "ecs:UpdateService",
-      "Resource": [
-        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_model_api",
-        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_streamlit"
-      ]
-    },
-    {
       "Sid": "ListProjectClusterTasks",
       "Effect": "Allow",
       "Action": [

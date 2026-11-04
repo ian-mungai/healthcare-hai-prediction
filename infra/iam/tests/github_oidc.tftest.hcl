@@ -277,9 +277,9 @@ run "deploy_role_is_limited_to_named_services" {
     condition = (
       strcontains(aws_iam_role_policy.github["deploy"].policy, "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_model_api") &&
       strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService") &&
-      !strcontains(aws_iam_role_policy.github["deploy"].policy, "iam:PassRole")
+      !strcontains(aws_iam_role_policy.github["deploy"].policy, "service/example_project_cluster_dev/example_project_dev_streamlit")
     )
-    error_message = "Deploy may update only the named services and passes no role."
+    error_message = "Deploy may update only the named services."
   }
 }
 
@@ -291,8 +291,8 @@ run "deploy_without_a_named_service_updates_nothing" {
   }
 
   assert {
-    condition     = !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService") && !strcontains(aws_iam_role_policy.github["deploy"].policy, "iam:PassRole")
-    error_message = "Until the model API names its service the deploy role must hold no update or pass-role grant."
+    condition     = !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService")
+    error_message = "Until the model API names its service the deploy role must hold no service update grant."
   }
 }
 
@@ -552,7 +552,27 @@ run "plan_role_wildcard_reads_match_the_approved_wildcards" {
   }
 }
 
-run "every_delivery_role_carries_the_delivery_boundary" {
+run "every_delivery_role_carries_its_own_boundary" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  # The deploy role's grants (registering the serving families, passing the serving roles) do not fit beside the push and plan grants in the 6,144
+  # characters of one managed policy, so the deploy role has a boundary of its own (owner decision D18).
+  assert {
+    condition = (
+      length(aws_iam_role.github) == 3 &&
+      aws_iam_role.github["image_push"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary" &&
+      aws_iam_role.github["terraform_plan"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary" &&
+      aws_iam_role.github["deploy"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_deploy_boundary"
+    )
+    error_message = "The push and plan roles carry the delivery boundary and the deploy role carries the deploy boundary."
+  }
+}
+
+run "the_deploy_boundary_holds_only_the_deploy_work" {
   command = plan
 
   variables {
@@ -560,11 +580,48 @@ run "every_delivery_role_carries_the_delivery_boundary" {
   }
 
   assert {
-    condition = (
-      length(aws_iam_role.github) == 3 &&
-      alltrue([for role in values(aws_iam_role.github) : role.permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary"])
-    )
-    error_message = "The push, deploy and plan roles must all carry the delivery boundary."
+    condition = join(",", output.github_oidc_boundary_actions.deploy) == join(",", sort([
+      "ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:ListTasks", "ecs:RegisterTaskDefinition",
+      "ecs:TagResource", "ecs:UpdateService", "iam:PassRole"
+    ]))
+    error_message = "The deploy boundary allows exactly the deploy work: describe, list, register and tag on registration, update a service and pass a role."
+  }
+
+  assert {
+    condition = join(",", output.github_oidc_boundary_resources.deploy) == join(",", sort([
+      "*",
+      "arn:aws:ecs:us-west-2:111111111111:cluster/example_project_cluster_dev",
+      "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_*",
+      "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_model_api",
+      "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_streamlit",
+      "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_model_api:*",
+      "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_streamlit:*",
+      "arn:aws:ecs:us-west-2:111111111111:task/example_project_cluster_dev/*",
+      "arn:aws:iam::111111111111:role/example_project_model_api_task_dev",
+      "arn:aws:iam::111111111111:role/example_project_serving_execution_dev",
+      "arn:aws:iam::111111111111:role/example_project_streamlit_task_dev"
+    ]))
+    error_message = "The deploy boundary names the cluster, the two serving services, the two serving families and the three serving roles, and no other resource."
+  }
+}
+
+run "the_delivery_boundary_of_push_and_plan_has_no_deploy_or_iam_action" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = length(setintersection(toset(output.github_oidc_boundary_actions.delivery), toset([
+      "ecs:RegisterTaskDefinition", "ecs:TagResource", "ecs:UpdateService", "iam:PassRole", "iam:GetRole", "iam:CreateRole", "sts:AssumeRole"
+    ]))) == 0 && length([for action in output.github_oidc_boundary_actions.delivery : action if startswith(action, "iam:")]) == 0
+    error_message = "The boundary of the push and plan roles allows no registration, no service update and no IAM action. Only the deploy boundary does."
+  }
+
+  assert {
+    condition     = !anytrue([for resource in output.github_oidc_boundary_resources.delivery : strcontains(resource, ":role/") || strcontains(resource, ":task-definition/")])
+    error_message = "The boundary of the push and plan roles names no role and no task definition."
   }
 }
 
@@ -639,47 +696,6 @@ run "the_delivery_boundary_names_one_action_with_a_wildcard" {
   }
 }
 
-run "the_delivery_boundary_allows_no_iam_action" {
-  command = plan
-
-  variables {
-    github_oidc_enabled = true
-  }
-
-  assert {
-    condition     = length([for action in output.github_oidc_boundary_allowed_actions : action if startswith(action, "iam:")]) == 0
-    error_message = "No delivery role passes or manages a role, so the delivery boundary allows no IAM action."
-  }
-}
-
-run "the_deploy_role_cannot_register_a_task_definition_or_pass_a_role" {
-  command = plan
-
-  variables {
-    github_oidc_enabled         = true
-    github_oidc_deploy_services = ["example_project_dev_model_api"]
-  }
-
-  # A crafted task definition that names the shared execution role would pull the PostgreSQL and Polaris root secrets. The workflow only describes
-  # definitions and updates services, so neither the role nor the boundary may register a definition or pass a role.
-  assert {
-    condition = (
-      !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:RegisterTaskDefinition") &&
-      !strcontains(aws_iam_role_policy.github["deploy"].policy, "iam:PassRole") &&
-      strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:DescribeTaskDefinition")
-    )
-    error_message = "The deploy role may describe task definitions and update the named services. It may not register a definition or pass a role."
-  }
-
-  assert {
-    condition = (
-      !contains(output.github_oidc_boundary_allowed_actions, "ecs:RegisterTaskDefinition") &&
-      !contains(output.github_oidc_boundary_allowed_actions, "iam:PassRole")
-    )
-    error_message = "The delivery boundary may not allow task definition registration or iam:PassRole for any delivery role."
-  }
-}
-
 run "the_deploy_role_updates_the_serving_services" {
   command = plan
 
@@ -730,13 +746,19 @@ run "the_delivery_boundary_fits_the_policy_limit_at_the_name_bounds" {
   }
 
   assert {
-    condition     = output.github_oidc_boundary_size.actual == output.github_oidc_boundary_size.at_bounds
+    condition = alltrue([
+      for name in ["delivery", "deploy"] :
+      output.github_oidc_boundary_size[name].actual == output.github_oidc_boundary_size[name].at_bounds
+    ])
     error_message = "The names at the validation bounds must be the names the size check uses for its bound, or the check measures something else."
   }
 
   assert {
-    condition     = output.github_oidc_boundary_size.at_bounds <= output.github_oidc_boundary_size.limit && output.github_oidc_boundary_size.limit == 6144
-    error_message = "The delivery boundary must stay inside the 6,144 characters of a managed policy at the longest names the variables accept."
+    condition = alltrue([
+      for name in ["delivery", "deploy"] :
+      output.github_oidc_boundary_size[name].at_bounds <= output.github_oidc_boundary_size.limit
+    ]) && output.github_oidc_boundary_size.limit == 6144
+    error_message = "Each delivery boundary must stay inside the 6,144 characters of a managed policy at the longest names the variables accept."
   }
 }
 
@@ -744,7 +766,10 @@ run "the_delivery_boundary_size_follows_the_names" {
   command = plan
 
   assert {
-    condition     = output.github_oidc_boundary_size.actual < output.github_oidc_boundary_size.at_bounds && output.github_oidc_boundary_size.actual > 3000
+    condition = (
+      output.github_oidc_boundary_size.delivery.actual < output.github_oidc_boundary_size.delivery.at_bounds && output.github_oidc_boundary_size.delivery.actual > 3000 &&
+      output.github_oidc_boundary_size.deploy.actual < output.github_oidc_boundary_size.deploy.at_bounds && output.github_oidc_boundary_size.deploy.actual > 1500
+    )
     error_message = "The size of the boundary for the real names must be measured, and shorter than the size at the bounds."
   }
 }
@@ -917,5 +942,129 @@ run "the_plan_save_stays_inside_the_boundary" {
   assert {
     condition     = length(output.github_oidc_grants_outside_boundary) == 0 && length(output.github_oidc_actions_outside_boundary) == 0
     error_message = "The plan role's one write must be allowed by the delivery boundary, or the boundary refuses the save."
+  }
+}
+
+# D18 model releases: GitHub registers the next serving task definition revision itself. The deploy role may register only the two serving families,
+# and pass only the two serving task roles and the dedicated serving execution role. The shared execution role reads the PostgreSQL and Polaris root
+# secrets for the tasks that name them, so passing it with a registration right would let a crafted task pull them.
+run "the_deploy_role_registers_only_the_serving_families" {
+  command = plan
+
+  variables {
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement : statement if contains(tolist(statement.Action), "ecs:RegisterTaskDefinition")]) == 1 &&
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement :
+        statement.Effect == "Allow" &&
+        join(",", sort(tolist(statement.Action))) == "ecs:RegisterTaskDefinition" &&
+        join(",", sort(tolist(statement.Resource))) == join(",", sort([
+          "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_model_api:*",
+          "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_streamlit:*"
+        ])) &&
+        statement.Condition.StringEquals["aws:RequestTag/Project"] == "example_project" &&
+        join(",", tolist(statement.Condition["ForAnyValue:StringEquals"]["aws:TagKeys"])) == "Project"
+        if contains(tolist(statement.Action), "ecs:RegisterTaskDefinition")
+      ])
+    )
+    error_message = "The deploy role registers task definitions of the model API and dashboard families only, and only with the Project tag."
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement : statement if contains(tolist(statement.Action), "ecs:TagResource")]) == 1 &&
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement :
+        join(",", sort(tolist(statement.Resource))) == join(",", sort([
+          "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_model_api:*",
+          "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_streamlit:*"
+        ])) &&
+        statement.Condition.StringEquals["ecs:CreateAction"] == "RegisterTaskDefinition"
+        if contains(tolist(statement.Action), "ecs:TagResource")
+      ])
+    )
+    error_message = "Tagging is allowed only on those families and only while registering, so the role cannot re-tag a definition."
+  }
+
+  assert {
+    condition     = !anytrue([for key in ["image_push", "terraform_plan"] : strcontains(aws_iam_role_policy.github[key].policy, "ecs:RegisterTaskDefinition")])
+    error_message = "Only the deploy role registers task definitions."
+  }
+}
+
+run "the_deploy_role_passes_only_the_serving_roles" {
+  command = plan
+
+  variables {
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement : statement if contains(tolist(statement.Action), "iam:PassRole")]) == 1 &&
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement :
+        statement.Effect == "Allow" &&
+        join(",", tolist(statement.Action)) == "iam:PassRole" &&
+        join(",", sort(tolist(statement.Resource))) == join(",", sort([
+          "arn:aws:iam::111111111111:role/example_project_model_api_task_dev",
+          "arn:aws:iam::111111111111:role/example_project_serving_execution_dev",
+          "arn:aws:iam::111111111111:role/example_project_streamlit_task_dev"
+        ])) &&
+        statement.Condition.StringEquals["iam:PassedToService"] == "ecs-tasks.amazonaws.com"
+        if contains(tolist(statement.Action), "iam:PassRole")
+      ])
+    )
+    error_message = "The deploy role passes the model API task role, the dashboard task role and the serving execution role to ECS tasks, and no other role."
+  }
+
+  assert {
+    condition     = !anytrue([for key in ["image_push", "terraform_plan"] : strcontains(aws_iam_role_policy.github[key].policy, "iam:PassRole")])
+    error_message = "Only the deploy role passes a role."
+  }
+
+  assert {
+    condition = !anytrue([
+      for name in ["task_execution", "polaris_task", "control_plane_task", "ecs_host", "job_execution", "gh_deploy", "gh_terraform_plan", "snapshots"] :
+      strcontains(aws_iam_role_policy.github["deploy"].policy, "example_project_${name}_dev")
+    ])
+    error_message = "The deploy role never names the shared execution role, the control-plane task roles, the host role or a delivery role."
+  }
+}
+
+run "the_delivery_boundary_allows_registering_and_passing_for_the_serving_tasks_only" {
+  command = plan
+
+  variables {
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
+  }
+
+  assert {
+    condition = (
+      contains(output.github_oidc_boundary_allowed_actions, "ecs:RegisterTaskDefinition") &&
+      join(",", sort([for action in output.github_oidc_boundary_allowed_actions : action if startswith(action, "iam:")])) == "iam:PassRole" &&
+      join(",", sort([for resource in output.github_oidc_boundary_allowed_resources : resource if strcontains(resource, ":role/")])) == join(",", sort([
+        "arn:aws:iam::111111111111:role/example_project_model_api_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_serving_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_streamlit_task_dev"
+      ])) &&
+      join(",", sort([for resource in output.github_oidc_boundary_allowed_resources : resource if strcontains(resource, ":task-definition/")])) == join(",", sort([
+        "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_model_api:*",
+        "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_streamlit:*"
+      ]))
+    )
+    error_message = "The delivery boundary lets a delivery role register the two serving families and pass the three serving roles, and allows no other IAM action."
+  }
+
+  assert {
+    condition     = length(output.github_oidc_grants_outside_boundary) == 0 && length(output.github_oidc_actions_outside_boundary) == 0
+    error_message = "The deploy role's registration and PassRole must be allowed by the boundary, or the boundary refuses them."
   }
 }

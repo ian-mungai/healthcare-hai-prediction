@@ -1,0 +1,114 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadProjectCluster",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeClusters",
+        "ecs:DescribeTasks"
+      ],
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*"
+      ]
+    },
+    {
+      "Sid": "ReadProjectServices",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices"
+      ],
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_*"
+      ]
+    },
+    {
+      "Sid": "UpdateProjectServices",
+      "Effect": "Allow",
+      "Action": "ecs:UpdateService",
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_model_api",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_streamlit"
+      ]
+    },
+    {
+      "Sid": "ListProjectClusterTasks",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:ListTasks"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+        }
+      }
+    },
+    {
+      "Sid": "DescribeTaskDefinitions",
+      "Effect": "Allow",
+      "Action": "ecs:DescribeTaskDefinition",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "RegisterServingTaskDefinitions",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RegisterTaskDefinition",
+        "ecs:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_model_api:*",
+        "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_streamlit:*"
+      ]
+    },
+    {
+      "Sid": "PassServingRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_model_api_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_streamlit_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_serving_execution_${ENVIRONMENT}"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "DenyIam",
+      "Effect": "Deny",
+      "Action": "iam:*",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOrganizationsAccountAndBudgets",
+      "Effect": "Deny",
+      "Action": [
+        "account:*",
+        "budgets:*",
+        "organizations:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyAssumeRoleOutsideProject",
+      "Effect": "Deny",
+      "Action": "sts:AssumeRole",
+      "NotResource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_*"
+    }
+  ]
+}
