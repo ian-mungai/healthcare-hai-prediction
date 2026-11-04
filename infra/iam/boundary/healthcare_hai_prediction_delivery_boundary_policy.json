@@ -147,9 +147,10 @@
       ],
       "Resource": [
         "arn:aws:cloudwatch:${AWS_REGION}:${AWS_ACCOUNT_ID}:alarm:${PROJECT_NAME}_*_${ENVIRONMENT}",
-        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_*_${ENVIRONMENT}*",
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_*_${ENVIRONMENT}",
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_*_${ENVIRONMENT}:*",
         "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
-        "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:*_api_key-??????"
+        "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${SHARED_SECRET_NAME}-??????"
       ]
     },
     {
@@ -187,9 +188,9 @@
       "Effect": "Allow",
       "Action": "s3:GetObject",
       "Resource": [
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/platform/terraform.tfstate*",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/services/terraform.tfstate*",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/jobs/terraform.tfstate*"
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/platform/terraform.tfstate",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/services/terraform.tfstate",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/jobs/terraform.tfstate"
       ]
     },
     {

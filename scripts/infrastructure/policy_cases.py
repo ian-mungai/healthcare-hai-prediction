@@ -1660,6 +1660,27 @@ def delivery_cases() -> Iterator[Case]:
     yield wide("reads a state version", "s3:GetObjectVersion", STATE_KEYS[0])
     yield wide("reads a parameter", "ssm:GetParameters", arn("ssm", f"parameter/{P}/x"))
     yield wide("reads a secret value", "secretsmanager:GetSecretValue", arn("secretsmanager", "secret:census_api_key-abcdef"))
+    # The metadata reads name the approved shared secrets and the exact state keys: no pattern reaches a neighbour.
+    for name in SHARED_KEYS:
+        yield Case(
+            f"delivery allowed: boundary describes the shared secret {name}",
+            request("secretsmanager:DescribeSecret", arn("secretsmanager", f"secret:{name}-AbCdEf"), region=None),
+            True,
+            None,
+            DELIVERY_WIDE,
+        )
+    for name in ("another_project_api_key", "bls_api_key_extra", "other_api_key", "census_key"):
+        yield wide(f"describes the secret {name}", "secretsmanager:DescribeSecret", arn("secretsmanager", f"secret:{name}-AbCdEf"), None)
+    for label, name in (
+        ("a devops log group of the environment", f"{P}_jobs_{E}_devops"),
+        ("a devops log group without the environment", f"{P}_devops"),
+        ("a log group of another project", f"other_project_jobs_{E}"),
+    ):
+        yield wide(f"lists the tags of {label}", "logs:ListTagsLogGroup", arn("logs", f"log-group:{name}"))
+    for key in STATE_KEYS:
+        yield Case(f"delivery allowed: boundary reads the state key {key.rsplit('/', 2)[-2]}", request("s3:GetObject", key), True, None, DELIVERY_WIDE)
+    for suffix in (".backup", ".tflock", ".tfstate", "-copy"):
+        yield wide(f"reads a platform state key with the suffix {suffix}", "s3:GetObject", f"{STATE_KEYS[0]}{suffix}")
     yield wide("reads log events", "logs:GetLogEvents", f"{LOG_GROUP}:log-stream:x")
     yield wide("launches an instance", "ec2:RunInstances", INSTANCE)
     yield wide("terminates an instance", "ec2:TerminateInstances", INSTANCE)
@@ -2576,6 +2597,20 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
 
         return mutation
 
+    def delivery_add_resource(sid: str, resource: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = delivery_statement(documents, sid)
+            statement["Resource"] = [*as_list(statement["Resource"]), resource]
+
+        return mutation
+
+    def delivery_remove_resource(sid: str, fragment: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = delivery_statement(documents, sid)
+            statement["Resource"] = [resource for resource in as_list(statement["Resource"]) if fragment not in resource]
+
+        return mutation
+
     def delivery_pass_roles_without_iam_deny(documents: dict[str, dict[str, Any]]) -> None:
         delivery_without_iam_deny(documents)
         delivery_extra_statement("PassAgain", "iam:PassRole", list(DEPLOY_TASK_ROLES), {"StringEquals": {"iam:PassedToService": ECS_TASKS}})(documents)
@@ -2624,6 +2659,26 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "delivery defect: lock release deletes state objects": (
             "delivery refused: deletes a state object",
             delivery_extra_statement("DeleteStateAgain", "s3:DeleteObject", f"{state}/*"),
+        ),
+        "delivery defect: the metadata reads reach every secret that ends in _api_key": (
+            "delivery refused: describes the secret another_project_api_key",
+            delivery_add_resource("ReadProjectMetadata", arn("secretsmanager", "secret:*_api_key-??????")),
+        ),
+        "delivery defect: the metadata reads reach a log group with any suffix": (
+            "delivery refused: lists the tags of a devops log group of the environment",
+            delivery_add_resource("ReadProjectMetadata", arn("logs", f"log-group:{P}_*_{E}*")),
+        ),
+        "delivery defect: state reads reach every key that starts with terraform.tfstate": (
+            "delivery refused: reads a platform state key with the suffix .backup",
+            delivery_add_resource("ReadProjectTerraformState", f"{STATE_KEYS[0]}*"),
+        ),
+        "delivery defect: the boundary lacks a shared secret": (
+            "delivery allowed: boundary describes the shared secret jev_api_key",
+            delivery_remove_resource("ReadProjectMetadata", "jev_api_key"),
+        ),
+        "delivery defect: the boundary lacks a state key": (
+            "delivery allowed: boundary reads the state key jobs",
+            delivery_remove_resource("ReadProjectTerraformState", "/jobs/"),
         ),
         "delivery defect: the boundary lacks a plan read": (
             "delivery allowed: terraform_plan access Readec2DescribeProjectInfrastructure ec2:DescribeVpcs",

@@ -42,10 +42,30 @@ locals {
       DATA_BUCKET_NAME = join("", [for position in range(63) : "b"])
     }
   }
-  github_boundary_size = {
-    for case, names in local.github_boundary_names : case => length(jsonencode(jsondecode(templatefile("${path.module}/boundary/${local.github_boundary_file}", names))))
+  # The boundary as the administrator renders it for each set of names. A shared secret name repeats its resource once per name.
+  github_boundary_rendered = {
+    for case, names in local.github_boundary_names : case => jsondecode(templatefile("${path.module}/boundary/${local.github_boundary_file}", merge(names, {
+      SHARED_SECRET_NAME = "%SHARED_SECRET_NAME%"
+    })))
   }
-  github_provider_arn = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
+  github_boundary_expanded = {
+    for case, document in local.github_boundary_rendered : case => {
+      Version = document.Version
+      Statement = concat(
+        [
+          for statement in document.Statement : merge(statement, {
+            Resource = flatten([
+              for resource in flatten([statement.Resource]) :
+              strcontains(resource, "%SHARED_SECRET_NAME%") ? [for name in local.github_policy_shared_secrets : replace(resource, "%SHARED_SECRET_NAME%", name)] : [resource]
+            ])
+          }) if can(statement.Resource)
+        ],
+        [for statement in document.Statement : statement if !can(statement.Resource)]
+      )
+    }
+  }
+  github_boundary_size = { for case, document in local.github_boundary_expanded : case => length(jsonencode(document)) }
+  github_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
 
   # The stacks that continuous delivery may plan. The IAM stack and the storage stack stay with the owner.
   github_state_stacks = ["platform", "services", "jobs"]
@@ -384,4 +404,11 @@ output "github_oidc_boundary_size" {
     condition     = local.github_boundary_size.actual <= local.github_boundary_limit && local.github_boundary_size.at_bounds <= local.github_boundary_limit
     error_message = "The delivery boundary is over the 6,144 characters of a managed policy, for the real names or for the longest names the variables accept. Shorten infra/iam/boundary/healthcare_hai_prediction_delivery_boundary_policy.json."
   }
+}
+
+output "github_oidc_boundary_allowed_resources" {
+  description = "Every resource the delivery boundary allows, shared secret names expanded, to check that no pattern reaches a neighbour."
+  value = sort(distinct(flatten([
+    for statement in local.github_boundary_expanded.actual.Statement : statement.Resource if statement.Effect == "Allow"
+  ])))
 }
