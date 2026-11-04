@@ -69,7 +69,6 @@ run "delivery_roles_are_off_by_default" {
       length(aws_iam_openid_connect_provider.github) == 0 &&
       length(aws_iam_role.github) == 0 &&
       length(aws_iam_role_policy.github) == 0 &&
-      length(aws_iam_role_policy_attachment.github_apply) == 0 &&
       output.github_oidc_contract.enabled == false
     )
     error_message = "With the flag off the stack must plan no provider, role, policy or attachment for GitHub delivery."
@@ -97,7 +96,7 @@ run "repository_without_a_slash_is_refused" {
   expect_failures = [var.github_repository]
 }
 
-run "enabled_provider_and_four_separate_roles" {
+run "enabled_provider_and_three_separate_roles" {
   command = plan
 
   variables {
@@ -114,11 +113,10 @@ run "enabled_provider_and_four_separate_roles" {
 
   assert {
     condition = (
-      join(",", sort(keys(aws_iam_role.github))) == "deploy,image_push,terraform_apply,terraform_plan" &&
+      join(",", sort(keys(aws_iam_role.github))) == "deploy,image_push,terraform_plan" &&
       aws_iam_role.github["image_push"].name == "example_project_gh_image_push_dev" &&
       aws_iam_role.github["deploy"].name == "example_project_gh_deploy_dev" &&
-      aws_iam_role.github["terraform_plan"].name == "example_project_gh_terraform_plan_dev" &&
-      aws_iam_role.github["terraform_apply"].name == "example_project_gh_terraform_apply_dev"
+      aws_iam_role.github["terraform_plan"].name == "example_project_gh_terraform_plan_dev"
     )
     error_message = "Each purpose must have its own role with the project prefix."
   }
@@ -146,10 +144,9 @@ run "trust_binds_this_repository_and_named_environments" {
   assert {
     condition = (
       jsondecode(aws_iam_role.github["image_push"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:image-push"] &&
-      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:model-api-deploy"] &&
-      jsondecode(aws_iam_role.github["terraform_apply"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:terraform-apply"]
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:model-api-deploy"]
     )
-    error_message = "Push, deploy and apply roles must trust one protected environment of this repository each."
+    error_message = "Push and deploy roles must trust one protected environment of this repository each."
   }
 
   assert {
@@ -231,54 +228,34 @@ run "state_access_is_per_stack_and_leaves_out_iam_and_storage" {
 
   assert {
     condition = (
-      strcontains(aws_iam_role_policy.github["terraform_apply"].policy, "arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate") &&
-      strcontains(aws_iam_role_policy.github["terraform_apply"].policy, "arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate.tflock") &&
-      strcontains(aws_iam_role_policy.github["terraform_apply"].policy, "arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate") &&
-      !strcontains(aws_iam_role_policy.github["terraform_apply"].policy, "iam/terraform.tfstate") &&
-      !strcontains(aws_iam_role_policy.github["terraform_apply"].policy, "storage/terraform.tfstate")
+      strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate") &&
+      strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate") &&
+      strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate") &&
+      !strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "iam/terraform.tfstate") &&
+      !strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "storage/terraform.tfstate")
     )
-    error_message = "CI may use the platform, services and jobs state only, never the IAM or storage state."
+    error_message = "CI may read the platform, services and jobs state only, never the IAM or storage state."
   }
 }
 
-run "apply_role_attaches_only_approved_service_policies" {
+run "no_delivery_role_can_apply_or_write_state" {
   command = plan
 
   variables {
     github_oidc_enabled = true
   }
 
+  # D18: GitHub runs Terraform plans with the read-only plan role and the owner applies them. No role may write state or hold a lock.
   assert {
     condition = (
-      length(aws_iam_role_policy_attachment.github_apply) == 10 &&
-      alltrue([for key, attachment in aws_iam_role_policy_attachment.github_apply : startswith(attachment.policy_arn, "arn:aws:iam::111111111111:policy/example_project_") && endswith(attachment.policy_arn, "_policy")]) &&
-      !contains(keys(aws_iam_role_policy_attachment.github_apply), "s3") &&
-      !contains(keys(aws_iam_role_policy_attachment.github_apply), "secretsmanager") &&
-      !contains(keys(aws_iam_role_policy_attachment.github_apply), "sts")
+      !contains(keys(aws_iam_role.github), "terraform_apply") &&
+      !contains(keys(output.github_oidc_contract.roles), "terraform_apply") &&
+      alltrue([for key, role in aws_iam_role_policy.github : !strcontains(role.policy, "s3:PutObject") && !strcontains(role.policy, "s3:DeleteObject")]) &&
+      !contains(output.github_oidc_boundary_allowed_actions, "s3:PutObject") &&
+      !contains(output.github_oidc_boundary_allowed_actions, "s3:DeleteObject")
     )
-    error_message = "The apply role holds the ten project service policies the platform, services and jobs stacks need and nothing else."
+    error_message = "GitHub Terraform is plan-only: no apply role exists, and neither a delivery role nor the delivery boundary may write or delete an object."
   }
-}
-
-run "apply_role_refuses_a_policy_outside_the_approved_list" {
-  command = plan
-
-  variables {
-    github_oidc_enabled               = true
-    github_oidc_apply_policy_services = ["ecs", "billing"]
-  }
-
-  expect_failures = [aws_iam_role_policy_attachment.github_apply]
-}
-
-run "apply_role_refuses_more_than_the_managed_policy_quota" {
-  command = plan
-
-  variables {
-    github_oidc_apply_policy_services = ["ecs", "ecr", "ec2", "dlm", "logs", "cloudwatch", "sns", "ssm", "iam", "autoscaling", "s3"]
-  }
-
-  expect_failures = [var.github_oidc_apply_policy_services]
 }
 
 run "deploy_role_is_limited_to_named_services" {
@@ -577,10 +554,10 @@ run "every_delivery_role_carries_the_delivery_boundary" {
 
   assert {
     condition = (
-      length(aws_iam_role.github) == 4 &&
+      length(aws_iam_role.github) == 3 &&
       alltrue([for role in values(aws_iam_role.github) : role.permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary"])
     )
-    error_message = "The push, deploy, plan and apply roles must all carry the delivery boundary."
+    error_message = "The push, deploy and plan roles must all carry the delivery boundary."
   }
 }
 

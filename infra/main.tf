@@ -196,14 +196,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
 }
 
 # Terraform state sits in this bucket under terraform_state/<stack>/terraform.tfstate, with its lock file beside it. Only the project user
-# (every stack except iam), the two Terraform CI roles (through their own role policies) and the named administrator (the iam stack)
+# (every stack except iam), the Terraform plan role (through its own role policy) and the named administrator (the iam stack)
 # may touch the prefix. The Deny below names who may, so a lakehouse, job, feature or Athena principal stays out even if a policy of
 # theirs holds a wildcard that reaches the prefix.
 locals {
   state_prefix        = "terraform_state"
   state_project_user  = "arn:aws:iam::${var.expected_account_id}:user/${var.aws_profile}"
   state_admin_arns    = [for name in var.terraform_state_admin_principals : "arn:aws:iam::${var.expected_account_id}:${name}"]
-  state_ci_roles      = [for name in ["gh_terraform_plan", "gh_terraform_apply"] : "arn:aws:iam::${var.expected_account_id}:role/${var.project_name}_${name}_${var.environment}"]
+  state_ci_roles      = [for name in ["gh_terraform_plan"] : "arn:aws:iam::${var.expected_account_id}:role/${var.project_name}_${name}_${var.environment}"]
   state_user_stacks   = ["storage", "platform", "services", "jobs"]
   state_user_keys     = [for stack in local.state_user_stacks : "${aws_s3_bucket.data.arn}/${local.state_prefix}/${stack}/terraform.tfstate"]
   state_user_lock_key = [for key in local.state_user_keys : "${key}.tflock"]

@@ -5,7 +5,6 @@ set -euo pipefail
 
 failures=0
 plan=.github/workflows/terraform_plan.yml
-apply=.github/workflows/terraform_apply.yml
 
 check() {
   local label="$1"
@@ -18,14 +17,14 @@ check() {
   fi
 }
 
-reads_no_variable() { ! grep -q 'vars.TERRAFORM_INPUTS_JSON' "$plan" "$apply"; }
-every_source_is_a_secret() { [[ "$(grep -h 'STACK_INPUTS:' "$plan" "$apply" | grep -vc 'secrets.TERRAFORM_INPUTS_JSON')" -eq 0 ]]; }
-three_jobs_use_it() { [[ "$(grep -h 'STACK_INPUTS:' "$plan" "$apply" | grep -c '')" -eq 3 ]]; }
-passed_to_no_action() { ! grep -A8 'with:' "$plan" "$apply" | grep -q 'TERRAFORM_INPUTS_JSON'; }
+reads_no_variable() { ! grep -q 'vars.TERRAFORM_INPUTS_JSON' "$plan"; }
+every_source_is_a_secret() { [[ "$(grep -h 'STACK_INPUTS:' "$plan" | grep -vc 'secrets.TERRAFORM_INPUTS_JSON')" -eq 0 ]]; }
+one_job_uses_it() { [[ "$(grep -h 'STACK_INPUTS:' "$plan" | grep -c '')" -eq 1 ]]; }
+passed_to_no_action() { ! grep -A8 'with:' "$plan" | grep -q 'TERRAFORM_INPUTS_JSON'; }
 
 check "no Terraform workflow reads the inputs from a repository variable" reads_no_variable
 check "every STACK_INPUTS source is a secret" every_source_is_a_secret
-check "the inputs are used by the three Terraform jobs" three_jobs_use_it
+check "the inputs are used by the one Terraform job" one_job_uses_it
 check "no step passes the inputs as an action input" passed_to_no_action
 
 # The secret masks the whole JSON, not its fields, and the project bucket sits in the job environment, which the runner prints before any
@@ -36,9 +35,9 @@ mask=.github/scripts/mask_inputs.sh
 account="$(printf '%s%s' 9999 00001111)"
 synthetic='{"aws_profile":"synthetic_profile_dev","expected_account_id":"'"$account"'","mlflow_bucket":"synthetic-private-bucket","ecr_repositories":["synthetic_private_repo"],"aws_region":"us-west-2","environment":"dev","limit":5,"flag":true}'
 
-state_bucket_is_a_secret() { [[ "$(grep -h 'STATE_BUCKET:' "$plan" "$apply" | grep -vc 'secrets.TERRAFORM_STATE_BUCKET')" -eq 0 ]]; }
-no_variable_bucket() { ! grep -q 'vars.TERRAFORM_STATE_BUCKET' "$plan" "$apply"; }
-workflows_call_the_mask() { [[ "$(grep -c 'bash .github/scripts/mask_inputs.sh' "$plan")" -eq 1 && "$(grep -c 'bash .github/scripts/mask_inputs.sh' "$apply")" -eq 2 ]]; }
+state_bucket_is_a_secret() { [[ "$(grep -h 'STATE_BUCKET:' "$plan" | grep -vc 'secrets.TERRAFORM_STATE_BUCKET')" -eq 0 ]]; }
+no_variable_bucket() { ! grep -q 'vars.TERRAFORM_STATE_BUCKET' "$plan"; }
+workflows_call_the_mask() { [[ "$(grep -c 'bash .github/scripts/mask_inputs.sh' "$plan")" -eq 1 ]]; }
 mask_script_exists() { [[ -f "$mask" ]]; }
 masks_every_private_string() {
   local output
