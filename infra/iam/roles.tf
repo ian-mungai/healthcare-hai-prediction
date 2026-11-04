@@ -296,6 +296,8 @@ resource "aws_iam_role" "snapshots" {
 # copying says, so a snapshot never escapes the budget filter: the schedule adds the tag itself, and an untagged or
 # differently spelled create fails instead of costing money unseen. Key matching in a request-tag condition ignores
 # case, so the policy also requires the exact key in aws:TagKeys. Three denies hold even if a later edit weakens an allow.
+# The two request-tag denies cover snapshot resources only: EC2 authorizes the volume part of CreateSnapshot without the
+# request tags, so a deny on every resource refused each scheduled snapshot of the tagged data volume.
 resource "aws_iam_role_policy" "snapshots" {
   name   = "snapshots"
   role   = aws_iam_role.snapshots.id

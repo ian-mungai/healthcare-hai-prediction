@@ -54,6 +54,7 @@ VOLUME = arn("ec2", "volume/vol-0123456789abcdef0")
 ADDRESS = arn("ec2", "elastic-ip/eipalloc-0123456789abcdef0")
 INSTANCE = arn("ec2", "instance/i-0123456789abcdef0")
 HOST_TAGS = {"aws:ResourceTag/Project": P, "aws:ResourceTag/Name": f"{P}_host_{E}"}
+DATA_VOLUME_TAGS = {"aws:ResourceTag/Project": P, "aws:ResourceTag/Name": f"{P}_host_data_{E}"}
 GROUP = arn("autoscaling", f"autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/{P}_host_{E}")
 # ECS adds this tag to the host group when it creates the capacity provider; the call is checked against the project user's policy.
 ECS_GROUP_TAG = {"AmazonECSManaged": ""}
@@ -184,6 +185,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("ec2", "CreateVolume", VOLUME, region=None, **tagged)
     add("ec2", "AllocateAddress", ADDRESS, region=None, **tagged)
     add("ec2", "CreateTags", VOLUME, region=None, tags=TAG, extra={"ec2:CreateAction": "CreateVolume"})
+    add("ec2", "CreateTags", VOLUME, region=None, tags={"DataClassification": "Public"}, extra=DATA_VOLUME_TAGS)
     add("ec2", "DeleteVolume", VOLUME, region=None, extra={"aws:ResourceTag/Project": P})
     add("ec2", "ReleaseAddress", ADDRESS, region=None, extra={"aws:ResourceTag/Project": P})
     add("ec2", "GetConsoleOutput", INSTANCE, region=None, extra=HOST_TAGS)
@@ -514,6 +516,33 @@ def tag_cases() -> Iterator[Case]:
             f"ec2:DeleteTags on a {label} removing Project", request("ec2:DeleteTags", resource, tags={"Project": P}, region=None), False, "DenyRemovingTags"
         )
         yield Case(f"ec2:DeleteTags on a {label} deleting every tag", request("ec2:DeleteTags", resource, region=None), False, "DenyRemovingTags")
+    for value in ("Public", "Confidential"):
+        yield Case(
+            f"ec2:CreateTags later sets DataClassification {value} on the data volume",
+            request("ec2:CreateTags", VOLUME, tags={"DataClassification": value}, extra=DATA_VOLUME_TAGS, region=None),
+            True,
+        )
+    later: tuple[tuple[str, str, dict[str, str], dict[str, Any], str | None], ...] = (
+        ("another value", VOLUME, {"DataClassification": "Restricted"}, DATA_VOLUME_TAGS, None),
+        ("a lowercase key", VOLUME, {"dataclassification": "Public"}, DATA_VOLUME_TAGS, None),
+        ("another key beside it", VOLUME, {"DataClassification": "Public", "Owner": "x"}, DATA_VOLUME_TAGS, "DenyTaggingAfterCreate"),
+        ("the Project key beside it", VOLUME, {"DataClassification": "Public", "Project": P}, DATA_VOLUME_TAGS, "DenyTaggingAfterCreate"),
+        ("another project volume", VOLUME, {"DataClassification": "Public"}, {**DATA_VOLUME_TAGS, "aws:ResourceTag/Project": "other_project"}, None),
+        ("another named volume", VOLUME, {"DataClassification": "Public"}, {**DATA_VOLUME_TAGS, "aws:ResourceTag/Name": f"{P}_host_root_{E}"}, None),
+        ("an untagged volume", VOLUME, {"DataClassification": "Public"}, {}, None),
+        ("an address", ADDRESS, {"DataClassification": "Public"}, DATA_VOLUME_TAGS, None),
+        ("the host instance", INSTANCE, {"DataClassification": "Public"}, DATA_VOLUME_TAGS, None),
+    )
+    for label, resource, tags, extra, sid in later:
+        yield Case(
+            f"ec2:CreateTags later sets DataClassification with {label}", request("ec2:CreateTags", resource, tags=tags, extra=extra, region=None), False, sid
+        )
+    yield Case(
+        "ec2:DeleteTags removes DataClassification from the data volume",
+        request("ec2:DeleteTags", VOLUME, tags={"DataClassification": ""}, extra=DATA_VOLUME_TAGS, region=None),
+        False,
+        "DenyRemovingTags",
+    )
     families = (("ecr", REPOSITORY), ("logs", LOG_GROUP), ("sns", TOPIC), ("cloudwatch", ALARM), ("dlm", SCHEDULE))
     for service, resource in families:
         owned = {"aws:ResourceTag/Project": P}
@@ -1370,7 +1399,32 @@ def snapshot_cases() -> Iterator[Case]:
 
     yield case("snapshot of the data volume with the tag", "ec2:CreateSnapshot", SNAPSHOT_SOURCE, True, SCHEDULE_TAGS, volume)
     yield case("new snapshot with the tag", "ec2:CreateSnapshot", SNAPSHOT, True, SCHEDULE_TAGS)
-    yield case("snapshot of the data volume without the tag", "ec2:CreateSnapshot", SNAPSHOT_SOURCE, False, {"SnapshotCreator": "DataLifecycleManager"}, volume)
+    # EC2 authorizes the volume part of CreateSnapshot without the request tags; the snapshot part carries them and refuses a wrong tag.
+    yield case("volume part of the data volume snapshot without request tags", "ec2:CreateSnapshot", SNAPSHOT_SOURCE, True, None, volume)
+    yield case(
+        "volume part of the data volume snapshot with scheduler tags only",
+        "ec2:CreateSnapshot",
+        SNAPSHOT_SOURCE,
+        True,
+        {"SnapshotCreator": "DataLifecycleManager"},
+        volume,
+    )
+    yield case(
+        "volume part of another project's volume without request tags",
+        "ec2:CreateSnapshot",
+        SNAPSHOT_SOURCE,
+        False,
+        None,
+        {**volume, "aws:ResourceTag/Project": "other_project"},
+    )
+    yield case(
+        "volume part of another volume without request tags",
+        "ec2:CreateSnapshot",
+        SNAPSHOT_SOURCE,
+        False,
+        None,
+        {**volume, "aws:ResourceTag/Name": "other_volume"},
+    )
     yield case("new snapshot without the tag", "ec2:CreateSnapshot", SNAPSHOT, False, {"SnapshotCreator": "DataLifecycleManager"})
     yield case("new snapshot with no tags", "ec2:CreateSnapshot", SNAPSHOT, False)
     yield case("new snapshot with another Project", "ec2:CreateSnapshot", SNAPSHOT, False, {"Project": "other_project"})
@@ -1380,15 +1434,6 @@ def snapshot_cases() -> Iterator[Case]:
         exact_key_deny = None if key.strip() != key else "DenySnapshotsWithoutExactProjectKey"
         for action in ("ec2:CreateSnapshot", "ec2:CreateSnapshots", "ec2:CopySnapshot"):
             yield case(f"{action} with the key {key!r}", action, SNAPSHOT, False, tags, sid=exact_key_deny)
-        yield case(
-            f"snapshot of the data volume with the key {key!r}",
-            "ec2:CreateSnapshot",
-            SNAPSHOT_SOURCE,
-            False,
-            tags,
-            volume,
-            sid=exact_key_deny,
-        )
     yield case("tag on create", "ec2:CreateTags", SNAPSHOT, True, SCHEDULE_TAGS, {"ec2:CreateAction": "CreateSnapshot"})
     yield case("scheduler tags only", "ec2:CreateTags", SNAPSHOT, True, {"SnapshotCreator": "DataLifecycleManager"}, {"ec2:CreateAction": "CreateSnapshot"})
     yield case("tag on create with another Project", "ec2:CreateTags", SNAPSHOT, False, {"Project": "other_project"}, {"ec2:CreateAction": "CreateSnapshot"})
@@ -1707,6 +1752,21 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         drop_owner(documents, "snapshots", "DenySnapshotsWithoutExactProjectKey")
         del owner_statement(documents, "snapshots", "CreateTaggedSnapshots")["Condition"]["ForAnyValue:StringEquals"]
 
+    def snapshot_denies_on_volume(documents: dict[str, dict[str, Any]]) -> None:
+        for sid in ("DenySnapshotsWithoutProjectTagValue", "DenySnapshotsWithoutExactProjectKey"):
+            owner_statement(documents, "snapshots", sid)["Resource"] = "*"
+
+    def classification_tag_any_volume(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ec2", "TagDataVolumeClassification")["Condition"]["StringEquals"]["aws:ResourceTag/Name"]
+
+    def classification_tag_any_key(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ec2", "TagDataVolumeClassification")["Condition"]["ForAllValues:StringEquals"]
+        condition = by_sid(documents, "ec2", "DenyTaggingAfterCreate")["Condition"]
+        condition["ForAllValues:StringNotEquals"] = condition.pop("ForAnyValue:StringNotEquals")
+
+    def classification_tag_any_value(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ec2", "TagDataVolumeClassification")["Condition"]["StringEquals"]["aws:RequestTag/DataClassification"]
+
     def snapshot_delete_any(documents: dict[str, dict[str, Any]]) -> None:
         del owner_statement(documents, "snapshots", "DeleteScheduledSnapshots")["Condition"]["StringEquals"]["aws:ResourceTag/aws:dlm:lifecycle-schedule-name"]
 
@@ -1871,6 +1931,19 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             snapshot_lowercase_key,
         ),
         "the snapshot role deletes snapshots its schedule did not make": ("dlm: delete a snapshot the schedule did not make", snapshot_delete_any),
+        "the snapshot denies match the volume part of CreateSnapshot": (
+            "dlm: volume part of the data volume snapshot without request tags",
+            snapshot_denies_on_volume,
+        ),
+        "the classification tag reaches any project volume": (
+            "ec2:CreateTags later sets DataClassification with another named volume",
+            classification_tag_any_volume,
+        ),
+        "both key limits on the classification tag removed (allow key list and deny set operator)": (
+            "ec2:CreateTags later sets DataClassification with another key beside it",
+            classification_tag_any_key,
+        ),
+        "the classification tag takes any value": ("ec2:CreateTags later sets DataClassification with another value", classification_tag_any_value),
         "the execution role reads every parameter in the project folder": ("execution: another name in the project folder", execution_wildcard),
         "ecr create accepts a lowercase project key (review round 4 finding 1)": ("create ecr:CreateRepository: lowercase key", lowercase_key_ecr),
         "ec2 volume and address creates accept a lowercase project key": ("create ec2:CreateVolume: lowercase key", lowercase_key_volume),

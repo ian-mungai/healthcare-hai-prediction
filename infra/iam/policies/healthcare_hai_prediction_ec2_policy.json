@@ -105,6 +105,29 @@
       }
     },
     {
+      "Sid": "TagDataVolumeClassification",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_data_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}",
+          "aws:RequestTag/DataClassification": [
+            "Public",
+            "Confidential"
+          ]
+        },
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "DataClassification"
+          ]
+        }
+      }
+    },
+    {
       "Sid": "DeleteProjectVolumes",
       "Effect": "Allow",
       "Action": [
@@ -170,6 +193,11 @@
       "Condition": {
         "Null": {
           "ec2:CreateAction": "true"
+        },
+        "ForAnyValue:StringNotEquals": {
+          "aws:TagKeys": [
+            "DataClassification"
+          ]
         }
       }
     },

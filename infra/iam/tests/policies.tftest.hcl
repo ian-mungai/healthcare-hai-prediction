@@ -619,9 +619,10 @@ run "platform_roles" {
 
   # Snapshots are tagged only by the call that creates them, only snapshots that the data volume's own schedule made can
   # be deleted (the aws:dlm tags are reserved, so no principal can add them to another snapshot), and every new snapshot
-  # must carry the exact key Project with the project value, which two denies enforce besides the allow. Key matching in a
-  # request-tag condition ignores case, so the allow and a deny also test aws:TagKeys. The evaluator cases in
-  # scripts/infrastructure/run_policy_e2e.py exercise all of it, including a lowercase key.
+  # must carry the exact key Project with the project value, which two denies on snapshot resources enforce besides the
+  # allow (EC2 checks the volume part of CreateSnapshot without request tags, so a deny on every resource blocks the
+  # schedule). Key matching in a request-tag condition ignores case, so the allow and a deny also test aws:TagKeys. The
+  # evaluator cases in scripts/infrastructure/run_policy_e2e.py exercise all of it, including a lowercase key.
   assert {
     condition = (
       alltrue([
@@ -652,14 +653,14 @@ run "platform_roles" {
         Sid       = "DenySnapshotsWithoutProjectTagValue"
         Effect    = "Deny"
         Action    = ["ec2:CopySnapshot", "ec2:CreateSnapshot", "ec2:CreateSnapshots"]
-        Resource  = "*"
+        Resource  = "arn:aws:ec2:eu-west-1::snapshot/*"
         Condition = { StringNotEquals = { "aws:RequestTag/Project" = "example_project" } }
       } &&
       one([for statement in jsondecode(aws_iam_role_policy.snapshots.policy).Statement : statement if statement.Sid == "DenySnapshotsWithoutExactProjectKey"]) == {
         Sid       = "DenySnapshotsWithoutExactProjectKey"
         Effect    = "Deny"
         Action    = ["ec2:CopySnapshot", "ec2:CreateSnapshot", "ec2:CreateSnapshots"]
-        Resource  = "*"
+        Resource  = "arn:aws:ec2:eu-west-1::snapshot/*"
         Condition = { "ForAllValues:StringNotEquals" = { "aws:TagKeys" = ["Project"] } }
       } &&
       alltrue([

@@ -76,7 +76,7 @@
         "ec2:CreateSnapshot",
         "ec2:CreateSnapshots"
       ],
-      "Resource": "*",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
       "Condition": {
         "StringNotEquals": {
           "aws:RequestTag/Project": "${PROJECT_NAME}"
@@ -91,7 +91,7 @@
         "ec2:CreateSnapshot",
         "ec2:CreateSnapshots"
       ],
-      "Resource": "*",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
       "Condition": {
         "ForAllValues:StringNotEquals": {
           "aws:TagKeys": [
