@@ -50,7 +50,7 @@ check "the task definitions of the serving services name the serving execution r
 check "the shared services do not ignore changes: an owner apply still rolls them to Terraform's revision" test -n "$shared" -a -z "$(grep 'ignore_changes\|lifecycle' <<< "$shared" || true)"
 
 serving_set_is_one_local() {
-  grep -q 'if contains(local.serving_keys, key) }' <<< "$serving" && grep -q 'if !contains(local.serving_keys, key) }' <<< "$shared"
+  grep -q 'if contains(local.serving_keys, key) }' <<< "$serving" && grep -q '!contains(local.serving_keys, key) }' <<< "$shared"
 }
 check "the two resources split the services by the same local list" serving_set_is_one_local
 
