@@ -292,6 +292,40 @@ def restore(work: Path) -> None:
     install_copies(work)
 
 
+def restore_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
+    """restore() resets the scratch worktree that this run made and refuses any other folder: a folder it refuses keeps its uncommitted edit."""
+    foreign = scratch / "foreign_repository"
+    foreign.mkdir()
+    git(foreign, "init", "--quiet")
+    git(foreign, "config", "user.name", "foreign owner")
+    git(foreign, "config", "user.email", "foreign@example.invalid")
+    (foreign / "notes.txt").write_text("committed\n", encoding="utf-8")
+    git(foreign, "add", "notes.txt")
+    git(foreign, "commit", "--quiet", "--message", "chore: foreign notes")
+    edit = "an edit that its owner has not committed\n"
+    (foreign / "notes.txt").write_text(edit, encoding="utf-8")
+    refusal: Exception | None = None
+    try:
+        restore(foreign)
+    except Exception as failure:
+        refusal = failure
+    kept = (foreign / "notes.txt").read_text(encoding="utf-8") == edit
+    tracked = work / "pyproject.toml"
+    original = tracked.read_text(encoding="utf-8")
+    tracked.write_text(original + "\n# an edit of this run\n", encoding="utf-8")
+    restore(work)
+    return [
+        {
+            "case": "restore_refuses_a_folder_the_runner_did_not_create",
+            "passed": refusal is not None and kept and str(foreign) in str(refusal),
+            "edit_kept": kept,
+            "refused": refusal is not None,
+            "error": str(refusal)[-300:],
+        },
+        {"case": "restore_resets_the_scratch_worktree_of_the_run", "passed": tracked.read_text(encoding="utf-8") == original},
+    ]
+
+
 def staged_case(work: Path, name: str, setup: list[list[str]], want_run: list[str], unstaged: str = "") -> dict[str, Any]:
     try:
         if unstaged:
@@ -6393,6 +6427,7 @@ def main() -> int:
             results += reuse_cases(work, out, scratch)
         else:
             results.append(scratch_cleanup_interrupt_case(scratch))
+            results += restore_cases(work, scratch)
             results += selection_cases(work)
             results += fast_hook_cases(scratch)
             results += pre_push_cases(work, scratch, gate_stage=not selection_only)
