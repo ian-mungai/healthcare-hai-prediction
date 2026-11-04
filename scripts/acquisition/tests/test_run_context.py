@@ -78,11 +78,11 @@ def test_a_pilot_of_another_lane_never_blocks_the_tasks_own_units_and_every_unit
 
 def test_a_unit_the_mirror_does_not_carry_cannot_be_the_pilot_of_a_unit_it_does(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    moved = make_unit("mmd_moved", 1) | {"snapshot_id": "M__1", "source_id": "A"}
+    moved = make_unit("manual_file", 1) | {"snapshot_id": "M__1", "source_id": "A"}
     plain = make_unit("file", 2) | {"snapshot_id": "F__1", "source_id": "A"}
     passes, summaries = second_pass(monkeypatch, tmp_path, [moved, plain], stored_root=tmp_path / "mirror")
     check(passes[0] == ["F__1"], f"the file unit ran in the first pass: {passes}")
-    check(summaries[0]["not_attempted"]["needs_local_data"] == ["M__1"], "the unit the mirror does not carry is named")
+    check(summaries[0]["not_attempted"]["needs_person"] == ["M__1"], "the unit the mirror does not carry is named")
 
 
 def test_the_task_keeps_its_state_outside_a_read_only_code_tree(tmp_path: Path) -> None:

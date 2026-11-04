@@ -33,7 +33,7 @@ REQUIRED_ENVIRONMENT = (MIRROR_VARIABLE, INDEX_VARIABLE, "EXPECTED_ACCOUNT_ID", 
 CHUNK = 1024 * 1024
 PLAN_INPUTS_NAME = "plan_inputs.json"
 # The collectors the task runs whose locked plans read reference and registry files from the data folder while they load.
-PLAN_MODES = ("bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api", "cms_owners_org", "onc_mu_hospital")
+PLAN_MODES = ("bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api", "cms_owners_org", "onc_mu_hospital", "mmd_api")
 OPENED: list[Path] = []
 
 
@@ -159,8 +159,9 @@ def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, buck
         units += 1
     from scripts.acquisition import redownload
 
-    runnable = set(redownload.PLANNED) - redownload.MANUAL_MODES - redownload.NEVER_IN_THE_TOOL
-    copy_plan_inputs(sorted({item["mode"] for item in queue if item["disposition"] in ACTIVE} & runnable), base, mirror)
+    runnable = (set(redownload.PLANNED) | set(PLAN_MODES)) - redownload.MANUAL_MODES - redownload.NEVER_IN_THE_TOOL
+    # A browser export moved to the API reads the MMD plans too, so the mode that decides is the handler's.
+    copy_plan_inputs(sorted({redownload.handler_mode(item) for item in queue if item["disposition"] in ACTIVE} & runnable), base, mirror)
     index = {"bucket": bucket, "objects": dict(sorted(objects.items())), "unavailable": sorted(set(unavailable))}
     write_once(output / "stored_index.json", encoded_json(index))
     files = [

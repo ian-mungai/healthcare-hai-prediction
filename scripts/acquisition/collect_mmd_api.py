@@ -15,9 +15,11 @@ from scripts.acquisition.data_paths import current
 from scripts.acquisition.mmd_api_contract import (
     FIELDS,
     PLAN_PATH,
+    PLANS,
     condition_for,
     current_code_hashes,
     digest,
+    load_plan,
     plan_for,
     reconstruct,
     request_parameters,
@@ -251,8 +253,21 @@ def capture(measure_id: str, year: int, allow_network: bool, root: Path | None =
     return receipt_path
 
 
-def execute(measure_id: str, year: int, allow_network: bool, upload: bool, root: Path | None = None) -> dict:
-    """Run a complete local or live pilot through the existing storage guard."""
+def task_inputs() -> list[dict]:
+    """Load every locked plan and read every other file a capture needs, so a mirror build can carry them all.
+
+    A capture also reads the plan template and, for each planned year, the baseline file named in the comparison report.
+    """
+    plans = [load_plan(sha) for sha in PLANS]
+    for plan in plans:
+        for item in read_json(Path(current(plan["comparison_report"])))["years"]:
+            Path(current(item["original_path"])).read_bytes()
+    read_json(TEMPLATE)
+    return plans
+
+
+def execute(measure_id: str, year: int, allow_network: bool, upload: bool, root: Path | None = None, client: AwsCli | None = None) -> dict:
+    """Run a complete local or live pilot through the existing storage guard. A task passes its own storage client and stores through it only."""
     path = capture(measure_id, year, allow_network, root)
     completed = path.parents[2] / "completed.json"
     if completed.exists():
@@ -263,9 +278,12 @@ def execute(measure_id: str, year: int, allow_network: bool, upload: bool, root:
     result = {"measure_id": measure_id, "year": year, "receipt_path": str(path), "rows": receipt["schema_profile"]["row_count"], "model_eligible": False}
     if upload:
         require_reviewed_code()
-        settings, _ = load_configuration(REPO_ROOT / ".env")
-        outputs = json.loads(run_argv([executable("terraform"), "-chdir=infra", "output", "-json"], check=True, capture_output=True, text=True).stdout)
-        stored = upload_snapshot(path, [], AwsCli(settings), outputs, load_registry(), receipt_validator())
+        outputs: dict = {}
+        if client is None:
+            settings, _ = load_configuration(REPO_ROOT / ".env")
+            outputs = json.loads(run_argv([executable("terraform"), "-chdir=infra", "output", "-json"], check=True, capture_output=True, text=True).stdout)
+            client = AwsCli(settings)
+        stored = upload_snapshot(path, [], client, outputs, load_registry(), receipt_validator())
         result.update(reconciliation_path=stored["reconciliation_path"], status="stored")
         write_once(path.parents[2] / "completed.json", encoded_json(result))
     else:

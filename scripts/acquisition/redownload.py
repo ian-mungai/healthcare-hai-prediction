@@ -1030,6 +1030,10 @@ PLANNED = {
 
 def load_plans_of(mode: str) -> list[dict]:
     """Load and check the locked plans of one collector mode."""
+    if mode == "mmd_api":
+        from scripts.acquisition.collect_mmd_api import task_inputs
+
+        return task_inputs()
     module_name, loader = PLANNED[mode][:2]
     loaded = getattr(importlib.import_module(f"scripts.acquisition.{module_name}"), loader)()
     return loaded if isinstance(loaded, list) else [loaded]
@@ -1131,7 +1135,9 @@ def adapt_mmd(unit: dict, run: Run) -> Path:
 
     measure, year = mmd_selection(unit, run)
     verify_input(run.data_root / collector.TEMPLATE, run)
-    return Path(collector.execute(measure, year, True, False, root=run.state_root / "collectors" / "mmd_api")["receipt_path"])
+    root = run.state_root / "collectors" / "mmd_api"
+    # On the task the capture is stored under raw/ through the task's own storage before the unit counts. This collector reads no key.
+    return Path(collector.execute(measure, year, True, run.task_storage is not None, root=root, client=run.task_storage)["receipt_path"])
 
 
 def adapt_hud_xlsx(unit: dict, run: Run) -> Path:
@@ -1256,9 +1262,8 @@ def lane_of(unit: dict, classes: Mapping[str, str]) -> str:
         return TASK_FILTERED
     if unit["disposition"] == "approved_manual" or mode in MANUAL_MODES:
         return "needs_person"
-    if mode == "mmd_api":
-        return "needs_local_data"
-    return TASK if mode in {"file", "il_directory"} else "unclassified"
+    # Both MMD variants read public plans and references that the mirror carries and need no key, so the plain task lane takes them.
+    return TASK if mode in {"file", "il_directory", "mmd_api"} else "unclassified"
 
 
 ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {

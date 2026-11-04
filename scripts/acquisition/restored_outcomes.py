@@ -32,13 +32,26 @@ def read_object(client: Any, item: dict, folder: Path, *, earlier_capture: bool 
     return path
 
 
-def bind(unit: dict, stored: dict, receipt: dict, manifests: list[dict], item: dict) -> None:
+def is_mmd(unit: dict) -> bool:
+    """Both MMD variants, the API units and the browser exports moved to the API, are captured by the one MMD collector."""
+    from scripts.acquisition.redownload import handler_mode
+
+    return handler_mode(unit) == "mmd_api"
+
+
+def bind(unit: dict, stored: dict, receipt: dict, manifests: list[dict], item: dict, run: Any) -> None:
     """The capture must be this unit's: its source, its address or planned item, its own snapshot in every manifest and its receipt listed in each."""
-    from scripts.acquisition.redownload import PLANNED
+    from scripts.acquisition.redownload import PLANNED, mmd_selection
 
     fresh, earlier = json.loads(receipt["lineage"]["extraction_or_query"]), json.loads(stored["lineage"]["extraction_or_query"])
     require(receipt["source"]["source_record_id"] == unit["source_id"], "Restored outcome names a capture of another source")
-    if unit["mode"] in PLANNED:
+    if is_mmd(unit):
+        # The planned item of an MMD unit is its measure and year, which the stored capture names whichever variant it is.
+        require(
+            fresh.get("mode") == "mmd_api" and (fresh.get("measure_id"), fresh.get("year")) == mmd_selection(unit, run),
+            "Restored outcome names a capture of another planned item",
+        )
+    elif unit["mode"] in PLANNED:
         key = PLANNED[unit["mode"]][3]
         require(fresh.get(key) == earlier.get(key) and fresh.get(key) is not None, "Restored outcome names a capture of another planned item")
     else:
@@ -55,6 +68,14 @@ def bind(unit: dict, stored: dict, receipt: dict, manifests: list[dict], item: d
 
 def data_artifacts(document: dict) -> dict[str, dict]:
     return {item["stored_file_name"]: item for item in document["artifacts"] if item["role"] in DATA_ROLES}
+
+
+def compared(unit: dict, document: dict) -> dict[str, dict]:
+    """The artifacts that decide a unit's outcome. An MMD capture is decided by its one derived file, whatever the stored export is called."""
+    if is_mmd(unit):
+        derived = [item for item in document["artifacts"] if item["role"] == "data"]
+        return {"data": derived[0]} if len(derived) == 1 else {}
+    return data_artifacts(document)
 
 
 def members_of(entries: list[dict]) -> dict[tuple[str, ...], dict]:
@@ -81,7 +102,7 @@ def require_coverage(unit: dict, run: Any, stored: dict, receipt: dict, entries:
 
     fresh = data_artifacts(receipt)
     require(bool(fresh), "Restored outcome names a capture with no data")
-    if unit["mode"] not in PLANNED:
+    if unit["mode"] not in PLANNED and not is_mmd(unit):
         require(set(fresh) == set(data_artifacts(stored)), "Restored outcome names a capture with other data files than its unit")
     members = members_of(entries)
     for artifact in fresh.values():
@@ -101,7 +122,7 @@ def same_data(unit: dict, run: Any, stored: dict, receipt: dict, entries: list[d
     """The comparison again, from the stored capture and the bytes just read. An archive compares member by member, as its container is never stored."""
     from scripts.acquisition.redownload import compare_files, ensure_stored, receipt_file, same_content
 
-    old, new = data_artifacts(stored), data_artifacts(receipt)
+    old, new = compared(unit, stored), compared(unit, receipt)
     if set(old) != set(new):
         return False
     for name, artifact in new.items():
@@ -110,7 +131,7 @@ def same_data(unit: dict, run: Any, stored: dict, receipt: dict, entries: list[d
             if artifact["sha256"] != old[name]["sha256"]:
                 path = receipt_file(unit, run).parent / old[name]["storage_path"]
                 ensure_stored(path, run)
-                if not path.is_file() or compare_files(path, local[direct["object"]["key"]], name, old[name]["sha256"])[0]:
+                if not path.is_file() or compare_files(path, local[direct["object"]["key"]], artifact["stored_file_name"], old[name]["sha256"])[0]:
                     return False
             continue
         reviewed = stored_members(unit, run)
@@ -213,7 +234,7 @@ def recheck(unit: dict, run: Any, record: dict, client: Any) -> dict:
             receipt = read_json(read_object(client, evidence["receipt"], folder))
             manifests = [read_json(read_object(client, item, folder)) for item in evidence["manifests"]]
             stored = stored_receipt(unit, run)
-            bind(unit, stored, receipt, manifests, evidence["receipt"])
+            bind(unit, stored, receipt, manifests, evidence["receipt"], run)
             entries = [entry for manifest in manifests for entry in manifest["objects"]]
             local = {
                 entry["object"]["key"]: read_object(client, entry["object"], folder) for entry in {item["object"]["key"]: item for item in entries}.values()
