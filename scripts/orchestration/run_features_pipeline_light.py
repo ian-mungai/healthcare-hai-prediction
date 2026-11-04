@@ -1471,6 +1471,10 @@ class StackLauncher:
 
         server.tx = tx
 
+    def key_of(self, tag: str) -> str:
+        """The worker key of the last worker spawned for one message tag: the record scopes its own keys."""
+        return next(key for key, spawned_tag in reversed(self.spawned) if spawned_tag == tag)
+
     def up(self) -> dict[str, Any]:
         result: dict[str, Any] = self.server.m_pipeline_online_store_up(ctx_of(self.state, "pipeline_online_store_up", {}))
         return result
@@ -1497,12 +1501,12 @@ def case_online_stack(fixture: Fixture, scratch: Path) -> Checks:
     first = stack.up()
     record = state["launcher"].get(online_store.STACK, {})
     checks["starts_from_down"] = first == {"phase": "starting"} and record.get("phase") == "starting" and record.get("step") == "limits"
-    checks["limits_spawned"] = ("online:limits", "onlinelimits") in stack.spawned
-    checks["repeat_while_starting"] = stack.up() == {"phase": "starting"} and stack.spawned.count(("online:limits", "onlinelimits")) == 1
+    checks["limits_spawned"] = any(tag == "onlinelimits" for _, tag in stack.spawned)
+    checks["repeat_while_starting"] = stack.up() == {"phase": "starting"} and [tag for _, tag in stack.spawned].count("onlinelimits") == 1
     checks["deadline_set"] = record.get("start_deadline", 0) > 0
     memory = 2 * 1024**3
     online_store.test_password(fixture.base / "registry")
-    stack.server.on_onlinelimits("online:limits", "ok", {"memory": memory})
+    stack.server.on_onlinelimits(stack.key_of("onlinelimits"), "ok", {"memory": memory})
     checks["settings_recorded"] = record.get("settings") == online_store.limits(memory) and record.get("step") == "network"
     checks["memory_reserved"] = state["services"].get(online_store.SERVICE) == memory
     stack.advance()
@@ -1519,8 +1523,8 @@ def case_online_stack(fixture: Fixture, scratch: Path) -> Checks:
     checks["admissible_while_starting"] = stack.server.admissible(state, attempts[0])
     attempts[0].update({"phase": "started", "container_id": "redis-container"})
     stack.advance()
-    checks["health_read"] = ("onlinehealth:online-store", "onlinehealth") in stack.spawned
-    stack.server.on_onlinehealth("onlinehealth:online-store", "ok", "healthy")
+    checks["health_read"] = any(tag == "onlinehealth" for _, tag in stack.spawned)
+    stack.server.on_onlinehealth(stack.key_of("onlinehealth"), "ok", "healthy")
     stack.advance()
     checks["up"] = record.get("phase") == "up"
     checks["up_answer"] = stack.up() == {"phase": "up", "network": online_store.network_name(REGISTRY_ID)}
@@ -1540,8 +1544,8 @@ def case_online_stack(fixture: Fixture, scratch: Path) -> Checks:
     checks["network_removal"] = len(removals) == 1 and removals[0]["network"] == "net-online-id"
     stack.server.on_onlinenetremove(f"op:{removals[0]['op_id']}", "ok", None)
     stack.advance()
-    checks["confirm_spawned"] = ("online:confirm", "onlineconfirm") in stack.spawned
-    stack.server.on_onlineconfirm("online:confirm", "ok", True)
+    checks["confirm_spawned"] = any(tag == "onlineconfirm" for _, tag in stack.spawned)
+    stack.server.on_onlineconfirm(stack.key_of("onlineconfirm"), "ok", True)
     checks["down_after_confirm"] = state["launcher"][online_store.STACK]["phase"] == "down" and online_store.SERVICE not in state["services"]
     checks["repair_starts_fresh"] = stack.up() == {"phase": "starting"} and state["launcher"][online_store.STACK]["service"] is None
     lost = stack_state("publish_fixture")
@@ -1556,7 +1560,7 @@ def case_online_stack(fixture: Fixture, scratch: Path) -> Checks:
     failed = stack_state("publish_fixture")
     broken = StackLauncher(fixture, failed)
     broken.up()
-    broken.server.on_onlinelimits("online:limits", "error", RuntimeError("plan refused"))
+    broken.server.on_onlinelimits(broken.key_of("onlinelimits"), "error", RuntimeError("plan refused"))
     answer = broken.up()
     checks["failed_start_answers_error"] = answer.get("phase") == "failed" and "cannot start" in answer.get("error", "")
     released = launcher_state("publish_fixture")

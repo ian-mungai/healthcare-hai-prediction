@@ -7824,7 +7824,8 @@ class Launcher:
                 self.fail_catalog(catalog, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
                 return
             container_id = attempt["container_id"]
-            actions.append(lambda: self.spawn(f"health:{service}", "health", self.read_health, container_id))
+            health_key = self.operation_key(f"health:{service}", catalog)
+            actions.append(lambda: self.spawn(health_key, "health", self.read_health, container_id))
 
     def record_network_op(self, state: dict[str, Any], kind: str, network: str | None = None, name: str | None = None) -> str:
         """Record a network operation with the identity it acts on (the network name, and the ID for a removal)."""
@@ -7912,9 +7913,12 @@ class Launcher:
         """Record a service's health."""
         if outcome != "ok":
             return
-        service = key.split(":", 1)[1]
+        service = key.split(":", 2)[1]
         with self.tx() as state:
-            self.catalog_record(state).setdefault("health", {})[service] = value
+            catalog = self.catalog_record(state)
+            if key != self.operation_key(f"health:{service}", catalog):
+                return
+            catalog.setdefault("health", {})[service] = value
 
     def advance_catalog_stop(self, state: dict[str, Any], catalog: dict[str, Any], actions: list[Callable[[], None]]) -> None:
         """Stop and clean up the service attempts in reverse order, remove the network, then confirm absence before clearing the barrier."""
@@ -8081,7 +8085,7 @@ class Launcher:
         }
         own = f"hai-{self.registry_id[:8]}-svc-orch-"
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
-        self.spawn("orch:limits", "orchlimits", self.compute_orchestration_limits, growth)
+        self.spawn(self.operation_key("orch:limits", ctx.state["launcher"]["orchestration"]), "orchlimits", self.compute_orchestration_limits, growth)
         return {"phase": "starting"}
 
     def compute_orchestration_limits(self, growth: dict[str, int]) -> dict[str, Any]:
@@ -8102,7 +8106,7 @@ class Launcher:
         """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
         with self.tx() as state:
             stack = self.orchestration_record(state)
-            if stack["phase"] != "starting":
+            if stack["phase"] != "starting" or key != self.operation_key("orch:limits", stack):
                 return
             if outcome != "ok":
                 self.fail_orchestration(stack, f"no memory limit for the orchestration services: {failure_text(value)}")
@@ -8198,14 +8202,19 @@ class Launcher:
             self.fail_orchestration(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
             return
         container_id = attempt["container_id"]
-        actions.append(lambda: self.spawn(f"orchhealth:{service}", "orchhealth", self.read_health, container_id))
+        health_key = self.operation_key(f"orchhealth:{service}", stack)
+        actions.append(lambda: self.spawn(health_key, "orchhealth", self.read_health, container_id))
 
     def on_orchhealth(self, key: str, outcome: str, value: Any) -> None:
         """Record a stack service's health."""
         if outcome != "ok":
             return
+        service = key.split(":", 2)[1]
         with self.tx() as state:
-            self.orchestration_record(state).setdefault("health", {})[key.split(":", 1)[1]] = value
+            stack = self.orchestration_record(state)
+            if key != self.operation_key(f"orchhealth:{service}", stack):
+                return
+            stack.setdefault("health", {})[service] = value
 
     def on_orchnetcreate(self, key: str, outcome: str, value: Any) -> None:
         """The stack's network exists: PostgreSQL starts next."""
@@ -8457,7 +8466,7 @@ class Launcher:
         }
         own = f"hai-{self.registry_id[:8]}-svc-lineage-"
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
-        self.spawn("lineage:limits", "lineagelimits", self.compute_lineage_limits, growth, Path(folder))
+        self.spawn(self.operation_key("lineage:limits", ctx.state["launcher"]["lineage"]), "lineagelimits", self.compute_lineage_limits, growth, Path(folder))
         return {"phase": "starting"}
 
     def compute_lineage_limits(self, growth: dict[str, int], folder: Path) -> dict[str, Any]:
@@ -8478,7 +8487,7 @@ class Launcher:
         """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
         with self.tx() as state:
             stack = self.lineage_record(state)
-            if stack["phase"] != "starting":
+            if stack["phase"] != "starting" or key != self.operation_key("lineage:limits", stack):
                 return
             if outcome != "ok":
                 self.fail_lineage(stack, f"the lineage services cannot start: {failure_text(value)}")
@@ -8606,14 +8615,19 @@ class Launcher:
             self.fail_lineage(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
             return
         container_id = attempt["container_id"]
-        actions.append(lambda: self.spawn(f"lineagehealth:{service}", "lineagehealth", self.read_health, container_id))
+        health_key = self.operation_key(f"lineagehealth:{service}", stack)
+        actions.append(lambda: self.spawn(health_key, "lineagehealth", self.read_health, container_id))
 
     def on_lineagehealth(self, key: str, outcome: str, value: Any) -> None:
         """Record a stack service's health."""
         if outcome != "ok":
             return
+        service = key.split(":", 2)[1]
         with self.tx() as state:
-            self.lineage_record(state).setdefault("health", {})[key.split(":", 1)[1]] = value
+            stack = self.lineage_record(state)
+            if key != self.operation_key(f"lineagehealth:{service}", stack):
+                return
+            stack.setdefault("health", {})[service] = value
 
     def on_lineagenetcreate(self, key: str, outcome: str, value: Any) -> None:
         op_id = key.split(":", 1)[1]
@@ -8792,7 +8806,7 @@ class Launcher:
         }
         own = online_store.container_name(self.registry_id)
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if name != own}
-        self.spawn("online:limits", "onlinelimits", self.compute_online_limits, growth)
+        self.spawn(self.operation_key("online:limits", ctx.state["launcher"][online_store.STACK]), "onlinelimits", self.compute_online_limits, growth)
         return {"phase": "starting"}
 
     def m_online_store_down(self, ctx: Ctx) -> dict[str, Any]:
@@ -8837,7 +8851,7 @@ class Launcher:
         """Record the memory settings, reserve the limit for the other plans and go on to the network."""
         with self.tx() as state:
             record = self.online_record(state)
-            if record["phase"] != "starting":
+            if record["phase"] != "starting" or key != self.operation_key("online:limits", record):
                 return
             if outcome != "ok":
                 self.fail_online(record, f"the online store cannot start: {failure_text(value)}")
@@ -8936,13 +8950,17 @@ class Launcher:
             self.fail_online(record, f"online-store was not healthy within {self.timings.health_wait:.0f} s")
             return
         container_id = attempt["container_id"]
-        actions.append(lambda: self.spawn(f"onlinehealth:{online_store.SERVICE}", "onlinehealth", self.read_health, container_id))
+        health_key = self.operation_key(f"onlinehealth:{online_store.SERVICE}", record)
+        actions.append(lambda: self.spawn(health_key, "onlinehealth", self.read_health, container_id))
 
     def on_onlinehealth(self, key: str, outcome: str, value: Any) -> None:
         if outcome != "ok":
             return
         with self.tx() as state:
-            self.online_record(state)["health"] = value
+            record = self.online_record(state)
+            if key != self.operation_key(f"onlinehealth:{online_store.SERVICE}", record):
+                return
+            record["health"] = value
 
     def on_onlinenetcreate(self, key: str, outcome: str, value: Any) -> None:
         op_id = key.split(":", 1)[1]
@@ -9238,9 +9256,9 @@ class Launcher:
 
     @staticmethod
     def operation_key(name: str, record: Mapping[str, Any]) -> str:
-        """The worker key of one step of a recorded operation (Docker Desktop, a release, a restart or a stack teardown), scoped to that record. An operation
-        ends at its deadline while its worker (the stop of a hung command, a slow listing) still runs; a worker key shared by every operation would hold
-        the next operation's worker back and let the earlier worker's result end or refuse the next operation."""
+        """The worker key of one step of a recorded operation (Docker Desktop, a release, a restart, a stack start or a stack teardown), scoped to that
+        record. An operation ends at its deadline while its worker (the stop of a hung command, a slow listing) still runs; a worker key shared by every
+        operation would hold the next operation's worker back and let the earlier worker's result end or refuse the next operation."""
         return f"{name}:{record.get('id') or record.get('request') or ''}"
 
     def m_desktop_start(self, ctx: Ctx) -> Any:
@@ -9602,6 +9620,7 @@ class Launcher:
         if stack["phase"] == "down":
             stack.update(
                 {
+                    "id": ctx.key,
                     "phase": "starting",
                     "checkout": str(checkout),
                     "services": {},
@@ -9723,7 +9742,7 @@ class Launcher:
                         if time.time() >= stack["health_deadlines"][service]:
                             stack.update({"phase": "tearing_down", "error": f"local MLflow service {service} was not healthy within 120 seconds"})
                             return
-                        key = f"mlflow_health:{service}"
+                        key = self.operation_key(f"mlflow_health:{service}", stack)
                         if key not in self.inflight:
                             actions.append(partial(self.spawn, key, "mlflow_health", self.read_health, attempt["container_id"]))
                     return
@@ -9765,8 +9784,9 @@ class Launcher:
         """Record health only for an MLflow service that is still starting."""
         with self.tx() as state:
             stack = state["launcher"].get("mlflow", {})
-            if outcome == "ok" and stack.get("phase") == "starting":
-                stack["health"][key.partition(":")[2]] = value
+            service = key.split(":", 2)[1]
+            if outcome == "ok" and stack.get("phase") == "starting" and key == self.operation_key(f"mlflow_health:{service}", stack):
+                stack["health"][service] = value
 
     def create_mlflow_client(self, run_id: str, name: str, server: str, deadline: float) -> dict[str, str]:
         """Provision an isolated client bridge and connect only the shared MLflow server."""
