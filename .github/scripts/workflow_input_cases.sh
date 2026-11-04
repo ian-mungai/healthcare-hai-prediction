@@ -82,4 +82,28 @@ check "the profile is written to the output after it is masked" writes_the_profi
 check "injected tracing does not print an input value" survives_injected_tracing
 check "the script refuses inputs that are not the expected object" refuses_other_inputs
 
+# --- saved plans (owner decision D18) ----------------------------------------------------------------------------------------------------
+# CI saves each plan with its digest through saved_plan.sh and shows the digest and the redacted summary only. The plan holds values, and the
+# repository is public, so no step may print it.
+dollar='$'
+workflow_saves_through_the_script() { [[ "$(grep -c 'bash .github/scripts/saved_plan.sh upload' "$plan")" -eq 1 ]]; }
+workflow_names_the_head_commit() { grep -qF "saved_plan.sh upload \"${dollar}STACK\" \"${dollar}HEAD_SHA\"" "$plan" && grep -qF "HEAD_SHA: ${dollar}{{ github.event.pull_request.head.sha }}" "$plan"; }
+workflow_takes_the_bucket_from_a_secret() { [[ "$(grep -h 'PLAN_BUCKET:' "$plan" | grep -c 'secrets.TERRAFORM_STATE_BUCKET')" -eq 1 && "$(grep -h 'PLAN_BUCKET:' "$plan" | grep -vc 'secrets.TERRAFORM_STATE_BUCKET')" -eq 0 ]]; }
+workflow_saves_after_it_plans() { [[ "$(grep -n 'plan -input=false' "$plan" | head -1 | cut -d: -f1)" -lt "$(grep -n 'saved_plan.sh upload' "$plan" | head -1 | cut -d: -f1)" ]]; }
+workflow_shows_the_digest() { grep -q 'Saved plan digest' "$plan"; }
+workflow_prints_no_plan() { ! grep -Eq '(^|[[:space:];|&(])(cat|echo|printf|head|tail|jq|less|more|strings|xxd|base64)[[:space:]][^|>]*plan\.(bin|json)' "$plan"; }
+workflow_calls_aws_only_through_the_script() { ! grep -Eq '^[[:space:]]*(quiet )?aws ' "$plan"; }
+workflow_writes_no_state() { ! grep -Eq 'terraform_state|terraform-state' "$plan"; }
+workflow_keeps_the_plan_role_read_only_in_github() { [[ "$(grep -c 'id-token: write' "$plan")" -eq 1 ]] && ! grep -q 'contents: write\|pull-requests: write' "$plan"; }
+
+check "the plan workflow saves the plan through the saved plan script, once" workflow_saves_through_the_script
+check "the plan workflow names the pull request head commit" workflow_names_the_head_commit
+check "the plan workflow takes the plan bucket from the state bucket secret only" workflow_takes_the_bucket_from_a_secret
+check "the plan workflow saves the plan after it plans" workflow_saves_after_it_plans
+check "the job summary shows the saved plan digest" workflow_shows_the_digest
+check "no plan workflow step prints the plan file" workflow_prints_no_plan
+check "the plan workflow calls AWS only through the script" workflow_calls_aws_only_through_the_script
+check "the plan workflow names no state prefix" workflow_writes_no_state
+check "the plan workflow asks GitHub for the token permission and no write permission" workflow_keeps_the_plan_role_read_only_in_github
+
 [[ $failures -eq 0 ]]

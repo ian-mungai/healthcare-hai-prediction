@@ -661,3 +661,116 @@ run "logging_bucket_name_must_fit" {
 
   expect_failures = [aws_s3_bucket.logs]
 }
+
+# D18 saved plans: CI saves each Terraform plan and its digest under terraform_plans/. A plan holds values, so only the plan role writes there, only the project
+# user (the owner's apply path) and the named administrator read, and no other principal touches the prefix.
+run "saved_plans_are_off_without_the_state_flag" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(aws_s3_bucket_policy.tls.policy, "terraform_plans")
+    error_message = "With the flag off the bucket policy must name no saved plans prefix."
+  }
+}
+
+run "saved_plans_are_read_by_the_project_user_and_nobody_else_allowed" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement : statement if statement.Sid == "ProjectUserReadsSavedPlans"]) == 1 &&
+      alltrue([
+        for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+        statement.Effect == "Allow" &&
+        statement.Principal.AWS == "arn:aws:iam::111111111111:user/example_project_dev" &&
+        join(",", tolist(statement.Action)) == "s3:GetObject" &&
+        join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_plans/*"
+        if statement.Sid == "ProjectUserReadsSavedPlans"
+      ])
+    )
+    error_message = "The project user, which runs the owner's apply path, reads saved plans and nothing else under that prefix."
+  }
+
+  assert {
+    condition = length([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement if statement.Effect == "Allow" && strcontains(jsonencode(statement.Resource), "terraform_plans")
+    ]) == 1
+    error_message = "No other bucket policy statement may allow an object under terraform_plans/. The plan role gets its write from its own role policy."
+  }
+}
+
+run "every_other_principal_is_denied_the_saved_plans" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement.Sid == "DenySavedPlansToEveryoneElse" &&
+      statement.Effect == "Deny" &&
+      statement.Principal == "*" &&
+      statement.Action == "s3:*" &&
+      join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_plans/*" &&
+      join(",", sort(tolist(statement.Condition.ArnNotLike["aws:PrincipalArn"]))) == join(",", sort([
+        "arn:aws:iam::111111111111:user/example_project_dev",
+        "arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev",
+        "arn:aws:iam::111111111111:role/example_admin"
+      ]))
+    ])
+    error_message = "Only the project user, the plan role and the named administrator may touch terraform_plans/. Every lakehouse, job, feature and Athena principal is denied."
+  }
+}
+
+run "only_the_plan_role_writes_saved_plans" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement.Sid == "DenySavedPlanWritesExceptThePlanRole" &&
+      statement.Effect == "Deny" &&
+      statement.Principal == "*" &&
+      join(",", sort(tolist(statement.Action))) == "s3:DeleteObject,s3:DeleteObjectVersion,s3:PutObject,s3:PutObjectAcl" &&
+      join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_plans/*" &&
+      join(",", tolist(statement.Condition.ArnNotLike["aws:PrincipalArn"])) == "arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev"
+    ])
+    error_message = "Writes and deletes under terraform_plans/ are denied to every principal except the plan role, the project user and the administrator included."
+  }
+}
+
+run "the_plan_role_can_only_save_plans" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement.Sid == "DenyThePlanRoleAnythingButSavingPlans" &&
+      statement.Effect == "Deny" &&
+      statement.Principal == "*" &&
+      join(",", tolist(statement.NotAction)) == "s3:PutObject" &&
+      join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_plans/*" &&
+      join(",", tolist(statement.Condition.ArnLike["aws:PrincipalArn"])) == "arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev"
+    ])
+    error_message = "The plan role puts objects under terraform_plans/ and may not read, list or delete there, so one pull request cannot read another job's plan."
+  }
+}

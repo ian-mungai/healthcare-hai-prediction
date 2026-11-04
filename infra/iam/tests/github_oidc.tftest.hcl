@@ -205,7 +205,7 @@ run "plan_role_holds_no_write_and_no_secret_read" {
   assert {
     condition = alltrue(flatten([
       for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : [
-        for action in(statement.Effect == "Allow" ? tolist(statement.Action) : []) :
+        for action in(statement.Effect == "Allow" && statement.Sid != "SaveTerraformPlans" ? tolist(statement.Action) : []) :
         can(regex("^[a-z0-9]+:(Describe|List|Get|BatchGet)", action)) &&
         !contains(["secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], action)
       ]
@@ -214,8 +214,11 @@ run "plan_role_holds_no_write_and_no_secret_read" {
   }
 
   assert {
-    condition     = !strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "s3:PutObject") && !strcontains(aws_iam_role_policy.github["terraform_plan"].policy, "s3:DeleteObject")
-    error_message = "The plan role reads state and never writes it, so it plans without a lock."
+    condition = (
+      !contains(flatten([for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), "s3:DeleteObject") &&
+      length([for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : statement if statement.Effect == "Allow" && contains(tolist(statement.Action), "s3:PutObject")]) == 1
+    )
+    error_message = "The plan role reads state and never writes it, so it plans without a lock. Its one write is the saved plan."
   }
 }
 
@@ -242,7 +245,8 @@ run "no_delivery_role_can_apply_or_write_state" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled         = true
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
   }
 
   # D18: GitHub runs Terraform plans with the read-only plan role and the owner applies them. No role may write state or hold a lock.
@@ -250,11 +254,14 @@ run "no_delivery_role_can_apply_or_write_state" {
     condition = (
       !contains(keys(aws_iam_role.github), "terraform_apply") &&
       !contains(keys(output.github_oidc_contract.roles), "terraform_apply") &&
-      alltrue([for key, role in aws_iam_role_policy.github : !strcontains(role.policy, "s3:PutObject") && !strcontains(role.policy, "s3:DeleteObject")]) &&
-      !contains(output.github_oidc_boundary_allowed_actions, "s3:PutObject") &&
+      alltrue([
+        for key, role in aws_iam_role_policy.github :
+        !contains(flatten([for statement in jsondecode(role.policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), "s3:DeleteObject") &&
+        (key == "terraform_plan" || !contains(flatten([for statement in jsondecode(role.policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), "s3:PutObject"))
+      ]) &&
       !contains(output.github_oidc_boundary_allowed_actions, "s3:DeleteObject")
     )
-    error_message = "GitHub Terraform is plan-only: no apply role exists, and neither a delivery role nor the delivery boundary may write or delete an object."
+    error_message = "GitHub Terraform is plan-only: no apply role exists, no delivery role or boundary deletes an object, and only the plan role writes (the saved plan, see the saved plan runs)."
   }
 }
 
@@ -333,9 +340,9 @@ run "plan_role_is_denied_every_object_read_except_its_state_keys" {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
       !strcontains(jsonencode(statement.NotResource), "*") && !strcontains(jsonencode(statement.NotResource), "?")
-      if statement.Effect == "Deny"
+      if statement.Effect == "Deny" && statement.Sid == "NeverReadObjectsExceptStateKeys"
     ])
-    error_message = "The deny's exceptions must be exact keys, never a pattern."
+    error_message = "The read deny's exceptions must be exact keys, never a pattern."
   }
 }
 
@@ -360,7 +367,7 @@ run "plan_role_allows_object_reads_on_state_keys_only" {
   assert {
     condition = (
       join(",", sort(flatten([for s in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : tolist(s.Resource) if s.Effect == "Allow" && s.Sid == "ReadStateObjects"]))) ==
-      join(",", sort(flatten([for s in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : tolist(s.NotResource) if s.Effect == "Deny"])))
+      join(",", sort(flatten([for s in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : tolist(s.NotResource) if s.Effect == "Deny" && s.Sid == "NeverReadObjectsExceptStateKeys"])))
     )
     error_message = "The deny's exceptions must equal the allowed state keys exactly, so the state read stays possible and nothing else opens."
   }
@@ -807,5 +814,108 @@ run "the_delivery_boundary_names_the_shared_secrets_and_the_exact_state_keys" {
   assert {
     condition     = !anytrue([for resource in output.github_oidc_boundary_allowed_resources : strcontains(resource, "log-group:") && endswith(resource, "*") && !endswith(resource, ":*")])
     error_message = "A log group pattern must end at the environment name, so a log group with a suffix such as _devops stays out of reach."
+  }
+}
+
+# D18 saved plans: CI saves each plan with its digest under one private prefix of the project bucket. The plan role may write there and nowhere else.
+run "the_plan_role_writes_saved_plans_to_one_prefix_only" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : statement if statement.Sid == "SaveTerraformPlans"]) == 1 &&
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+        statement.Effect == "Allow" &&
+        join(",", tolist(statement.Action)) == "s3:PutObject" &&
+        join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-data-bucket/terraform_plans/*" &&
+        statement.Condition.StringEquals["aws:RequestedRegion"] == "us-west-2"
+        if statement.Sid == "SaveTerraformPlans"
+      ])
+    )
+    error_message = "The plan role holds one Allow that puts objects under terraform_plans/ in the project bucket, with no other action and no other resource."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      !contains(tolist(statement.Action), "s3:PutObject") || statement.Sid == "SaveTerraformPlans" || statement.Effect == "Deny"
+    ])
+    error_message = "No other statement of the plan role may allow s3:PutObject."
+  }
+
+  assert {
+    condition     = alltrue([for key, role in aws_iam_role_policy.github : !strcontains(role.policy, "terraform_plans") if key != "terraform_plan"])
+    error_message = "The image push and deploy roles do not touch the saved plans."
+  }
+}
+
+run "the_plan_role_cannot_read_list_or_delete_saved_plans" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      !strcontains(jsonencode(try(statement.Resource, [])), "terraform_plans")
+      if statement.Effect == "Allow" && statement.Sid != "SaveTerraformPlans"
+    ])
+    error_message = "No other Allow of the plan role reaches the saved plans, so the role cannot read or list them."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      statement.Sid == "NeverReadObjectsExceptStateKeys" && !strcontains(jsonencode(statement.NotResource), "terraform_plans")
+    ])
+    error_message = "The explicit read Deny must still cover the saved plans, so a plan role cannot read another job's plan."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement :
+      statement.Sid == "NeverWriteObjectsExceptSavedPlans" &&
+      statement.Effect == "Deny" &&
+      join(",", sort(tolist(statement.Action))) == "s3:DeleteObject,s3:DeleteObjectVersion,s3:PutObject,s3:PutObjectAcl" &&
+      join(",", tolist(statement.NotResource)) == "arn:aws:s3:::example-data-bucket/terraform_plans/*"
+    ])
+    error_message = "An explicit Deny keeps every write and delete of the plan role under terraform_plans/, even if an allow above is widened later."
+  }
+}
+
+run "the_delivery_boundary_writes_only_saved_plans" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      contains(output.github_oidc_boundary_allowed_actions, "s3:PutObject") &&
+      join(",", [for resource in output.github_oidc_boundary_allowed_resources : resource if strcontains(resource, "terraform_plans")]) == "arn:aws:s3:::example-data-bucket/terraform_plans/*" &&
+      length([for allow in output.github_oidc_boundary_write_resources : allow if !strcontains(allow, "terraform_plans")]) == 0
+    )
+    error_message = "The delivery boundary lets a delivery role put objects under terraform_plans/ and nowhere else."
+  }
+}
+
+run "the_plan_save_stays_inside_the_boundary" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition     = length(output.github_oidc_grants_outside_boundary) == 0 && length(output.github_oidc_actions_outside_boundary) == 0
+    error_message = "The plan role's one write must be allowed by the delivery boundary, or the boundary refuses the save."
   }
 }

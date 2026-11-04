@@ -1517,6 +1517,10 @@ STATE_PREFIX = "terraform_state"
 STATE_STACKS = ("platform", "services", "jobs")
 STATE_KEYS = tuple(f"{BUCKET}/{STATE_PREFIX}/{stack}/terraform.tfstate" for stack in STATE_STACKS)
 LOCK_KEYS = tuple(f"{key}.tflock" for key in STATE_KEYS)
+# D18 saved plans: CI saves each plan and its digest under this prefix. The plan role may put objects there and nothing else.
+PLAN_PREFIX = "terraform_plans"
+PLAN_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+PLAN_OBJECTS = tuple(f"{BUCKET}/{PLAN_PREFIX}/{stack}/{PLAN_COMMIT}/{name}" for stack in STATE_STACKS for name in ("plan.bin", "plan.sha256"))
 DEPLOY_SERVICE = arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_model_api")
 DEPLOY_STREAMLIT = arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_streamlit")
 # Services of the cluster that no delivery role may update: they serve no user and hold the data stores or the orchestration.
@@ -1570,6 +1574,49 @@ def delivery_cases() -> Iterator[Case]:
 
     def wide(label: str, action: str, resource: str, extra: dict[str, str] | None = None, sid: str | None = None) -> Case:
         return Case(f"delivery refused: {label}", request(action, resource, extra=extra), False, sid, DELIVERY_WIDE)
+
+    # Saved plans (D18): the plan role puts the plan and its digest under terraform_plans/ and does nothing else with that prefix. A plan holds values,
+    # so no delivery role reads, lists, deletes or replaces another job's plan, and no write leaves the prefix.
+    plan_role = f"delivery_{DELIVERY_ROLES[2]}"
+    who = {plan_role: DELIVERY_ROLES[2], DELIVERY_WIDE: "boundary"}
+    for key in PLAN_OBJECTS:
+        yield Case(f"delivery allowed: terraform_plan saves {key.split('/', 1)[1]}", request("s3:PutObject", key), True, None, plan_role)
+        yield Case(f"delivery allowed: boundary lets a delivery role save {key.split('/', 1)[1]}", request("s3:PutObject", key), True, None, DELIVERY_WIDE)
+    for principal in (plan_role, DELIVERY_WIDE):
+        for label, resource in (
+            ("a platform state key", STATE_KEYS[0]),
+            ("the IAM stack state", f"{BUCKET}/{STATE_PREFIX}/iam/terraform.tfstate"),
+            ("a state lock", LOCK_KEYS[0]),
+            ("a lakehouse object", f"{BUCKET}/lakehouse/silver/x"),
+            ("a source object", f"{BUCKET}/census/x"),
+            ("the bucket root", f"{BUCKET}/x"),
+            ("a prefix that only starts like the plans prefix", f"{BUCKET}/{PLAN_PREFIX}_backup/platform/{PLAN_COMMIT}/plan.bin"),
+            ("a prefix that nearly matches the plans prefix", f"{BUCKET}/terraform_plan/platform/{PLAN_COMMIT}/plan.bin"),
+            ("the plans prefix of another bucket", f"arn:aws:s3:::other-bucket/{PLAN_PREFIX}/platform/{PLAN_COMMIT}/plan.bin"),
+            ("the plans prefix of the logs bucket", f"{BUCKET}-logs/{PLAN_PREFIX}/platform/{PLAN_COMMIT}/plan.bin"),
+        ):
+            yield Case(f"delivery refused: saved plans: {who[principal]} puts {label}", request("s3:PutObject", resource), False, None, principal)
+        for action in ("s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:PutObjectAcl"):
+            yield Case(
+                f"delivery refused: saved plans: {who[principal]} uses {action} on a saved plan",
+                request(action, PLAN_OBJECTS[0]),
+                False,
+                None,
+                principal,
+            )
+    # The plan role may still list the data bucket (the storage stack refresh needs s3:ListBucket on it), so it sees the key names of saved plans:
+    # the stack and the commit. The plans themselves stay unreadable.
+    for role in (DELIVERY_ROLES[0], DELIVERY_ROLES[1]):
+        yield Case(f"delivery refused: saved plans: {role} puts a saved plan", request("s3:PutObject", PLAN_OBJECTS[0]), False, None, f"delivery_{role}")
+    # The state keys stay readable and unwritable for the plan role while it saves plans.
+    yield Case("delivery allowed: terraform_plan still reads a state key", request("s3:GetObject", STATE_KEYS[0]), True, None, plan_role)
+    yield Case(
+        "delivery refused: saved plans: terraform_plan writes a state key",
+        request("s3:PutObject", STATE_KEYS[0]),
+        False,
+        "NeverWriteObjectsExceptSavedPlans",
+        plan_role,
+    )
 
     other_repository = arn("ecr", f"repository/other_project_spark_{E}")
     for label, resource in (
@@ -2686,9 +2733,98 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         ),
     }
 
+    def plan_role_statement(documents: dict[str, dict[str, Any]], sid: str) -> dict[str, Any]:
+        return next(statement for statement in documents[f"delivery/{DELIVERY_ROLES[2]}/access"]["Statement"] if statement["Sid"] == sid)
+
+    def plan_role_drops(*sids: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            policy = documents[f"delivery/{DELIVERY_ROLES[2]}/access"]
+            policy["Statement"] = [statement for statement in policy["Statement"] if statement["Sid"] not in sids]
+
+        return mutation
+
+    def plan_role_save_resource(resource: str, *, drop_write_deny: bool = True) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            plan_role_statement(documents, "SaveTerraformPlans")["Resource"] = [resource]
+            if drop_write_deny:
+                plan_role_drops("NeverWriteObjectsExceptSavedPlans")(documents)
+
+        return mutation
+
+    def plan_role_save_action(action: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = plan_role_statement(documents, "SaveTerraformPlans")
+            statement["Action"] = [*as_list(statement["Action"]), action]
+            plan_role_drops("NeverWriteObjectsExceptSavedPlans")(documents)
+            delivery_extra_statement("ExtraPlanAction", action, f"{BUCKET}/{PLAN_PREFIX}/*")(documents)
+
+        return mutation
+
+    def plan_role_reads_plans(documents: dict[str, dict[str, Any]]) -> None:
+        documents[f"delivery/{DELIVERY_ROLES[2]}/access"]["Statement"].append(
+            {"Sid": "ReadPlansAgain", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{BUCKET}/{PLAN_PREFIX}/*"]}
+        )
+        plan_role_statement(documents, "NeverReadObjectsExceptStateKeys")["NotResource"] = [*STATE_KEYS, f"{BUCKET}/{PLAN_PREFIX}/*"]
+        delivery_extra_statement("ReadPlansAgain", "s3:GetObject", f"{BUCKET}/{PLAN_PREFIX}/*")(documents)
+
+    def image_push_saves_plans(documents: dict[str, dict[str, Any]]) -> None:
+        documents[f"delivery/{DELIVERY_ROLES[0]}/access"]["Statement"].append(
+            {"Sid": "SaveTerraformPlans", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": [f"{BUCKET}/{PLAN_PREFIX}/*"]}
+        )
+
+    plan_delivery_defects: dict[str, tuple[str, Mutation]] = {
+        "saved plans: the plan role cannot save": ("delivery allowed: terraform_plan saves", plan_role_drops("SaveTerraformPlans")),
+        "saved plans: the boundary lacks the plan save": (
+            "delivery allowed: boundary lets a delivery role save",
+            delivery_without_action("SaveTerraformPlans", "s3:PutObject"),
+        ),
+        "saved plans: the plan role writes the whole bucket": (
+            "delivery refused: saved plans: terraform_plan puts a lakehouse object",
+            plan_role_save_resource(f"{BUCKET}/*"),
+        ),
+        "saved plans: the plan role writes the state prefix": (
+            "delivery refused: saved plans: terraform_plan puts a platform state key",
+            plan_role_save_resource(f"{BUCKET}/{STATE_PREFIX}/*"),
+        ),
+        "saved plans: the plan role resource drops the slash of the prefix": (
+            "delivery refused: saved plans: terraform_plan puts a prefix that only starts like the plans prefix",
+            plan_role_save_resource(f"{BUCKET}/{PLAN_PREFIX}*"),
+        ),
+        "saved plans: the boundary allows every object": (
+            "delivery refused: saved plans: boundary puts a lakehouse object",
+            delivery_resource("SaveTerraformPlans", f"{BUCKET}/*"),
+        ),
+        "saved plans: the boundary resource drops the slash of the prefix": (
+            "delivery refused: saved plans: boundary puts a prefix that only starts like the plans prefix",
+            delivery_resource("SaveTerraformPlans", f"{BUCKET}/{PLAN_PREFIX}*"),
+        ),
+        "saved plans: the boundary allows the plans of every bucket": (
+            "delivery refused: saved plans: boundary puts the plans prefix of another bucket",
+            delivery_resource("SaveTerraformPlans", f"arn:aws:s3:::*/{PLAN_PREFIX}/*"),
+        ),
+        "saved plans: the plan role reads saved plans": (
+            "delivery refused: saved plans: terraform_plan uses s3:GetObject on a saved plan",
+            plan_role_reads_plans,
+        ),
+        "saved plans: the plan role deletes saved plans": (
+            "delivery refused: saved plans: terraform_plan uses s3:DeleteObject on a saved plan",
+            plan_role_save_action("s3:DeleteObject"),
+        ),
+        "saved plans: the plan role replaces the ACL of a saved plan": (
+            "delivery refused: saved plans: terraform_plan uses s3:PutObjectAcl on a saved plan",
+            plan_role_save_action("s3:PutObjectAcl"),
+        ),
+        "saved plans: the image push role saves plans": ("delivery refused: saved plans: image_push puts a saved plan", image_push_saves_plans),
+        "saved plans: the write deny is gone and the allow reaches the state prefix": (
+            "delivery refused: saved plans: terraform_plan writes a state key",
+            plan_role_save_resource(f"{BUCKET}/{STATE_PREFIX}/*"),
+        ),
+    }
+
     return {
         **job_defects,
         **delivery_defects,
+        **plan_delivery_defects,
         **aws_pair_defects,
         **openmetadata_defects,
         "DescribeContainerInstances is granted on the cluster ARN instead of the container-instance ARN (review round 5 finding 6)": (
