@@ -70,13 +70,24 @@ variable "host_metadata_resources" {
 }
 
 variable "host_openmetadata_api" {
-  description = "Address of the persistent OpenMetadata API for the metadata host task, for example http://10.0.1.20:8585/api. Use the private address of the host, because the bridge task reaches the host's services at that address and the host firewall opens the catalog port for it. Loopback is the task's own address in bridge mode, and the bridge gateway is not one of the addresses the firewall rules name. Required while the metadata host task is selected."
+  description = "Address of the persistent OpenMetadata API for the metadata host task, for example http://10.0.1.20:8585/api, always port 8585 and path /api. Use the private address of the host, because the bridge task reaches the host's services at that address and the host firewall opens the catalog port for it. Loopback is the task's own address in bridge mode, and the bridge gateway is not one of the addresses the firewall rules name. Required while the metadata host task is selected."
   type        = string
   default     = null
 
   validation {
-    condition     = var.host_openmetadata_api == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : can(regex("^http://(?:[0-9]{1,3}\\.){3}[0-9]{1,3}:[0-9]{2,5}/api$", var.host_openmetadata_api)) && !startswith(var.host_openmetadata_api, "http://127.")
-    error_message = "Supply the catalog API as http://<private IPv4 address>:<port>/api, not a loopback address, while the metadata host task is selected."
+    condition = var.host_openmetadata_api == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : try(
+      [
+        for captures in [regex("^http://(([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})):8585/api$", var.host_openmetadata_api)] : [
+          for octets in [[for part in slice(captures, 1, 5) : tonumber(part)]] : (
+            alltrue([for octet in octets : octet <= 255]) &&
+            captures[0] == format("%d.%d.%d.%d", octets...) &&
+            (octets[0] == 10 || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) || (octets[0] == 192 && octets[1] == 168))
+          )
+        ][0]
+      ][0],
+      false
+    )
+    error_message = "Supply the catalog API as http://<private IPv4 address>:8585/api while the metadata host task is selected. The address must be in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 with octets from 0 to 255 and no leading zero, the port must be 8585 and the path /api, because the task sends its bot token there."
   }
 }
 
