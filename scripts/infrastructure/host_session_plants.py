@@ -1,19 +1,57 @@
-"""Plant one defect at a time in ``host_session`` and require the cases to catch each; run: ``.venv/bin/python -m scripts.infrastructure.host_session_plants``.
+"""Plant one defect at a time in ``host_session`` and in the group signal test and require the cases to catch each.
 
-Each plant replaces one piece of the module's source in memory (the file stays unchanged) and reruns every case. A plant is caught when a check
-fails or a case raises. The run exits 1 when any plant survives or its text is not found.
+Run: ``.venv/bin/python -m scripts.infrastructure.host_session_plants``. Each plant replaces one piece of a module's source in memory (the file stays
+unchanged) and reruns the cases. A plant is caught when a check fails or a case raises. The run exits 1 when any plant survives or its text is not
+found. The group signal plants load the planted test module in place of ``host_session_group_signal`` and rerun the terminal interrupt case.
 """
 
 from __future__ import annotations
 
 import importlib
 import importlib.util
+import re
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 MODULE = "scripts.infrastructure.host_session"
 SOURCE = Path(__file__).with_name("host_session.py")
+SIGNAL_MODULE = "scripts.infrastructure.host_session_group_signal"
+SIGNAL_SOURCE = Path(__file__).with_name("host_session_group_signal.py")
+KILL_AFTER_REAP = ("with contextlib.suppress(ProcessLookupError, PermissionError):", "    os.killpg(driver.pid, signal.SIGKILL)")
+
+
+def insert_before(pattern: str, lines: tuple[str, ...], last: bool = False) -> Callable[[str], str]:
+    """A plant that inserts ``lines`` before the first (or last) source line that matches ``pattern``, at the indentation of that line."""
+
+    def plant(source: str) -> str:
+        found = list(re.finditer(rf"^(?P<indent>[ ]*){pattern}", source, flags=re.MULTILINE))
+        if not found:
+            return source
+        chosen = found[-1 if last else 0]
+        return source[: chosen.start()] + "".join(f"{chosen['indent']}{line}\n" for line in lines) + source[chosen.start() :]
+
+    return plant
+
+
+def replace_once(old: str, new: str) -> Callable[[str], str]:
+    """A plant that replaces the first occurrence of ``old`` with ``new``."""
+    return lambda source: source.replace(old, new, 1)
+
+
+# Each plant of the group signal test restores a signal that follows the reap: in the cleanup of the caller after the driver was supervised (the
+# place where the first version of the test sent it), at the end of the case, and in the cleanup of the driver after its own reap.
+SIGNAL_PLANTS: dict[str, Callable[[str], str]] = {
+    "kills the group in the caller after the driver was supervised": insert_before(r"status = driver\.status$", KILL_AFTER_REAP),
+    "kills the group at the end of the case": insert_before(r"return facts$", KILL_AFTER_REAP),
+    "kills the group in the cleanup of the supervising helper": insert_before(r"return driver$", KILL_AFTER_REAP),
+    "kills the group between the driver runs": insert_before(r"facts: dict\[str, Any\] = \{$", KILL_AFTER_REAP),
+    "kills the group after the cleanup reap": replace_once(
+        "        if self.reap():\n            return\n", "        if self.reap():\n            os.killpg(self.pid, signal.SIGKILL)\n            return\n"
+    ),
+}
+
 PLANTS: dict[str, tuple[str, str]] = {
     "drops tag propagation": ('"TASK_DEFINITION"', '"NONE"'),
     "starts a second one-shot task": ("        if running:\n", "        if False:\n"),
@@ -87,9 +125,38 @@ def caught(source: str) -> bool:
     return False
 
 
+def signal_plant_caught(source: str) -> bool:
+    """True when the terminal interrupt case detects the planted group signal test."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "host_session_group_signal_planted.py"
+        path.write_text(source, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(SIGNAL_MODULE, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(SIGNAL_MODULE)
+        planted = importlib.util.module_from_spec(spec)
+        sys.modules[SIGNAL_MODULE] = planted
+        spec.loader.exec_module(planted)
+    package = importlib.import_module("scripts.infrastructure")
+    names = vars(package)
+    original = names.get("host_session_group_signal")
+    names["host_session_group_signal"] = planted
+    try:
+        cases = importlib.import_module("scripts.infrastructure.host_session_cases")
+        importlib.reload(cases)
+        try:
+            return not all(cases.CASES["terminal_interrupt_during_host_off"]().values())
+        except (*cases.CASE_ERRORS, KeyboardInterrupt, OSError):
+            return True
+    finally:
+        names["host_session_group_signal"] = original
+        sys.modules.pop(SIGNAL_MODULE, None)
+        importlib.reload(importlib.import_module("scripts.infrastructure.host_session_cases"))
+
+
 def main() -> int:
     """Run every plant and return 1 when any survives."""
     original = SOURCE.read_text(encoding="utf-8")
+    signal_original = SIGNAL_SOURCE.read_text(encoding="utf-8")
     survivors = 0
     try:
         for name, (old, new) in PLANTS.items():
@@ -102,7 +169,17 @@ def main() -> int:
             survivors += not result
     finally:
         sys.modules.pop(MODULE, None)
-    sys.stdout.write(f"{len(PLANTS) - survivors} of {len(PLANTS)} plants caught\n")
+    for name, plant in SIGNAL_PLANTS.items():
+        planted = plant(signal_original)
+        if planted == signal_original:
+            sys.stdout.write(f"MISSING {name}\n")
+            survivors += 1
+            continue
+        result = signal_plant_caught(planted)
+        sys.stdout.write(f"{'CAUGHT' if result else 'SURVIVED'} {name}\n")
+        survivors += not result
+    total = len(PLANTS) + len(SIGNAL_PLANTS)
+    sys.stdout.write(f"{total - survivors} of {total} plants caught\n")
     return 1 if survivors else 0
 
 
