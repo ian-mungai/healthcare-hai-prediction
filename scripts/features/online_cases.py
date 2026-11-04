@@ -491,6 +491,12 @@ def serving_adapter_checks(c: Checker) -> None:
             (calls[-1]["db"], calls[-1]["port"], calls[-1]["socket_timeout"], calls[-1]["socket_connect_timeout"]) == (2, 6379, 5.0, 5.0),
         )
         c.check("a job client has explicit zero retries", no_retry(calls[-1]))
+        c.check("a job client sends no user name, so it logs in as the default user", calls[-1].get("username") is None)
+        online.connect({**environ, "REDIS_USERNAME": "model_api"}, online.FEATURE_DB, timeout=online.SERVING_TIMEOUT, decode=False)
+        c.check(
+            "a client with REDIS_USERNAME logs in as that user on database 1 with 1 s timeouts",
+            (calls[-1].get("username"), calls[-1]["db"], calls[-1]["socket_timeout"]) == ("model_api", 1, 1.0),
+        )
         serving.marker_reader(environ)
         c.check(
             "the serving marker client uses 1 s timeouts on database 2",

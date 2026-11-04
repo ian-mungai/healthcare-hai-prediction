@@ -378,6 +378,22 @@ variable "model_api_mlflow_credential_name" {
   }
 }
 
+variable "model_api_redis_password_name" {
+  description = "Parameter Store SecureString name of the password of the read-only Redis user the model API reads the Feast online store with (D18). The Redis task creates the user from it. The project may read, create and put it, the shared execution role injects it into the Redis task and the serving execution role into the model API while model_api_prepared is true. The shared Redis password stays with the control plane."
+  type        = string
+  default     = "/healthcare_hai_prediction/model_api_redis_password"
+
+  validation {
+    condition     = length(var.model_api_redis_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_redis_password_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_redis_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+
+  validation {
+    condition     = var.model_api_redis_password_name != var.redis_password_name
+    error_message = "The model API's Redis user has a password of its own: the shared Redis password stays with the control plane."
+  }
+}
+
 variable "streamlit_model_api_key_name" {
   description = "Parameter Store SecureString name of the API key the page presents to the model API. The project may read, create and put it, and the task execution role injects it into the page while model_api_prepared is true."
   type        = string

@@ -133,15 +133,18 @@ def no_retry() -> Any:
 
 
 def connect(environ: Mapping[str, str], database: int, *, timeout: float = SOCKET_TIMEOUT, decode: bool = True) -> RedisClient:
-    """A redis-py client for one database of ``FEAST_REDIS_HOST`` with the password of ``REDIS_PASSWORD`` and bounded connect and command waits."""
+    """A redis-py client for one database of ``FEAST_REDIS_HOST``: password ``REDIS_PASSWORD``, user ``REDIS_USERNAME`` when set, bounded waits."""
     missing = sorted(name for name in ("FEAST_REDIS_HOST", "REDIS_PASSWORD") if not environ.get(name))
     if missing:
         raise OnlineError(f"Redis settings are unset: {', '.join(missing)}")
+    # The model API logs in as its own read-only ACL user (REDIS_USERNAME); a job leaves it unset and uses the default user.
+    user = {"username": environ["REDIS_USERNAME"]} if environ.get("REDIS_USERNAME") else {}
     client: RedisClient = importlib.import_module("redis").Redis(
         host=environ["FEAST_REDIS_HOST"],
         port=PORT,
         db=database,
         password=environ["REDIS_PASSWORD"],
+        **user,
         socket_timeout=timeout,
         socket_connect_timeout=timeout,
         retry=no_retry(),

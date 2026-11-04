@@ -101,10 +101,11 @@ run "the_serving_execution_role_injects_the_serving_parameters_and_nothing_else"
         "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_key_hashes",
         "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_mlflow_credential",
         "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_mlflow_user",
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/model_api_redis_password",
         "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/streamlit_model_api_key"
       ]))
     )
-    error_message = "The role injects exactly the six serving parameters."
+    error_message = "The role injects exactly the seven serving parameters: the six it always had and the password of the model API's own Redis user."
   }
 
   assert {
@@ -116,6 +117,11 @@ run "the_serving_execution_role_injects_the_serving_parameters_and_nothing_else"
       ] : strcontains(aws_iam_role_policy.serving_execution[0].policy, name)
     ])
     error_message = "The serving execution role can read none of the control-plane secrets."
+  }
+
+  assert {
+    condition     = !contains(flatten([for statement in jsondecode(aws_iam_role_policy.serving_execution[0].policy).Statement : flatten([statement.Resource])]), "arn:aws:ssm:eu-west-1:111111111111:parameter${var.redis_password_name}")
+    error_message = "The shared Redis password stays control-plane only: only the model API's own Redis user password is injected into the serving tasks."
   }
 
   assert {

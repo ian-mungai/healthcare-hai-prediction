@@ -10,7 +10,8 @@
         "/healthcare_hai_prediction/aws_polaris_serving_client_id",
         "/healthcare_hai_prediction/aws_polaris_serving_client_secret",
         "/healthcare_hai_prediction/model_api_mlflow_user",
-        "/healthcare_hai_prediction/model_api_mlflow_credential"
+        "/healthcare_hai_prediction/model_api_mlflow_credential",
+        "/healthcare_hai_prediction/model_api_redis_password"
       ]
     },
     "streamlit": {

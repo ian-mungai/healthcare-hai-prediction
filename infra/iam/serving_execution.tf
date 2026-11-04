@@ -6,7 +6,7 @@ resource "aws_iam_role" "serving_execution" {
   count = var.model_api_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "serving_execution")
-  description          = "ECS task execution for the model API and the dashboard: pulls their two images, writes their log streams and injects their six parameters. Reads no control-plane secret."
+  description          = "ECS task execution for the model API and the dashboard: pulls their two images, writes their log streams and injects their seven parameters. Reads no control-plane secret."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags
@@ -23,6 +23,7 @@ resource "aws_iam_role_policy" "serving_execution" {
     AWS_POLARIS_SERVING_CLIENT_SECRET_NAME = var.aws_polaris_serving_client_secret_name
     MODEL_API_MLFLOW_USER_NAME             = var.model_api_mlflow_user_name
     MODEL_API_MLFLOW_CREDENTIAL_NAME       = var.model_api_mlflow_credential_name
+    MODEL_API_REDIS_PASSWORD_NAME          = var.model_api_redis_password_name
     STREAMLIT_MODEL_API_KEY_NAME           = var.streamlit_model_api_key_name
   }))
 }

@@ -165,6 +165,18 @@ resource "aws_iam_role_policy" "task_execution_model_api" {
   }))
 }
 
+# The Redis task creates the read-only user of the model API from its own password (D18). The shared execution role injects that one parameter into the Redis task. The
+# model API gets the same parameter through the serving execution role, and the shared Redis password never reaches a serving task.
+resource "aws_iam_role_policy" "task_execution_redis_acl" {
+  count = var.model_api_prepared ? 1 : 0
+
+  name = "task_execution_redis_acl"
+  role = aws_iam_role.task_execution.id
+  policy = templatefile("${path.module}/owner_policies/task_execution_redis_acl.json", merge(local.owner_policy_values, {
+    MODEL_API_REDIS_PASSWORD_NAME = var.model_api_redis_password_name
+  }))
+}
+
 resource "aws_iam_role" "polaris_task" {
   name               = format(local.platform_name, "polaris_task")
   description        = "Polaris catalog service: Iceberg files under lakehouse/ only."
