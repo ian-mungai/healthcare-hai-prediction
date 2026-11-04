@@ -10281,6 +10281,7 @@ ALL_CASES = (
     docker_restart_command_and_client,
     docker_restart_answer_deadline,
     desktop_start,
+    docker_desktop_stale_stop,
     docker_release_skips_and_refusals,
     docker_release_quit,
     docker_release_quit_deadlines,
