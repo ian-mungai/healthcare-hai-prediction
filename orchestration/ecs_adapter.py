@@ -14,12 +14,15 @@ import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 TRANSIENT_CODES = frozenset({"ThrottlingException", "ServerException", "ServiceUnavailableException", "RequestLimitExceeded", "InternalFailure"})
+STOPPED_PAGES = 10
+DESCRIBE_BATCH = 100
 PENDING_STATUSES = frozenset({"PROVISIONING", "PENDING", "ACTIVATING"})
 STOPPED = "STOPPED"
 NO_EXIT_CODE = 125
@@ -38,7 +41,11 @@ class TaskRefused(Exception):
 
 
 class TaskUnavailable(Exception):
-    """The call failed in a way a later identical call can cure: throttling, a timeout, no capacity."""
+    """The call failed in a way a later identical call can cure: throttling, a timeout, no capacity. After a timeout or a lost reply a task may exist."""
+
+
+class CapacityUnavailable(TaskUnavailable):
+    """RunTask answered that the host has no room. The answer is definite: no task was created."""
 
 
 class EcsClient(Protocol):
@@ -72,6 +79,14 @@ class EcsSettings:
     log_group: str
     families: frozenset[str]
     host_capacity_provider: str = ""
+
+
+@dataclass(frozen=True)
+class TaskFound:
+    """A task found by its identity. ``created_at`` is the time ECS created it, in epoch seconds, or None when ECS gave none."""
+
+    arn: str
+    created_at: float | None
 
 
 @dataclass(frozen=True)
@@ -124,6 +139,35 @@ class EcsAdapter:
         except (ClientError, BotoCoreError) as error:
             raise classify(error) from None
         return str(running[0]) if running else None
+
+    def lookup(self, key: str) -> TaskFound | None:
+        """The task started for ``key`` in any state ECS still lists: running first, then stopped (ECS keeps a stopped task for about an hour), so a task that
+        ended before the caller looked is found too. None means no listed task carries the identity. A failed or unfinished listing raises."""
+        started_by = self.identity(key)
+        try:
+            running = self.ecs.list_tasks(cluster=self.settings.cluster, startedBy=started_by)["taskArns"]
+            if running:
+                found = self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=[str(running[0])])["tasks"]
+                return TaskFound(str(running[0]), self.created_at(found[0]) if found else None)
+            token: str | None = None
+            for _ in range(STOPPED_PAGES):
+                page = self.ecs.list_tasks(cluster=self.settings.cluster, desiredStatus=STOPPED, **({"nextToken": token} if token else {}))
+                arns = [str(arn) for arn in page["taskArns"]]
+                for start in range(0, len(arns), DESCRIBE_BATCH):
+                    for task in self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=arns[start : start + DESCRIBE_BATCH])["tasks"]:
+                        if task.get("startedBy") == started_by:
+                            return TaskFound(str(task["taskArn"]), self.created_at(task))
+                token = page.get("nextToken")
+                if not token:
+                    return None
+        except (ClientError, BotoCoreError) as error:
+            raise classify(error) from None
+        raise TaskUnavailable("stopped_task_listing_too_long")
+
+    @staticmethod
+    def created_at(task: Mapping[str, Any]) -> float | None:
+        created = task.get("createdAt")
+        return created.timestamp() if isinstance(created, datetime) else None
 
     def definition(self, family: str, placement: str = FARGATE) -> str:
         """The task definition that runs the family in the placement."""
@@ -190,7 +234,7 @@ class EcsAdapter:
             return str(reply["tasks"][0]["taskArn"])
         reasons = " ".join(str(item.get("reason", "")) for item in reply["failures"])
         if re.search(r"capacity|RESOURCE:|AGENT", reasons, re.IGNORECASE):
-            raise TaskUnavailable(scrub(reasons))
+            raise CapacityUnavailable(scrub(reasons))
         raise TaskRefused(scrub(reasons) or "no_task_started")
 
     def poll(self, task_arn: str) -> TaskReport:

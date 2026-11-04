@@ -344,6 +344,45 @@ def host_capacity_exhausted_is_transient() -> None:
     require(len(ecs.tasks) == 1, "the retry after the host had room made no task")
 
 
+def capacity_answer_is_definite() -> None:
+    adapter, ecs, _ = host_build()
+    ecs.host_full = True
+    try:
+        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    except ecs_adapter.CapacityUnavailable:
+        pass
+    else:
+        raise AssertionError("a full host must answer with the capacity error: no task was created")
+    ecs.host_full = False
+    ecs.lose_reply_once = True
+    try:
+        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    except ecs_adapter.CapacityUnavailable:
+        raise AssertionError("a lost reply is not a capacity answer: a task may exist") from None
+    except TaskUnavailable:
+        pass
+    require(len(ecs.tasks) == 1, "the lost reply case did not create the task")
+
+
+def lookup_finds_running_and_stopped_tasks() -> None:
+    adapter, ecs, _ = host_build()
+    require(adapter.lookup(KEY) is None, "a task was found where none was started")
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    found = adapter.lookup(KEY)
+    require(found is not None and found.arn == arn and found.created_at is None, f"running task not found: {found}")
+    ecs.finish(arn)
+    require(adapter.find(KEY) is None, "the running listing must miss a stopped task: that is what lookup has to cover")
+    for number in range(5):
+        decoy = adapter.start("train", KEY.replace(":1", f":{number + 2}"), ENVIRONMENT, "training", placement="host")
+        ecs.finish(decoy)
+    ecs.list_page = 2
+    found = adapter.lookup(KEY)
+    require(found is not None and found.arn == arn, f"a stopped task past the first listing page was not found: {found}")
+    require(adapter.lookup(KEY.replace(":1", ":9")) is None, "another identity found a task")
+    ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
+    raises(TaskUnavailable, lambda: adapter.lookup(KEY))
+
+
 def fake_refuses_a_wrong_shape() -> None:
     """The fake must refuse what ECS refuses, or the adapter cases prove nothing about placement."""
     ecs = FakeEcs()
@@ -411,4 +450,6 @@ CASES: dict[str, Callable[[], None]] = {
     "host_task_shape": host_task_shape,
     "host_capacity_exhausted_is_transient": host_capacity_exhausted_is_transient,
     "fake_refuses_a_wrong_shape": fake_refuses_a_wrong_shape,
+    "capacity_answer_is_definite": capacity_answer_is_definite,
+    "lookup_finds_running_and_stopped_tasks": lookup_finds_running_and_stopped_tasks,
 }

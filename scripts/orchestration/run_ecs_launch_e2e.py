@@ -21,6 +21,7 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = (
+    "orchestration/ecs_adapter.py",
     "orchestration/ecs_launch.py",
     "orchestration/ecs_launch_operator.py",
     "orchestration/ecs_launch_provider.py",

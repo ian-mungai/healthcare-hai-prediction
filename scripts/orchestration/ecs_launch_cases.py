@@ -18,7 +18,7 @@ from typing import Any
 
 from botocore.exceptions import ReadTimeoutError
 
-from orchestration.ecs_adapter import EcsAdapter, EcsSettings
+from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
 from orchestration.ecs_launch import (
     CleanupFailed,
     EcsFitProbe,
@@ -30,13 +30,15 @@ from orchestration.ecs_launch import (
     Resources,
     S3LaunchStore,
     StopFailed,
+    iso,
     launch_record_prefix,
 )
 from scripts.orchestration.ecs_broker_fake import CLUSTER, FakeEcs, FakeLogs, client_error
-from scripts.orchestration.ecs_launch_fake import FakeClock, FakeLaunchBucket
+from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN = "20261104T100000Z-abcdef01"
+OTHER_RUN = "20261104T110000Z-abcdef02"
 BUCKET = "example-private-bucket"
 PREFIX = launch_record_prefix()
 SETTINGS = EcsSettings(
@@ -56,6 +58,10 @@ EVENT_ORDER = ("intent", "started", "end")
 THROTTLE = client_error("ThrottlingException", "DescribeTasks")
 
 
+class Interrupted(BaseException):
+    """The process ends while it waits, as when the scheduler is restarted."""
+
+
 class Rig:
     """One stand-in cloud, bucket and clock. ``launcher`` makes a new process over them."""
 
@@ -63,6 +69,7 @@ class Rig:
         self.ecs, self.logs = FakeEcs(), FakeLogs()
         self.bucket = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
+        self.ecs.clock = lambda: self.time.now
         self.adapter = EcsAdapter(self.ecs, self.logs, SETTINGS)
         self.scratch_free = 2 * NEED.scratch_bytes
 
@@ -72,6 +79,9 @@ class Rig:
 
     def key(self, attempt: int, event: str, job: str = "gold") -> str:
         return f"{PREFIX}/{RUN}/{job}/{attempt:02d}/{event}.json"
+
+    def claim_key(self, job: str = "gold") -> str:
+        return f"{PREFIX}/{RUN}/{job}/claim.json"
 
     def events(self, attempt: int) -> list[str]:
         return [event for event in EVENT_ORDER if self.key(attempt, event) in self.bucket.objects]
@@ -134,6 +144,18 @@ def die_while_running(rig: Rig, job: JobSpec) -> str:
     return str(launch.arn)
 
 
+def gold_tasks(rig: Rig) -> list[str]:
+    """The ARNs of the tasks started for the gold job, whatever their state."""
+    return [arn for arn, task in rig.ecs.tasks.items() if "job_gold" in str(task["taskDefinitionArn"])]
+
+
+def stopped_decoys(rig: Rig, count: int) -> None:
+    """Tasks of other jobs that have already stopped, so a lookup of stopped tasks has to read past them."""
+    for number in range(count):
+        arn = rig.adapter.start("drift", f"2026110{number + 1}T090000Z-1111111{number}:drift:1", {"drift": {"RUN_ID": "x"}}, "", HOST)
+        rig.ecs.finish(arn)
+
+
 def launch_failure() -> None:
     rig = Rig()
     rig.ecs.faults["run_task"] = [client_error("AccessDeniedException", "RunTask")]
@@ -143,7 +165,41 @@ def launch_failure() -> None:
     again = rig.launcher().run(spec())
     require(again == first and rig.ecs.count("run_task") == 1, "a rerun of the attempt must return the recorded failure and not call RunTask")
     retry = rig.launcher().run(spec(2))
-    require(retry.ok and rig.ecs.count("run_task") == 2, f"a new attempt may launch after a failed launch: {retry}")
+    require(retry.outcome == first.outcome and retry.reason == first.reason and retry.adopted, f"a retry reports the closed launch: {retry}")
+    require(rig.ecs.count("run_task") == 1, "and launches nothing")
+
+
+def failed_attempt_is_terminal() -> None:
+    rig = Rig()
+    rig.ecs.plan = {"gold": 3}
+    first = rig.launcher().run(spec())
+    require(first.outcome == "failed" and first.exit_code == 3, f"first attempt: {first}")
+    runs = rig.ecs.count("run_task")
+    retry = rig.launcher().run(spec(2))
+    require(retry.outcome == "failed" and retry.exit_code == 3 and retry.adopted and not retry.ok, f"a retry reports the earlier failure: {retry}")
+    require(rig.ecs.count("run_task") == runs and rig.events(2) == [], "a retry after a failure launches nothing and records nothing")
+    rig.ecs.plan = {}
+    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(fresh.ok and rig.ecs.count("run_task") == runs + 1, f"trying again needs a new run, and a new run launches: {fresh}")
+    rig = Rig()
+    rig.ecs.hold = True
+    first = rig.launcher().run(spec(deadline_seconds=100))
+    retry = rig.launcher().run(spec(2))
+    require(first.outcome == "timeout" and retry.outcome == "timeout" and retry.adopted, f"a timeout is terminal too: {retry}")
+    require(rig.ecs.count("run_task") == 1 and rig.events(2) == [], "a retry after a timeout launches nothing")
+    rig = Rig()
+    rig.ecs.instance_free = {"CPU": 1024, "MEMORY": 31000}
+    first = rig.launcher().run(spec())
+    rig.ecs.instance_free = {"CPU": 4096, "MEMORY": 31000}
+    retry = rig.launcher().run(spec(2))
+    require(first.outcome == "failed_closed" and retry.outcome == "failed_closed" and retry.adopted, f"a launch that did not fit is terminal too: {retry}")
+    require(rig.ecs.count("run_task") == 0, "a retry after a fit failure launches nothing")
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    cancelled = rig.launcher().cancel(RUN, "gold", 1)
+    retry = rig.launcher().run(spec(2))
+    require(cancelled.outcome == "cancelled" and retry.outcome == "cancelled" and rig.ecs.count("run_task") == 1, f"a cancel is terminal too: {retry}")
 
 
 def lost_reply() -> None:
@@ -184,6 +240,7 @@ def restart_next_attempt() -> None:
     second = rig.record(2, "started")
     require(second["task_arn"] == arn and second["job_started_at"] == first["job_started_at"], f"attempt 2 keeps the task and its start time: {second}")
     require(rig.record(2, "intent")["reattached_from"] == 1, "the intent of attempt 2 names the attempt it reattached to")
+    require(rig.record(1, "end")["outcome"] == "succeeded", "the attempt that joined also ends the launch it joined")
 
 
 def completion_before_recovery() -> None:
@@ -207,8 +264,9 @@ def completion_before_recovery() -> None:
     rig.ecs.finish(arn, {"gold": 3})
     rig.ecs.hold = False
     retry = rig.launcher().run(spec(2))
-    require(retry.ok and not retry.adopted and rig.ecs.count("run_task") == 2, f"a failed attempt allows a new launch: {retry}")
-    require(rig.record(1, "end")["outcome"] == "failed" and rig.record(1, "end")["exit_code"] == 3, "the failure of attempt 1 stays recorded")
+    require(retry.outcome == "failed" and retry.exit_code == 3 and retry.adopted, f"the failure that ended in the cloud is recovered and reported: {retry}")
+    require(rig.ecs.count("run_task") == 1 and rig.events(2) == [], "a retry after a failure launches nothing")
+    require(rig.record(1, "end")["outcome"] == "failed" and rig.record(1, "end")["exit_code"] == 3, "the failure of attempt 1 is recorded")
 
 
 def earlier_success_adopted() -> None:
@@ -234,6 +292,125 @@ def fit_probe_refused() -> None:
     require(
         done.outcome == "failed_closed" and "fit_probe_refused" in done.reason and rig.ecs.count("run_task") == 0, f"a refused fit probe fails closed: {done}"
     )
+
+
+def unresolved_launch_task_finished() -> None:
+    rig = Rig()
+    rig.ecs.forget_stopped_tokens = True
+    rig.ecs.list_page = 2
+    stopped_decoys(rig, 5)
+    rig.ecs.hold = True
+    rig.bucket.put_faults["started.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
+    require(rig.events(1) == ["intent"] and len(gold_tasks(rig)) == 1, f"the task runs but only the intent is recorded: {rig.events(1)}")
+    arn = gold_tasks(rig)[0]
+    rig.ecs.finish(arn)
+    rig.ecs.hold = False
+    rig.time.now += 300
+    done = rig.launcher().run(spec(2))
+    require(done.ok and done.adopted, f"the finished task of the unresolved launch is adopted: {done}")
+    require(len(gold_tasks(rig)) == 1, f"a second task was started beside the first: {len(gold_tasks(rig))}")
+    require(rig.record(1, "started")["task_arn"] == arn and rig.record(1, "end")["outcome"] == "succeeded", "the unresolved launch is resolved in the records")
+    require(rig.record(1, "started")["job_started_at"] == iso(START_TIME), "the task starts when ECS created it, not when the recovery ran")
+
+
+def ambiguous_replies_stay_unresolved() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.ecs.lose_reply_once = True
+
+    def break_the_lookups(now: float) -> None:
+        rig.time.on_sleep = None
+        rig.ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")] * 500
+        rig.ecs.faults["run_task"] = [ReadTimeoutError(endpoint_url="https://ecs.invalid")] * 500
+
+    rig.time.on_sleep = break_the_lookups
+    begin = rig.time.now
+    refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
+    require(rig.time.now - begin >= 600, "the launch waits its 10 minutes before it gives up")
+    require(rig.events(1) == ["intent"] and len(gold_tasks(rig)) == 1, f"an unknown reply must not become a failure record: {rig.events(1)}")
+    rig.ecs.faults.clear()
+    rig.ecs.hold = False
+    done = rig.launcher().run(spec())
+    require(done.ok and len(gold_tasks(rig)) == 1, f"the next call finds the accepted task: {done}")
+    require(rig.events(1) == ["intent", "started", "end"], "the launch is resolved by a lookup")
+
+
+def concurrent_attempts_one_task() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    first, second = rig.launcher(), rig.launcher()
+    a, b = first.attach(spec(1)), second.attach(spec(2))
+    first.start(a)
+    second.start(b)
+    require(len(gold_tasks(rig)) == 1, f"two callers that both saw an empty history started {len(gold_tasks(rig))} tasks")
+    require(a.arn is not None and b.arn == a.arn, "the second caller joins the task of the first")
+    require(rig.record(2, "intent")["reattached_from"] == 1, "recorded as a reattachment")
+    rig.ecs.hold = False
+    first.wait(a)
+    second.wait(b)
+    require(first.conclude(a).ok and second.conclude(b).ok, "both callers see the job end well")
+
+
+def concurrent_loser_bindings_refused() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    first, second = rig.launcher(), rig.launcher()
+    a, b = first.attach(spec(1)), second.attach(spec(1, bound={**BOUND, "request_hash": "e" * 64}))
+    first.start(a)
+    runs = rig.ecs.count("run_task")
+    error = refuses(LaunchRefused, lambda: second.start(b))
+    require("request_hash" in str(error), f"the refusal names the changed input: {error}")
+    require(rig.ecs.count("run_task") == runs and len(gold_tasks(rig)) == 1 and b.arn is None, "the loser takes no ECS action")
+
+
+def capacity_wait_rechecks_identity() -> None:
+    rig = Rig()
+    rig.ecs.forget_stopped_tokens = True
+    rig.ecs.instance_free = {"CPU": 1024, "MEMORY": 31000}
+    seen: dict[str, Any] = {}
+
+    def other_caller_runs(now: float) -> None:
+        rig.time.on_sleep = None
+        rig.ecs.instance_free = {"CPU": 4096, "MEMORY": 31000}
+        seen["other"] = rig.launcher().run(spec(2))
+
+    rig.time.on_sleep = other_caller_runs
+    done = rig.launcher().run(spec(1))
+    require(seen["other"].ok and done.ok, f"both callers end well: {seen.get('other')} {done}")
+    require(len(gold_tasks(rig)) == 1, f"the waiting caller started a task after the other one had run and finished: {len(gold_tasks(rig))}")
+
+
+def restart_keeps_job_start() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.bucket.put_faults["started.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(LaunchUnavailable, lambda: rig.launcher().run(spec(deadline_seconds=600)))
+    rig.time.now += 500
+    launcher = rig.launcher()
+    launch = launcher.attach(spec(deadline_seconds=600))
+    launcher.start(launch)
+    require(rig.record(1, "started")["job_started_at"] == iso(START_TIME), f"a recovery must not restart the job clock: {rig.record(1, 'started')}")
+    begin = rig.time.now
+    launcher.wait(launch)
+    done = launcher.conclude(launch)
+    require(done.outcome == "timeout" and rig.time.now - begin < 130, f"the deadline counts from the original start: {done}, {rig.time.now - begin}")
+
+
+def fit_deadline_survives_restart() -> None:
+    rig = Rig()
+    rig.ecs.instance_free = {"CPU": 1024, "MEMORY": 31000}
+
+    def die(now: float) -> None:
+        if now - START_TIME >= 300:
+            raise Interrupted
+
+    rig.time.on_sleep = die
+    refuses(Interrupted, lambda: rig.launcher().run(spec()))
+    rig.time.on_sleep = None
+    done = rig.launcher().run(spec())
+    require(done.outcome == "failed_closed" and "does_not_fit" in done.reason, f"fit report: {done}")
+    require(rig.time.now - START_TIME < 600 + 30, f"the 10 minutes count from the claim, not from the restart: {rig.time.now - START_TIME}")
 
 
 def duplicate() -> None:
@@ -365,6 +542,8 @@ def deadline_from_ledger() -> None:
     done = rig.launcher().run(spec(2, deadline_seconds=100000))
     require(done.outcome == "timeout" and rig.time.now - begin < 200 + 30, f"attempt 2 keeps the deadline of the task it joined: {done}")
     require(rig.record(2, "intent")["deadline_seconds"] == 200, "recorded with the original deadline")
+    later = rig.launcher().run(spec(3))
+    require(later.outcome == "timeout" and later.adopted and rig.ecs.count("run_task") == 1, f"a later attempt reports the timeout, not a stop code: {later}")
 
 
 def stop_unconfirmed() -> None:
@@ -492,12 +671,12 @@ def store_scope() -> None:
     done = rig.launcher().run(spec(3))
     require(done.ok, f"records read by key across a gap in the attempts: {done}")
     require(rig.launcher().run(spec(3)) == done, "a repeat reads the records and returns the outcome")
-    require(not hasattr(rig.bucket, "list_objects_v2"), "the role cannot list")
+    require(not hasattr(rig.bucket, "list_objects_v2"), "the code never lists")
     operations = {name for name, _ in rig.bucket.calls}
     require(operations <= {"put_object", "get_object"}, f"no delete, list or other call: {operations}")
     for name, arguments in rig.bucket.calls:
         key = arguments["Key"]
-        pattern = rf"{re.escape(PREFIX)}/{RUN}/gold/[0-9]{{2}}/(intent|started|end)\.json"
+        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim)|absent-probe)\.json"
         require(re.fullmatch(pattern, key) is not None, f"{name} {key} is not a launch record key")
         require(name != "put_object" or arguments.get("IfNoneMatch") == "*", "every write is conditional")
 
@@ -506,8 +685,51 @@ def read_denied_is_loud() -> None:
     rig = Rig()
     rig.bucket.deny_reads = True
     error = refuses(LaunchRefused, lambda: rig.launcher().run(spec()))
-    require("read back" in str(error), f"a role that cannot read its records is named: {error}")
-    require(rig.ecs.count("run_task") == 0, "nothing launches when the history cannot be read")
+    require("404" in str(error), f"a role that cannot read its records is named: {error}")
+    require(rig.ecs.count("run_task") == 0 and rig.bucket.count("put_object") == 0, "nothing launches and nothing is written when the history cannot be read")
+
+
+def role_without_list_refuses() -> None:
+    rig = Rig()
+    rig.bucket.absent_reads_denied = True
+    error = refuses(LaunchRefused, lambda: rig.launcher().run(spec()))
+    require("ListBucket" in str(error) and "404" in str(error), f"the refusal names the missing grant: {error}")
+    require(rig.ecs.count("run_task") == 0 and rig.bucket.count("put_object") == 0, "a role that cannot tell a missing record from a denied one starts nothing")
+
+
+def selective_denial_refuses() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    writes, runs = rig.bucket.count("put_object"), rig.ecs.count("run_task")
+    rig.bucket.deny_keys = {rig.key(1, "intent"), rig.key(1, "started"), rig.key(1, "end")}
+    error = refuses(LaunchRefused, lambda: rig.launcher().run(spec(2)))
+    require("cannot be read" in str(error), f"the refusal says the history cannot be read: {error}")
+    require(len(gold_tasks(rig)) == 1 and rig.ecs.count("run_task") == runs, "no second task starts beside a task whose records cannot be read")
+    require(rig.bucket.count("put_object") == writes, "nothing is written for the refused attempt")
+    rig.bucket.deny_keys = {rig.key(1, "intent")}
+    refuses(LaunchRefused, lambda: rig.launcher().run(spec(2)))
+    refuses(LaunchRefused, lambda: rig.launcher().run(spec(1)))
+    require(len(gold_tasks(rig)) == 1 and rig.bucket.count("put_object") == writes, "one denied record is enough to block both the retry and the owner's rerun")
+    rig.bucket.deny_keys = set()
+    rig.ecs.hold = False
+    done = rig.launcher().run(spec(2))
+    require(done.ok and len(gold_tasks(rig)) == 1, f"once the history can be read the retry reattaches: {done}")
+
+
+def authority_unreadable_refuses() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    rig.bucket.deny_keys = {rig.claim_key()}
+    for attempt in (1, 2):
+        error = refuses(LaunchRefused, partial(rig.launcher().run, spec(attempt)))
+        require("cannot be read" in str(error), f"attempt {attempt}: {error}")
+    require(len(gold_tasks(rig)) == 1, "no second task")
+    rig = Rig()
+    rig.bucket.deny_keys = {rig.claim_key()}
+    refuses(LaunchRefused, lambda: rig.launcher().run(spec()))
+    require(rig.ecs.count("run_task") == 0, "a denied read of the authority is not a missing authority: nothing starts")
 
 
 def record_prefix_from_configuration() -> None:
@@ -533,10 +755,18 @@ def poll_errors() -> None:
 
 CASES: dict[str, Callable[[], None]] = {
     "launch_failure": launch_failure,
+    "failed_attempt_is_terminal": failed_attempt_is_terminal,
     "lost_reply": lost_reply,
     "restart_same_attempt": restart_same_attempt,
     "restart_next_attempt": restart_next_attempt,
     "completion_before_recovery": completion_before_recovery,
+    "unresolved_launch_task_finished": unresolved_launch_task_finished,
+    "ambiguous_replies_stay_unresolved": ambiguous_replies_stay_unresolved,
+    "concurrent_attempts_one_task": concurrent_attempts_one_task,
+    "concurrent_loser_bindings_refused": concurrent_loser_bindings_refused,
+    "capacity_wait_rechecks_identity": capacity_wait_rechecks_identity,
+    "restart_keeps_job_start": restart_keeps_job_start,
+    "fit_deadline_survives_restart": fit_deadline_survives_restart,
     "duplicate": duplicate,
     "earlier_success_adopted": earlier_success_adopted,
     "corrupt_record": corrupt_record,
@@ -561,6 +791,9 @@ CASES: dict[str, Callable[[], None]] = {
     "put_reply_lost": put_reply_lost,
     "store_scope": store_scope,
     "read_denied_is_loud": read_denied_is_loud,
+    "role_without_list_refuses": role_without_list_refuses,
+    "selective_denial_refuses": selective_denial_refuses,
+    "authority_unreadable_refuses": authority_unreadable_refuses,
     "record_prefix_from_configuration": record_prefix_from_configuration,
     "poll_errors": poll_errors,
 }
