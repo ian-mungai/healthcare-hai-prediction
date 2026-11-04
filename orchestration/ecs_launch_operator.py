@@ -33,6 +33,7 @@ class LaunchGuarantees:
     def __init__(self, *, job: JobSpec, launcher: Callable[[], Launcher], stop_on_kill: bool = False, **kwargs: Any) -> None:
         if kwargs.get("deferrable"):
             raise ValueError("a launch operator cannot defer: the deadline, stop and records need this process")
+        kwargs["deferrable"] = False  # the provider's default is read from the operators.default_deferrable setting (operators/ecs.py line 466)
         if kwargs.get("wait_for_completion", True) is False:
             raise ValueError("a launch operator always waits for the job to end")
         kwargs["reattach"] = True

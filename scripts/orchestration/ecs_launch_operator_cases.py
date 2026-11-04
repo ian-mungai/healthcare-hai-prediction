@@ -14,13 +14,20 @@ from typing import Any
 
 from orchestration.ecs_launch_operator import JobFailed, LaunchGuarantees
 from scripts.orchestration.ecs_launch_cases import CLUSTER, RUN, Interrupted, Rig, refuses, require, spec
-from scripts.orchestration.ecs_launch_standin import MIRRORED_PROVIDER_VERSION, StandInEcsRunTaskOperator
+from scripts.orchestration.ecs_launch_standin import MIRRORED_PROVIDER_VERSION, OPERATORS_CONFIG, Deferred, StandInEcsRunTaskOperator
 
 CONSTRAINTS = Path(__file__).resolve().parents[2] / "services" / "orchestration" / "constraints-3.12.txt"
 
 
 class StandInLaunchOperator(LaunchGuarantees, StandInEcsRunTaskOperator):
     """The launch operator over the stand-in base: the same bases order as the provider subclass."""
+
+
+class StartedStandIn(StandInEcsRunTaskOperator):
+    """The provider operator over a task that has already started, so ``execute`` reaches the defer branch (operators/ecs.py line 548) as the real one does."""
+
+    def _start_task(self) -> None:
+        self.arn = "arn:stand-in"
 
 
 def operator(rig: Rig, attempt: int = 1, stop_on_kill: bool = False, **changes: Any) -> StandInLaunchOperator:
@@ -116,6 +123,33 @@ def wait_is_bounded() -> None:
     require("timeout" in str(error) and rig.time.now - begin < 130, f"the provider waits 1,000,000 attempts, this one ends at the deadline: {error}")
 
 
+def configured_default_deferral_is_neutralized() -> None:
+    """The provider reads its deferrable default from the Airflow setting operators.default_deferrable (operators/ecs.py line 466)."""
+    rig = Rig()
+    OPERATORS_CONFIG["default_deferrable"] = True
+    try:
+        plain = StartedStandIn(task_definition="x", cluster=CLUSTER, overrides={})
+        require(plain.deferrable is True, "the stand-in must mirror the configuration-derived default")
+        refuses(Deferred, lambda: plain.execute(context()))
+        built = operator(rig)
+        require(built.deferrable is False, "the launch operator must not inherit the configured default")
+        built.execute(context())
+        require(rig.ecs.count("run_task") == 1 and rig.events(1) == ["intent", "started", "end"], "the job ran in this process, with its records")
+    finally:
+        OPERATORS_CONFIG["default_deferrable"] = False
+
+
+def explicit_deferral_is_refused_even_when_configured() -> None:
+    rig = Rig()
+    OPERATORS_CONFIG["default_deferrable"] = True
+    try:
+        refuses(
+            ValueError, lambda: StandInLaunchOperator(job=spec(), launcher=rig.launcher, task_definition="x", cluster=CLUSTER, overrides={}, deferrable=True)
+        )
+    finally:
+        OPERATORS_CONFIG["default_deferrable"] = False
+
+
 def provider_pin() -> None:
     match = re.search(r"^apache-airflow-providers-amazon==(\S+)$", CONSTRAINTS.read_text(), re.MULTILINE)
     require(
@@ -132,5 +166,7 @@ CASES: dict[str, Callable[[], None]] = {
     "operator_reattaches_after_interrupt": reattaches_after_interrupt,
     "operator_stop_on_kill": stop_on_kill,
     "operator_wait_is_bounded": wait_is_bounded,
+    "operator_configured_default_deferral_is_neutralized": configured_default_deferral_is_neutralized,
+    "operator_explicit_deferral_is_refused_even_when_configured": explicit_deferral_is_refused_even_when_configured,
     "provider_pin": provider_pin,
 }
