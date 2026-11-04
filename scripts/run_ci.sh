@@ -15,7 +15,7 @@ set -euo pipefail
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
 # HAI_CI_REUSE=main (the local default) skips a group whose input hash matches a pass recorded by a full run on a commit of origin/main; off runs every group. A passed full run on
 # a clean commit of origin/main records its groups (scripts/quality/ci_main_passes.py). The pre-push gate never reuses.
-# CI_LIST_ONLY=1 prints the plan and runs nothing. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
+# CI_LIST_ONLY=1 prints the plan and runs nothing. CI_ADMISSION_ONLY=1 runs the gates, checks that every worker has a limit, prints the workers and runs none. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
 # session and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
 # worker. A worker is overdue only when the whole seconds since its start exceed its limit, so it is never stopped before its limit. At the deadline the dispatcher stops every member
 # of the worker's session (scripts/process.py stop_sessions: TERM, then KILL after CI_WORKER_GRACE_SECONDS, default 5), which includes the groups that the worker's descendants
@@ -635,6 +635,12 @@ if is_selected lakehouse_features; then
 fi
 if [[ "$part" == "all" ]] && is_selected acquisition; then
   set_worker_limit acquisition_combine
+fi
+# CI_ADMISSION_ONLY=1 stops here, once every kind of worker of the run has a limit, and prints the workers: the CI groups E2E uses it to check the limits without running a worker.
+if [[ "${CI_ADMISSION_ONLY:-0}" == "1" ]]; then
+  printf 'admitted workers: %s %s %s\n' "${alone[*]-}" "${exclusive[*]-}" "${shared[*]-}"
+  ci_finished=1
+  exit 0
 fi
 if ((${#alone[@]})); then
   run_items "${alone[@]}"

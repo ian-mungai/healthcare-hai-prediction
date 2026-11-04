@@ -530,6 +530,21 @@ def list_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     return {"case": f"list_only_prints_plan_{part}", "passed": all(checks.values()), "checks": checks, "exit": code}
 
 
+def admission_case(work: Path, out: Path) -> dict[str, Any]:
+    """Every worker that the full run creates has a limit in worker_limits: the run stops at its admission, before any worker starts, and names the workers."""
+    code, log, _ = run_entry(work, out, "admission_all", {"CI_SCOPE": "full", "CI_PART": "all", "CI_ADMISSION_ONLY": "1"})
+    listed = re.search(r"^admitted workers: (.*)$", log, re.MULTILINE)
+    workers = listed.group(1).split() if listed else []
+    checks = {
+        "exit_zero": code == 0,
+        "no_worker_without_a_limit": "has no limit" not in log,
+        "workers_named": bool(workers),
+        "feature_store_worker_admitted": "lakehouse_features_store" in workers,
+        "no_worker_ran": "\n== " not in log,
+    }
+    return {"case": "every_worker_has_a_limit", "passed": all(checks.values()), "checks": checks, "exit": code, "workers": workers}
+
+
 def write_markdown_probes(work: Path) -> list[Path]:
     probes = [work / "docs" / name for name in MARKDOWN_PROBES]
     for probe in probes:
@@ -1560,6 +1575,7 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
         cases.append(docs_only_case(work, out, part))
     for part in ("core", "all", "launcher", "silver", "features", "feature_sources", "feature_columns"):
         cases.append(gate_failure_case(work, out, part))
+    cases.append(admission_case(work, out))
     cases.append(layer_skip_case(work, out))
     cases.append(gates_before_launcher_case(work, out, "launcher", gate_fails=False))
     cases += [gates_before_launcher_case(work, out, part, gate_fails=True) for part in ("launcher", "all")]
@@ -5924,6 +5940,7 @@ EXPECTED_CONTROLS = (
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
+    "CI_ADMISSION_ONLY",
     "CI_WORKER_LIMIT_SECONDS",
     "CI_WORKER_GRACE_SECONDS",
     "RANGE_START",
@@ -6213,6 +6230,7 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         ("running_legacy_kept", inherited_controls_case, '    "PRE_COMMIT_RUNNING_LEGACY",\n', ""),
         ("post_checkout_skip_kept", inherited_controls_case, '    "_PRE_COMMIT_SKIP_POST_CHECKOUT",\n', ""),
         ("list_only_control_kept", inherited_controls_case, '"CI_LIST_ONLY",', ""),
+        ("admission_control_kept", inherited_controls_case, '"CI_ADMISSION_ONLY",', ""),
         ("native_ref_variable_kept", inherited_controls_case, '"PRE_COMMIT_FROM_REF",', ""),
         ("hosted_marker_variable_kept", inherited_controls_case, '"GITHUB_ACTIONS",', ""),
     ]
