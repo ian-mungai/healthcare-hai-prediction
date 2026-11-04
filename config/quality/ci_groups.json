@@ -169,7 +169,7 @@
       "^scripts/quality/(static_checks|install_tools)\\.py$",
       "^config/quality_tools\\.json$",
       "^scripts/ci/groups/terraform_checks\\.sh$",
-      "^scripts/infrastructure/run_(services_move|serving_release_real)_e2e\\.py$",
+      "^scripts/infrastructure/run_(services_move|serving_release_real|serving_transition)_e2e\\.py$",
       "^config/aws/serving_release\\.json$"
     ],
     "launcher": [

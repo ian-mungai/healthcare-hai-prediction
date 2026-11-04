@@ -2,7 +2,7 @@
 # Cases for the configuration of the serving services in the services stack (owner decision D18). GitHub registers new task definition revisions of the model API and
 # the dashboard and rolls the services to them, so an owner apply must neither roll a release back nor destroy a service when the two services moved to their own
 # resource. The stack's plan tests check the planned values. This reads the text of main.tf for what a plan test cannot see (moved blocks and lifecycle), and
-# scripts/infrastructure/run_services_move_e2e.py proves the move with a real plan. Run from the repository root.
+# scripts/infrastructure/run_services_move_e2e.py proves the move with a real plan, and run_serving_transition_e2e.py the first apply after it. Run from the repository root.
 set -euo pipefail
 
 main="${SERVICES_MAIN:-infra/services/main.tf}"
@@ -31,9 +31,22 @@ check "the shared service resource exists" has_resource 'resource "aws_ecs_servi
 check "the serving service resource exists" has_resource 'resource "aws_ecs_service" "serving"' "$serving"
 
 only_serving_ignores_the_task_definition() {
-  [[ -n "$serving" ]] && grep -qx '    ignore_changes = \[task_definition\]' <<< "$serving" && [[ "$(grep -c 'ignore_changes' <<< "$serving")" -eq 1 ]]
+  [[ -n "$serving" ]] && grep -Eqx ' {4}ignore_changes += \[task_definition\]' <<< "$serving" && [[ "$(grep -c 'ignore_changes' <<< "$serving")" -eq 1 ]]
 }
 check "the serving services ignore changes to their task definition, and only to it" only_serving_ignores_the_task_definition
+
+# A service that exists before this change runs a revision with the shared execution role and the shared Redis password, and the release check refuses the next
+# revision rendered from it. So each serving service is replaced once, when the execution role of its task definition changes (the first owner apply), and by nothing
+# else: a trigger on the whole task definition would roll every release back, one on another attribute would never fire.
+replaced_by_the_execution_role_only() {
+  [[ -n "$serving" && "$(grep -c 'replace_triggered_by' <<< "$serving")" -eq 1 ]] &&
+    grep -Eqx ' {4}replace_triggered_by += \[aws_ecs_task_definition\.service\[each\.key\]\.execution_role_arn\]' <<< "$serving"
+}
+check "each serving service is replaced once when the execution role of its task definition changes, and by nothing else" replaced_by_the_execution_role_only
+serving_definitions_take_the_serving_role() {
+  grep -q 'execution_role_arn *= contains(local.serving_keys, each.key) ? var.serving_execution_role_arn : var.execution_role_arn' "$main"
+}
+check "the task definitions of the serving services name the serving execution role, which the trigger watches" serving_definitions_take_the_serving_role
 check "the shared services do not ignore changes: an owner apply still rolls them to Terraform's revision" test -n "$shared" -a -z "$(grep 'ignore_changes\|lifecycle' <<< "$shared" || true)"
 
 serving_set_is_one_local() {
@@ -74,10 +87,12 @@ selectors=config/quality/ci_groups.json
 runs_once() { [[ "$(grep -c -- "$1" "$group")" -eq 1 ]]; }
 check "the terraform_checks group runs the services move proof" runs_once 'scripts.infrastructure.run_services_move_e2e --output-directory'
 check "the terraform_checks group runs the release check on the real definitions" runs_once 'scripts.infrastructure.run_serving_release_real_e2e --output-directory'
+check "the terraform_checks group runs the serving transition proof" runs_once 'scripts.infrastructure.run_serving_transition_e2e --output-directory'
 check "the terraform_checks group runs the Redis ACL cases" runs_once 'bash .github/scripts/redis_acl_cases.sh'
 selected() { jq -e --arg path "$1" '.groups.terraform_checks | any(. as $pattern | $path | test($pattern))' "$selectors" > /dev/null 2>&1; }
 check "a change of the move proof runner selects the group" selected scripts/infrastructure/run_services_move_e2e.py
 check "a change of the real definitions runner selects the group" selected scripts/infrastructure/run_serving_release_real_e2e.py
+check "a change of the transition proof runner selects the group" selected scripts/infrastructure/run_serving_transition_e2e.py
 check "a change of the serving release configuration selects the group" selected config/aws/serving_release.json
 check "a change of the Redis ACL cases selects the group" selected .github/scripts/redis_acl_cases.sh
 check "an unrelated runner does not select the group" test "$(selected scripts/infrastructure/run_policy_e2e.py && echo selected || echo not)" = not

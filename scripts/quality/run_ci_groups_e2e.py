@@ -1375,6 +1375,12 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         ),
         selection_case(
             work,
+            "serving_transition_runner_selects_terraform_checks",
+            ["--scope", "paths", "--path", "scripts/infrastructure/run_serving_transition_e2e.py", "--part", "core+layers"],
+            ["python_lint", *LAYERS, "repository_code_checks", "configuration_checks", "terraform_checks"],
+        ),
+        selection_case(
+            work,
             "serving_release_configuration_selects_terraform_checks",
             ["--scope", "paths", "--path", "config/aws/serving_release.json", "--part", "core+layers"],
             [*LAYERS, "configuration_checks", "terraform_checks"],
