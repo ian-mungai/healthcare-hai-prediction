@@ -412,11 +412,19 @@ def saved_plan(root: Path) -> dict[str, bool]:
 ADMIN_NAME = secret_store.PREFIX + "openmetadata_admin_password"
 DB_NAME = secret_store.PREFIX + "openmetadata_db_password"
 ADMIN_POLICY = (r"[A-Z]", r"[a-z]", r"[0-9]", r"[^A-Za-z0-9]")
+# PasswordUtil.java of OpenMetadata 2.0.7, lines 38 to 48: 8 to 56 characters, no white space, one upper case letter, one lower case letter, one digit
+# and one special character. Line 83 lists the specials its own generator uses. The setup keeps to that list, because the validator library's set is unread.
+OM_SPECIALS = "!@#$%^&*()_+"
 
 
 def meets_admin_policy(value: str) -> bool:
-    """OpenMetadata's rule for a new administrator password: 8 to 56 characters with upper and lower case letters, a digit and a special character."""
-    return 8 <= len(value) <= 56 and all(re.search(pattern, value) for pattern in ADMIN_POLICY)
+    """OpenMetadata 2.0.7's rule for a new administrator password, with the special characters limited to those its own generator uses."""
+    return (
+        8 <= len(value) <= 56
+        and re.search(r"\s", value) is None
+        and all(re.search(pattern, value) for pattern in ADMIN_POLICY)
+        and all(character in OM_SPECIALS for character in value if not character.isalnum())
+    )
 
 
 def openmetadata_passwords(root: Path) -> dict[str, bool]:
@@ -458,6 +466,9 @@ def openmetadata_passwords(root: Path) -> dict[str, bool]:
     return {
         "a first run exits zero and creates both passwords": first == 0 and bool(admin) and bool(database) and writes_first == 2,
         "the administrator password meets the OpenMetadata password rule": meets_admin_policy(admin),
+        "300 more generated administrator passwords all meet the OpenMetadata password rule": all(
+            meets_admin_policy(openmetadata_secrets.new_admin_password()) for _ in range(300)
+        ),
         "the two passwords differ, and the database password is long and holds only letters, digits, dash and underscore": admin != database
         and re.fullmatch(r"[A-Za-z0-9_-]{32,}", database) is not None,
         "a rerun exits zero and writes nothing": second == 0 and writes_rerun == writes_first,
