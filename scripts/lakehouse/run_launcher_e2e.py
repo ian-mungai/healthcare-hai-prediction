@@ -3433,6 +3433,28 @@ def docker_release_stale_list(env: Env) -> dict[str, bool]:
     }
 
 
+@case("event_stream_idle")
+def event_stream_idle(env: Env) -> dict[str, bool]:
+    """The Docker events stream waits for events without a time limit once it is open: a launcher that sees no Docker event for longer than the 30 s open
+    timeout of the stream stays serving on the same stream. The fake daemon closes the events connection after its reply, so http.client drops its own socket
+    reference, and the limit change after the reply was skipped: the stream dropped 30 s after the last event (method_matrix, which runs longer than that)."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    time.sleep(2)
+    opened = len(env.daemon.calls_matching("GET", "/events"))
+    statuses: set[object] = set()
+    end = time.monotonic() + 34
+    while time.monotonic() < end:
+        statuses.add(env.ping().get("status"))
+        time.sleep(0.5)
+    reopened = len(env.daemon.calls_matching("GET", "/events")) - opened
+    return {
+        "the launcher opened an events stream": opened >= 1,
+        "the launcher stays serving while no Docker event arrives for 34 s": statuses == {"serving"},
+        "the launcher opens no second events stream": reopened == 0,
+    }
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -10286,6 +10308,7 @@ ALL_CASES = (
     docker_release_quit,
     docker_release_quit_deadlines,
     docker_release_stale_list,
+    event_stream_idle,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,
