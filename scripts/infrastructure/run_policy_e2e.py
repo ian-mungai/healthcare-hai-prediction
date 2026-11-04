@@ -214,7 +214,8 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
     """The policies of the three GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
 
     The statements follow ``github_statements`` in infra/iam/github_oidc.tf. The deploy role's service and task role names are the test inputs
-    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_STREAMLIT``. No delivery role applies Terraform or holds an attached policy.
+    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_STREAMLIT``. No delivery role applies Terraform or holds an attached policy. The plan role
+    also saves plans under ``terraform_plans/`` (D18).
     """
     state_read = [
         {"Sid": "ReadStateObjects", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": list(policy_cases.STATE_KEYS)},
@@ -222,6 +223,7 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
          "Condition": {"StringLike": {"s3:prefix": [f"{policy_cases.STATE_PREFIX}/*"]}}},
     ]  # fmt: skip
     repository = f"arn:aws:ecr:{policy_cases.R}:{policy_cases.A}:repository/{policy_cases.P}_*_{policy_cases.E}"
+    plans = f"{policy_cases.BUCKET}/{policy_cases.PLAN_PREFIX}/*"
     statements = {
         "image_push": [
             {"Sid": "GetRegistryToken", "Effect": "Allow", "Action": ["ecr:GetAuthorizationToken"], "Resource": ["*"]},
@@ -239,6 +241,10 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
         "terraform_plan": [
             {"Sid": "NeverReadObjectsExceptStateKeys", "Effect": "Deny", "NotResource": list(policy_cases.STATE_KEYS),
              "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes", "s3:GetObjectTagging"]},
+            {"Sid": "NeverWriteObjectsExceptSavedPlans", "Effect": "Deny", "NotResource": [plans],
+             "Action": ["s3:PutObject", "s3:PutObjectAcl", "s3:DeleteObject", "s3:DeleteObjectVersion"]},
+            {"Sid": "SaveTerraformPlans", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": [plans],
+             "Condition": {"StringEquals": {"aws:RequestedRegion": policy_cases.R}}},
             *plan_read_statements(documents),
             *state_read,
         ],

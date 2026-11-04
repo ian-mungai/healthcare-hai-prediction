@@ -194,6 +194,12 @@
       ]
     },
     {
+      "Sid": "SaveTerraformPlans",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_plans/*"
+    },
+    {
       "Sid": "DenyIam",
       "Effect": "Deny",
       "Action": "iam:*",

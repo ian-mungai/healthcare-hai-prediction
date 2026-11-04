@@ -2,7 +2,9 @@ name: Terraform plan
 
 # Read-only plans for pull requests of this repository. Off until the owner sets the repository variable OIDC_DELIVERY_ENABLED to
 # true (project guide: OIDC delivery). The job never runs for a pull request from a fork, and the plan role trusts no other event. It plans
-# without a state lock and prints no plan and no value: only each changed resource address and its action reach the job summary.
+# without a state lock and prints no plan and no value: only each changed resource address, its action and the plan's SHA-256 digest reach the
+# job summary. The plan itself goes to a private prefix of the project bucket (owner decision D18: the plan role may only write there), and the
+# owner's apply downloads it and refuses it unless it matches the digest from this summary (.github/scripts/saved_plan.sh fetch).
 on:
   pull_request:
     paths:
@@ -33,6 +35,8 @@ jobs:
     env:
       STACK: ${{ matrix.stack }}
       STATE_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+      PLAN_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       STACK_INPUTS: ${{ secrets.TERRAFORM_INPUTS_JSON }}
       TF_IN_AUTOMATION: "1"
@@ -89,10 +93,12 @@ jobs:
             exit 1
           fi
           terraform -chdir="infra/$STACK" show -json plan.bin 2> "$RUNNER_TEMP/terraform.log" > "$RUNNER_TEMP/plan.json" || { echo "Reading the plan failed. Its output stays out of the public log." >&2; exit 1; }
+          saved="$(bash .github/scripts/saved_plan.sh upload "$STACK" "$HEAD_SHA" "infra/$STACK/plan.bin")" || exit 1
           {
             echo "### Plan summary for $STACK"
             echo '```'
             bash .github/scripts/plan_digest.sh summary < "$RUNNER_TEMP/plan.json"
             echo '```'
+            echo "Saved plan digest (SHA-256): \`${saved#digest=}\`"
             if [[ $code -eq 0 ]]; then echo "No change."; fi
           } >> "$GITHUB_STEP_SUMMARY"

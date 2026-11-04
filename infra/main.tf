@@ -207,6 +207,10 @@ locals {
   state_user_stacks   = ["storage", "platform", "services", "jobs"]
   state_user_keys     = [for stack in local.state_user_stacks : "${aws_s3_bucket.data.arn}/${local.state_prefix}/${stack}/terraform.tfstate"]
   state_user_lock_key = [for key in local.state_user_keys : "${key}.tflock"]
+  # Saved Terraform plans (owner decision D18): the plan job writes each plan and its digest here, and the owner's apply path (the project user) reads them. A
+  # plan holds values, so nobody else touches the prefix, and the plan role can only put objects: it reads, lists and deletes nothing there.
+  plans_prefix  = "terraform_plans"
+  plans_objects = ["${aws_s3_bucket.data.arn}/${local.plans_prefix}/*"]
   state_statements = [for statement in [
     {
       Sid       = "ProjectUserUsesItsStateKeys"
@@ -240,6 +244,43 @@ locals {
       Resource  = ["${aws_s3_bucket.data.arn}/${local.state_prefix}/iam/*"]
       Condition = {
         ArnLike = { "aws:PrincipalArn" = concat([local.state_project_user], local.state_ci_roles) }
+      }
+    },
+    {
+      Sid       = "ProjectUserReadsSavedPlans"
+      Effect    = "Allow"
+      Principal = { AWS = local.state_project_user }
+      Action    = ["s3:GetObject"]
+      Resource  = local.plans_objects
+    },
+    {
+      Sid       = "DenySavedPlansToEveryoneElse"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = local.plans_objects
+      Condition = {
+        ArnNotLike = { "aws:PrincipalArn" = concat([local.state_project_user], local.state_ci_roles, local.state_admin_arns) }
+      }
+    },
+    {
+      Sid       = "DenySavedPlanWritesExceptThePlanRole"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = ["s3:PutObject", "s3:PutObjectAcl", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+      Resource  = local.plans_objects
+      Condition = {
+        ArnNotLike = { "aws:PrincipalArn" = local.state_ci_roles }
+      }
+    },
+    {
+      Sid       = "DenyThePlanRoleAnythingButSavingPlans"
+      Effect    = "Deny"
+      Principal = "*"
+      NotAction = ["s3:PutObject"]
+      Resource  = local.plans_objects
+      Condition = {
+        ArnLike = { "aws:PrincipalArn" = local.state_ci_roles }
       }
     }
   ] : statement if var.terraform_state_enabled]

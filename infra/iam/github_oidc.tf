@@ -72,6 +72,8 @@ locals {
   github_state_prefix = "terraform_state"
   github_state_keys   = [for stack in local.github_state_stacks : "${local.github_state_prefix}/${stack}/terraform.tfstate"]
   github_state_bucket = "arn:aws:s3:::${var.data_bucket_name}"
+  # D18 saved plans: CI saves each plan and its digest here. The plan role may put objects under this prefix and do nothing else with it.
+  github_plans_objects = "${local.github_state_bucket}/terraform_plans/*"
 
   github_roles = var.github_oidc_enabled ? {
     image_push = {
@@ -236,6 +238,8 @@ locals {
 
     # Any pull request job of this repository can use the plan role, and the data bucket holds Confidential tables. The explicit Deny
     # covers every object read except the three exact state keys the plan reads, and holds even if an allow above is widened later.
+    # The role saves each plan with its digest under terraform_plans/ (owner decision D18) and writes nothing else: the second Deny keeps every
+    # write and delete under that prefix. It reads, lists and deletes no saved plan, so one pull request cannot read another job's plan.
     terraform_plan = concat(
       [
         {
@@ -243,6 +247,19 @@ locals {
           Effect      = "Deny"
           Action      = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes", "s3:GetObjectTagging"]
           NotResource = [for key in local.github_state_keys : "${local.github_state_bucket}/${key}"]
+        },
+        {
+          Sid         = "NeverWriteObjectsExceptSavedPlans"
+          Effect      = "Deny"
+          Action      = ["s3:PutObject", "s3:PutObjectAcl", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+          NotResource = [local.github_plans_objects]
+        },
+        {
+          Sid       = "SaveTerraformPlans"
+          Effect    = "Allow"
+          Action    = ["s3:PutObject"]
+          Resource  = [local.github_plans_objects]
+          Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }
         }
       ],
       local.github_plan_read_statements,
@@ -404,6 +421,14 @@ output "github_oidc_boundary_size" {
     condition     = local.github_boundary_size.actual <= local.github_boundary_limit && local.github_boundary_size.at_bounds <= local.github_boundary_limit
     error_message = "The delivery boundary is over the 6,144 characters of a managed policy, for the real names or for the longest names the variables accept. Shorten infra/iam/boundary/healthcare_hai_prediction_delivery_boundary_policy.json."
   }
+}
+
+output "github_oidc_boundary_write_resources" {
+  description = "Every resource on which the delivery boundary allows an object write. Must be the saved plans prefix only."
+  value = sort(distinct(flatten([
+    for statement in local.github_boundary_expanded.actual.Statement : statement.Resource
+    if statement.Effect == "Allow" && anytrue([for action in flatten([statement.Action]) : startswith(action, "s3:Put") || startswith(action, "s3:Delete")])
+  ])))
 }
 
 output "github_oidc_boundary_allowed_resources" {

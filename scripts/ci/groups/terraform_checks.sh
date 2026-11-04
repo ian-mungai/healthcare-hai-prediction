@@ -7,6 +7,7 @@
 terraform_checks() {
   timed "terraform_checks: format" terraform fmt -check -recursive infra
   timed "terraform_checks: plan digest cases" bash .github/scripts/plan_digest_cases.sh
+  timed "terraform_checks: saved plan cases" bash .github/scripts/saved_plan_cases.sh
   timed "terraform_checks: workflow input cases" bash .github/scripts/workflow_input_cases.sh
   timed "terraform_checks: delivery cases" bash .github/scripts/delivery_cases.sh
   export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$scratch/provider_cache}"
