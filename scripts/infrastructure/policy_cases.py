@@ -1381,7 +1381,6 @@ FORBIDDEN = {
 
 
 ROLE_BOUNDARY = f"arn:aws:iam::{A}:policy/{P}_role_boundary"
-ADMINISTRATOR_ACCESS = "arn:aws:iam::aws:policy/AdministratorAccess"
 
 
 BOUNDARY = "role_boundary"
@@ -2816,13 +2815,6 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def deploy_resource(sid: str, resource: str | list[str]) -> Mutation:
         def mutation(documents: dict[str, dict[str, Any]]) -> None:
             deploy_statement(documents, sid)["Resource"] = resource
-
-        return mutation
-
-    def deploy_add_resource(sid: str, resource: str) -> Mutation:
-        def mutation(documents: dict[str, dict[str, Any]]) -> None:
-            statement = deploy_statement(documents, sid)
-            statement["Resource"] = [*as_list(statement["Resource"]), resource]
 
         return mutation
 
