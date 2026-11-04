@@ -6,12 +6,15 @@ adapter through the HTTP route. Every case runs offline against ``FakeEcs``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from orchestration import ecs_adapter
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable
@@ -245,6 +248,140 @@ def client_timeouts() -> None:
     )
 
 
+NINE_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote", "serve", "metadata", "bronze"})
+
+
+def host_build() -> tuple[EcsAdapter, FakeEcs, FakeLogs]:
+    """An adapter whose settings name the capacity provider of the host that the fake cluster registers."""
+    ecs, logs = FakeEcs(), FakeLogs()
+    return EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider)), ecs, logs
+
+
+def host_run_task_request() -> None:
+    adapter, ecs, _ = host_build()
+    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    request = next(arguments for name, arguments in ecs.calls if name == "run_task")
+    names = [item["name"] for item in request["overrides"]["containerOverrides"]]
+    require(request["taskDefinition"] == "example_dev_job_train_host" and request["count"] == 1, "wrong host task definition or count")
+    require(
+        request["capacityProviderStrategy"] == [{"capacityProvider": ecs.host_provider, "weight": 1}], "the task is not placed on the host capacity provider"
+    )
+    require("networkConfiguration" not in request, "a bridge task was given an awsvpc network")
+    require("launchType" not in request, "a launch type was sent beside the capacity provider strategy")
+    require(
+        request["propagateTags"] == "TASK_DEFINITION" and request["tags"] == [{"key": "Project", "value": "example"}, {"key": "HaiJob", "value": "train"}],
+        "wrong tags: the HaiJob tag is the plain family name on the host too",
+    )
+    require(names == ["fetch", "train"], "overrides name a container that was not asked for")
+    require(
+        request["clientToken"] == hashlib.sha256(KEY.encode()).hexdigest() and request["startedBy"] == EcsAdapter.identity(KEY), "the launch identity changed"
+    )
+
+
+def host_family_map() -> None:
+    adapter, _, _ = host_build()
+    jobs = json.loads(JOBS_FILE.read_text())["jobs"]
+    require(set(jobs) == NINE_FAMILIES, f"the job table names other families than the nine: {sorted(jobs)}")
+    for family in jobs:
+        require(adapter.definition(family, "fargate") == f"example_dev_job_{family}", f"{family}: the Fargate definition name changed")
+        require(adapter.definition(family, "host") == f"example_dev_job_{family}_host", f"{family}: the host definition is not <prefix><family>_host")
+    require(
+        len({adapter.definition(family, placement) for family in jobs for placement in ("fargate", "host")}) == 2 * len(jobs), "two definitions share a name"
+    )
+
+
+def host_provider_required() -> None:
+    ecs, logs = FakeEcs(), FakeLogs()
+    adapter = EcsAdapter(ecs, logs, SETTINGS)
+    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
+    require(not ecs.calls, "a host start without a capacity provider reached the cloud, where the cluster default would place it on Fargate")
+
+
+def unknown_placement_refused() -> None:
+    adapter, ecs, _ = host_build()
+    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="spot"))
+    raises(TaskRefused, lambda: adapter.definition("train", "spot"))
+    require(not ecs.calls, "an unknown placement reached the cloud")
+
+
+def host_start_needs_no_awsvpc_settings() -> None:
+    ecs, logs = FakeEcs(), FakeLogs()
+    adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider, subnets=(), networks={}))
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    require(list(ecs.tasks) == [arn], "a host job needs no subnet and no security group, and started nothing without them")
+
+
+def host_start_twice_one_task() -> None:
+    adapter, ecs, _ = host_build()
+    first, second = (
+        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"),
+        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"),
+    )
+    require(first == second and len(ecs.tasks) == 1, "a second host start with the same key made a second task")
+    ecs.lose_reply_once = True
+    lost = KEY.replace(":1", ":2")
+    raises(TaskUnavailable, lambda: adapter.start("train", lost, ENVIRONMENT, "training", placement="host"))
+    arn = adapter.start("train", lost, ENVIRONMENT, "training", placement="host")
+    require(len(ecs.tasks) == 2 and arn in ecs.tasks, "the retry after a lost reply made a second host task")
+
+
+def host_task_shape() -> None:
+    adapter, ecs, _ = host_build()
+    host = ecs.tasks[adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")]
+    require(host["launchType"] == "EC2" and host["capacityProviderName"] == ecs.host_provider, f"not an EC2 task of the host provider: {host}")
+    require("containerInstanceArn" in host and "attachments" not in host, "a bridge task has a container instance and no network interface")
+    fargate = ecs.tasks[adapter.start("train", KEY.replace(":1", ":2"), ENVIRONMENT, "training")]
+    require(fargate["launchType"] == "FARGATE" and "attachments" in fargate and "containerInstanceArn" not in fargate, f"the Fargate shape changed: {fargate}")
+
+
+def host_capacity_exhausted_is_transient() -> None:
+    adapter, ecs, _ = host_build()
+    ecs.host_full = True
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
+    require(not ecs.tasks, "a full host created a task")
+    ecs.host_full = False
+    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    require(len(ecs.tasks) == 1, "the retry after the host had room made no task")
+
+
+def fake_refuses_a_wrong_shape() -> None:
+    """The fake must refuse what ECS refuses, or the adapter cases prove nothing about placement."""
+    ecs = FakeEcs()
+    host = [{"capacityProvider": ecs.host_provider, "weight": 1}]
+    fargate = [{"capacityProvider": "FARGATE", "weight": 1}]
+    awsvpc = {"awsvpcConfiguration": {"subnets": ["subnet-0example"], "securityGroups": ["sg-0lake"], "assignPublicIp": "DISABLED"}}
+    base = {"cluster": CLUSTER, "count": 1, "startedBy": "hai-example"}
+    host_definition, fargate_definition = "example_dev_job_train_host", "example_dev_job_train"
+    wrong: dict[str, tuple[dict[str, Any], str]] = {
+        "bridge task with an awsvpc network": (
+            {"taskDefinition": host_definition, "capacityProviderStrategy": host, "networkConfiguration": awsvpc},
+            "network",
+        ),
+        "host task with no strategy, which the cluster default places on Fargate": ({"taskDefinition": host_definition}, "compatible"),
+        "host task on a Fargate provider": ({"taskDefinition": host_definition, "capacityProviderStrategy": fargate}, "compatible"),
+        "Fargate task on the host provider": (
+            {"taskDefinition": fargate_definition, "capacityProviderStrategy": host, "networkConfiguration": awsvpc},
+            "compatible",
+        ),
+        "Fargate task with no network": ({"taskDefinition": fargate_definition, "capacityProviderStrategy": fargate}, "network"),
+        "unknown capacity provider": (
+            {"taskDefinition": host_definition, "capacityProviderStrategy": [{"capacityProvider": "typo", "weight": 1}]},
+            "not found",
+        ),
+    }
+    for index, (label, (arguments, reason)) in enumerate(wrong.items()):
+        try:
+            ecs.run_task(**base, clientToken=f"wrong-{index}", **arguments)
+        except ClientError as error:
+            message = str(error.response["Error"]["Message"]).lower()
+            require(error.response["Error"]["Code"] == "InvalidParameterException" and reason in message, f"{label}: refused for another cause: {message}")
+        else:
+            raise AssertionError(f"the fake accepted a {label}")
+    require(not ecs.tasks, "a refused call created a task")
+    accepted = ecs.run_task(**base, clientToken="right-0", taskDefinition=host_definition, capacityProviderStrategy=host)["tasks"]
+    require(len(accepted) == 1 and len(ecs.tasks) == 1, "the fake refused a correct host request")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "start_twice_one_task": start_twice_one_task,
     "lost_reply_one_task": lost_reply_one_task,
@@ -265,4 +402,13 @@ CASES: dict[str, Callable[[], None]] = {
     "reasons_hide_identifiers": reasons_hide_identifiers,
     "tail_reads_the_container_stream": tail_reads_the_container_stream,
     "client_timeouts": client_timeouts,
+    "host_run_task_request": host_run_task_request,
+    "host_family_map": host_family_map,
+    "host_provider_required": host_provider_required,
+    "unknown_placement_refused": unknown_placement_refused,
+    "host_start_needs_no_awsvpc_settings": host_start_needs_no_awsvpc_settings,
+    "host_start_twice_one_task": host_start_twice_one_task,
+    "host_task_shape": host_task_shape,
+    "host_capacity_exhausted_is_transient": host_capacity_exhausted_is_transient,
+    "fake_refuses_a_wrong_shape": fake_refuses_a_wrong_shape,
 }
