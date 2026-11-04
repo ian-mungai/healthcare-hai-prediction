@@ -155,6 +155,28 @@
         "owner_policies/broker_jobs.json"
       ]
     },
+    "airflow_launch": {
+      "name": "${PROJECT_NAME}_airflow_launch_task_${ENVIRONMENT}",
+      "terraform": [
+        "airflow_launch.tf"
+      ],
+      "policies": [
+        "owner_policies/airflow_launch_jobs.json",
+        "owner_policies/airflow_launch_records.json"
+      ],
+      "attachments": [
+        {
+          "policy": "owner_policies/airflow_launch_jobs.json",
+          "resource": "airflow_launch_jobs",
+          "flag": "airflow_launch_prepared"
+        },
+        {
+          "policy": "owner_policies/airflow_launch_records.json",
+          "resource": "airflow_launch_records",
+          "flag": "airflow_launch_prepared"
+        }
+      ]
+    },
     "train": {
       "name": "${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
       "terraform": [
@@ -554,6 +576,117 @@
       "role": "broker",
       "action": "ssm:GetParameter",
       "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_SIGNED_PARAMETER_NAME}"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:RunTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train_host:1",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
+        "aws:RequestTag/Project": "${PROJECT_NAME}",
+        "aws:RequestTag/HaiJob": "train",
+        "aws:TagKeys": [
+          "Project",
+          "HaiJob"
+        ]
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:TagResource",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
+      "context": {
+        "ecs:CreateAction": "RunTask"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:StopTask",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
+      "context": {
+        "aws:ResourceTag/HaiJob": "train"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:DescribeTasks",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
+      "context": {
+        "aws:ResourceTag/HaiJob": "train"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:ListTasks",
+      "resource": "*",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:ListContainerInstances",
+      "resource": "*",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ecs:DescribeContainerInstances",
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:container-instance/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
+      "context": {
+        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_execution_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/promotion_approval.json"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "logs:GetLogEvents",
+      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:example"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_SIGNED_PARAMETER_NAME}"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/train/0/intent.json",
+      "context": {
+        "s3:if-none-match": "*"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/train/0/intent.json"
     },
     {
       "role": "train",

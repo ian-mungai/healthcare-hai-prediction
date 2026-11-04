@@ -116,6 +116,7 @@ def infra_names(infra: Path = INFRA) -> dict[str, str]:
     names = {key: value for key, value in terraform_names(infra / "variables.tf").items() if isinstance(value, str)}
     names["BROKER_TOKEN_NAME"] = terraform_default(infra, "broker.tf", "broker_token_name")
     names["BROKER_SIGNED_PARAMETER_NAME"] = terraform_default(infra, "broker.tf", "broker_signed_parameter_name")
+    names["AIRFLOW_LAUNCH_RECORD_PREFIX"] = terraform_default(infra, "airflow_launch.tf", "airflow_launch_record_prefix")
     for part in ("id", "secret"):
         names[f"AWS_POLARIS_FEATURES_CLIENT_{part.upper()}_NAME"] = terraform_default(
             infra, "job_writer_variables.tf", f"aws_polaris_features_client_{part}_name"
@@ -239,7 +240,28 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "TASK_DEFINITION_ARNS": json.dumps([f"arn:aws:ecs:{region}:{account}:task-definition/{project}_{environment}_job_{f}:*" for f in sorted(families)]),
             "ROLE_ARNS": json.dumps([f"arn:aws:iam::{account}:role/{project}_job_{kind}_{environment}" for kind in ("execution", "train_task")]),
         }
+    if Path(policy).name.startswith("airflow_launch_"):
+        return airflow_launch_inputs(infra, values, names)
     return {}
+
+
+def airflow_launch_inputs(infra: Path, values: Mapping[str, str], names: Mapping[str, str]) -> dict[str, str]:
+    """The Terraform-computed placeholders of the Airflow launch policies, built the way ``airflow_launch.tf`` builds them from the family default."""
+    account, region, project, environment = values["AWS_ACCOUNT_ID"], values["AWS_REGION"], values["PROJECT_NAME"], values["ENVIRONMENT"]
+    families = sorted(terraform_list(infra, "airflow_launch.tf", "airflow_launch_families"))
+    cluster = f"{project}_cluster_{environment}"
+    return {
+        "CLUSTER_ARN": f"arn:aws:ecs:{region}:{account}:cluster/{cluster}",
+        "CONTAINER_INSTANCE_ARN_PATTERN": f"arn:aws:ecs:{region}:{account}:container-instance/{cluster}/*",
+        "TASK_ARN_PATTERN": f"arn:aws:ecs:{region}:{account}:task/{cluster}/*",
+        "LOG_GROUP_NAME": f"{project}_jobs_{environment}",
+        "PROJECT_TAG": project,
+        "SIGNED_PARAMETER_NAME": names["BROKER_SIGNED_PARAMETER_NAME"],
+        "RECORD_PREFIX": names["AIRFLOW_LAUNCH_RECORD_PREFIX"],
+        "FAMILIES": json.dumps(families),
+        "TASK_DEFINITION_ARNS": json.dumps([f"arn:aws:ecs:{region}:{account}:task-definition/{project}_{environment}_job_{f}_host:*" for f in families]),
+        "ROLE_ARNS": json.dumps([f"arn:aws:iam::{account}:role/{project}_job_{kind}_{environment}" for kind in ("execution", "train_task")]),
+    }
 
 
 def role_documents(role: Mapping[str, Any], infra: Path, values: Mapping[str, str], names: Mapping[str, str]) -> list[dict[str, Any]]:
