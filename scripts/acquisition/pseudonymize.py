@@ -62,7 +62,6 @@ NO_IDENTITY = frozenset({"", "-", "n/a", "na", "none", "null", "unknown", "not a
 NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 APOSTROPHES = dict.fromkeys(map(ord, "'‘’ʼ`´."), None)
 APOSTROPHE_FORMS = dict.fromkeys(map(ord, "‘’ʼ`´＇"), "'")
-TEXT_CONNECTORS = "'‘’ʼ`´."
 TEXT_TOKEN = re.compile(r"[^\W_]+(?:['‘’ʼ`´.]+[^\W_]+)*")
 POSSESSIVE_END = re.compile(r"['‘’ʼ`´]s$")
 TREATMENTS = ("keep", "drop", "scrub_names")
