@@ -12,6 +12,7 @@ variables {
   cluster_name                = "example-project-dev"
   ec2_capacity_provider_name  = "example-project-dev-host"
   execution_role_arn          = "arn:aws:iam::111111111111:role/example-execution"
+  serving_execution_role_arn  = "arn:aws:iam::111111111111:role/example-serving-execution"
   polaris_task_role_arn       = "arn:aws:iam::111111111111:role/example-polaris"
   control_plane_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
   data_mount_path             = "/mnt/example-data"
@@ -201,14 +202,14 @@ run "health_checks_and_restarts" {
 
   assert {
     condition = alltrue([
-      for key, service in aws_ecs_service.service :
+      for key, service in merge(aws_ecs_service.service, aws_ecs_service.serving) :
       one(service.deployment_circuit_breaker).enable && one(service.deployment_circuit_breaker).rollback && service.desired_count == 1
     ])
     error_message = "Every service keeps one task and stops a failing deployment through the circuit breaker."
   }
 
   assert {
-    condition     = alltrue([for key, service in aws_ecs_service.service : service.deployment_minimum_healthy_percent == 0 && service.deployment_maximum_percent == 100])
+    condition     = alltrue([for key, service in merge(aws_ecs_service.service, aws_ecs_service.serving) : service.deployment_minimum_healthy_percent == 0 && service.deployment_maximum_percent == 100])
     error_message = "Host ports and data directories allow one task at a time, so a deployment stops the old task first."
   }
 }
@@ -658,7 +659,7 @@ run "secrets_come_from_parameter_store" {
   }
 
   assert {
-    condition     = toset(flatten([for service in aws_ecs_service.service : service.name])) == toset([for key in keys(aws_ecs_service.service) : "example_project_dev_${key}"])
+    condition     = toset(flatten([for service in merge(aws_ecs_service.service, aws_ecs_service.serving) : service.name])) == toset([for key in keys(merge(aws_ecs_service.service, aws_ecs_service.serving)) : "example_project_dev_${key}"])
     error_message = "Service names follow the project, environment and service naming."
   }
 }
@@ -753,7 +754,7 @@ run "every_service_propagates_the_task_definition_tags" {
   command = plan
 
   assert {
-    condition     = length(aws_ecs_service.service) > 0 && alltrue([for service in aws_ecs_service.service : service.propagate_tags == "TASK_DEFINITION" && service.enable_ecs_managed_tags])
+    condition     = length(aws_ecs_service.service) > 0 && alltrue([for service in merge(aws_ecs_service.service, aws_ecs_service.serving) : service.propagate_tags == "TASK_DEFINITION" && service.enable_ecs_managed_tags])
     error_message = "Every service must set propagate_tags to TASK_DEFINITION, or its tasks start without the Project tag."
   }
 }
@@ -836,7 +837,7 @@ run "host_networking_on_the_ec2_provider" {
 
   assert {
     condition = alltrue([
-      for key, service in aws_ecs_service.service :
+      for key, service in merge(aws_ecs_service.service, aws_ecs_service.serving) :
       length(service.network_configuration) == 0
       && one(service.capacity_provider_strategy).capacity_provider == var.ec2_capacity_provider_name
       && service.cluster == var.cluster_name
@@ -2152,7 +2153,7 @@ run "model_api_is_off_by_default" {
   command = plan
 
   assert {
-    condition     = !contains(keys(aws_ecs_task_definition.service), "model_api") && !contains(keys(aws_ecs_service.service), "model_api")
+    condition     = !contains(keys(aws_ecs_task_definition.service), "model_api") && !contains(keys(aws_ecs_service.serving), "model_api")
     error_message = "The model API must not exist unless model_api_enabled is true."
   }
 
@@ -2176,7 +2177,7 @@ run "model_api_is_private_and_pinned" {
   }
 
   assert {
-    condition     = contains(keys(aws_ecs_task_definition.service), "model_api") && aws_ecs_service.service["model_api"].desired_count == 1
+    condition     = contains(keys(aws_ecs_task_definition.service), "model_api") && aws_ecs_service.serving["model_api"].desired_count == 1
     error_message = "One model API task must run when the flag is true."
   }
 
@@ -2304,7 +2305,7 @@ run "streamlit_is_off_by_default" {
   command = plan
 
   assert {
-    condition     = !contains(keys(aws_ecs_task_definition.service), "streamlit") && !contains(keys(aws_ecs_service.service), "streamlit")
+    condition     = !contains(keys(aws_ecs_task_definition.service), "streamlit") && !contains(keys(aws_ecs_service.serving), "streamlit")
     error_message = "The Streamlit page must not exist unless streamlit_enabled is true."
   }
 
@@ -2329,7 +2330,7 @@ run "streamlit_is_private_pinned_and_small" {
   }
 
   assert {
-    condition     = contains(keys(aws_ecs_task_definition.service), "streamlit") && aws_ecs_service.service["streamlit"].desired_count == 1
+    condition     = contains(keys(aws_ecs_task_definition.service), "streamlit") && aws_ecs_service.serving["streamlit"].desired_count == 1
     error_message = "One Streamlit task must run when the flag is true."
   }
 
@@ -2484,4 +2485,356 @@ run "streamlit_with_repeated_types_is_refused" {
   }
 
   expect_failures = [var.streamlit_hai_types]
+}
+
+# D18 serving: the model API and the dashboard are released by GitHub, which registers their task definition revisions and rolls the services to them. So they are
+# services of their own with ignore_changes on task_definition (an owner apply must not roll a release back), their task definitions use the dedicated serving
+# execution role, and the model API reads Feast through its own read-only Redis user.
+run "serving_services_are_their_own_resource" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    streamlit_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  assert {
+    condition     = toset(keys(aws_ecs_service.serving)) == toset(["model_api", "streamlit"]) && !contains(keys(aws_ecs_service.service), "model_api") && !contains(keys(aws_ecs_service.service), "streamlit")
+    error_message = "The model API and the dashboard are services of the serving resource and are no longer in the shared one, so the moved blocks carry them over."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, service in aws_ecs_service.serving :
+      service.name == "example_project_dev_${key}" && service.desired_count == 1 && service.propagate_tags == "TASK_DEFINITION" && service.enable_ecs_managed_tags &&
+      service.deployment_minimum_healthy_percent == 0 && service.deployment_maximum_percent == 100 && one(service.deployment_circuit_breaker).rollback
+    ])
+    error_message = "A serving service keeps the name, count, tag propagation and deployment settings it had in the shared resource, or the move would replace it."
+  }
+
+  assert {
+    condition     = toset(keys(output.service_names)) == toset(concat(keys(aws_ecs_service.service), ["model_api", "streamlit"]))
+    error_message = "The service names output lists the serving services too."
+  }
+}
+
+run "serving_task_definitions_use_the_serving_execution_role" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    streamlit_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  assert {
+    condition = alltrue([
+      for key, definition in aws_ecs_task_definition.service :
+      definition.execution_role_arn == (contains(["model_api", "streamlit"], key) ? "arn:aws:iam::111111111111:role/example-serving-execution" : "arn:aws:iam::111111111111:role/example-execution")
+    ])
+    error_message = "The model API and the dashboard name the serving execution role, and every other task keeps the shared one."
+  }
+
+  assert {
+    condition = alltrue([
+      for definition in values(aws_ecs_task_definition.one_shot) : definition.execution_role_arn == "arn:aws:iam::111111111111:role/example-execution"
+    ])
+    error_message = "The one-shot tasks keep the shared execution role."
+  }
+}
+
+run "the_serving_tasks_inject_only_what_the_serving_execution_role_reads" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    streamlit_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  assert {
+    condition = toset(output.serving_parameter_arns_used) == toset([
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/aws_polaris_serving_client_id",
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/aws_polaris_serving_client_secret",
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_key_hashes",
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_mlflow_credential",
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_mlflow_user",
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_redis_password",
+      "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/streamlit_model_api_key",
+    ])
+    error_message = "The serving tasks inject the seven parameters the serving execution role reads, and no control-plane secret."
+  }
+
+  assert {
+    condition     = !contains(output.serving_parameter_arns_used, "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/redis_password")
+    error_message = "The shared Redis password never reaches a serving task."
+  }
+
+  assert {
+    condition     = !contains(output.control_plane_parameter_arns_used, "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_key_hashes") && contains(output.control_plane_parameter_arns_used, "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_redis_password")
+    error_message = "The control-plane tasks inject the model API's Redis password (the Redis task creates the user from it) and none of the other serving parameters."
+  }
+}
+
+run "serving_without_the_serving_execution_role_is_refused" {
+  command = plan
+
+  variables {
+    serving_execution_role_arn = null
+    model_api_enabled          = true
+    marquez_enabled            = false
+    model_api_task_role_arn    = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri     = "s3://example-data/serving/deployments"
+    model_api_registry_uri     = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri       = "http://127.0.0.1:5100"
+  }
+
+  expect_failures = [var.serving_execution_role_arn]
+}
+
+run "serving_sharing_the_shared_execution_role_is_refused" {
+  command = plan
+
+  variables {
+    serving_execution_role_arn = "arn:aws:iam::111111111111:role/example-execution"
+    model_api_enabled          = true
+    marquez_enabled            = false
+    model_api_task_role_arn    = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri     = "s3://example-data/serving/deployments"
+    model_api_registry_uri     = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri       = "http://127.0.0.1:5100"
+  }
+
+  expect_failures = [var.serving_execution_role_arn]
+}
+
+run "serving_off_needs_no_serving_execution_role" {
+  command = plan
+
+  variables {
+    serving_execution_role_arn = null
+  }
+
+  assert {
+    condition     = length(aws_ecs_service.serving) == 0 && length(output.serving_parameter_arns_used) == 0
+    error_message = "With the serving services off the stack plans none and needs no serving execution role."
+  }
+}
+
+run "redis_is_unchanged_while_the_model_api_is_off" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
+      !strcontains(jsonencode(container), "model_api") && toset([for secret in container.secrets : secret.name]) == toset(["REDIS_PASSWORD", "REDISCLI_AUTH"])
+    ])
+    error_message = "While the model API is off the Redis task names no model API user and injects only its own password."
+  }
+}
+
+run "redis_creates_a_read_only_user_for_the_model_api" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
+      contains(container.secrets, { name = "MODEL_API_REDIS_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_redis_password" }) &&
+      contains(container.secrets, { name = "REDIS_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/redis_password" })
+    ])
+    error_message = "The Redis task injects the model API's Redis password beside its own."
+  }
+
+  # Redis ACLs cannot bind a database, so the user may only run the read commands the serving client sends, select databases 1 (Feast) and 2 (the marker),
+  # and nothing else: no write, no flush, no script, no administration. A connection starts in database 0, which stays empty.
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
+      contains(split("\n", container.command[0]), "rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setinfo +client|setname +select|1 +select|2'")
+    ])
+    error_message = "The model API user is read-only: only the listed read commands, and select for the two databases the client uses."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
+      anytrue([for line in split("\n", container.command[0]) : trimspace(line) == "printf 'user model_api on \"\\076%s\" %s\\n' \"$mp\" \"$rules\""]) &&
+      !anytrue([for word in ["+@", "allkeys", "allcommands", "+set", "+del", "+flush", "+eval", "+config", "+acl", "+keys", "+scan", "+debug", "+shutdown", "+select|0", "+select|3"] : strcontains(container.command[0], word)])
+    ])
+    error_message = "The user is created from the password through a printf line, and the command grants no write, no administration and no select of another database."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
+      anytrue([for line in split("\n", container.command[0]) : trimspace(line) == "printf 'requirepass \"%s\"\\n' \"$pw\""])
+    ])
+    error_message = "The default user keeps its password for the control plane."
+  }
+}
+
+run "the_model_api_logs_in_as_its_own_redis_user" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      contains(container.secrets, { name = "REDIS_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/model_api_redis_password" }) &&
+      contains(container.environment, { name = "REDIS_USERNAME", value = "model_api" }) &&
+      !anytrue([for secret in container.secrets : secret.valueFrom == "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/redis_password"])
+    ])
+    error_message = "The model API presents the password of its own Redis user as REDIS_USERNAME model_api, never the shared Redis password."
+  }
+}
+
+run "the_model_api_redis_password_name_must_differ_from_the_shared_one" {
+  command = plan
+
+  variables {
+    model_api_redis_password_name = "/healthcare_hai_prediction/redis_password"
+  }
+
+  expect_failures = [var.model_api_redis_password_name]
+}
+
+run "container_definitions_with_serving_for_review" {
+  command = plan
+
+  variables {
+    host_memory_mib         = 32768
+    model_api_enabled       = true
+    streamlit_enabled       = true
+    marquez_enabled         = false
+    model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
+    streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
+    model_api_manifest_uri  = "s3://example-data/serving/deployments"
+    model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
+    model_api_mlflow_uri    = "http://127.0.0.1:5100"
+  }
+}
+
+run "the_redis_user_password_reaches_no_file_argument_log_or_dump" {
+  command = plan
+
+  module {
+    source = "./tests/flow"
+  }
+
+  variables {
+    tasks       = run.container_definitions_with_serving_for_review.task_definition_settings
+    definitions = run.container_definitions_with_serving_for_review.container_definitions
+  }
+
+  assert {
+    condition     = output.violations == []
+    error_message = "A line lets the model API's Redis password, or a variable that received it, reach a file, a command argument, the log or the environment dump."
+  }
+
+  assert {
+    condition     = contains(output.containers_checked, "redis/redis")
+    error_message = "The Redis task, which now receives two secrets, is followed by the check."
+  }
+}
+
+run "leak_of_the_model_api_redis_password_to_a_file_is_caught" {
+  command = plan
+
+  module {
+    source = "./tests/flow"
+  }
+
+  variables {
+    tasks = run.container_definitions_with_serving_for_review.task_definition_settings
+    definitions = {
+      redis = replace(run.container_definitions_with_serving_for_review.container_definitions["redis"], "exec redis-server", "printf %s \\\"$mp\\\" >/tmp/review-synthetic-leak\\nexec redis-server")
+    }
+  }
+
+  assert {
+    condition     = contains(output.violations, "redis/redis: printf %s \"$mp\" >/tmp/review-synthetic-leak")
+    error_message = "The ACL user's password written to a file through a variable must fail."
+  }
+}
+
+run "leak_of_the_model_api_redis_password_to_the_log_is_caught" {
+  command = plan
+
+  module {
+    source = "./tests/flow"
+  }
+
+  variables {
+    tasks = run.container_definitions_with_serving_for_review.task_definition_settings
+    definitions = {
+      redis = replace(run.container_definitions_with_serving_for_review.container_definitions["redis"], "exec redis-server", "echo \\\"$MODEL_API_REDIS_PASSWORD\\\"\\nexec redis-server")
+    }
+  }
+
+  assert {
+    condition     = contains(output.violations, "redis/redis: echo \"$MODEL_API_REDIS_PASSWORD\"")
+    error_message = "The ACL user's password echoed to the log must fail."
+  }
+}
+
+run "serving_container_definitions_match_the_approved_versions" {
+  command = plan
+
+  module {
+    source = "./tests/flow"
+  }
+
+  variables {
+    tasks       = run.container_definitions_with_serving_for_review.task_definition_settings
+    definitions = run.container_definitions_with_serving_for_review.container_definitions
+  }
+
+  assert {
+    condition = alltrue([
+      for pin in [
+        { id = "model_api/model_api", digest = "f87f0f24695ce2d0d9e7a0f9306ccbf81fdc5e6ff2dfd680764e07516c884704" },
+        { id = "redis/redis", digest = "58f37afc634efb30e092015385c8d84c4576ebb66aff343d2567d3a75baa87d3" },
+        { id = "streamlit/streamlit", digest = "f8e2c6e9514fc5a6205c06cbfed1d52950ddcce9fe60e33034de38c25a0438af" },
+      ] : output.execution_digests[pin.id] == pin.digest
+    ])
+    error_message = "A serving container script changed from its reviewed version. Review the change, then record its digest here. Current digests: ${jsonencode(output.execution_digests)}"
+  }
 }

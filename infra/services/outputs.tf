@@ -1,6 +1,6 @@
 output "service_names" {
   description = "ECS service name of each control-plane service."
-  value       = merge({ for key, service in aws_ecs_service.service : key => service.name }, { for key, service in aws_ecs_service.catalog : key => service.name })
+  value       = merge({ for key, service in aws_ecs_service.service : key => service.name }, { for key, service in aws_ecs_service.catalog : key => service.name }, { for key, service in aws_ecs_service.serving : key => service.name })
 }
 
 output "task_definition_arns" {
@@ -11,6 +11,16 @@ output "task_definition_arns" {
 output "parameter_names_used" {
   description = "Every Parameter Store name the task definitions read; the execution role needs ssm:GetParameters on exactly these."
   value       = local.secret_names_used
+}
+
+output "serving_parameter_arns_used" {
+  description = "The Parameter Store ARNs the model API and dashboard task definitions inject: the serving execution role reads exactly these."
+  value       = local.serving_secret_arns
+}
+
+output "control_plane_parameter_arns_used" {
+  description = "The Parameter Store ARNs the other task definitions inject, the model API's Redis password among them because the Redis task creates its user from it: the shared execution role reads these."
+  value       = local.other_secret_arns
 }
 
 output "parameter_arns_used" {

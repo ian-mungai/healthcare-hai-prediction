@@ -199,11 +199,16 @@ locals {
     }
   )
 
+  serving_keys        = ["model_api", "streamlit"]
+  serving_containers  = flatten([for key, service in local.services : service.containers if contains(local.serving_keys, key)])
+  other_containers    = concat(flatten([for key, service in local.services : service.containers if !contains(local.serving_keys, key)]), flatten([for task in local.one_shot_tasks : task.containers]))
   all_containers      = concat(flatten([for service in local.services : service.containers]), flatten([for task in local.one_shot_tasks : task.containers]))
   reserved_memory_mib = sum([for service in local.services : sum([for container in service.containers : container.memoryReservation])])
   hard_memory_mib     = sum([for container in local.all_containers : container.memory])
   memory_budget_mib   = var.host_memory_mib - var.other_services_reserve_mib
   secret_arns_used    = sort(distinct(flatten([for container in local.all_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
+  serving_secret_arns = sort(distinct(flatten([for container in local.serving_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
+  other_secret_arns   = sort(distinct(flatten([for container in local.other_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   secret_names_used   = sort([for key, arn in local.secret_arn : local.secret_names[key] if contains(local.secret_arns_used, arn)])
 }
 
@@ -218,7 +223,7 @@ resource "aws_ecs_task_definition" "service" {
   family                   = "${local.name_prefix}_${each.key}"
   requires_compatibilities = ["EC2"]
   network_mode             = "host"
-  execution_role_arn       = var.execution_role_arn
+  execution_role_arn       = contains(local.serving_keys, each.key) ? var.serving_execution_role_arn : var.execution_role_arn
   task_role_arn            = each.value.task_role_arn
   container_definitions    = jsonencode(each.value.containers)
   tags                     = local.tags
@@ -260,7 +265,7 @@ resource "aws_ecs_task_definition" "service" {
 }
 
 resource "aws_ecs_service" "service" {
-  for_each = { for key, value in local.services : key => value if key != "openmetadata" }
+  for_each = { for key, service in local.services : key => service if key != "openmetadata" && !contains(local.serving_keys, key) }
 
   name                               = "${local.name_prefix}_${each.key}"
   cluster                            = var.cluster_name
@@ -313,4 +318,46 @@ resource "aws_ecs_service" "catalog" {
   lifecycle {
     ignore_changes = [desired_count]
   }
+}
+
+# The model API and the dashboard are released by GitHub (owner decision D18): its deploy workflow registers a new task definition revision and rolls the service to it.
+# An owner apply must not roll such a release back, so these two services ignore changes to task_definition. They were services of the shared resource above, and the
+# moved blocks carry them over without a destroy or a replacement.
+resource "aws_ecs_service" "serving" {
+  for_each = { for key, service in local.services : key => service if contains(local.serving_keys, key) }
+
+  name                               = "${local.name_prefix}_${each.key}"
+  cluster                            = var.cluster_name
+  task_definition                    = aws_ecs_task_definition.service[each.key].arn
+  desired_count                      = 1
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+  enable_ecs_managed_tags            = true
+  propagate_tags                     = local.task_tag_source
+  tags                               = local.tags
+
+  capacity_provider_strategy {
+    capacity_provider = var.ec2_capacity_provider_name
+    weight            = 1
+    base              = 1
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+}
+
+moved {
+  from = aws_ecs_service.service["model_api"]
+  to   = aws_ecs_service.serving["model_api"]
+}
+
+moved {
+  from = aws_ecs_service.service["streamlit"]
+  to   = aws_ecs_service.serving["streamlit"]
 }

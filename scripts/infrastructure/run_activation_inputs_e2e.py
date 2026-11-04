@@ -158,6 +158,7 @@ ROWS: list[Row] = [
     Row("services", "openmetadata_task_role_arn", ROLE % "openmetadata_host_task", "arn:aws:iam::1:role/x"),
     Row("services", "model_api_task_role_arn", ROLE % "model_api_task", "arn:aws:iam::1:role/x"),
     Row("services", "streamlit_task_role_arn", ROLE % "streamlit_task", "arn:aws:iam::1:role/x"),
+    Row("services", "serving_execution_role_arn", ROLE % "serving_execution", "arn:aws:iam::1:role/x"),
     Row("services", "broker_task_role_arn", ROLE % "broker_task", "arn:aws:iam::1:role/x"),
     Row("services", "model_api_hai_types", "HAI_1,HAI_2", "HAI_9"),
     Row("services", "streamlit_hai_types", "HAI_1", "HAI_9"),

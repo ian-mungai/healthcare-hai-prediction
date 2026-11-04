@@ -115,6 +115,27 @@ variable "control_plane_task_role_arn" {
   }
 }
 
+variable "serving_execution_role_arn" {
+  description = "Foundation output: the dedicated execution role of the model API and the dashboard (owner decision D18). It pulls their two images, writes their log streams and injects their seven parameters, and reads no control-plane secret. Required when model_api_enabled or streamlit_enabled is true."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.serving_execution_role_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:role/", coalesce(var.serving_execution_role_arn, "x")))
+    error_message = "Supply an IAM role ARN."
+  }
+
+  validation {
+    condition     = !(var.model_api_enabled || var.streamlit_enabled) || var.serving_execution_role_arn != null
+    error_message = "Set serving_execution_role_arn when the model API or the dashboard is on: they do not use the shared execution role."
+  }
+
+  validation {
+    condition     = var.serving_execution_role_arn == null || var.serving_execution_role_arn != var.execution_role_arn
+    error_message = "The serving tasks need an execution role of their own: the shared one reads the control-plane secrets."
+  }
+}
+
 variable "log_group_names" {
   description = "Foundation output: log group name for each component. The keys postgres, redis, polaris, airflow and marquez are required, mlflow when mlflow_enabled is true, and monitoring when monitoring_enabled is true; components may share a group."
   type        = map(string)
