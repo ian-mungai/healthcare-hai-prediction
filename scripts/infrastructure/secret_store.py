@@ -23,6 +23,8 @@ from typing import Any
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from scripts.sdk_logs import quiet_sdk_logs
+
 PREFIX = "/healthcare_hai_prediction/"
 POSTGRES_PASSWORD = PREFIX + "postgres_password"
 POLARIS_ROOT_SECRET = PREFIX + "polaris_root_secret"
@@ -280,9 +282,11 @@ class SecretStore:
                     if self.shared is None:
                         raise SecretStoreError(f"{name} is a shared key and this store has no Secrets Manager client")
                     self.shared_client = self.shared()
-                value = self.shared_client.get_secret_value(SecretId=name).get("SecretString")
+                with quiet_sdk_logs():
+                    value = self.shared_client.get_secret_value(SecretId=name).get("SecretString")
             else:
-                value = self.parameters.get_parameter(Name=name, WithDecryption=True).get("Parameter", {}).get("Value")
+                with quiet_sdk_logs():
+                    value = self.parameters.get_parameter(Name=name, WithDecryption=True).get("Parameter", {}).get("Value")
         except (ClientError, BotoCoreError) as error:
             if self.code(error) not in ("ParameterNotFound", "ResourceNotFoundException"):
                 raise self.failure("reading", name, error) from None

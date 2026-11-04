@@ -40,6 +40,7 @@ from scripts.features import feast_job, feast_materialize
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
+from scripts.sdk_logs import quiet_sdk_logs
 
 PROFILES = ("local", "aws")
 STEPS = ("apply", "materialize")
@@ -222,7 +223,8 @@ class SsmSecretReader:
     def get(self, name: str) -> str:
         if name != redis_secret_name():
             raise ReadError("the AWS profile reads the Redis password secret only")
-        value = self.client.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+        with quiet_sdk_logs():
+            value = self.client.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
         return str(value)
 
 

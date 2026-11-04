@@ -1497,6 +1497,7 @@
     "scripts/orchestration/traffic_probe.py",
     "scripts/process.py",
     "scripts/quality/docker_calls.py",
+    "scripts/sdk_logs.py",
     "scripts/training/__init__.py",
     "scripts/training/bundle.py",
     "scripts/training/dvc_baseline.py",

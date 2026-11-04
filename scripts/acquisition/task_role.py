@@ -20,6 +20,7 @@ from scripts.acquisition.bls_api_transport import QuotaPause
 from scripts.acquisition.collection_layout import RAW_ROOT
 from scripts.acquisition.s3_store import StorageError, encoded_json
 from scripts.acquisition.stored_mirror import require_task_identity
+from scripts.sdk_logs import quiet_sdk_logs
 
 KEYS_VARIABLE = "HAI_TASK_KEYS"
 FILTERED_VARIABLE = "HAI_TASK_FILTERED"
@@ -154,7 +155,8 @@ class TaskKeys:
         region = self.environment["AWS_REGION"]
         require_task_identity(self.factory("sts", region), self.environment["EXPECTED_ACCOUNT_ID"], self.environment["TASK_ROLE_NAME"])
         try:
-            value = self.factory("secretsmanager", region).get_secret_value(SecretId=name).get("SecretString")
+            with quiet_sdk_logs():
+                value = self.factory("secretsmanager", region).get_secret_value(SecretId=name).get("SecretString")
         except Exception:
             raise ApiKeyError(f"reading secret {name} failed") from None
         if not isinstance(value, str) or not value:

@@ -26,7 +26,6 @@ import sys
 import tempfile
 import unicodedata
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -36,6 +35,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import canonical_hash, read_json
+from scripts.sdk_logs import quiet_sdk_logs
 
 CONTRACT_VERSION = 1
 NORMALIZATION_VERSION = "norm_v1"
@@ -220,17 +220,6 @@ def load_key(version: str, reader: KeyReader) -> bytes:
         raise PseudonymizationError("key_malformed") from None
     require(len(key) == KEY_BYTES, "key_malformed")
     return key
-
-
-@contextmanager
-def quiet_sdk_logs() -> Iterator[None]:
-    """Switch off DEBUG logging for the duration of a secret read: the SDK logs response bodies at DEBUG, and the body holds the decrypted value."""
-    previous = logging.root.manager.disable
-    logging.disable(max(previous, logging.DEBUG))
-    try:
-        yield
-    finally:
-        logging.disable(previous)
 
 
 def parameter_store_reader(client: Any) -> KeyReader:

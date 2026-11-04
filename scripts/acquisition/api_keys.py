@@ -36,6 +36,7 @@ from typing import Any
 
 from scripts.acquisition.cli_tools import run_argv
 from scripts.process import SubprocessError, TimeoutExpired
+from scripts.sdk_logs import quiet_sdk_logs
 
 SHARED_KEYS = ("bls_api_key", "census_api_key", "hud_api_key")
 READ_DEADLINE_SECONDS = 60.0
@@ -198,7 +199,8 @@ def fetch(name: str, profile: str, region: str, account: str, arn: str, endpoint
         caller = session.client("sts", **options).get_caller_identity()
         if caller.get("Account") != account or caller.get("Arn") != arn:
             raise Refused("identity_mismatch")
-        value = session.client("secretsmanager", **options).get_secret_value(SecretId=name).get("SecretString")
+        with quiet_sdk_logs():
+            value = session.client("secretsmanager", **options).get_secret_value(SecretId=name).get("SecretString")
     except ClientError as error:
         code = error.response.get("Error", {}).get("Code")
         raise Refused(
