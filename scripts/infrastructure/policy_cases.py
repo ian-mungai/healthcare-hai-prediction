@@ -114,10 +114,11 @@ AWS_WRITER_PARAMETERS = tuple(
     f"aws_polaris_{identity}_client_{part}" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")
 )
 AWS_POLARIS_PARAMETERS = (*AWS_READER_PARAMETERS, *AWS_WRITER_PARAMETERS)
-# The catalog setup creates these two passwords as the project user. IAM has no condition key for the Overwrite flag of PutParameter, so create-only is held by
-# the setup code (openmetadata_secrets writes without overwrite) and the grant is limited to the two names.
+# The catalog setup creates these two passwords as the project user. PutParameter carries the condition key ssm:Overwrite (a string), so an explicit
+# Deny on Overwrite = true keeps the two names create-only. The grant is limited to the two names.
 OPENMETADATA_PASSWORDS = ("openmetadata_admin_password", "openmetadata_db_password")
 OPENMETADATA_STATEMENT = "SetUpOpenMetadataPasswords"
+OPENMETADATA_DENY = "DenyOpenMetadataPasswordOverwrite"
 OPENMETADATA_NEIGHBORS = (
     "openmetadata_bot_lineage",
     "openmetadata_bot_ingestion",
@@ -1067,6 +1068,37 @@ def openmetadata_password_cases() -> Iterator[Case]:
         ):
             for action in ("PutParameter", "GetParameter"):
                 yield Case(f"openmetadata passwords: refuse {action} {name} in {label}", request(f"ssm:{action}", resource, region=None), False)
+    for name in OPENMETADATA_PASSWORDS:
+        resource = parameter(name)
+        yield Case(
+            f"openmetadata passwords: create {name} with Overwrite=false",
+            request("ssm:PutParameter", resource, extra={"ssm:Overwrite": "false"}, region=None),
+            True,
+            OPENMETADATA_STATEMENT,
+        )
+        for value in ("true", "True", "TRUE"):
+            yield Case(
+                f"openmetadata passwords: refuse overwrite of {name} with Overwrite={value}",
+                request("ssm:PutParameter", resource, extra={"ssm:Overwrite": value}, region=None),
+                False,
+            )
+        yield Case(
+            f"openmetadata passwords: read {name} next to an overwrite key",
+            request("ssm:GetParameter", resource, extra={"ssm:Overwrite": "true"}, region=None),
+            True,
+        )
+    yield Case(
+        "openmetadata passwords: overwrite stays allowed for a managed name",
+        request("ssm:PutParameter", parameter("redis_password"), extra={"ssm:Overwrite": "true"}, region=None),
+        True,
+        "ManageProjectParameters",
+    )
+    yield Case(
+        "openmetadata passwords: overwrite stays allowed for an AWS Polaris pair name",
+        request("ssm:PutParameter", parameter("aws_polaris_gold_client_secret"), extra={"ssm:Overwrite": "true"}, region=None),
+        True,
+        "SetUpAwsPolarisPairs",
+    )
     for name in OPENMETADATA_NEIGHBORS:
         for action in ("PutParameter", "GetParameter"):
             yield Case(f"openmetadata passwords: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
@@ -1927,6 +1959,28 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def om_key_use_granted(documents: dict[str, dict[str, Any]]) -> None:
         documents["healthcare_hai_prediction_ssm_policy"]["Statement"].append({"Sid": "UseKey", "Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*"})
 
+    def om_deny_dropped(documents: dict[str, dict[str, Any]]) -> None:
+        drop(documents, "ssm", OPENMETADATA_DENY)
+
+    def om_deny_inverted(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssm", OPENMETADATA_DENY)["Condition"] = {"StringEqualsIgnoreCase": {"ssm:Overwrite": "false"}}
+
+    def om_deny_case_sensitive(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssm", OPENMETADATA_DENY)["Condition"] = {"StringEquals": {"ssm:Overwrite": "true"}}
+
+    def om_deny_one_name(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "ssm", OPENMETADATA_DENY)
+        statement["Resource"] = as_list(statement["Resource"])[:1]
+
+    def om_deny_everywhere(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssm", OPENMETADATA_DENY)["Resource"] = f"arn:aws:ssm:{R}:{A}:parameter/{PARAMETER_FOLDER}/*"
+
+    def om_deny_other_action(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssm", OPENMETADATA_DENY)["Action"] = ["ssm:DeleteParameter"]
+
+    def om_deny_as_allow(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssm", OPENMETADATA_DENY)["Effect"] = "Allow"
+
     openmetadata_defects: dict[str, tuple[str, Mutation]] = {
         f"openmetadata password resource {name} widened": (
             f"openmetadata passwords: refuse PutParameter {name}_extra",
@@ -1936,6 +1990,34 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     }
     openmetadata_defects.update(
         {
+            "openmetadata password overwrite deny dropped": (
+                f"openmetadata passwords: refuse overwrite of {OPENMETADATA_PASSWORDS[0]} with Overwrite=true",
+                om_deny_dropped,
+            ),
+            "openmetadata password overwrite deny turned around": (
+                f"openmetadata passwords: refuse overwrite of {OPENMETADATA_PASSWORDS[1]} with Overwrite=true",
+                om_deny_inverted,
+            ),
+            "openmetadata password overwrite deny matches the value by case": (
+                f"openmetadata passwords: refuse overwrite of {OPENMETADATA_PASSWORDS[0]} with Overwrite=True",
+                om_deny_case_sensitive,
+            ),
+            "openmetadata password overwrite deny covers one name": (
+                f"openmetadata passwords: refuse overwrite of {OPENMETADATA_PASSWORDS[1]} with Overwrite=true",
+                om_deny_one_name,
+            ),
+            "openmetadata password overwrite deny covers the whole folder": (
+                "openmetadata passwords: overwrite stays allowed for a managed name",
+                om_deny_everywhere,
+            ),
+            "openmetadata password overwrite deny names another action": (
+                f"openmetadata passwords: refuse overwrite of {OPENMETADATA_PASSWORDS[0]} with Overwrite=true",
+                om_deny_other_action,
+            ),
+            "openmetadata password overwrite deny is an allow": (
+                f"openmetadata passwords: refuse overwrite of {OPENMETADATA_PASSWORDS[0]} with Overwrite=true",
+                om_deny_as_allow,
+            ),
             "openmetadata password statement dropped": (f"openmetadata passwords: PutParameter {OPENMETADATA_PASSWORDS[1]}", om_statement_dropped),
             "openmetadata password delete action added": (
                 f"openmetadata passwords: refuse DeleteParameter {OPENMETADATA_PASSWORDS[0]}",
