@@ -106,4 +106,47 @@ check "the plan workflow calls AWS only through the script" workflow_calls_aws_o
 check "the plan workflow names no state prefix" workflow_writes_no_state
 check "the plan workflow asks GitHub for the token permission and no write permission" workflow_keeps_the_plan_role_read_only_in_github
 
+# --- the Redis server of the hosted runner (owner decision D18) ---------------------------------------------------------------------------------------
+# redis_acl_cases.sh starts a real redis-server, and the hosted runner image has none. The setup action installs the exact package of the Ubuntu 24.04 archive for the
+# job that runs terraform_checks only, and the step fails when that version is not in the archive. Source of the version: packages.ubuntu.com, noble and noble-updates,
+# redis-server 5:7.0.15-1ubuntu0.24.04.5 (published 2026-10-06), whose redis-tools dependency is the same version. A newer upload makes the step fail until the pin is moved.
+action=.github/actions/setup/action.yml
+workflow=.github/workflows/ci.yml
+group=scripts/ci/groups/terraform_checks.sh
+redis_version='5:7.0.15-1ubuntu0.24.04.5'
+install_line() { grep -E '^\s+sudo apt-get install' "$action" 2> /dev/null || true; }
+redis_step() { awk '/- name: Install the pinned Redis server/ {on = 1; print; next} on && /^    - name:/ {exit} on {print}' "$action" 2> /dev/null || true; }
+
+action_has_the_input() { grep -q '^  redis-server:' "$action" && [[ "$(awk '/^  redis-server:/ {on = 1; next} on && /default:/ {print $2; exit}' "$action")" == '"false"' ]]; }
+step_is_guarded_by_the_input() { [[ -n "$(redis_step)" ]] && redis_step | grep -q "if: \${{ inputs.redis-server == 'true' }}"; }
+install_pins_the_server() { [[ "$(install_line | grep -c "redis-server=\$REDIS_VERSION")" -eq 1 ]]; }
+install_pins_the_tools() { [[ "$(install_line | grep -c "redis-tools=\$REDIS_VERSION")" -eq 1 ]]; }
+version_is_the_archive_version() { [[ "$(redis_step | grep -c "REDIS_VERSION: \"$redis_version\"")" -eq 1 ]]; }
+no_other_redis_package() { [[ "$(install_line | tr ' ' '\n' | grep redis | sort | tr '\n' ' ')" == "\"redis-server=${dollar}REDIS_VERSION\" \"redis-tools=${dollar}REDIS_VERSION\" " ]]; }
+step_stops_on_the_first_error() { redis_step | grep -q 'set -euo pipefail'; }
+step_checks_the_installed_version() { redis_step | grep -q "dpkg-query --show" && redis_step | grep -qF "== \"${dollar}REDIS_VERSION\""; }
+step_does_not_ignore_failure() { [[ -n "$(redis_step)" ]] && ! redis_step | grep -qE '\|\| *(true|:)|continue-on-error|2> */dev/null'; }
+exactly_one_job_asks_for_the_server() { [[ "$(grep -c 'redis-server: "true"' "$workflow")" -eq 1 ]]; }
+that_job_runs_the_core_part() {
+  awk '/^  [a-z_]+:$/ {job = $1} /redis-server: "true"/ {print job}' "$workflow" | grep -qx 'local_ci:' && awk '/^  local_ci:$/ {on = 1; next} on && /^  [a-z_]+:$/ {exit} on' "$workflow" | grep -q 'CI_PART: core'
+}
+group_has_no_skip() { ! grep -qE 'GITHUB_ACTIONS|::warning' "$group"; }
+group_runs_the_cases_in_every_environment() { [[ "$(grep -c 'bash .github/scripts/redis_acl_cases.sh' "$group")" -eq 1 ]] && ! grep -B2 'redis_acl_cases.sh' "$group" | grep -qE '^\s*(if|elif|else)'; }
+local_ci_uses_the_installed_server() { ! grep -qE 'apt-get|brew ' "$group"; }
+
+check "the setup action has a redis-server input that is off by default" action_has_the_input
+check "the install step runs only when the input is true" step_is_guarded_by_the_input
+check "the install pins redis-server to the exact archive version" install_pins_the_server
+check "the install pins redis-tools to the same version" install_pins_the_tools
+check "the pin is the version of the Ubuntu 24.04 archive" version_is_the_archive_version
+check "the install names no other Redis package" no_other_redis_package
+check "the install step stops on the first error" step_stops_on_the_first_error
+check "the install step checks the installed version against the pin" step_checks_the_installed_version
+check "the install step does not ignore a failure" step_does_not_ignore_failure
+check "exactly one workflow job asks for the server" exactly_one_job_asks_for_the_server
+check "that job is the one that runs the core part, with terraform_checks" that_job_runs_the_core_part
+check "the terraform_checks group no longer skips the Redis cases on a hosted runner" group_has_no_skip
+check "the group runs the Redis cases in every environment" group_runs_the_cases_in_every_environment
+check "the group installs nothing itself, so local CI keeps using the machine's server" local_ci_uses_the_installed_server
+
 [[ $failures -eq 0 ]]

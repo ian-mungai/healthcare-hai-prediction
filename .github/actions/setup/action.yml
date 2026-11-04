@@ -11,6 +11,10 @@ inputs:
     description: Also install the Python lint tools and the AWS ruleset of TFLint, which only the hook group that runs those linters needs.
     required: false
     default: "false"
+  redis-server:
+    description: Also install the pinned Redis server of the Ubuntu 24.04 archive, which only the job that runs the terraform_checks group needs for its Redis cases.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -72,6 +76,22 @@ runs:
         fi
         mkdir -p "$HOME/.terraform.d/plugin-cache"
         echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+
+    # The Redis cases start a real redis-server and the hosted runner image has none. The exact version of the Ubuntu 24.04 archive (noble and noble-updates,
+    # packages.ubuntu.com, published 2026-10-06) is installed with its redis-tools of the same version, and the step fails when that version is no longer in the
+    # archive: then look up the new version, record it here and in .github/scripts/workflow_input_cases.sh. Local CI uses the machine's own redis-server.
+    - name: Install the pinned Redis server
+      if: ${{ inputs.redis-server == 'true' }}
+      shell: bash
+      env:
+        REDIS_VERSION: "5:7.0.15-1ubuntu0.24.04.5"
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends "redis-server=$REDIS_VERSION" "redis-tools=$REDIS_VERSION"
+        installed="$(dpkg-query --show --showformat='${Version}' redis-server)"
+        [[ "$installed" == "$REDIS_VERSION" ]] || { echo "redis-server $installed is installed, not $REDIS_VERSION." >&2; exit 1; }
+        redis-server --version
 
     - name: Install the lint tools
       if: ${{ inputs.lint-tools == 'true' }}
