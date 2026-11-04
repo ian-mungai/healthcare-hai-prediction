@@ -909,8 +909,8 @@ def temporary_uses(path: str, text: str, listed: list[str]) -> list[tuple[int, s
             found += [(line, item) for item, pattern in named.items() if pattern.search(value)]
             found += [(line, item) for item, pattern in dotted.items() if pattern.search(value)]
     else:
-        for number, line in enumerate(text.splitlines(), 1):
-            found += [(number, item) for item, pattern in named.items() if pattern.search(line)]
+        for number, text_line in enumerate(text.splitlines(), 1):
+            found += [(number, item) for item, pattern in named.items() if pattern.search(text_line)]
     return sorted(set(found))
 
 
