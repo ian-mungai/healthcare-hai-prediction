@@ -773,3 +773,39 @@ run "a_region_code_over_the_bound_is_refused" {
 
   expect_failures = [var.aws_region]
 }
+
+run "the_delivery_boundary_names_the_shared_secrets_and_the_exact_state_keys" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      join(",", sort([for resource in output.github_oidc_boundary_allowed_resources : resource if strcontains(resource, ":secret:")])) == join(",", sort([
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-??????",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:jev_api_key-??????"
+      ]))
+    )
+    error_message = "The boundary may describe the four shared API key secrets by name and no other secret. A pattern such as *_api_key would reach another project's key."
+  }
+
+  assert {
+    condition = (
+      join(",", sort([for resource in output.github_oidc_boundary_allowed_resources : resource if strcontains(resource, "terraform_state")])) == join(",", sort([
+        "arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate",
+        "arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate",
+        "arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate"
+      ]))
+    )
+    error_message = "The boundary may read the three exact state keys. terraform.tfstate.backup and the lock files stay out of reach."
+  }
+
+  assert {
+    condition     = !anytrue([for resource in output.github_oidc_boundary_allowed_resources : strcontains(resource, "log-group:") && endswith(resource, "*") && !endswith(resource, ":*")])
+    error_message = "A log group pattern must end at the environment name, so a log group with a suffix such as _devops stays out of reach."
+  }
+}
