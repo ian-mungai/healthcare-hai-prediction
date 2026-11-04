@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CREDENTIAL = "synthetic-comparison-bot-value"
 NAMESPACE = "hai-prediction-aws"
 OBSERVED: dict[str, Any] = {}
-RUNS = {
+RUNS: dict[str, dict[str, Any]] = {
     "silver": {
         "id": "20261103T100000Z-aaaaaaa1",
         "job": "silver_transform_dag.silver_build",
