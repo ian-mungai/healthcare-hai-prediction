@@ -1,5 +1,5 @@
 {
-  "bronze_live_locations": {},
+  "bronze_live_locations": false,
   "bronze_qualification_collection": "",
   "bronze_writer_prepared": false,
   "job_writer_e2e_prepared": false
