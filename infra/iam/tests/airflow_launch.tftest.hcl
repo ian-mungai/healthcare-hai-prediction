@@ -393,8 +393,15 @@ run "launch_records_are_written_once_under_their_prefix" {
         Action   = "s3:GetObject"
         Resource = "arn:aws:s3:::example-project-ci-bucket/lakehouse/launch_records/*"
       },
+      {
+        Sid       = "ListLaunchRecords"
+        Effect    = "Allow"
+        Action    = "s3:ListBucket"
+        Resource  = "arn:aws:s3:::example-project-ci-bucket"
+        Condition = { StringLike = { "s3:prefix" = ["lakehouse/launch_records/*"] } }
+      },
     ]
-    error_message = "A launch record is created with a conditional write that fails when the object exists, is read back and is never replaced or deleted, under the record prefix only."
+    error_message = "A launch record is created with a conditional write that fails when the object exists, is read back, is listed under the record prefix only and is never replaced or deleted."
   }
 }
 
@@ -409,9 +416,10 @@ run "the_record_prefix_follows_the_variable" {
     condition = (
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement : statement.Resource][0] == "arn:aws:s3:::example-project-ci-bucket/example/records/*" &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement : statement.Resource][1] == "arn:aws:s3:::example-project-ci-bucket/example/records/*" &&
+      jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement[2].Condition.StringLike["s3:prefix"] == ["example/records/*"] &&
       output.airflow_launch_roles["airflow_launch_task"].record_prefix == "example/records/"
     )
-    error_message = "Both record grants and the output follow the record prefix variable."
+    error_message = "The record grants, the list condition and the output follow the record prefix variable."
   }
 }
 

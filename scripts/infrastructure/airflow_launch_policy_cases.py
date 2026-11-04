@@ -2,7 +2,7 @@
 
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
 families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
-instances, and write each launch record once under its own prefix. It holds nothing else.
+instances, and write each launch record once, list and read them under its own prefix. It holds nothing else.
 
 The three policies are one role, so every request is decided against all of them together. Each grant is checked against requests written here, apart from
 the rendered policies. The refusals do not depend on the policy under inspection: a fixed list of actions is tried against a fixed list of resource
@@ -232,6 +232,7 @@ def job_cases() -> list[Case]:
 def record_cases() -> list[tuple[Any, ...]]:
     """The launch records: created once under their prefix, read back, never replaced or removed."""
     key = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
+    bucket = f"arn:aws:s3:::{BUCKET}"
     other = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/intent.json"
     return [
         ("create a launch record", "s3:PutObject", key, True, ONCE),
@@ -255,7 +256,19 @@ def record_cases() -> list[tuple[Any, ...]]:
         ("read a sibling prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/launch_records_extra/intent.json", False),
         ("read a record in another bucket", "s3:GetObject", f"arn:aws:s3:::another-bucket/{RECORD_PREFIX}intent.json", False),
         ("read a version of a launch record", "s3:GetObjectVersion", key, False),
-        ("list the record prefix", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False, {"s3:prefix": (RECORD_PREFIX,)}),
+        ("list the record prefix", "s3:ListBucket", bucket, True, {"s3:prefix": (RECORD_PREFIX,)}),
+        ("list the record prefix with a delimiter", "s3:ListBucket", bucket, True, {"s3:prefix": (RECORD_PREFIX,), "s3:delimiter": ("/",)}),
+        ("list below the record prefix", "s3:ListBucket", bucket, True, {"s3:prefix": (f"{RECORD_PREFIX}20261030T100000Z-abcdef01/train/",)}),
+        ("list with no prefix", "s3:ListBucket", bucket, False),
+        ("list with an empty prefix", "s3:ListBucket", bucket, False, {"s3:prefix": ("",)}),
+        ("list with a delimiter and no prefix", "s3:ListBucket", bucket, False, {"s3:delimiter": ("/",)}),
+        ("list the lakehouse", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/",)}),
+        ("list the staged inputs", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/",)}),
+        ("list a sibling of the record prefix", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/launch_records_extra/",)}),
+        ("list the record prefix of another bucket", "s3:ListBucket", "arn:aws:s3:::another-bucket", False, {"s3:prefix": (RECORD_PREFIX,)}),
+        ("list the record prefix as an object", "s3:ListBucket", f"{bucket}/{RECORD_PREFIX}", False, {"s3:prefix": (RECORD_PREFIX,)}),
+        ("list the versions under the record prefix", "s3:ListBucketVersions", bucket, False, {"s3:prefix": (RECORD_PREFIX,)}),
+        ("list the multipart uploads under the record prefix", "s3:ListBucketMultipartUploads", bucket, False, {"s3:prefix": (RECORD_PREFIX,)}),
     ]
 
 
@@ -302,6 +315,7 @@ PERMISSIVE: Context = {
     "aws:ResourceTag/HaiJob": ("train",),
     "ecs:CreateAction": ("RunTask",),
     "iam:PassedToService": (ECS_TASKS,),
+    "s3:prefix": (RECORD_PREFIX,),
     **ONCE,
 }
 STREAM = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
@@ -329,7 +343,7 @@ RESOURCES = (
     Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
     Resource("launch record", RECORD, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("lakehouse table file", LAKEHOUSE_FILE, NONE, NONE),
-    Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", NONE, NONE),
+    Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", frozenset({"s3:ListBucket"}), NONE),
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
     Resource("signed publish record", SIGNED_ARN, frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
@@ -378,6 +392,7 @@ ACTIONS = (
     "s3:RestoreObject",
     "s3:ListBucket",
     "s3:ListBucketMultipartUploads",
+    "s3:ListBucketVersions",
     "logs:GetLogEvents",
     "logs:FilterLogEvents",
     "logs:PutLogEvents",
@@ -449,6 +464,7 @@ WIDENING_ACTIONS = {
     "ReadSignedPublishRecord": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
+    "ListLaunchRecords": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
     "ReadStagedRequests": ("s3:PutObject", "s3:DeleteObject"),
 }
 
@@ -478,7 +494,9 @@ def widenings(role_documents_: Role) -> list[tuple[str, str, dict[str, Any]]]:
 
 def replaced(document: dict[str, Any], sid: str, **fields: Any) -> dict[str, Any]:
     changed = copy.deepcopy(document)
-    next(item for item in changed["Statement"] if item["Sid"] == sid).update(fields)
+    for item in changed["Statement"]:
+        if item["Sid"] == sid:
+            item.update(fields)
     return changed
 
 
@@ -532,6 +550,26 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
             "records",
             "an_extra_statement_deletes_a_record",
             appended(records, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:DeleteObject", "Resource": f"{RECORDS}*"}),
+        ),
+        (
+            "records",
+            "an_extra_statement_lists_without_the_prefix_condition",
+            appended(records, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": bucket}),
+        ),
+        (
+            "records",
+            "ListLaunchRecords_the_prefix_condition_widened_to_the_bucket_root",
+            replaced(records, "ListLaunchRecords", Condition={"StringLike": {"s3:prefix": ["*"]}}),
+        ),
+        (
+            "records",
+            "ListLaunchRecords_the_prefix_condition_widened_to_the_lakehouse",
+            replaced(records, "ListLaunchRecords", Condition={"StringLike": {"s3:prefix": ["lakehouse/*"]}}),
+        ),
+        (
+            "records",
+            "ListLaunchRecords_a_prefix_condition_on_the_wrong_key",
+            replaced(records, "ListLaunchRecords", Condition={"StringLike": {"s3:delimiter": ["*"]}}),
         ),
         ("records", "ReadLaunchRecords_the_lakehouse", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/lakehouse/*")),
         ("records", "ReadLaunchRecords_the_whole_bucket", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/*")),

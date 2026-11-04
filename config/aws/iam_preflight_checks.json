@@ -689,6 +689,14 @@
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/train/0/intent.json"
     },
     {
+      "role": "airflow_launch",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/"
+      }
+    },
+    {
       "role": "train",
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"

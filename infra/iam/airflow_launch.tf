@@ -23,7 +23,7 @@ variable "airflow_launch_families" {
 }
 
 variable "airflow_launch_record_prefix" {
-  description = "Key prefix in the data bucket under which the launch role creates and reads its launch records. A record is created once, by a conditional write that fails when the object exists, and is never replaced or deleted."
+  description = "Key prefix in the data bucket under which the launch role creates, lists and reads its launch records. A record is created once, by a conditional write that fails when the object exists, and is never replaced or deleted. The list grant lets a missing record read as absent instead of as a refusal."
   type        = string
   default     = "lakehouse/launch_records/"
   nullable    = false
