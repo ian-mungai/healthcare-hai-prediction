@@ -79,3 +79,7 @@ config scripts/quality/run_model_metadata_e2e.py -- confidential_columns appears
 config docs/data_collection.md -- the tracked document keeps its earlier wording until the documents leave the repository (decision 166)
 config scripts/quality/dbt_manifest_labels.py -- the Public label guard names the removed Confidential label keys so it can refuse any model that brings them back
 config scripts/quality/label_guard_fixtures.py -- the guard's test fixtures plant the removed Confidential label keys to prove the guard refuses them
+orphan orchestration/ecs_launch_provider.py -- the Airflow image imports the launch operator by name when a DAG uses it; the offline cases run its guarantees through orchestration/ecs_launch_operator.py over a stand-in
+unused-code orchestration/ecs_launch_provider.py -- Airflow's DAG parser imports the operator class by name
+unused-code orchestration/ecs_launch_operator.py -- the provider operator's execute calls the four hooks by name, the task runner calls on_kill, and the unused started_by argument is part of the hook signature
+unused-code scripts/orchestration/ecs_launch_standin.py -- the stand-in keeps the signatures of the provider operator, so unused arguments and the hook names stay

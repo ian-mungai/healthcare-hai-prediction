@@ -48,6 +48,7 @@ class FakeEcs:
         self.finish_after = FINISH_AFTER
         self.host_provider = "stand-in_host"  # the registered EC2 capacity provider of the cluster
         self.host_full = False
+        self.instance_free = {"CPU": 4096, "MEMORY": 31000}  # what the host's container instance reports as remaining
         self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
 
     def count(self, operation: str) -> int:
@@ -144,6 +145,24 @@ class FakeEcs:
                 task["lastStatus"] = "RUNNING"
             tasks.append(self._view(task))
         return {"tasks": tasks, "failures": failures}
+
+    def list_container_instances(self, **arguments: Any) -> dict[str, Any]:
+        self._enter("list_container_instances", arguments)
+        return {"containerInstanceArns": [f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in"]}
+
+    def describe_container_instances(self, **arguments: Any) -> dict[str, Any]:
+        self._enter("describe_container_instances", arguments)
+        remaining = [{"name": name, "type": "INTEGER", "integerValue": value} for name, value in self.instance_free.items()]
+        return {
+            "containerInstances": [
+                {"containerInstanceArn": arn, "status": "ACTIVE", "remainingResources": remaining} for arn in arguments["containerInstances"]
+            ],
+            "failures": [],
+        }
+
+    def finish(self, arn: str, exits: Mapping[str, int | None] | None = None) -> None:
+        """End a task now, as if its containers exited with ``exits`` (a container not named exits 0)."""
+        self._finish(self.tasks[arn], exits or {}, "Essential container in task exited")
 
     def stop_task(self, **arguments: Any) -> dict[str, Any]:
         self._enter("stop_task", arguments)
