@@ -216,6 +216,7 @@ def exchange(connection: http.client.HTTPConnection, payload: bytes, headers: di
         if response.status == 200:
             box["raw"] = response.read(MAX_ANSWER_BYTES + 1)
     except (OSError, http.client.HTTPException) as error:
+        box["error_at"] = time.monotonic()
         box["error"] = error
 
 
@@ -236,10 +237,9 @@ def predict(settings: Settings, hai_type: str, ccn: str, window_year: int) -> Pr
     started = time.monotonic()
     worker = threading.Thread(target=exchange, args=(connection, payload, headers, abandoned, box), daemon=True)
     worker.start()
+    cutoff = started + settings.deadline_seconds
     worker.join(settings.deadline_seconds)
     kind = ""
-    # Freeze what the worker reported by the deadline: a later error comes from the shutdown below and must not change the outcome.
-    error = box.get("error")
     if worker.is_alive():
         abandoned.set()
         sock = connection.sock
@@ -248,8 +248,11 @@ def predict(settings: Settings, hai_type: str, ccn: str, window_year: int) -> Pr
                 sock.shutdown(socket.SHUT_RDWR)
         kind = "timeout"
     connection.close()
-    if kind != "timeout":
-        error = box.get("error")
+    error = box.get("error")
+    error_at = box.get("error_at")
+    # After a timeout, only an error the worker recorded before the deadline counts. A later one comes from the shutdown above.
+    if error is not None and kind == "timeout" and not (isinstance(error_at, float) and error_at <= cutoff):
+        error = None
     status: int | None = box.get("status")
     if error is not None:
         kind = "timeout" if isinstance(error, TimeoutError) else "unreachable"
