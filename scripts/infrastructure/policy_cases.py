@@ -1526,6 +1526,17 @@ DEPLOY_STREAMLIT = arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_streamlit")
 # Services of the cluster that no delivery role may update: they serve no user and hold the data stores or the orchestration.
 UNSERVED_SERVICES = tuple(arn("ecs", f"service/{P}_cluster_{E}/{P}_{E}_{name}") for name in ("airflow", "postgres", "polaris", "mlflow"))
 DEPLOY_TASK_ROLES = tuple(f"arn:aws:iam::{A}:role/{P}_{name}_{E}" for name in ("model_api_task", "streamlit_task", "task_execution"))
+# D18 model releases: GitHub registers serving revisions that name a dedicated execution role. It must read none of the control-plane secrets.
+SERVING_SERVICES = ("model_api", "streamlit")
+SERVING_PARAMETERS = (
+    "model_api_key_hashes",
+    "aws_polaris_serving_client_id",
+    "aws_polaris_serving_client_secret",
+    "model_api_mlflow_user",
+    "model_api_mlflow_credential",
+    "streamlit_model_api_key",
+)
+SERVING_EXECUTION = "serving_execution"
 ECS_TASKS = "ecs-tasks.amazonaws.com"
 # A delivery role whose own policy grants far more than the delivery work: only the delivery boundary stands between it and the account.
 DELIVERY_WIDE_POLICY = {
@@ -2028,12 +2039,67 @@ def execution_cases() -> Iterator[Case]:
     yield case("no log group create", "logs:CreateLogGroup", LOG_GROUP, False)
 
 
+def serving_execution_cases() -> Iterator[Case]:
+    """The dedicated serving execution role: it injects exactly the six serving parameters, pulls two images and writes two log groups.
+
+    GitHub registers serving task definition revisions that name this role (D18), so it must read none of the control-plane secrets that the shared task
+    execution role injects. The shared role's nine parameters are each refused.
+    """
+
+    def case(label: str, action: str, resource: str, allowed: bool, region: str | None = R) -> Case:
+        return Case(f"serving execution: {label}", request(action, resource, region=region), allowed, None, SERVING_EXECUTION)
+
+    for name in SERVING_PARAMETERS:
+        yield case(f"injects {name}", "ssm:GetParameters", parameter(name), True)
+    for name in EXECUTION_PARAMETERS:
+        yield case(f"cannot inject the control-plane parameter {name}", "ssm:GetParameters", parameter(name), False)
+    for name in ("airflow_admin", "other_secret", "mlflow_db_password", "mlflow_admin_password", "broker_token", "model_api_key_hashes_extra"):
+        yield case(f"cannot inject {name}", "ssm:GetParameters", parameter(name), False)
+    yield case(
+        "cannot inject a serving name of another project",
+        "ssm:GetParameters",
+        parameter("model_api_key_hashes").replace(PARAMETER_FOLDER, "other_project"),
+        False,
+    )
+    yield case("cannot inject a serving name in another region", "ssm:GetParameters", parameter("model_api_key_hashes").replace(R, "us-east-1"), False)
+    for action in ("ssm:GetParameter", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DescribeParameters", "secretsmanager:GetSecretValue", "kms:Decrypt"):
+        yield case(f"no {action}", action, parameter("model_api_key_hashes"), False)
+    yield case("cannot read a Secrets Manager secret", "secretsmanager:GetSecretValue", arn("secretsmanager", "secret:census_api_key-AbCdEf"), False)
+    yield case("registry token", "ecr:GetAuthorizationToken", "*", True)
+    yield case("registry token in another region", "ecr:GetAuthorizationToken", "*", False, "us-east-1")
+    for service in SERVING_SERVICES:
+        for action in ("BatchCheckLayerAvailability", "BatchGetImage", "GetDownloadUrlForLayer"):
+            yield case(f"pulls {service} with {action}", f"ecr:{action}", arn("ecr", f"repository/{P}_{service}_{E}"), True)
+    for name in ("airflow", "training", "spark", "polaris", "model_api_extra"):
+        yield case(f"cannot pull the {name} image", "ecr:BatchGetImage", arn("ecr", f"repository/{P}_{name}_{E}"), False)
+    yield case("cannot pull a serving image of another environment", "ecr:BatchGetImage", arn("ecr", f"repository/{P}_model_api_prod"), False)
+    yield case("cannot pull another project's serving image", "ecr:BatchGetImage", arn("ecr", f"repository/other_project_model_api_{E}"), False)
+    yield case("cannot push", "ecr:PutImage", arn("ecr", f"repository/{P}_model_api_{E}"), False)
+    # The services stack sends both serving containers to the shared airflow log group, each under its own stream prefix.
+    group = f"log-group:{P}_airflow_{E}"
+    for service in SERVING_SERVICES:
+        stream = arn("logs", f"{group}:log-stream:{service}/{service}/abc")
+        yield case(f"writes the {service} log stream", "logs:PutLogEvents", stream, True)
+        yield case(f"creates a {service} log stream", "logs:CreateLogStream", stream, True)
+    for name in ("airflow_scheduler", "postgres", "polaris"):
+        yield case(f"cannot write the {name} log stream", "logs:PutLogEvents", arn("logs", f"{group}:log-stream:{name}/{name}/abc"), False)
+    for name in ("jobs", "postgres", "model_api"):
+        yield case(
+            f"cannot write the {name} log group", "logs:PutLogEvents", arn("logs", f"log-group:{P}_{name}_{E}:log-stream:model_api/model_api/abc"), False
+        )
+    yield case(
+        "cannot write another project's log", "logs:PutLogEvents", arn("logs", f"log-group:other_project_airflow_{E}:log-stream:model_api/model_api/abc"), False
+    )
+    yield case("cannot create a log group", "logs:CreateLogGroup", arn("logs", f"log-group:{P}_model_api_{E}"), False)
+
+
 def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     """Every case the evaluator suite runs."""
     current = list(current_cases(operations))
     yield from current
     yield from bounded_role_cases()
     yield from delivery_cases()
+    yield from serving_execution_cases()
 
 
 def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
@@ -2105,6 +2171,7 @@ def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str,
         "snapshots": [documents["owner_snapshots"]],
         "execution": [documents["owner_task_execution"]],
         "task_execution": [documents["owner_task_execution"]],
+        SERVING_EXECUTION: [documents["owner_serving_execution"]],
         WIDE_ROLE: [WIDE_ROLE_POLICY],
         **delivery,
         DELIVERY_WIDE: [DELIVERY_WIDE_POLICY],
@@ -2821,8 +2888,110 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         ),
     }
 
+    def serving_statement(documents: dict[str, dict[str, Any]], sid: str) -> dict[str, Any]:
+        return next(statement for statement in documents["owner_serving_execution"]["Statement"] if statement["Sid"] == sid)
+
+    def serving_adds_resource(sid: str, resource: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = serving_statement(documents, sid)
+            statement["Resource"] = [*as_list(statement["Resource"]), resource]
+
+        return mutation
+
+    def serving_sets_resource(sid: str, resource: str | list[str]) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            serving_statement(documents, sid)["Resource"] = resource
+
+        return mutation
+
+    def serving_adds_action(sid: str, action: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = serving_statement(documents, sid)
+            statement["Action"] = [*as_list(statement["Action"]), action]
+
+        return mutation
+
+    def serving_drops(*sids: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            policy = documents["owner_serving_execution"]
+            policy["Statement"] = [statement for statement in policy["Statement"] if statement["Sid"] not in sids]
+
+        return mutation
+
+    def serving_without_resource(sid: str, fragment: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = serving_statement(documents, sid)
+            statement["Resource"] = [resource for resource in as_list(statement["Resource"]) if fragment not in resource]
+
+        return mutation
+
+    def serving_creates_groups(documents: dict[str, dict[str, Any]]) -> None:
+        documents["owner_serving_execution"]["Statement"].append(
+            {"Sid": "CreateGroups", "Effect": "Allow", "Action": "logs:CreateLogGroup", "Resource": arn("logs", f"log-group:{P}_*")}
+        )
+
+    def serving_reads_secrets(documents: dict[str, dict[str, Any]]) -> None:
+        documents["owner_serving_execution"]["Statement"].append(
+            {"Sid": "ReadSecrets", "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "*"}
+        )
+
+    serving_execution_defects: dict[str, tuple[str, Mutation]] = {
+        "serving execution: injects the Redis password": (
+            "serving execution: cannot inject the control-plane parameter redis_password",
+            serving_adds_resource("InjectServingParameters", parameter("redis_password")),
+        ),
+        "serving execution: injects the PostgreSQL password": (
+            "serving execution: cannot inject the control-plane parameter postgres_password",
+            serving_adds_resource("InjectServingParameters", parameter("postgres_password")),
+        ),
+        "serving execution: injects every parameter of the project folder": (
+            "serving execution: cannot inject the control-plane parameter polaris_root_secret",
+            serving_sets_resource("InjectServingParameters", parameter("*")),
+        ),
+        "serving execution: injects a name that only starts like a serving one": (
+            "serving execution: cannot inject model_api_key_hashes_extra",
+            serving_sets_resource("InjectServingParameters", [parameter("model_api_key_hashes*"), *[parameter(name) for name in SERVING_PARAMETERS[1:]]]),
+        ),
+        "serving execution: reads one parameter at a time": (
+            "serving execution: no ssm:GetParameter",
+            serving_adds_action("InjectServingParameters", "ssm:GetParameter"),
+        ),
+        "serving execution: reads a Secrets Manager secret": ("serving execution: cannot read a Secrets Manager secret", serving_reads_secrets),
+        "serving execution: decrypts with a key": ("serving execution: no kms:Decrypt", serving_adds_action("InjectServingParameters", "kms:Decrypt")),
+        "serving execution: pulls every image of the project": (
+            "serving execution: cannot pull the airflow image",
+            serving_sets_resource("PullServingImages", arn("ecr", f"repository/{P}_*")),
+        ),
+        "serving execution: pulls serving images of every environment": (
+            "serving execution: cannot pull a serving image of another environment",
+            serving_sets_resource("PullServingImages", [arn("ecr", f"repository/{P}_model_api_*"), arn("ecr", f"repository/{P}_streamlit_*")]),
+        ),
+        "serving execution: pushes images": ("serving execution: cannot push", serving_adds_action("PullServingImages", "ecr:PutImage")),
+        "serving execution: writes every stream of the shared log group": (
+            "serving execution: cannot write the airflow_scheduler log stream",
+            serving_sets_resource("WriteServingLogs", arn("logs", f"log-group:{P}_airflow_{E}:log-stream:*")),
+        ),
+        "serving execution: writes the logs of every group": (
+            "serving execution: cannot write the jobs log group",
+            serving_sets_resource("WriteServingLogs", arn("logs", f"log-group:{P}_*:log-stream:*")),
+        ),
+        "serving execution: creates log groups": (
+            "serving execution: cannot create a log group",
+            serving_creates_groups,
+        ),
+        "serving execution: loses the parameter injection": ("serving execution: injects model_api_key_hashes", serving_drops("InjectServingParameters")),
+        "serving execution: loses one serving parameter": (
+            "serving execution: injects streamlit_model_api_key",
+            serving_without_resource("InjectServingParameters", "streamlit_model_api_key"),
+        ),
+        "serving execution: loses the image pull": ("serving execution: pulls model_api with BatchGetImage", serving_drops("PullServingImages")),
+        "serving execution: loses the log write": ("serving execution: writes the model_api log stream", serving_drops("WriteServingLogs")),
+        "serving execution: loses the registry token": ("serving execution: registry token", serving_drops("EcrToken")),
+    }
+
     return {
         **job_defects,
+        **serving_execution_defects,
         **delivery_defects,
         **plan_delivery_defects,
         **aws_pair_defects,

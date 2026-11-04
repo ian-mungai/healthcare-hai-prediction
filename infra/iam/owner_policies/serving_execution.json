@@ -1,0 +1,54 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrToken",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "PullServingImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": [
+        "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_model_api_${ENVIRONMENT}",
+        "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_streamlit_${ENVIRONMENT}"
+      ]
+    },
+    {
+      "Sid": "WriteServingLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_airflow_${ENVIRONMENT}:log-stream:model_api/*",
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_airflow_${ENVIRONMENT}:log-stream:streamlit/*"
+      ]
+    },
+    {
+      "Sid": "InjectServingParameters",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MODEL_API_KEY_HASHES_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SERVING_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SERVING_CLIENT_SECRET_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MODEL_API_MLFLOW_USER_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MODEL_API_MLFLOW_CREDENTIAL_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${STREAMLIT_MODEL_API_KEY_NAME}"
+      ]
+    }
+  ]
+}

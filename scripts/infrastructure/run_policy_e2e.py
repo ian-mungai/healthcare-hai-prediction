@@ -261,6 +261,7 @@ def load_all() -> dict[str, dict[str, Any]]:
     documents["owner_snapshots"] = render_template((OWNER_DIRECTORY / "snapshots.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     documents[TASK_EXECUTION] = render_task_execution(OWNER_DIRECTORY)
     documents[policy_cases.DELIVERY_BOUNDARY] = render_template((BOUNDARY_DIRECTORY / DELIVERY_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
+    documents["owner_serving_execution"] = render_template((OWNER_DIRECTORY / "serving_execution.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     return {**documents, **load_roles(), **load_delivery(documents)}
 
 
