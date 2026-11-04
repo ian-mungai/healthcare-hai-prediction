@@ -3655,6 +3655,334 @@ def mlflow_stop_overlap(env: Env) -> dict[str, bool]:
     }
 
 
+@contextlib.contextmanager
+def recording_launcher(env: Env) -> Iterator[tuple[launcher.Launcher, list[tuple[str, str]]]]:
+    """A launcher object on the case's registry that serves nothing and runs no worker. Its ``spawn`` keeps the rule of the real one (a key that is in
+    flight starts no second worker) and records the (key, tag) of each worker it would run; ``deliver`` returns a result as the message loop does."""
+    with compactor(env) as instance:
+        spawned: list[tuple[str, str]] = []
+
+        def spawn(key: str, tag: str, function: Callable[..., Any], *arguments: Any) -> None:
+            if key in instance.inflight:
+                return
+            instance.inflight.add(key)
+            spawned.append((key, tag))
+
+        instance.docker_ok, instance.status = True, "serving"
+        with mock.patch.object(instance, "spawn", spawn):
+            yield instance, spawned
+
+
+def deliver(instance: launcher.Launcher, worker: tuple[str, str], outcome: str, value: Any) -> None:
+    """Return one worker's result to its handler, as ``drain_messages`` does."""
+    key, tag = worker
+    instance.inflight.discard(key)
+    instance.message_handlers[tag](key, outcome, value)
+
+
+def registry_state(env: Env) -> dict[str, Any]:
+    """A copy of the registry state, read by this process."""
+    state: dict[str, Any] = json.loads(json.dumps(env.state()))
+    return state
+
+
+def started_attempt(identity: str) -> dict[str, Any]:
+    """The part of a started service attempt that the health steps read."""
+    return {"id": identity, "phase": "started", "container_id": f"container-{identity}", "reason": ""}
+
+
+def limit_error(identity: str) -> launcher.LauncherError:
+    """A failed limit worker whose text names the record that asked for it."""
+    return launcher.LauncherError(f"limit of the {identity} record", "refused")
+
+
+def stale_limits_checks(
+    env: Env,
+    family: tuple[str, str, dict[str, Any]],
+    begin: Callable[[launcher.Launcher, dict[str, Any], str], None],
+    error_prefix: str,
+) -> dict[str, bool]:
+    """The limit worker of a start record that was stopped is still running when the owner starts the stack again: its late result must not settle the newer
+    record, and the newer record must run its own worker. ``begin`` runs the launcher's own start method for one record; the older record ends as a finished
+    teardown leaves it (a handler-contract step, as in the confirmation cases)."""
+    record_key, tag, down = family
+    with recording_launcher(env) as (instance, spawned):
+        with instance.tx() as state:
+            begin(instance, state, "older")
+        older = spawned[-1] if spawned else ("", "")
+        write_launcher_record(env, record_key, dict(down))
+        with instance.tx() as state:
+            begin(instance, state, "newer")
+        newer = spawned[-1]
+        newer_ran_its_own = len(spawned) == 2 and spawned[0] != spawned[1] and spawned[1][1] == tag
+        deliver(instance, older, "docker", limit_error("older"))
+        after_older = dict(env.state()["launcher"][record_key])
+        deliver(instance, newer, "docker", limit_error("newer"))
+        after_newer = dict(env.state()["launcher"][record_key])
+    return {
+        "the newer record ran its own limit worker while the older one was in flight": newer_ran_its_own,
+        "the late result of the older record did not settle the newer record": newer_ran_its_own
+        and after_older["phase"] == "starting"
+        and after_older["step"] == "limits"
+        and not after_older["error"],
+        "the newer record settles by its own result": newer_ran_its_own
+        and after_newer["phase"] == "tearing_down"
+        and after_newer["error"] == f"{error_prefix}: limit of the newer record",
+    }
+
+
+@contextlib.contextmanager
+def stack_folder(env: Env, *names: str) -> Iterator[Path]:
+    """A state folder of a stack start, named as an allowed root of the test registry."""
+    folder = Path(tempfile.mkdtemp(prefix="hai-stack-", dir=env.temp)).resolve()
+    for name in names:
+        (folder / name).mkdir()
+    env.settings["allowed_roots"] = [str(folder)]
+    env.write_settings()
+    try:
+        yield folder
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def start_ctx(method: str, params: dict[str, Any], identity: str, state: dict[str, Any], principal: dict[str, Any] | None = None) -> launcher.Ctx:
+    """The context of one start request."""
+    return launcher.Ctx(cast(Any, None), method, f"request-{identity}", params, principal or {"kind": "any", "owner": True}, identity, state)
+
+
+@case("orchestration_stale_limits")
+def orchestration_stale_limits(env: Env) -> dict[str, bool]:
+    """The limit worker of an orchestration start that the owner stopped must not settle the next start, which runs its own worker."""
+    with stack_folder(env, "session") as folder:
+        params = {"state": str(folder), "api_port": 18180, "checkout": str(ROOT)}
+
+        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
+            instance.m_orchestration_up(start_ctx("orchestration_up", params, identity, state))
+
+        return stale_limits_checks(
+            env, ("orchestration", "orchlimits", {"phase": "down", "services": {}}), begin, "no memory limit for the orchestration services"
+        )
+
+
+@case("lineage_stale_limits")
+def lineage_stale_limits(env: Env) -> dict[str, bool]:
+    """The limit worker of a lineage start that the owner stopped must not settle the next start, which runs its own worker."""
+    with stack_folder(env, "postgres", "config") as folder:
+        params = {"state": str(folder), "api_port": 18181, "web_port": 18182, "checkout": str(ROOT)}
+
+        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
+            instance.m_lineage_up(start_ctx("lineage_up", params, identity, state))
+
+        return stale_limits_checks(
+            env, ("lineage", "lineagelimits", {"phase": "down", "services": {}, "networks": {}}), begin, "the lineage services cannot start"
+        )
+
+
+@case("online_store_stale_limits")
+def online_store_stale_limits(env: Env) -> dict[str, bool]:
+    """The limit worker of an online store start that ended must not settle the next start, which runs its own worker."""
+    run_id = "limits_run"
+    online_store.test_password(env.registry)
+    try:
+
+        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
+            state["runs"][run_id] = {"run_id": run_id, "state": "held"}
+            instance.m_pipeline_online_store_up(start_ctx("pipeline_online_store_up", {}, identity, state, {"run_id": run_id}))
+
+        return stale_limits_checks(env, (online_store.STACK, "onlinelimits", {"phase": "down", "service": None}), begin, "the online store cannot start")
+    finally:
+        online_store.forget_test_password(env.registry)
+
+
+def stale_health_checks(
+    env: Env,
+    record_key: str,
+    tag: str,
+    down: dict[str, Any],
+    begin: Callable[[dict[str, Any], str], None],
+    advance: Callable[[launcher.Launcher, dict[str, Any], list[Callable[[], None]]], None],
+    health: Callable[[dict[str, Any]], Any],
+) -> dict[str, bool]:
+    """A health worker of a start record that ended is still running when a newer record waits for the same service: its late result must not be taken
+    for the newer record's, the newer record must read the health itself, and a result that arrives after the record was removed must change nothing.
+    ``begin`` writes a starting record (its id and a started service attempt) and ``advance`` is the launcher's own step that spawns the health worker."""
+
+    def step(instance: launcher.Launcher, identity: str) -> tuple[str, str]:
+        with instance.tx() as state:
+            begin(state, identity)
+            actions: list[Callable[[], None]] = []
+            advance(instance, state, actions)
+        for action in actions:
+            action()
+        return spawned[-1] if spawned else ("", "")
+
+    with recording_launcher(env) as (instance, spawned):
+        older = step(instance, "older")
+        write_launcher_record(env, record_key, dict(down))
+        newer = step(instance, "newer")
+        newer_read_for_itself = len(spawned) == 2 and spawned[0] != spawned[1] and spawned[1][1] == tag
+        deliver(instance, older, "ok", "healthy")
+        after_older = dict(env.state()["launcher"][record_key])
+        deliver(instance, newer, "ok", "healthy")
+        after_newer = dict(env.state()["launcher"][record_key])
+        last = step(instance, "last")
+        write_launcher_record(env, record_key, dict(down))
+        deliver(instance, last, "ok", "healthy")
+        after_removal = env.state()["launcher"].get(record_key)
+    return {
+        "the newer record ran its own health worker while the older one was in flight": newer_read_for_itself,
+        "the late result of the older record did not mark the newer record healthy": newer_read_for_itself and health(after_older) in (None, "", {}),
+        "the newer record is healthy by its own result": newer_read_for_itself and health(after_newer) == "healthy",
+        "a result that arrives after the record was removed changes nothing": after_removal == down,
+    }
+
+
+@case("catalog_stale_health")
+def catalog_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of a catalog start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+    service = "polaris-db"
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["catalog"] = {
+            "id": identity,
+            "phase": "starting",
+            "step": "db",
+            "services": {service: f"{identity}-attempt"},
+            "health": {},
+            "error": "",
+        }
+
+    return stale_health_checks(
+        env,
+        "catalog",
+        "health",
+        {"phase": "down", "services": {}},
+        begin,
+        lambda instance, state, actions: instance.advance_catalog(state, actions),
+        lambda record: record.get("health", {}).get(service),
+    )
+
+
+@case("orchestration_stale_health")
+def orchestration_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of an orchestration start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["orchestration"] = {
+            "id": identity,
+            "phase": "starting",
+            "step": "postgres",
+            "services": {"postgres": f"{identity}-attempt"},
+            "health": {},
+            "error": "",
+            "checkout": str(ROOT),
+        }
+
+    return stale_health_checks(
+        env,
+        "orchestration",
+        "orchhealth",
+        {"phase": "down", "services": {}},
+        begin,
+        lambda instance, state, actions: instance.advance_orchestration(state, actions),
+        lambda record: record.get("health", {}).get("postgres"),
+    )
+
+
+@case("lineage_stale_health")
+def lineage_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of a lineage start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["lineage"] = {
+            "id": identity,
+            "phase": "starting",
+            "step": "postgres",
+            "services": {"postgres": f"{identity}-attempt"},
+            "health": {},
+            "error": "",
+            "checkout": str(ROOT),
+            "start_deadline": time.time() + 3600,
+        }
+
+    return stale_health_checks(
+        env,
+        "lineage",
+        "lineagehealth",
+        {"phase": "down", "services": {}, "networks": {}},
+        begin,
+        lambda instance, state, actions: instance.advance_lineage(state, actions),
+        lambda record: record.get("health", {}).get("postgres"),
+    )
+
+
+@case("online_store_stale_health")
+def online_store_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of an online store start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+    online_store.test_password(env.registry)
+    try:
+
+        def begin(state: dict[str, Any], identity: str) -> None:
+            state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+            state["launcher"][online_store.STACK] = {
+                "id": identity,
+                "phase": "starting",
+                "step": "service",
+                "service": f"{identity}-attempt",
+                "network": "network-id",
+                "error": "",
+                "settings": {},
+                "health": "",
+                "checkout": str(ROOT),
+                "start_deadline": time.time() + 3600,
+            }
+
+        return stale_health_checks(
+            env,
+            online_store.STACK,
+            "onlinehealth",
+            {"phase": "down", "service": None},
+            begin,
+            lambda instance, state, actions: instance.advance_online_store(state, actions),
+            lambda record: record.get("health"),
+        )
+    finally:
+        online_store.forget_test_password(env.registry)
+
+
+@case("mlflow_stale_health")
+def mlflow_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of an MLflow start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+    service = mlflow_service.SERVICES[0]
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["mlflow"] = {
+            "id": identity,
+            "phase": "starting",
+            "checkout": str(ROOT),
+            "services": {service: f"{identity}-attempt"},
+            "health": {},
+            "settings": {},
+            "networks": {"internal": "network-id"},
+            "deadline": time.time() + 3600,
+            "error": "",
+        }
+
+    return stale_health_checks(
+        env,
+        "mlflow",
+        "mlflow_health",
+        {"phase": "down"},
+        begin,
+        lambda instance, state, actions: instance.advance_mlflow(state, actions),
+        lambda record: record.get("health", {}).get(service),
+    )
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -10515,6 +10843,14 @@ ALL_CASES = (
     lineage_stale_confirm,
     online_store_stale_confirm,
     mlflow_stale_stop,
+    orchestration_stale_limits,
+    lineage_stale_limits,
+    online_store_stale_limits,
+    catalog_stale_health,
+    orchestration_stale_health,
+    lineage_stale_health,
+    online_store_stale_health,
+    mlflow_stale_health,
     mlflow_stop_overlap,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
