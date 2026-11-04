@@ -20,7 +20,7 @@ ADMIN_PASSWORD = secret_store.PREFIX + "openmetadata_admin_password"
 DB_PASSWORD = secret_store.PREFIX + "openmetadata_db_password"
 NAMES = (ADMIN_PASSWORD, DB_PASSWORD)
 ADMIN_LENGTH = 40
-SPECIAL = "!#%*+=-_"
+SPECIAL = "!#%*+_"
 
 
 def new_admin_password() -> str:
