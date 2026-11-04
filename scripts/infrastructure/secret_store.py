@@ -185,11 +185,14 @@ def variable_names(variables: Path) -> dict[str, str]:
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
     wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES) or value.startswith(PREFIX)]
-    return {name.upper(): defaults[name] for name in wanted} | openmetadata_names(variables)
+    return {name.upper(): defaults[name] for name in wanted}
 
 
 def openmetadata_names(variables: Path) -> dict[str, str]:
-    """The two catalog password names by placeholder, read from the catalog's IAM variable files beside ``variables.tf``."""
+    """The two catalog password names by placeholder, read from the catalog's IAM variable files beside ``variables.tf``.
+
+    Only the policy renderer needs them (``render_policy.terraform_names``), so ``variable_names`` stays readable from a lone ``variables.tf``.
+    """
     found: dict[str, str] = {}
     for file in OPENMETADATA_FILES:
         try:
