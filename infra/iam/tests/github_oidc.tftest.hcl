@@ -697,3 +697,79 @@ run "the_deploy_role_cannot_name_a_service_that_is_not_served" {
 
   expect_failures = [aws_iam_role_policy.github]
 }
+
+# IAM counts at most 6,144 characters, white space left out, in a managed policy. The delivery boundary holds the project, bucket, region, account and environment
+# names many times, so it grows with them. The bounds are what the variable validations accept: a project name of at most 37 characters, so that the longest
+# role name (<project>_job_openmetadata_task_prod) fits the 64 characters of an IAM role name, a 63 character bucket, a region code of at most 14 characters,
+# a 12 digit account and the longer environment name.
+run "the_delivery_boundary_fits_the_policy_limit_at_the_name_bounds" {
+  command = plan
+
+  override_data {
+    target          = data.aws_ec2_instance_type_offerings.host
+    override_during = plan
+    values = {
+      locations = ["ap-southeast-2a", "ap-southeast-2b", "ap-southeast-2c"]
+    }
+  }
+
+  variables {
+    aws_region          = "ap-southeast-2"
+    expected_account_id = "999999999999"
+    project_name        = "healthcare_hai_prediction_longest_nm0"
+    aws_profile         = "healthcare_hai_prediction_longest_nm0_prod"
+    environment         = "prod"
+    data_bucket_name    = "healthcare-hai-prediction-data-bucket-0000000000000000000000000"
+  }
+
+  assert {
+    condition     = output.github_oidc_boundary_size.actual == output.github_oidc_boundary_size.at_bounds
+    error_message = "The names at the validation bounds must be the names the size check uses for its bound, or the check measures something else."
+  }
+
+  assert {
+    condition     = output.github_oidc_boundary_size.at_bounds <= output.github_oidc_boundary_size.limit && output.github_oidc_boundary_size.limit == 6144
+    error_message = "The delivery boundary must stay inside the 6,144 characters of a managed policy at the longest names the variables accept."
+  }
+}
+
+run "the_delivery_boundary_size_follows_the_names" {
+  command = plan
+
+  assert {
+    condition     = output.github_oidc_boundary_size.actual < output.github_oidc_boundary_size.at_bounds && output.github_oidc_boundary_size.actual > 3000
+    error_message = "The size of the boundary for the real names must be measured, and shorter than the size at the bounds."
+  }
+}
+
+run "a_project_name_over_the_bound_is_refused" {
+  command = plan
+
+  variables {
+    project_name = "healthcare_hai_prediction_longest_nm01"
+    aws_profile  = "healthcare_hai_prediction_longest_nm01_prod"
+    environment  = "prod"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "a_bucket_name_over_the_bound_is_refused" {
+  command = plan
+
+  variables {
+    data_bucket_name = "healthcare-hai-prediction-data-bucket-00000000000000000000000000"
+  }
+
+  expect_failures = [var.data_bucket_name]
+}
+
+run "a_region_code_over_the_bound_is_refused" {
+  command = plan
+
+  variables {
+    aws_region = "ap-southeast-22"
+  }
+
+  expect_failures = [var.aws_region]
+}

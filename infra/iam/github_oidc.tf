@@ -21,7 +21,31 @@ locals {
   # the three roles below. The project role boundary cannot hold them: it has no room for them in the 6,144 characters IAM allows.
   github_boundary_file = "healthcare_hai_prediction_delivery_boundary_policy.json"
   github_boundary_arn  = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_delivery_boundary"
-  github_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
+
+  # IAM counts at most 6,144 characters, white space left out, in a managed policy, and the boundary holds the names many times. The size is measured for
+  # the real names and for the longest names the variable validations accept: a 37 character project name, a 63 character bucket, a 14 character region
+  # code, a 12 digit account and the environment "prod". The test run "the_delivery_boundary_fits_the_policy_limit_at_the_name_bounds" sets exactly those.
+  github_boundary_limit = 6144
+  github_boundary_names = {
+    actual = {
+      AWS_REGION       = var.aws_region
+      AWS_ACCOUNT_ID   = var.expected_account_id
+      PROJECT_NAME     = var.project_name
+      ENVIRONMENT      = var.environment
+      DATA_BUCKET_NAME = var.data_bucket_name
+    }
+    at_bounds = {
+      AWS_REGION       = join("", [for position in range(14) : "r"])
+      AWS_ACCOUNT_ID   = join("", [for position in range(12) : "9"])
+      PROJECT_NAME     = join("", [for position in range(37) : "p"])
+      ENVIRONMENT      = "prod"
+      DATA_BUCKET_NAME = join("", [for position in range(63) : "b"])
+    }
+  }
+  github_boundary_size = {
+    for case, names in local.github_boundary_names : case => length(jsonencode(jsondecode(templatefile("${path.module}/boundary/${local.github_boundary_file}", names))))
+  }
+  github_provider_arn = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
 
   # The stacks that continuous delivery may plan. The IAM stack and the storage stack stay with the owner.
   github_state_stacks = ["platform", "services", "jobs"]
@@ -346,4 +370,18 @@ output "github_oidc_grants_outside_boundary" {
 output "github_oidc_boundary_allowed_actions" {
   description = "Every action the delivery boundary allows, to check that nothing outside the delivery work is in it."
   value       = sort(tolist(local.github_boundary_actions))
+}
+
+output "github_oidc_boundary_size" {
+  description = "Characters of the delivery boundary, white space left out, for the real names and for the longest names the validations accept, against the 6,144 that IAM allows."
+  value = {
+    actual    = local.github_boundary_size.actual
+    at_bounds = local.github_boundary_size.at_bounds
+    limit     = local.github_boundary_limit
+  }
+
+  precondition {
+    condition     = local.github_boundary_size.actual <= local.github_boundary_limit && local.github_boundary_size.at_bounds <= local.github_boundary_limit
+    error_message = "The delivery boundary is over the 6,144 characters of a managed policy, for the real names or for the longest names the variables accept. Shorten infra/iam/boundary/healthcare_hai_prediction_delivery_boundary_policy.json."
+  }
 }

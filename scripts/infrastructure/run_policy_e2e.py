@@ -690,6 +690,16 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         text = writer.read_text(encoding="utf-8")
         writer.write_text(plant(text, '"s3:ListMultipartUploadParts"', '"s3:ListMultipartUploadParts",\n        "s3:PutObjectAcl"'), encoding="utf-8")
         record("a lakehouse role holds an S3 action that the project user's s3 policy lacks", check_roles(directory=widened))
+        # A boundary that fits the one old fixture (a 25 character project name, a 51 character bucket) and not the longest names the variables accept.
+        padded = root / "padded_boundary"
+        padded.mkdir()
+        template = BOUNDARY_DIRECTORY / DELIVERY_BOUNDARY_FILE
+        document = json.loads(template.read_text(encoding="utf-8"))
+        room = MAX_POLICY_CHARACTERS - non_whitespace_length(render_template(json.dumps(document), LONGEST_VALUES)) - 150
+        document["Statement"].append({"Sid": "Padding", "Effect": "Deny", "Action": "sns:Publish", "Resource": "x" * room})
+        (padded / DELIVERY_BOUNDARY_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        record("a boundary fits the old fixture but is over the limit at the longest names the variables accept", check_boundary_sizes(padded))
+        results[-1]["missed_by_the_longest_fixture"] = not check_sizes(padded)
         oidc = root / "github_oidc.tf"
         original_oidc = GITHUB_OIDC.read_text(encoding="utf-8")
         oidc.write_text(
@@ -710,15 +720,65 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return results
 
 
-def check_sizes() -> list[str]:
-    """Each project user policy and the boundary, rendered with the longest real values, stay under the managed policy limit."""
+def check_sizes(boundary_directory: Path = BOUNDARY_DIRECTORY) -> list[str]:
+    """Each project user policy and the boundary, rendered with the longest values of the real deployment, stay under the managed policy limit."""
     rendered = load_policies(POLICY_DIRECTORY, LONGEST_VALUES)
-    for path in sorted(BOUNDARY_DIRECTORY.glob("*.json")):
+    for path in sorted(boundary_directory.glob("*.json")):
         rendered[path.stem] = render_template(path.read_text(encoding="utf-8"), LONGEST_VALUES)
     return [
         f"{name}: {non_whitespace_length(document)} characters over the {MAX_POLICY_CHARACTERS} limit"
         for name, document in rendered.items()
         if non_whitespace_length(document) > MAX_POLICY_CHARACTERS
+    ]
+
+
+def name_bounds(variables: Path = VARIABLES) -> dict[str, str]:
+    """The longest values the variable validations of the IAM stack accept, as placeholder values of that length.
+
+    A boundary policy grows with the length of these names and with nothing else, so one rendering at the bounds is its largest size. The project name
+    is capped so that the longest role name fits the 64 characters of an IAM role name, the bucket name by the S3 limit and the region code by its own
+    validation. ``infra/iam/github_oidc.tf`` measures the same names at plan time.
+    """
+    text = variables.read_text(encoding="utf-8")
+
+    def block(name: str) -> str:
+        found = re.search(rf'variable "{name}" \{{.*?^\}}', text, re.MULTILINE | re.DOTALL)
+        if found is None:
+            raise RuntimeError(f"variable {name} is not found in {variables.name}")
+        return found.group(0)
+
+    def maximum(name: str, pattern: str, extra: int) -> int:
+        found = re.search(pattern, block(name))
+        if found is None:
+            raise RuntimeError(f"the length bound of {name} is not found in {variables.name}")
+        return int(found.group(1)) + extra
+
+    return {
+        "AWS_REGION": "r" * maximum("aws_region", r"length\(var\.aws_region\) <= (\d+)", 0),
+        "AWS_ACCOUNT_ID": "9" * 12,
+        "PROJECT_NAME": "p" * maximum("project_name", r"\{2,(\d+)\}", 1),
+        "ENVIRONMENT": "prod",
+        "DATA_BUCKET_NAME": "b" * maximum("data_bucket_name", r"\{1,(\d+)\}", 2),
+    }
+
+
+def boundary_sizes(directory: Path = BOUNDARY_DIRECTORY, variables: Path = VARIABLES) -> dict[str, int]:
+    """The characters of each boundary policy that IAM counts, rendered with the longest names the variables accept."""
+    bounds = name_bounds(variables)
+    return {
+        path.stem: non_whitespace_length(render_template(path.read_text(encoding="utf-8"), bounds, check_size=False))
+        for path in sorted(directory.glob("*.json"))
+    }
+
+
+def check_boundary_sizes(directory: Path = BOUNDARY_DIRECTORY, variables: Path = VARIABLES) -> list[str]:
+    """Each boundary policy stays under the managed policy limit at the supported name bounds, not only for one fixture."""
+    bounds = name_bounds(variables)
+    description = ", ".join(f"{key.lower()} {len(value)}" for key, value in bounds.items() if key != "ENVIRONMENT")
+    return [
+        f"{name}: {size} characters over the {MAX_POLICY_CHARACTERS} limit at the supported name bounds ({description}, prod)"
+        for name, size in boundary_sizes(directory, variables).items()
+        if size > MAX_POLICY_CHARACTERS
     ]
 
 
@@ -733,7 +793,15 @@ def run_suite(output: Path) -> dict[str, Any]:
         {"label": label, "passed": dict(item.context) == expected, "expected": expected, "observed": dict(item.context)}
         for label, item, expected in policy_cases.request_context_cases()
     ]
-    problems = check_inventory(documents, operations) + check_sizes() + check_names(documents) + check_name_source() + check_roles() + check_delivery_roles()
+    problems = (
+        check_inventory(documents, operations)
+        + check_sizes()
+        + check_boundary_sizes()
+        + check_names(documents)
+        + check_name_source()
+        + check_roles()
+        + check_delivery_roles()
+    )
     name_checks = name_defects(documents)
     defects = []
     for description, (label_prefix, mutation) in policy_cases.planted_defects().items():
@@ -761,6 +829,7 @@ def run_suite(output: Path) -> dict[str, Any]:
         item.get("right_values_pass_the_names_check", True)
         and item.get("identical_with_the_real_project_name", True)
         and item.get("caught_by_the_name_source_check", True)
+        and item.get("missed_by_the_longest_fixture", True)
         for item in name_checks
     )
     passed = (
@@ -786,6 +855,11 @@ def run_suite(output: Path) -> dict[str, Any]:
         "failures": failures,
         "request_context_checks": context_checks,
         "inventory_and_size_problems": problems,
+        "boundary_sizes_at_the_name_bounds": {
+            "limit": MAX_POLICY_CHARACTERS,
+            "names": {key: len(value) for key, value in name_bounds().items()},
+            "characters": boundary_sizes(),
+        },
         "planted_defects": defects,
         "planted_name_defects": name_checks,
         "script_tests": script_report,

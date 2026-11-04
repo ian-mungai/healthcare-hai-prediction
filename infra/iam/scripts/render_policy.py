@@ -81,10 +81,11 @@ def expand_names(node: Any, names: Mapping[str, Sequence[str]]) -> Any:
     return expanded
 
 
-def render_template(text: str, values: Mapping[str, str], names: Mapping[str, Sequence[str]] | None = None) -> dict[str, Any]:
+def render_template(text: str, values: Mapping[str, str], names: Mapping[str, Sequence[str]] | None = None, *, check_size: bool = True) -> dict[str, Any]:
     """Replace every upper-case ``${NAME}`` placeholder, repeat the list elements of the name placeholders and parse the policy.
 
-    ``names`` replaces the Terraform variable defaults as the source of the names; only a test passes it.
+    ``names`` replaces the Terraform variable defaults as the source of the names; only a test passes it. ``check_size=False`` returns a policy over the size
+    limit instead of stopping, for a check that reports the size.
     """
     found = set(PLACEHOLDER.findall(text))
     scalars = found - set(PLACEHOLDER_NAMES) - set(NAME_PLACEHOLDERS)
@@ -107,7 +108,7 @@ def render_template(text: str, values: Mapping[str, str], names: Mapping[str, Se
         document = expand_names(document, names)
     if not isinstance(document, dict) or not isinstance(document.get("Statement"), list):
         raise PolicyRenderError("a policy document must be a JSON object with a Statement list")
-    if non_whitespace_length(document) > MAX_POLICY_CHARACTERS:
+    if check_size and non_whitespace_length(document) > MAX_POLICY_CHARACTERS:
         raise PolicyRenderError(f"the rendered policy has {non_whitespace_length(document)} characters; IAM allows {MAX_POLICY_CHARACTERS}")
     return document
 
