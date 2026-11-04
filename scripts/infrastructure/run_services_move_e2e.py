@@ -9,6 +9,9 @@ it off the network. The first plan has no state. A state is then built with the 
 registered (:99). The second plan must show both services at the new addresses with that revision untouched and nothing destroyed or replaced. Then each
 planted defect (a missing moved block, a dropped ignore_changes, a renamed service) must make the same checks fail. Nothing is applied; no credential is read.
 
+The state holds no task definitions, so the one-time replacement of the services (``replace_triggered_by``) does not fire here: a resource that is
+created triggers nothing. ``run_serving_transition_e2e`` proves the first apply with the task definitions in the state.
+
 Run: ``.venv/bin/python -m scripts.infrastructure.run_services_move_e2e --output-directory data/e2e/<new folder>``
 """
 
@@ -203,15 +206,15 @@ def rename_serving(text: str) -> str:
     )
 
 
+IGNORE = "    ignore_changes       = [task_definition]\n"
+
 DEFECTS: dict[str, Callable[[str], str]] = {
     "the moved block of the model API is missing": lambda text: replace_once(text, MOVED_MODEL_API, ""),
     "the moved block of the dashboard is missing": lambda text: replace_once(text, MOVED_STREAMLIT, ""),
     "both moved blocks are missing": lambda text: replace_once(replace_once(text, MOVED_MODEL_API, ""), MOVED_STREAMLIT, ""),
-    "the serving services no longer ignore their task definition": lambda text: replace_once(
-        text, "    ignore_changes = [task_definition]\n", "    ignore_changes = []\n"
-    ),
+    "the serving services no longer ignore their task definition": lambda text: replace_once(text, IGNORE, "    ignore_changes       = []\n"),
     "the serving services ignore the desired count and not the task definition": lambda text: replace_once(
-        text, "    ignore_changes = [task_definition]\n", "    ignore_changes = [desired_count]\n"
+        text, IGNORE, "    ignore_changes       = [desired_count]\n"
     ),
     "the serving services are renamed": rename_serving,
 }
