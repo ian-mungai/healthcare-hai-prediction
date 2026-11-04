@@ -108,6 +108,7 @@ def flags(stack: str, *names: str) -> list[Row]:
 ROWS: list[Row] = [
     *flags(
         "iam",
+        "airflow_launch_prepared",
         "athena_mirror_prepared",
         "broker_prepared",
         "drift_prepared",
@@ -128,6 +129,28 @@ ROWS: list[Row] = [
     Row("iam", "model_api_registry_key", "lakehouse/feast/registry.pb", "/rooted/registry.pb"),
     Row("iam", "model_api_manifest_prefix", "serving/deployments", "serving/deployments/"),
     Row("iam", "broker_job_families", FAMILIES, "serve"),
+    Row("iam", "airflow_launch_families", FAMILIES, "serve", None, (["write_gold"], ["train", "train"], ["Train"], [1], ["train", None])),
+    Row(
+        "iam",
+        "airflow_launch_record_prefix",
+        "example/records/",
+        5,
+        "lakehouse/launch_records/",
+        (
+            "/lakehouse/launch_records/",
+            "lakehouse/launch_records",
+            "lakehouse/*/",
+            "lakehouse/../",
+            "lakehouse/a..b/",
+            "",
+            "/",
+            "lakehouse//records/",
+            "lakehouse/launch records/",
+            "records/${aws:username}/",
+            "lakehouse/.hidden/",
+            "a" * 257 + "/",
+        ),
+    ),
     *flags("platform", "monitoring_enabled", "serving_enabled"),
     Row(
         "platform",
@@ -648,7 +671,13 @@ def committed_default_cases(workspace: Workspace, row: Row) -> dict[str, bool]:
 def wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     """One activation per stack through terraform.sh itself: it renders the reviewed value and then reaches the stand-in terraform."""
     checks: dict[str, bool] = {}
-    for stack, name in (("iam", "serve_prepared"), ("platform", "serving_enabled"), ("services", "model_api_enabled"), ("jobs", "serve_enabled")):
+    for stack, name in (
+        ("iam", "serve_prepared"),
+        ("iam", "airflow_launch_prepared"),
+        ("platform", "serving_enabled"),
+        ("services", "model_api_enabled"),
+        ("jobs", "serve_enabled"),
+    ):
         workspace.clear(stack)
         result = workspace.wrapper(stack, {name: True})
         written = workspace.written(stack) or {}
@@ -656,6 +685,50 @@ def wrapper_cases(workspace: Workspace) -> dict[str, bool]:
         workspace.clear(stack)
         refused = workspace.wrapper(stack, {name: "true"})
         checks[f"wrapper {stack}: {name} set to a string is refused before terraform"] = refused.returncode == 2 and workspace.written(stack) is None
+    return checks | launch_wrapper_cases(workspace) | launch_refusal_cases(workspace)
+
+
+def launch_refusal_cases(workspace: Workspace) -> dict[str, bool]:
+    """Each refused launch value fails for its own reason: the message says to set that input, not that the name is unknown."""
+    checks: dict[str, bool] = {}
+    for row in (item for item in ROWS if item.name.startswith("airflow_launch_") and item.refuse):
+        for index, value in enumerate(row.refuse):
+            workspace.clear("iam")
+            result = workspace.run("iam", {row.name: value})
+            checks[f"{row.name}: constrained value {index} is refused by the rule of that input"] = (
+                result.returncode == 2 and f"Set {row.name} " in (result.stderr + result.stdout) and workspace.written("iam") is None
+            )
+    workspace.clear("iam")
+    result = workspace.run("iam", {"airflow_launch_prepared": True, "airflow_launch_families": []})
+    checks["airflow_launch_families: an empty list is refused while the launch role is prepared"] = (
+        result.returncode == 2 and "Set airflow_launch_families " in (result.stderr + result.stdout) and workspace.written("iam") is None
+    )
+    workspace.clear("iam")
+    result = workspace.run("iam", {"airflow_launch_families": []})
+    checks["airflow_launch_families: an empty list is accepted while the launch role is not prepared"] = result.returncode == 0
+    return checks
+
+
+def launch_wrapper_cases(workspace: Workspace) -> dict[str, bool]:
+    """The Airflow launch role through terraform.sh: an enabled plan with its families and prefix, a disabled plan, and the refusal of a -var override."""
+    checks: dict[str, bool] = {}
+    enabled = {"airflow_launch_prepared": True, "airflow_launch_families": ["serve", "train"], "airflow_launch_record_prefix": "example/records/"}
+    workspace.clear("iam")
+    result = workspace.wrapper("iam", enabled)
+    checks["wrapper iam: an enabled launch role with its families and prefix is rendered whole and plan runs"] = result.returncode == 0 and all(
+        (workspace.written("iam") or {}).get(key) == value for key, value in enabled.items()
+    )
+    workspace.clear("iam")
+    result = workspace.wrapper("iam", {"airflow_launch_prepared": False})
+    checks["wrapper iam: a disabled launch role is rendered as false and plan runs"] = (
+        result.returncode == 0 and (workspace.written("iam") or {}).get("airflow_launch_prepared") is False
+    )
+    workspace.clear("iam")
+    result = workspace.wrapper("iam", {"airflow_launch_prepared": True, "airflow_launch_families": []})
+    checks["wrapper iam: an enabled launch role with no family is refused before terraform"] = result.returncode == 2 and workspace.written("iam") is None
+    workspace.clear("iam")
+    result = workspace.wrapper("iam", None, "plan", "-var=airflow_launch_prepared=true")
+    checks["wrapper iam: a -var override of the launch flag is refused"] = result.returncode == 2 and workspace.written("iam") is None
     return checks
 
 

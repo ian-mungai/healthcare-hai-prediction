@@ -2,8 +2,12 @@
 
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
 families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
-instances, and write each launch record once under its own prefix. It holds nothing else. Each grant is checked against requests written here, apart from
-the rendered policies, and every scope widening of a policy must fail at least one request. Run from the repository root:
+instances, and write each launch record once under its own prefix. It holds nothing else.
+
+The three policies are one role, so every request is decided against all of them together. Each grant is checked against requests written here, apart from
+the rendered policies. The refusals do not depend on the policy under inspection: a fixed list of actions is tried against a fixed list of resource
+classes, and only the intended pairs may be allowed. Every realistic widening of a policy (a dangerous action on a valid resource, a wider resource, a
+missing condition) must fail at least one request. Run from the repository root:
 ``.venv/bin/python -m scripts.infrastructure.airflow_launch_policy_cases --output <NEW_DIRECTORY>``.
 """
 
@@ -15,7 +19,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from scripts.infrastructure.broker_policy_cases import (
     ACCOUNT,
@@ -29,12 +33,12 @@ from scripts.infrastructure.broker_policy_cases import (
     SIGNED,
     Case,
     as_list,
-    evaluate,
     role,
     run_context,
     tagged,
     task,
 )
+from scripts.infrastructure.policy_evaluator import Request, decide
 
 ROOT = Path(__file__).resolve().parents[2]
 JOBS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_jobs.json"
@@ -46,6 +50,7 @@ RECORD_PREFIX = "lakehouse/launch_records/"
 INLINE_LIMIT = 10240
 ECS_TASKS = "ecs-tasks.amazonaws.com"
 Context = dict[str, tuple[str, ...]]
+Role = dict[str, dict[str, Any]]
 ONCE: Context = {"s3:if-none-match": ("*",)}
 REQUEST_FILES = {"bronze": "bronze_request.json", "serve": "serving_request.json"}
 FAMILY_ROLES = {
@@ -56,18 +61,12 @@ FAMILY_ROLES = {
     "silver": "job_write_silver_task",
     "gold": "job_write_gold_task",
     "features": "job_write_features_task",
+    "drift": "job_drift_task",
+    "metadata": "job_openmetadata_task",
 }
+ALL_FAMILIES = sorted(FAMILY_ROLES)
 RECORDS = f"arn:aws:s3:::{BUCKET}/{RECORD_PREFIX}"
 STAGE = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs"
-EXTRA_ACTIONS = (
-    "ecs:UpdateService",
-    "ecs:DeleteService",
-    "ecs:RegisterTaskDefinition",
-    "s3:DeleteObject",
-    "iam:CreateRole",
-    "ssm:PutParameter",
-    "logs:PutLogEvents",
-)
 
 
 def definition(family: str, revision: str = "7") -> str:
@@ -200,7 +199,7 @@ def job_cases() -> list[Case]:
     add("read a promotion approval", "s3:GetObject", f"{STAGE}/promotion_approval.json", True)
     add("write a promotion approval", "s3:PutObject", f"{STAGE}/promotion_approval.json", False)
     add("read an approval of another name", "s3:GetObject", f"{STAGE}/approval.json", False)
-    for key in ("code.tar.gz", "other.json", "../code.sha256", "bronze_request.json", "serving_request.json"):
+    for key in ("code.tar.gz", "other.json", "../code.sha256"):
         add(f"read inputs/{key} through the main policy", "s3:GetObject", f"{STAGE}/{key}", False)
     add("read a gold table", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet", False)
     add("read a digest in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code.sha256", False)
@@ -266,7 +265,6 @@ def request_cases() -> list[tuple[Any, ...]]:
         ("read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", True),
         ("read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", True),
         ("read the code archive", "s3:GetObject", f"{STAGE}/code.tar.gz", False),
-        ("read the code digest through the request policy", "s3:GetObject", f"{STAGE}/code.sha256", False),
         ("read a request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/bronze/inputs/bronze_request.json", False),
         ("read a serving request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/serving/deployments/inputs/serving_request.json", False),
         (
@@ -287,31 +285,143 @@ def with_empty_context(rows: list[tuple[Any, ...]]) -> list[Case]:
     return [(row[0], row[1], row[2], row[3], row[4] if len(row) > 4 else {}) for row in rows]
 
 
-def satisfying_context(sid: str) -> dict[str, tuple[str, ...]]:
-    """A request context that meets every condition of the statement, so only the action and resource decide."""
-    contexts: dict[str, dict[str, tuple[str, ...]]] = {
-        "RunNamedHostJobs": run_context("train"),
-        "TagTasksItStarts": {"ecs:CreateAction": ("RunTask",)},
-        "StopAndDescribeNamedJobTasks": tagged("train"),
-        "ListClusterTasks": {"ecs:cluster": (CLUSTER_ARN,)},
-        "ListClusterContainerInstances": {"ecs:cluster": (CLUSTER_ARN,)},
-        "DescribeClusterContainerInstances": {"ecs:cluster": (CLUSTER_ARN,)},
-        "PassNamedJobRoles": {"iam:PassedToService": (ECS_TASKS,)},
-        "WriteLaunchRecordsOnce": dict(ONCE),
-    }
-    return contexts.get(sid, {})
+class Resource(NamedTuple):
+    """A class of resource: one concrete name, the actions the role may use on it with every condition met, and those it may use with no condition."""
+
+    name: str
+    resource: str
+    allowed: frozenset[str]
+    bare: frozenset[str]
 
 
-def extra_action_cases(document: dict[str, Any]) -> list[Case]:
-    """On each statement's own resources, with its conditions met, every action it does not list stays refused."""
+GET = frozenset({"s3:GetObject"})
+LISTS = frozenset({"ecs:ListTasks", "ecs:ListContainerInstances"})
+# Every condition of every grant met at once, so that only the action and the resource decide.
+PERMISSIVE: Context = {
+    **run_context("train"),
+    "aws:ResourceTag/HaiJob": ("train",),
+    "ecs:CreateAction": ("RunTask",),
+    "iam:PassedToService": (ECS_TASKS,),
+    **ONCE,
+}
+STREAM = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
+SIGNED_ARN = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}"
+LAKEHOUSE_FILE = f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet"
+RECORD = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
+NONE: frozenset[str] = frozenset()
+RESOURCES = (
+    Resource("host definition of a named family", definition("train"), frozenset({"ecs:RunTask"}), NONE),
+    Resource("Fargate definition of a named family", definition("train").replace("_host:", ":"), NONE, NONE),
+    Resource("host definition of an unnamed family", definition("features"), NONE, NONE),
+    Resource("task of the cluster", task(), frozenset({"ecs:TagResource", "ecs:StopTask", "ecs:DescribeTasks"}), NONE),
+    Resource("task of another cluster", task("another_cluster"), NONE, NONE),
+    Resource("cluster-wide list", "*", LISTS, NONE),
+    Resource("container instance of the cluster", container_instance(), frozenset({"ecs:DescribeContainerInstances"}), NONE),
+    Resource("container instance of another cluster", container_instance("another_cluster"), NONE, NONE),
+    Resource("task role of a named family", role("job_train_task"), frozenset({"iam:PassRole"}), NONE),
+    Resource("execution role", role("job_execution"), frozenset({"iam:PassRole"}), NONE),
+    Resource("role of an unnamed family", role("job_write_features_task"), NONE, NONE),
+    Resource("the launch role itself", role("airflow_launch_task"), NONE, NONE),
+    Resource("staged code digest", f"{STAGE}/code.sha256", GET, GET),
+    Resource("staged promotion approval", f"{STAGE}/promotion_approval.json", GET, GET),
+    Resource("staged bronze request", f"{STAGE}/bronze_request.json", GET, GET),
+    Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
+    Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
+    Resource("launch record", RECORD, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("lakehouse table file", LAKEHOUSE_FILE, NONE, NONE),
+    Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", NONE, NONE),
+    Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
+    Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
+    Resource("signed publish record", SIGNED_ARN, frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
+    Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
+)
+# The actions tried against every class. The list is fixed here: it never reads the policy under inspection.
+ACTIONS = (
+    "ecs:RunTask",
+    "ecs:StartTask",
+    "ecs:StopTask",
+    "ecs:DescribeTasks",
+    "ecs:TagResource",
+    "ecs:UntagResource",
+    "ecs:ListTasks",
+    "ecs:ListContainerInstances",
+    "ecs:DescribeContainerInstances",
+    "ecs:RegisterContainerInstance",
+    "ecs:DeregisterContainerInstance",
+    "ecs:UpdateContainerInstancesState",
+    "ecs:RegisterTaskDefinition",
+    "ecs:DeregisterTaskDefinition",
+    "ecs:DescribeTaskDefinition",
+    "ecs:CreateService",
+    "ecs:UpdateService",
+    "ecs:DeleteService",
+    "ecs:ListServices",
+    "ecs:DescribeClusters",
+    "ecs:DeleteCluster",
+    "ecs:ExecuteCommand",
+    "ecs:UpdateTaskProtection",
+    "iam:PassRole",
+    "iam:CreateRole",
+    "iam:DeleteRole",
+    "iam:AttachRolePolicy",
+    "iam:PutRolePolicy",
+    "iam:UpdateAssumeRolePolicy",
+    "sts:AssumeRole",
+    "s3:GetObject",
+    "s3:GetObjectVersion",
+    "s3:PutObject",
+    "s3:PutObjectAcl",
+    "s3:PutObjectTagging",
+    "s3:DeleteObject",
+    "s3:DeleteObjectVersion",
+    "s3:AbortMultipartUpload",
+    "s3:RestoreObject",
+    "s3:ListBucket",
+    "s3:ListBucketMultipartUploads",
+    "logs:GetLogEvents",
+    "logs:FilterLogEvents",
+    "logs:PutLogEvents",
+    "logs:CreateLogStream",
+    "logs:DeleteLogStream",
+    "logs:DeleteLogGroup",
+    "ssm:GetParameter",
+    "ssm:GetParameters",
+    "ssm:GetParametersByPath",
+    "ssm:GetParameterHistory",
+    "ssm:DescribeParameters",
+    "ssm:PutParameter",
+    "ssm:DeleteParameter",
+    "kms:Decrypt",
+    "secretsmanager:GetSecretValue",
+)
+
+
+def matrix_cases() -> list[Case]:
+    """Every fixed action against every fixed resource class: only the intended pairs are allowed, with every condition met or with none."""
     rows: list[Case] = []
-    for statement in document["Statement"]:
-        for resource in as_list(statement["Resource"]):
-            concrete = resource.replace("*", "7") if resource != "*" else "*"
-            for action in EXTRA_ACTIONS:
-                if action not in as_list(statement["Action"]):
-                    rows.append((f"{statement['Sid']}: no {action} on {concrete}", action, concrete, False, satisfying_context(statement["Sid"])))
+    for item in RESOURCES:
+        for action in ACTIONS:
+            if action in LISTS and item.resource != "*":
+                continue
+            rows.append((f"{item.name}: {action} with every condition met", action, item.resource, action in item.allowed, PERMISSIVE))
+            rows.append((f"{item.name}: {action} with no condition", action, item.resource, action in item.bare, {}))
     return rows
+
+
+def train_only_cases() -> list[Case]:
+    """A role for the train family alone holds no staged request grant and no other family's definition or role."""
+    pass_context: Context = {"iam:PassedToService": (ECS_TASKS,)}
+    return [
+        ("train only: run the train host definition", "ecs:RunTask", definition("train"), True, run_context("train")),
+        ("train only: run the gold host definition", "ecs:RunTask", definition("gold"), False, run_context("train")),
+        ("train only: run with the gold tag", "ecs:RunTask", definition("train"), False, run_context("gold")),
+        ("train only: pass the train role", "iam:PassRole", role("job_train_task"), True, pass_context),
+        ("train only: pass the gold role", "iam:PassRole", role("job_write_gold_task"), False, pass_context),
+        ("train only: pass the bronze role", "iam:PassRole", role("job_write_bronze_task"), False, pass_context),
+        ("train only: read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", False, {}),
+        ("train only: read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", False, {}),
+        ("train only: create a launch record", "s3:PutObject", RECORD, True, ONCE),
+    ]
 
 
 def condition_drops(statement: dict[str, Any]) -> list[tuple[str, dict[str, Any] | None]]:
@@ -325,22 +435,44 @@ def condition_drops(statement: dict[str, Any]) -> list[tuple[str, dict[str, Any]
     return variants
 
 
-def mutations(document: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Every scope widening of every statement: an extra action, a wildcard resource, each condition key removed."""
-    found = []
-    for statement in document["Statement"]:
-        variants: list[tuple[str, str, Any]] = [("add_action", "Action", [*as_list(statement["Action"]), "ecs:UpdateService"])]
-        if statement["Resource"] != "*":
-            variants.append(("widen_resource", "Resource", "*"))
-        variants += [(label, "Condition", condition) for label, condition in condition_drops(statement)]
-        for label, field, value in variants:
-            changed = copy.deepcopy(document)
-            target = next(item for item in changed["Statement"] if item["Sid"] == statement["Sid"])
-            if value is None:
-                target.pop(field)
-            else:
-                target[field] = value
-            found.append((f"{statement['Sid']}_{label}", changed))
+# The dangerous actions a careless edit could add to a statement, each valid on that statement's own resources.
+WIDENING_ACTIONS = {
+    "RunNamedHostJobs": ("ecs:StartTask", "ecs:RegisterTaskDefinition"),
+    "TagTasksItStarts": ("ecs:UntagResource",),
+    "StopAndDescribeNamedJobTasks": ("ecs:ExecuteCommand", "ecs:UpdateTaskProtection"),
+    "ListClusterTasks": ("ecs:ListServices",),
+    "ListClusterContainerInstances": ("ecs:DescribeClusters",),
+    "DescribeClusterContainerInstances": ("ecs:DeregisterContainerInstance", "ecs:UpdateContainerInstancesState"),
+    "PassNamedJobRoles": ("sts:AssumeRole", "iam:AttachRolePolicy"),
+    "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
+    "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
+    "ReadSignedPublishRecord": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
+    "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
+    "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
+    "ReadStagedRequests": ("s3:PutObject", "s3:DeleteObject"),
+}
+
+
+def widenings(role_documents_: Role) -> list[tuple[str, str, dict[str, Any]]]:
+    """Each realistic widening of each statement: a dangerous action added, a wildcard resource and each condition key removed in turn."""
+    found: list[tuple[str, str, dict[str, Any]]] = []
+    for name, document in role_documents_.items():
+        for statement in document["Statement"]:
+            sid = statement["Sid"]
+            variants: list[tuple[str, str, Any]] = [
+                (f"add_{action.replace(':', '_')}", "Action", [*as_list(statement["Action"]), action]) for action in WIDENING_ACTIONS[sid]
+            ]
+            if statement["Resource"] != "*":
+                variants.append(("widen_resource", "Resource", "*"))
+            variants += [(label, "Condition", condition) for label, condition in condition_drops(statement)]
+            for label, field, value in variants:
+                changed = copy.deepcopy(document)
+                target = next(item for item in changed["Statement"] if item["Sid"] == sid)
+                if value is None:
+                    target.pop(field)
+                else:
+                    target[field] = value
+                found.append((name, f"{sid}_{label}", changed))
     return found
 
 
@@ -350,23 +482,37 @@ def replaced(document: dict[str, Any], sid: str, **fields: Any) -> dict[str, Any
     return changed
 
 
-def planted(jobs: dict[str, Any], records: dict[str, Any], requests: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
-    """Named widenings that a reviewer could make by hand, beyond the generic ones: the document each belongs to is the first field."""
+def appended(document: dict[str, Any], statement: dict[str, Any]) -> dict[str, Any]:
+    changed = copy.deepcopy(document)
+    changed["Statement"].append(statement)
+    return changed
+
+
+def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
+    """Named widenings that a reviewer could make by hand: the document each belongs to is the first field."""
+    jobs, records, requests = documents["jobs"], documents["records"], documents["requests"]
     ssm = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter"
     pass_roles = next(item for item in jobs["Statement"] if item["Sid"] == "PassNamedJobRoles")["Resource"]
     definitions = [name.replace("_host:*", ":*") for name in next(item for item in jobs["Statement"] if item["Sid"] == "RunNamedHostJobs")["Resource"]]
     request_resource = next(item for item in requests["Statement"])["Resource"]
+    bucket = f"arn:aws:s3:::{BUCKET}"
     return [
         ("jobs", "RunNamedHostJobs_run_the_Fargate_definitions", replaced(jobs, "RunNamedHostJobs", Resource=definitions)),
         ("jobs", "PassNamedJobRoles_another_family_role", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("job_write_features_task")])),
         ("jobs", "PassNamedJobRoles_role_wildcard", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("job_*")])),
-        ("jobs", "PassNamedJobRoles_the_launch_role_itself", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("airflow_launch_task")])),
+        ("jobs", "PassNamedJobRoles_the_scheduler_role_itself", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("airflow_launch_task")])),
         ("jobs", "ReadSignedPublishRecord_a_parameter_prefix", replaced(jobs, "ReadSignedPublishRecord", Resource=f"{ssm}/healthcare_hai_prediction/*")),
         ("jobs", "ReadSignedPublishRecord_every_parameter", replaced(jobs, "ReadSignedPublishRecord", Resource=f"{ssm}/*")),
         ("jobs", "ReadSignedPublishRecord_a_name_prefix", replaced(jobs, "ReadSignedPublishRecord", Resource=f"{ssm}{SIGNED}*")),
-        ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs/*")),
-        ("records", "WriteLaunchRecordsOnce_the_whole_bucket", replaced(records, "WriteLaunchRecordsOnce", Resource=f"arn:aws:s3:::{BUCKET}/*")),
-        ("records", "WriteLaunchRecordsOnce_the_lakehouse", replaced(records, "WriteLaunchRecordsOnce", Resource=f"arn:aws:s3:::{BUCKET}/lakehouse/*")),
+        ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("jobs", "ReadStagedRunRecords_delete_the_digest", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObject"])),
+        (
+            "jobs",
+            "an_extra_statement_deletes_the_digest",
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:DeleteObject", "Resource": f"{bucket}/lakehouse/run_stage/*/inputs/code.sha256"}),
+        ),
+        ("records", "WriteLaunchRecordsOnce_the_whole_bucket", replaced(records, "WriteLaunchRecordsOnce", Resource=f"{bucket}/*")),
+        ("records", "WriteLaunchRecordsOnce_the_lakehouse", replaced(records, "WriteLaunchRecordsOnce", Resource=f"{bucket}/lakehouse/*")),
         (
             "records",
             "WriteLaunchRecordsOnce_any_precondition_value",
@@ -377,42 +523,69 @@ def planted(jobs: dict[str, Any], records: dict[str, Any], requests: dict[str, A
             "WriteLaunchRecordsOnce_a_present_precondition",
             replaced(records, "WriteLaunchRecordsOnce", Condition={"Null": {"s3:if-none-match": "false"}}),
         ),
-        ("records", "ReadLaunchRecords_the_lakehouse", replaced(records, "ReadLaunchRecords", Resource=f"arn:aws:s3:::{BUCKET}/lakehouse/*")),
-        ("records", "ReadLaunchRecords_the_whole_bucket", replaced(records, "ReadLaunchRecords", Resource=f"arn:aws:s3:::{BUCKET}/*")),
         (
-            "requests",
-            "ReadStagedRequests_every_input",
-            replaced(requests, "ReadStagedRequests", Resource=f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs/*"),
+            "records",
+            "an_extra_statement_puts_without_the_condition",
+            appended(records, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutObject", "Resource": f"{RECORDS}*"}),
         ),
-        ("requests", "ReadStagedRequests_any_object", replaced(requests, "ReadStagedRequests", Resource=[*request_resource, f"arn:aws:s3:::{BUCKET}/*"])),
+        (
+            "records",
+            "an_extra_statement_deletes_a_record",
+            appended(records, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:DeleteObject", "Resource": f"{RECORDS}*"}),
+        ),
+        ("records", "ReadLaunchRecords_the_lakehouse", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/lakehouse/*")),
+        ("records", "ReadLaunchRecords_the_whole_bucket", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/*")),
+        ("requests", "ReadStagedRequests_every_input", replaced(requests, "ReadStagedRequests", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("requests", "ReadStagedRequests_any_object", replaced(requests, "ReadStagedRequests", Resource=[*request_resource, f"{bucket}/*"])),
     ]
 
 
-def size_checks(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def role_documents(directory: Path, families: list[str]) -> Role:
+    """The policies of one role, rendered from a folder of templates. The request policy exists only while bronze or serve is named."""
+    documents = {"jobs": render(directory / JOBS_TEMPLATE.name, families), "records": render(directory / RECORDS_TEMPLATE.name, families)}
+    if any(family in REQUEST_FILES for family in families):
+        documents["requests"] = render(directory / REQUESTS_TEMPLATE.name, families)
+    return documents
+
+
+def evaluate_role(documents: Role, rows: list[Case]) -> list[dict[str, Any]]:
+    """Decide each request against all policies of the role together."""
+    attached = list(documents.values())
+    observations = []
+    for label, action, resource, expected, context in rows:
+        decision = decide(attached, Request(action, resource, context))
+        observations.append(
+            {"case": label, "expected": expected, "observed": decision.allowed, "passed": decision.allowed == expected, "statements": decision.statements}
+        )
+    return observations
+
+
+def size_checks(label: str, documents: Role) -> list[dict[str, Any]]:
     """The aggregate of the inline policies of one role stays under the IAM limit, white space not counted."""
-    size = sum(len(re.sub(r"\s", "", json.dumps(document, separators=(",", ":")))) for document in documents)
-    return [{"case": "the inline policies of the role fit the IAM aggregate limit", "expected": INLINE_LIMIT, "observed": size, "passed": size <= INLINE_LIMIT}]
+    size = sum(len(re.sub(r"\s", "", json.dumps(document, separators=(",", ":")))) for document in documents.values())
+    return [
+        {
+            "case": f"the inline policies of the {label} role fit the IAM aggregate limit",
+            "expected": INLINE_LIMIT,
+            "observed": size,
+            "passed": size <= INLINE_LIMIT,
+        }
+    ]
 
 
-def verify(output: Path) -> int:
-    jobs = render(JOBS_TEMPLATE, FAMILIES)
-    records = render(RECORDS_TEMPLATE, FAMILIES)
-    requests = render(REQUESTS_TEMPLATE, FAMILIES)
-    suites = {
-        "jobs": (jobs, with_empty_context(job_cases()) + extra_action_cases(jobs)),
-        "records": (records, with_empty_context(record_cases()) + extra_action_cases(records)),
-        "requests": (requests, with_empty_context(request_cases()) + extra_action_cases(requests)),
-    }
-    checks = [item for document, rows in suites.values() for item in evaluate(document, rows)]
-    checks += size_checks([jobs, records, requests])
+def verify(output: Path, directory: Path = JOBS_TEMPLATE.parent) -> int:
+    documents = role_documents(directory, FAMILIES)
+    rows = with_empty_context(job_cases() + record_cases() + request_cases()) + matrix_cases()
+    checks = evaluate_role(documents, rows)
+    checks += evaluate_role(role_documents(directory, ["train"]), train_only_cases())
+    checks += size_checks("six family", documents) + size_checks("nine family", role_documents(directory, ALL_FAMILIES))
     defects = []
-    for suite, (document, rows) in suites.items():
-        for name, changed in mutations(document):
-            failures = [item["case"] for item in evaluate(changed, rows) if not item["passed"]]
-            defects.append({"defect": f"{suite}_{name}", "caught": bool(failures), "failed_cases": failures[:3]})
-    for suite, name, changed in planted(jobs, records, requests):
-        failures = [item["case"] for item in evaluate(changed, suites[suite][1]) if not item["passed"]]
-        defects.append({"defect": f"{suite}_{name}", "caught": bool(failures), "failed_cases": failures[:3]})
+    for name, label, changed in widenings(documents) + planted(documents):
+        if changed == documents[name]:
+            defects.append({"defect": f"{name}_{label}", "caught": False, "failed_cases": ["the planted change left the policy as it was"]})
+            continue
+        failures = [item["case"] for item in evaluate_role({**documents, name: changed}, rows) if not item["passed"]]
+        defects.append({"defect": f"{name}_{label}", "caught": bool(failures), "failed_cases": failures[:3]})
     output.mkdir(parents=True, exist_ok=False)
     (output / "report.json").write_text(json.dumps({"checks": checks, "defects": defects}, indent=2) + "\n")
     failed = [item["case"] for item in checks if not item["passed"]] + [f"defect not caught: {item['defect']}" for item in defects if not item["caught"]]
@@ -425,7 +598,9 @@ def verify(output: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, required=True)
-    return verify(parser.parse_args().output)
+    parser.add_argument("--policy-directory", type=Path, default=JOBS_TEMPLATE.parent, help="The folder with the three launch policy templates to inspect.")
+    arguments = parser.parse_args()
+    return verify(arguments.output, arguments.policy_directory)
 
 
 if __name__ == "__main__":
