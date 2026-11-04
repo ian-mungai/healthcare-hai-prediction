@@ -4,6 +4,11 @@
 ``list_tasks``. It enforces the request rules the service documents: one task per call, a client token of at most 64 printable characters (a repeat of
 a token returns the first task), ``startedBy`` of at most 128 characters, and no ``startedBy`` together with ``desiredStatus`` in ``list_tasks``. A task moves
 on each ``describe_tasks``: provisioning, then running, then stopped with the exit codes planned for it. It never leaves the machine.
+
+It knows the two task shapes of the cluster. A definition whose name ends in ``_host`` is a bridge task for the EC2 capacity provider ``host_provider``: ECS
+refuses an awsvpc network for it, refuses a strategy that names another provider and, when the strategy is omitted, places it by the cluster default
+(``FARGATE_SPOT``), which cannot run it. Every other definition is an awsvpc Fargate task: it needs the network and a Fargate provider. ``host_full`` makes
+the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room.
 """
 
 from __future__ import annotations
@@ -18,6 +23,9 @@ ACCOUNT = "000000000000"
 CLUSTER = "stand-in-cluster"
 REGION = "stand-in-region"
 FINISH_AFTER = 3
+HOST_SUFFIX = "_host"
+FARGATE_PROVIDERS = frozenset({"FARGATE", "FARGATE_SPOT"})
+CLUSTER_DEFAULT_PROVIDER = "FARGATE_SPOT"
 
 
 def client_error(code: str, operation: str, message: str = "stand-in refusal") -> ClientError:
@@ -38,6 +46,8 @@ class FakeEcs:
         self.plan: dict[str, int | None] = {}
         self.omit: set[str] = set()
         self.finish_after = FINISH_AFTER
+        self.host_provider = "stand-in_host"  # the registered EC2 capacity provider of the cluster
+        self.host_full = False
         self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
 
     def count(self, operation: str) -> int:
@@ -51,16 +61,34 @@ class FakeEcs:
         if queue:
             raise queue.pop(0)
 
+    def _check_shape(self, arguments: Mapping[str, Any]) -> bool:
+        """Refuse what ECS refuses for the task definition's shape and return True when the task runs on the host."""
+        on_host = str(arguments["taskDefinition"]).endswith(HOST_SUFFIX)
+        strategy = arguments.get("capacityProviderStrategy") or [{"capacityProvider": CLUSTER_DEFAULT_PROVIDER, "weight": 1}]
+        providers = {str(item["capacityProvider"]) for item in strategy}
+        if not providers <= FARGATE_PROVIDERS | {self.host_provider}:
+            raise client_error("InvalidParameterException", "RunTask", "The capacity provider was not found in the cluster.")
+        if on_host and "networkConfiguration" in arguments:
+            raise client_error("InvalidParameterException", "RunTask", "Network configuration is not valid for a bridge task definition.")
+        if not on_host and "networkConfiguration" not in arguments:
+            raise client_error("InvalidParameterException", "RunTask", "Network configuration must be provided for an awsvpc task definition.")
+        if on_host != (providers == {self.host_provider}):
+            raise client_error("InvalidParameterException", "RunTask", "The task definition is not compatible with the capacity provider.")
+        return on_host
+
     def run_task(self, **arguments: Any) -> dict[str, Any]:
         self._enter("run_task", arguments)
         token = arguments.get("clientToken", "")
         started_by = arguments.get("startedBy", "")
         if arguments.get("count") != 1 or not 1 <= len(token) <= 64 or len(started_by) > 128 or not all(33 <= ord(c) <= 126 for c in token):
             raise client_error("InvalidParameterException", "RunTask")
+        on_host = self._check_shape(arguments)
         if token in self.tokens:
             return {"tasks": [self.tasks[self.tokens[token]]], "failures": []}
+        if on_host and self.host_full:
+            return {"tasks": [], "failures": [{"arn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in", "reason": "RESOURCE:CPU"}]}
         names = [item["name"] for item in arguments.get("overrides", {}).get("containerOverrides", [])]
-        names = ["init", *names] if arguments["taskDefinition"].endswith("_train") else names
+        names = ["init", *names] if str(arguments["taskDefinition"]).removesuffix(HOST_SUFFIX).endswith("_train") else names
         digest = hashlib.sha256(token.encode()).hexdigest()[:32]
         arn = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{digest}"
         task = {
@@ -73,6 +101,14 @@ class FakeEcs:
             "polls": 0,
             "request": dict(arguments),
         }
+        if on_host:
+            task.update(
+                launchType="EC2",
+                capacityProviderName=self.host_provider,
+                containerInstanceArn=f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in",
+            )
+        else:
+            task.update(launchType="FARGATE", attachments=[{"type": "ElasticNetworkInterface", "status": "PRECREATED"}])
         self.tasks[arn] = task
         self.tokens[token] = arn
         if self.lose_reply_once:
