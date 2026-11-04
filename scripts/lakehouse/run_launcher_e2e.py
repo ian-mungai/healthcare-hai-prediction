@@ -3504,6 +3504,113 @@ def docker_restart_stale_ping(env: Env) -> dict[str, bool]:
     }
 
 
+def label_listings(env: Env, label: str) -> int:
+    """How many container listings the fake daemon served for one label filter."""
+    return sum(1 for call in env.daemon.calls_matching("GET", "/containers/json") if label in json.loads(call["query"].get("filters", "{}")).get("label", []))
+
+
+def write_launcher_record(env: Env, key: str, record: dict[str, Any]) -> None:
+    """Replace one record of the launcher section of the registry, as the end of a record and the start of a newer one would."""
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        state["launcher"][key] = record
+
+
+def record_phase(env: Env, key: str) -> Any:
+    """The phase of one record of the launcher section of the registry."""
+    return (env.state()["launcher"].get(key) or {}).get("phase")
+
+
+def stale_result_checks(env: Env, label: str, begin_older: Callable[[], None], begin_newer: Callable[[], None], phase_key: str) -> dict[str, bool]:
+    """A worker of a record that ended is still running when a newer record begins: its late result must not settle the newer record. The fake daemon holds the
+    older worker's first container listing and the newer worker's, so the older result arrives while the newer record waits for its own."""
+
+    def listing(context: dict[str, Any]) -> bool:
+        return label in context["labels"]
+
+    older_gate = env.daemon.add_gate("list", "after", match=listing)
+    newer_gate = env.daemon.add_gate("list", "after", match=listing)
+    begin_older()
+    older_running = older_gate.wait_reached(15)
+    begin_newer()
+    newer_ran_its_own = newer_gate.wait_reached(5)
+    older_gate.release()
+    time.sleep(1.5)
+    settled_by_the_older = record_phase(env, phase_key) == "down"
+    newer_gate.release()
+    with contextlib.suppress(CaseFailure):
+        env.wait(lambda: record_phase(env, phase_key) == "down", 10, "the newer record is down")
+    return {
+        "the worker of the older record was running": older_running,
+        "the newer record ran its own worker while the older one was held": newer_ran_its_own,
+        "the late result of the older record did not settle the newer record": newer_ran_its_own and not settled_by_the_older,
+        "the newer record is down once its own worker answered": record_phase(env, phase_key) == "down",
+        "two listings served": label_listings(env, label) == 2,
+    }
+
+
+def stack_family_case(env: Env, key: str, label: str, extra: dict[str, Any]) -> dict[str, bool]:
+    """The teardown of a stack record (catalog, orchestration, lineage or online store) at its confirmation step, replaced by a newer record in the registry
+    (a handler-contract test: the launcher itself never leaves a teardown before its own confirmation result)."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+
+    def record(identity: str) -> dict[str, Any]:
+        return {"id": identity, "phase": "tearing_down", "after": "down", "stop_step": "confirm", "services": {}, "error": "", **extra}
+
+    return stale_result_checks(
+        env, label, partial(write_launcher_record, env, key, record("older")), partial(write_launcher_record, env, key, record("newer")), key
+    )
+
+
+@case("catalog_stale_confirm")
+def catalog_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of a catalog teardown that ended must not settle the teardown of a newer catalog record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, "catalog", launcher.LABEL_SERVICE, {"network": None})
+
+
+@case("orchestration_stale_confirm")
+def orchestration_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of an orchestration stack teardown that ended must not settle the teardown of a newer record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, "orchestration", f"{launcher.LABEL_STACK}={launcher.ORCHESTRATION_STACK}", {"network": None})
+
+
+@case("lineage_stale_confirm")
+def lineage_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of a lineage stack teardown that ended must not settle the teardown of a newer record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, "lineage", f"{launcher.LABEL_STACK}={launcher.LINEAGE_STACK}", {"networks": {}})
+
+
+@case("online_store_stale_confirm")
+def online_store_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of an online store teardown that ended must not settle the teardown of a newer record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, online_store.STACK, f"{launcher.LABEL_STACK}={online_store.STACK}", {"service": None, "network": None})
+
+
+@case("mlflow_stale_stop")
+def mlflow_stale_stop(env: Env) -> dict[str, bool]:
+    """The stop worker of an MLflow teardown that ended at its deadline (cleanup_failed) must not settle the teardown that the owner starts again."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def begin_older() -> None:
+        write_launcher_record(env, "mlflow", {"phase": "tearing_down", "services": {}, "error": "", "stop_deadline": time.time() + 120})
+
+    def begin_newer() -> None:
+        # The older teardown passes its deadline while its stop worker is held; the owner then asks for the shutdown again.
+        with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+            state["launcher"]["mlflow"]["stop_deadline"] = time.time() - 1
+        env.wait(lambda: record_phase(env, "mlflow") == "cleanup_failed", 10, "the older teardown has passed its deadline")
+        client.call("mlflow_down", {"owner": True}, owner)
+
+    return stale_result_checks(env, f"{launcher.LABEL_STACK}={mlflow_service.STACK}", begin_older, begin_newer, "mlflow")
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -10359,6 +10466,11 @@ ALL_CASES = (
     docker_release_stale_list,
     event_stream_idle,
     docker_restart_stale_ping,
+    catalog_stale_confirm,
+    orchestration_stale_confirm,
+    lineage_stale_confirm,
+    online_store_stale_confirm,
+    mlflow_stale_stop,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,
