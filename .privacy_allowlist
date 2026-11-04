@@ -61,3 +61,4 @@ aws-account scripts/infrastructure/run_activation_inputs_e2e.py -- synthetic all
 aws-account infra/iam/tests/silver_first_run.tftest.hcl -- synthetic all-ones account IDs in mocked silver first run IAM tests; not the project account
 aws-account infra/iam/tests/features_image.tftest.hcl -- synthetic all-ones account IDs in mocked features image grant tests; not the project account
 aws-account infra/jobs/tests/guard.tftest.hcl -- synthetic all-ones account IDs in the mocked guard task definition tests; not the project account
+aws-account infra/jobs/tests/host.tftest.hcl -- synthetic all-ones account IDs in the mocked host task definition plans and refusal cases; not the project account
