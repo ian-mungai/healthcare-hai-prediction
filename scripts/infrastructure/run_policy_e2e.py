@@ -125,6 +125,7 @@ AWS_POLARIS_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases
 AWS_PAIRS = ("ssm", "SetUpAwsPolarisPairs")
 OPENMETADATA_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.OPENMETADATA_PASSWORDS)
 OPENMETADATA_PASSWORDS = ("ssm", policy_cases.OPENMETADATA_STATEMENT)
+OPENMETADATA_DENY = ("ssm", policy_cases.OPENMETADATA_DENY)
 TASK_EXECUTION = "owner_task_execution"
 STS = ("sts", "AssumeLakehouseRolesOnly")
 INJECT = (TASK_EXECUTION, "InjectNamedParameters")
@@ -144,6 +145,7 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         INJECT: {parameter_arn(names[key]) for key in EXECUTION_PLACEHOLDERS},
         AWS_PAIRS: {parameter_arn(names[key]) for key in AWS_POLARIS_PLACEHOLDERS},
         OPENMETADATA_PASSWORDS: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
+        OPENMETADATA_DENY: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
     }
 
 

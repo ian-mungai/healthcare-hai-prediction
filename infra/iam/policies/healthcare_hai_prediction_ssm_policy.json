@@ -101,6 +101,20 @@
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${OPENMETADATA_ADMIN_PASSWORD_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${OPENMETADATA_DB_PASSWORD_NAME}"
       ]
+    },
+    {
+      "Sid": "DenyOpenMetadataPasswordOverwrite",
+      "Effect": "Deny",
+      "Action": "ssm:PutParameter",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${OPENMETADATA_ADMIN_PASSWORD_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${OPENMETADATA_DB_PASSWORD_NAME}"
+      ],
+      "Condition": {
+        "StringEqualsIgnoreCase": {
+          "ssm:Overwrite": "true"
+        }
+      }
     }
   ]
 }
