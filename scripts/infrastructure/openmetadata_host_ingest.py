@@ -10,6 +10,7 @@ of a profiling or sampling configuration, its variable check and its dbt downloa
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import re
 import sys
@@ -19,8 +20,22 @@ from typing import Any
 
 from scripts.infrastructure import openmetadata_ingest as ingest
 
-# A private IPv4 address and a port: the catalog is reached over the bridge by the host address, never by a name that could resolve elsewhere or by loopback.
-API_ADDRESS = re.compile(r"http://(?!127\.)(?:[0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{2,5}/api")
+# The catalog is reached over the bridge at the host's address: an http URL whose host is a private IPv4 address, port 8585 and the path /api, and nothing else.
+API_ADDRESS = re.compile(r"http://([0-9]{1,3}(?:\.[0-9]{1,3}){3}):8585/api")
+PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+def catalog_address_is_valid(api: str) -> bool:
+    """True only for http://<RFC 1918 IPv4 address>:8585/api. An octet over 255 or with a leading zero, a public, loopback or link-local address, another port
+    and any other path are refused, so the token can only go to the host's own catalog."""
+    match = API_ADDRESS.fullmatch(api)
+    if match is None:
+        return False
+    try:
+        host = ipaddress.IPv4Address(match.group(1))
+    except ValueError:
+        return False
+    return any(host in network for network in PRIVATE_NETWORKS)
 
 
 def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callable[[dict[str, Any]], None] | None = None, s3_client: Any = None) -> int:
@@ -32,8 +47,8 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     environment = dict(os.environ if env is None else env)
     api = environment.get("OM_API", "")
     token = environment.get("OM_INGESTION_TOKEN", "")
-    if not API_ADDRESS.fullmatch(api):
-        sys.stderr.write("openmetadata_host_ingest: OM_API must be http://<private IPv4 address>:<port>/api and not a loopback address\n")
+    if not catalog_address_is_valid(api):
+        sys.stderr.write("openmetadata_host_ingest: OM_API must be http://<private IPv4 address>:8585/api, with a 10., 172.16 to 172.31 or 192.168. address\n")
         return 2
     if not token:
         sys.stderr.write("openmetadata_host_ingest: OM_INGESTION_TOKEN is not set\n")

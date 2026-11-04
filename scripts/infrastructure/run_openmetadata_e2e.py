@@ -308,19 +308,58 @@ def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
 
 
 def host_ingest_refuses_an_unusable_catalog_address() -> None:
-    for label, address in {
+    refused = {
         "loopback": "http://127.0.0.1:8585/api",
         "missing": None,
         "no api path": "http://10.0.1.20:8585",
         "a name": "http://catalog.example.invalid:8585/api",
         "tls": "https://10.0.1.20:8585/api",
-    }.items():
+        "public": "http://203.0.113.20:8585/api",
+        "link local": "http://169.254.169.254:8585/api",
+        "octet over 255": "http://10.0.1.256:8585/api",
+        "first octet over 255": "http://999.0.1.20:8585/api",
+        "leading zero": "http://10.0.01.20:8585/api",
+        "another port": "http://10.0.1.20:8586/api",
+        "port over 65535": "http://10.0.1.20:99999/api",
+        "no port": "http://10.0.1.20/api",
+        "path with a slash": "http://10.0.1.20:8585/api/",
+        "another path": "http://10.0.1.20:8585/apix",
+        "query": "http://10.0.1.20:8585/api?x=1",
+        "user information": "http://10.0.1.20:8585@203.0.113.20:8585/api",
+        "below 172.16": "http://172.15.255.255:8585/api",
+        "above 172.31": "http://172.32.0.1:8585/api",
+        "below 10": "http://9.255.255.255:8585/api",
+        "above 10": "http://11.0.0.1:8585/api",
+        "below 192.168": "http://192.167.255.255:8585/api",
+        "above 192.168": "http://192.169.0.1:8585/api",
+        "space": " http://10.0.1.20:8585/api",
+    }
+    for label, address in refused.items():
         seen: list[dict[str, Any]] = []
         with tempfile.TemporaryDirectory() as folder:
             args, env = host_ingest_environment(Path(folder), OM_API=address)
             code, out, err = run_host_ingest(args, env, seen.append)
         require(code == 2 and seen == [], f"{label}: code {code}, workflows {len(seen)}")
         require("OM_API" in err and BEARER_VALUE not in out + err, f"{label}: {err}")
+
+
+def host_ingest_accepts_each_private_range_on_the_catalog_port() -> None:
+    for address in (
+        "http://10.0.1.20:8585/api",
+        "http://10.0.0.0:8585/api",
+        "http://10.255.255.255:8585/api",
+        "http://172.16.0.0:8585/api",
+        "http://172.31.255.255:8585/api",
+        "http://192.168.0.1:8585/api",
+        "http://192.168.255.255:8585/api",
+    ):
+        seen: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory() as folder:
+            args, env = host_ingest_environment(Path(folder), OM_API=address)
+            args = [item for item in args if item != "dbt"]
+            code, _, err = run_host_ingest(args, env, seen.append)
+        require(code == 0 and len(seen) == 1, f"{address}: code {code}, workflows {len(seen)}, {err}")
+        require(seen[0]["workflowConfig"]["openMetadataServerConfig"]["hostPort"] == address, f"{address}: the workflow was aimed elsewhere")
 
 
 def host_ingest_refuses_a_missing_token() -> None:
@@ -1008,6 +1047,7 @@ CASES: list[Callable[[], None]] = [
     ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest,
     host_ingest_aims_both_sources_at_the_persistent_catalog,
     host_ingest_refuses_an_unusable_catalog_address,
+    host_ingest_accepts_each_private_range_on_the_catalog_port,
     host_ingest_refuses_a_missing_token,
     host_ingest_stops_at_the_first_failing_source,
     host_ingest_keeps_the_profiler_refusal,
