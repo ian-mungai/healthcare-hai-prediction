@@ -3520,9 +3520,12 @@ def record_phase(env: Env, key: str) -> Any:
     return (env.state()["launcher"].get(key) or {}).get("phase")
 
 
-def stale_result_checks(env: Env, label: str, begin_older: Callable[[], None], begin_newer: Callable[[], None], phase_key: str) -> dict[str, bool]:
+def stale_result_checks(
+    env: Env, label: str, begin_older: Callable[[], None], begin_newer: Callable[[], None], phase_key: str, single_flight: bool = False
+) -> dict[str, bool]:
     """A worker of a record that ended is still running when a newer record begins: its late result must not settle the newer record. The fake daemon holds the
-    older worker's first container listing and the newer worker's, so the older result arrives while the newer record waits for its own."""
+    older worker's first container listing and the newer worker's, so the older result arrives while the newer record waits for its own. With
+    ``single_flight`` only one worker runs at a time: the newer record waits for the older worker and runs its own worker once the older one returned."""
 
     def listing(context: dict[str, Any]) -> bool:
         return label in context["labels"]
@@ -3532,16 +3535,21 @@ def stale_result_checks(env: Env, label: str, begin_older: Callable[[], None], b
     begin_older()
     older_running = older_gate.wait_reached(15)
     begin_newer()
-    newer_ran_its_own = newer_gate.wait_reached(5)
+    newer_ran_while_older_held = newer_gate.wait_reached(2 if single_flight else 5)
     older_gate.release()
+    newer_ran_its_own = newer_ran_while_older_held or (single_flight and newer_gate.wait_reached(10))
     time.sleep(1.5)
     settled_by_the_older = record_phase(env, phase_key) == "down"
     newer_gate.release()
     with contextlib.suppress(CaseFailure):
         env.wait(lambda: record_phase(env, phase_key) == "down", 10, "the newer record is down")
+    started_by = {
+        "the newer record did not run a second worker while the older one was held": not newer_ran_while_older_held,
+        "the newer record ran its own worker once the older one returned": newer_ran_its_own,
+    }
     return {
         "the worker of the older record was running": older_running,
-        "the newer record ran its own worker while the older one was held": newer_ran_its_own,
+        **(started_by if single_flight else {"the newer record ran its own worker while the older one was held": newer_ran_its_own}),
         "the late result of the older record did not settle the newer record": newer_ran_its_own and not settled_by_the_older,
         "the newer record is down once its own worker answered": record_phase(env, phase_key) == "down",
         "two listings served": label_listings(env, label) == 2,
@@ -3592,7 +3600,8 @@ def online_store_stale_confirm(env: Env) -> dict[str, bool]:
 
 @case("mlflow_stale_stop")
 def mlflow_stale_stop(env: Env) -> dict[str, bool]:
-    """The stop worker of an MLflow teardown that ended at its deadline (cleanup_failed) must not settle the teardown that the owner starts again."""
+    """The stop worker of an MLflow teardown that ended at its deadline (cleanup_failed) must not settle the teardown that the owner starts again. Only one
+    MLflow stop worker runs at a time: the retry waits for the older worker, the older result is dropped by its key and the retry settles by its own worker."""
     env.start()
     env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
     client = env.client()
@@ -3608,7 +3617,7 @@ def mlflow_stale_stop(env: Env) -> dict[str, bool]:
         env.wait(lambda: record_phase(env, "mlflow") == "cleanup_failed", 10, "the older teardown has passed its deadline")
         client.call("mlflow_down", {"owner": True}, owner)
 
-    return stale_result_checks(env, f"{launcher.LABEL_STACK}={mlflow_service.STACK}", begin_older, begin_newer, "mlflow")
+    return stale_result_checks(env, f"{launcher.LABEL_STACK}={mlflow_service.STACK}", begin_older, begin_newer, "mlflow", single_flight=True)
 
 
 @case("mlflow_stop_overlap")
