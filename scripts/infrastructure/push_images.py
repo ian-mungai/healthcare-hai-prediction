@@ -16,7 +16,7 @@ variable file the services stack reads. Images run by digest, never by tag, so a
 
 The three OpenMetadata images (``openmetadata_server``, ``openmetadata_ingestion`` and ``openmetadata_search``) are mirrors pinned to the linux/arm64
 digest of the selected upstream release, and each names its entry in ``config/metadata/images.json`` (``metadata_image``). Their plan skips the pull and
-the push when ECR already holds the digest, and reads the ECR digest back and stops when it differs from the pinned one (``read_back``). ``record`` takes
+the push when ECR already holds the digest under any tag, and asks ECR for the pinned digest and stops when it is absent (``read_back``). ``record`` takes
 only a digest equal to the pin for these images and writes it to the variable file and to ``config/metadata/images.json`` together. ``check
 --require-resolved`` is the activation check: it fails while a digest in that file is still ``TO_RESOLVE`` or the two files disagree. The finite catalog
 task's database image is not part of this list.
@@ -287,21 +287,25 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
 
 
 def mirror_lines(name: str, image: dict[str, Any], url: str, profile: str, region: str) -> list[str]:
-    """The commands that mirror one pinned upstream image: skip it when ECR holds the digest, push it once and stop when the ECR digest differs."""
+    """The commands that mirror one pinned upstream image: skip it when ECR holds the digest, push it once and stop when ECR lacks the pinned digest.
+
+    The digest is known, so every check reads the image by digest (``imageDigest=``). A tag only names the push, and an image that ECR holds under another
+    tag counts as present.
+    """
     repository = urlsplit("//" + url).path.lstrip("/")
     source = str(image["source"])
     digest = source.rpartition("@")[2]
     tag_variable = f"TAG_{name.upper()}"
     tag = f"{image['tag']}-{digest.removeprefix('sha256:')[:12]}"
     target = f"{url}:${tag_variable}"
-    describe = f"aws ecr describe-images --profile {profile} --region {region} --repository-name {repository}"
+    describe = f"aws ecr describe-images --profile {profile} --region {region} --repository-name {repository} --image-ids imageDigest={digest}"
     inspect = f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {source}"
     return [
         f"{tag_variable}={tag}",
-        f"{describe} --image-ids imageDigest={digest} >/dev/null 2>&1 || {{ docker pull --platform {PLATFORM} {source} "
-        f'&& [ "$({inspect})" = {PLATFORM} ] && docker tag {source} {target} && docker push {target}; }}   # skipped when ECR holds the digest',
-        f"[ \"$({describe} --image-ids imageTag=${tag_variable} --query 'imageDetails[0].imageDigest' --output text)\" = {digest} ] "
-        f'|| {{ echo "{name}: the ECR digest differs from the pinned upstream digest" >&2; exit 1; }}   # the digest to record for {name} is {digest}',
+        f"{describe} >/dev/null 2>&1 || {{ docker pull --platform {PLATFORM} {source} "
+        f'&& [ "$({inspect})" = {PLATFORM} ] && docker tag {source} {target} && docker push {target}; }}   # skipped when ECR holds the digest under any tag',
+        f"[ \"$({describe} --query 'imageDetails[0].imageDigest' --output text 2>/dev/null)\" = {digest} ] "
+        f'|| {{ echo "{name}: ECR does not hold the pinned upstream digest" >&2; exit 1; }}   # the digest to record for {name} is {digest}',
     ]
 
 
