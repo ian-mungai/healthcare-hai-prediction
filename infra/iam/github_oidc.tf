@@ -4,7 +4,7 @@
 #
 # Three roles, one per purpose. Each trusts one exact web identity subject of the one repository, with no pattern:
 #   image_push       environment image-push           pushes images to the project repositories
-#   deploy           environment model-api-deploy     updates the named serving services
+#   deploy           environment model-api-deploy     registers the next serving task definition revision and updates the named serving services
 #   terraform_plan   pull requests, environment terraform-plan   read-only, plans without a lock
 # No role applies Terraform (owner decision D18): GitHub plans with the read-only plan role and the owner applies the saved plan. Each role
 # holds one inline policy and no attached policy, so the coverage checks (scripts/infrastructure/run_policy_e2e.py) see all it can do.
@@ -16,11 +16,16 @@
 locals {
   github_issuer       = "token.actions.githubusercontent.com"
   github_subject_base = "repo:${var.github_repository}"
-  # Every delivery role carries one permissions boundary that the administrator creates at bootstrap from infra/iam/boundary/. The
-  # boundary policy must exist before the owner applies this file with the flag on. The delivery boundary holds exactly the grants of
-  # the three roles below. The project role boundary cannot hold them: it has no room for them in the 6,144 characters IAM allows.
-  github_boundary_file = "healthcare_hai_prediction_delivery_boundary_policy.json"
-  github_boundary_arn  = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_delivery_boundary"
+  # Every delivery role carries a permissions boundary that the administrator creates at bootstrap from infra/iam/boundary/. The boundary policies must
+  # exist before the owner applies this file with the flag on. The delivery boundary holds exactly the grants of the image push and plan roles. The deploy
+  # role has a boundary of its own (owner decision D18): registering the serving families and passing the serving roles do not fit beside the push and plan
+  # grants in the 6,144 characters IAM allows for one managed policy, and the project role boundary has no room for them either.
+  github_boundaries = {
+    delivery = { file = "healthcare_hai_prediction_delivery_boundary_policy.json", name = "delivery_boundary" }
+    deploy   = { file = "healthcare_hai_prediction_deploy_boundary_policy.json", name = "deploy_boundary" }
+  }
+  github_role_boundary = { image_push = "delivery", terraform_plan = "delivery", deploy = "deploy" }
+  github_boundary_arn  = { for key, boundary in local.github_boundaries : key => "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_${boundary.name}" }
 
   # IAM counts at most 6,144 characters, white space left out, in a managed policy, and the boundary holds the names many times. The size is measured for
   # the real names and for the longest names the variable validations accept: a 37 character project name, a 63 character bucket, a 14 character region
@@ -42,29 +47,33 @@ locals {
       DATA_BUCKET_NAME = join("", [for position in range(63) : "b"])
     }
   }
-  # The boundary as the administrator renders it for each set of names. A shared secret name repeats its resource once per name.
+  # Each boundary as the administrator renders it for each set of names. A shared secret name repeats its resource once per name.
   github_boundary_rendered = {
-    for case, names in local.github_boundary_names : case => jsondecode(templatefile("${path.module}/boundary/${local.github_boundary_file}", merge(names, {
-      SHARED_SECRET_NAME = "%SHARED_SECRET_NAME%"
-    })))
-  }
-  github_boundary_expanded = {
-    for case, document in local.github_boundary_rendered : case => {
-      Version = document.Version
-      Statement = concat(
-        [
-          for statement in document.Statement : merge(statement, {
-            Resource = flatten([
-              for resource in flatten([statement.Resource]) :
-              strcontains(resource, "%SHARED_SECRET_NAME%") ? [for name in local.github_policy_shared_secrets : replace(resource, "%SHARED_SECRET_NAME%", name)] : [resource]
-            ])
-          }) if can(statement.Resource)
-        ],
-        [for statement in document.Statement : statement if !can(statement.Resource)]
-      )
+    for case, names in local.github_boundary_names : case => {
+      for key, boundary in local.github_boundaries : key => jsondecode(templatefile("${path.module}/boundary/${boundary.file}", merge(names, {
+        SHARED_SECRET_NAME = "%SHARED_SECRET_NAME%"
+      })))
     }
   }
-  github_boundary_size = { for case, document in local.github_boundary_expanded : case => length(jsonencode(document)) }
+  github_boundary_expanded = {
+    for case, documents in local.github_boundary_rendered : case => {
+      for key, document in documents : key => {
+        Version = document.Version
+        Statement = concat(
+          [
+            for statement in document.Statement : merge(statement, {
+              Resource = flatten([
+                for resource in flatten([statement.Resource]) :
+                strcontains(resource, "%SHARED_SECRET_NAME%") ? [for name in local.github_policy_shared_secrets : replace(resource, "%SHARED_SECRET_NAME%", name)] : [resource]
+              ])
+            }) if can(statement.Resource)
+          ],
+          [for statement in document.Statement : statement if !can(statement.Resource)]
+        )
+      }
+    }
+  }
+  github_boundary_size = { for case, documents in local.github_boundary_expanded : case => { for key, document in documents : key => length(jsonencode(document)) } }
   github_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
 
   # The stacks that continuous delivery may plan. The IAM stack and the storage stack stay with the owner.
@@ -72,6 +81,10 @@ locals {
   github_state_prefix = "terraform_state"
   github_state_keys   = [for stack in local.github_state_stacks : "${local.github_state_prefix}/${stack}/terraform.tfstate"]
   github_state_bucket = "arn:aws:s3:::${var.data_bucket_name}"
+  # D18 model releases: the families the deploy role registers, and the roles it passes. The names follow the services stack (<project>_<environment>_<service>)
+  # and this stack (the serving task roles in model_api.tf and the serving execution role in serving_execution.tf).
+  github_serving_families = [for service in ["model_api", "streamlit"] : "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}:task-definition/${var.project_name}_${var.environment}_${service}:*"]
+  github_serving_roles    = [for name in ["model_api_task", "streamlit_task", "serving_execution"] : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, name)}"]
   # D18 saved plans: CI saves each plan and its digest here. The plan role may put objects under this prefix and do nothing else with it.
   github_plans_objects = "${local.github_state_bucket}/terraform_plans/*"
 
@@ -206,11 +219,12 @@ locals {
       }
     ]
 
-    # The deploy role rolls a service to a task definition revision that already exists: it describes definitions and updates the named
-    # services. It cannot register a definition or pass a role. The shared task execution role reads the PostgreSQL and Polaris root secrets for
-    # the tasks that name them, so a role that registers a definition, passes that role and updates a service could pull those secrets into a
-    # crafted task. Terraform registers definitions, and the owner applies it. Until the services stack names the serving services through the
-    # variable, the role can only look at the project cluster.
+    # The deploy role releases a serving image (owner decision D18: a model release needs no owner step). The workflow registers the next task
+    # definition revision of the model API or the dashboard from the running one, and rolls the service to it. The shared task execution role reads the
+    # PostgreSQL and Polaris root secrets for the tasks that name them, so a role that registers any definition and passes any role could pull them into a
+    # crafted task. This role registers only the two serving families, with the Project tag, and passes only the two serving task roles and the dedicated
+    # serving execution role, to ECS tasks. .github/scripts/serving_release.sh also refuses a definition that names any other role, secret or image
+    # repository. Until the services stack names the serving services through the variable, the role can only look at the project cluster.
     deploy = concat(
       [
         {
@@ -224,6 +238,27 @@ locals {
           Effect   = "Allow"
           Action   = ["ecs:DescribeTaskDefinition"]
           Resource = ["*"]
+        },
+        {
+          Sid       = "RegisterServingTaskDefinitions"
+          Effect    = "Allow"
+          Action    = ["ecs:RegisterTaskDefinition"]
+          Resource  = local.github_serving_families
+          Condition = { StringEquals = { "aws:RequestTag/Project" = var.project_name }, "ForAnyValue:StringEquals" = { "aws:TagKeys" = ["Project"] } }
+        },
+        {
+          Sid       = "TagRegisteredTaskDefinitions"
+          Effect    = "Allow"
+          Action    = ["ecs:TagResource"]
+          Resource  = local.github_serving_families
+          Condition = { StringEquals = { "ecs:CreateAction" = "RegisterTaskDefinition" } }
+        },
+        {
+          Sid       = "PassServingRoles"
+          Effect    = "Allow"
+          Action    = ["iam:PassRole"]
+          Resource  = local.github_serving_roles
+          Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
         }
       ],
       length(var.github_oidc_deploy_services) == 0 ? [] : [
@@ -289,35 +324,43 @@ locals {
     if var.github_oidc_enabled
   ]))
 
-  # The boundary as the administrator renders it: the same file, the same values. A shared secret name repeats its resource once per name.
-  github_boundary_document = jsondecode(templatefile("${path.module}/boundary/${local.github_boundary_file}", merge(local.owner_policy_values, {
-    DATA_BUCKET_NAME   = var.data_bucket_name
-    SHARED_SECRET_NAME = "%SHARED_SECRET_NAME%"
-  })))
-  github_boundary_allows = [
-    for statement in local.github_boundary_document.Statement : {
-      actions = flatten([statement.Action])
-      resources = flatten([
-        for resource in flatten([statement.Resource]) :
-        strcontains(resource, "%SHARED_SECRET_NAME%") ? [for name in local.github_policy_shared_secrets : replace(resource, "%SHARED_SECRET_NAME%", name)] : [resource]
-      ])
-    } if statement.Effect == "Allow"
-  ]
-  github_boundary_actions = toset(flatten([for allow in local.github_boundary_allows : allow.actions]))
+  # The boundaries as the administrator renders them: the same files, the same values. A shared secret name repeats its resource once per name.
+  github_boundary_documents = {
+    for key, boundary in local.github_boundaries : key => jsondecode(templatefile("${path.module}/boundary/${boundary.file}", merge(local.owner_policy_values, {
+      DATA_BUCKET_NAME   = var.data_bucket_name
+      SHARED_SECRET_NAME = "%SHARED_SECRET_NAME%"
+    })))
+  }
+  github_boundary_allows = {
+    for key, document in local.github_boundary_documents : key => [
+      for statement in document.Statement : {
+        actions = flatten([statement.Action])
+        resources = flatten([
+          for resource in flatten([statement.Resource]) :
+          strcontains(resource, "%SHARED_SECRET_NAME%") ? [for name in local.github_policy_shared_secrets : replace(resource, "%SHARED_SECRET_NAME%", name)] : [resource]
+        ])
+      } if statement.Effect == "Allow"
+    ]
+  }
+  github_boundary_actions = { for key, allows in local.github_boundary_allows : key => toset(flatten([for allow in allows : allow.actions])) }
 
-  # An action of a delivery role that no boundary statement allows is dead: the boundary refuses it whatever the role policy says.
-  github_actions_outside_boundary = toset([
-    for action in local.github_custom_actions : action
-    if !anytrue([for pattern in local.github_boundary_actions : can(regex("^${replace(pattern, "*", ".*")}$", action))])
-  ])
-  # A named resource of a delivery role that no boundary statement allows for the same action. A resource of "*" is skipped: the
+  # An action of a delivery role that no statement of its own boundary allows is dead: the boundary refuses it whatever the role policy says.
+  github_actions_outside_boundary = var.github_oidc_enabled ? toset(flatten([
+    for role, statements in local.github_statements : [
+      for statement in statements : [
+        for action in flatten([statement.Action]) : action
+        if statement.Effect == "Allow" && !anytrue([for pattern in local.github_boundary_actions[local.github_role_boundary[role]] : can(regex("^${replace(pattern, "*", ".*")}$", action))])
+      ]
+    ]
+  ])) : toset([])
+  # A named resource of a delivery role that no statement of its own boundary allows for the same action. A resource of "*" is skipped: the
   # boundary names the resources AWS authorizes such an action on, and the evaluator cases check those requests.
   github_grants_outside_boundary = var.github_oidc_enabled ? toset(flatten([
     for key, statements in local.github_statements : [
       for statement in statements : [
         for pair in setproduct(flatten([statement.Action]), flatten([statement.Resource])) : "${key}: ${pair[0]} on ${pair[1]}"
         if pair[1] != "*" && !anytrue([
-          for allow in local.github_boundary_allows :
+          for allow in local.github_boundary_allows[local.github_role_boundary[key]] :
           anytrue([for action in allow.actions : can(regex("^${replace(action, "*", ".*")}$", pair[0]))]) && anytrue([for pattern in allow.resources : can(regex("^${replace(replace(replace(pattern, ".", "\\."), "?", "."), "*", ".*")}$", pair[1]))])
         ])
       ] if statement.Effect == "Allow"
@@ -338,7 +381,7 @@ resource "aws_iam_role" "github" {
   name                 = format(local.platform_name, "gh_${each.key}")
   description          = each.value.description
   max_session_duration = 3600
-  permissions_boundary = local.github_boundary_arn
+  permissions_boundary = local.github_boundary_arn[local.github_role_boundary[each.key]]
   assume_role_policy   = local.github_trust[each.key]
 }
 
@@ -405,35 +448,57 @@ output "github_oidc_grants_outside_boundary" {
 }
 
 output "github_oidc_boundary_allowed_actions" {
-  description = "Every action the delivery boundary allows, to check that nothing outside the delivery work is in it."
-  value       = sort(tolist(local.github_boundary_actions))
+  description = "Every action the delivery boundaries allow, to check that nothing outside the delivery work is in them."
+  value       = sort(tolist(setunion(values(local.github_boundary_actions)...)))
+}
+
+output "github_oidc_boundary_actions" {
+  description = "The actions each delivery boundary allows: the delivery boundary of the image push and plan roles, and the deploy boundary."
+  value       = { for key, actions in local.github_boundary_actions : key => sort(tolist(actions)) }
+}
+
+output "github_oidc_boundary_resources" {
+  description = "The resources each delivery boundary allows, shared secret names expanded."
+  value = {
+    for key, document in local.github_boundary_expanded.actual : key => sort(distinct(flatten([
+      for statement in document.Statement : statement.Resource if statement.Effect == "Allow"
+    ])))
+  }
 }
 
 output "github_oidc_boundary_size" {
-  description = "Characters of the delivery boundary, white space left out, for the real names and for the longest names the validations accept, against the 6,144 that IAM allows."
-  value = {
-    actual    = local.github_boundary_size.actual
-    at_bounds = local.github_boundary_size.at_bounds
-    limit     = local.github_boundary_limit
-  }
+  description = "Characters of each delivery boundary, white space left out, for the real names and for the longest names the validations accept, against the 6,144 that IAM allows."
+  value = merge(
+    {
+      for key in keys(local.github_boundaries) : key => {
+        actual    = local.github_boundary_size.actual[key]
+        at_bounds = local.github_boundary_size.at_bounds[key]
+      }
+    },
+    { limit = local.github_boundary_limit }
+  )
 
   precondition {
-    condition     = local.github_boundary_size.actual <= local.github_boundary_limit && local.github_boundary_size.at_bounds <= local.github_boundary_limit
-    error_message = "The delivery boundary is over the 6,144 characters of a managed policy, for the real names or for the longest names the variables accept. Shorten infra/iam/boundary/healthcare_hai_prediction_delivery_boundary_policy.json."
+    condition = alltrue(flatten([
+      for key in keys(local.github_boundaries) : [local.github_boundary_size.actual[key] <= local.github_boundary_limit, local.github_boundary_size.at_bounds[key] <= local.github_boundary_limit]
+    ]))
+    error_message = "A delivery boundary is over the 6,144 characters of a managed policy, for the real names or for the longest names the variables accept. Shorten the files in infra/iam/boundary/."
   }
 }
 
 output "github_oidc_boundary_write_resources" {
-  description = "Every resource on which the delivery boundary allows an object write. Must be the saved plans prefix only."
+  description = "Every resource on which a delivery boundary allows an object write. Must be the saved plans prefix only."
   value = sort(distinct(flatten([
-    for statement in local.github_boundary_expanded.actual.Statement : statement.Resource
-    if statement.Effect == "Allow" && anytrue([for action in flatten([statement.Action]) : startswith(action, "s3:Put") || startswith(action, "s3:Delete")])
+    for key, document in local.github_boundary_expanded.actual : [
+      for statement in document.Statement : statement.Resource
+      if statement.Effect == "Allow" && anytrue([for action in flatten([statement.Action]) : startswith(action, "s3:Put") || startswith(action, "s3:Delete")])
+    ]
   ])))
 }
 
 output "github_oidc_boundary_allowed_resources" {
-  description = "Every resource the delivery boundary allows, shared secret names expanded, to check that no pattern reaches a neighbour."
+  description = "Every resource the delivery boundaries allow, shared secret names expanded, to check that no pattern reaches a neighbour."
   value = sort(distinct(flatten([
-    for statement in local.github_boundary_expanded.actual.Statement : statement.Resource if statement.Effect == "Allow"
+    for key, document in local.github_boundary_expanded.actual : [for statement in document.Statement : statement.Resource if statement.Effect == "Allow"]
   ])))
 }

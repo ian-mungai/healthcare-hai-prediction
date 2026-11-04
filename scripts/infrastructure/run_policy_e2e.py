@@ -32,6 +32,7 @@ ROLE_DIRECTORY = REPO_ROOT / "infra" / "iam" / "role_policies"
 BOUNDARY_DIRECTORY = REPO_ROOT / "infra" / "iam" / "boundary"
 BOUNDARY_FILE = "healthcare_hai_prediction_role_boundary_policy.json"
 DELIVERY_BOUNDARY_FILE = "healthcare_hai_prediction_delivery_boundary_policy.json"
+DEPLOY_BOUNDARY_FILE = "healthcare_hai_prediction_deploy_boundary_policy.json"
 VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
 GITHUB_OIDC = REPO_ROOT / "infra" / "iam" / "github_oidc.tf"
 IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
@@ -224,6 +225,9 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
     ]  # fmt: skip
     repository = f"arn:aws:ecr:{policy_cases.R}:{policy_cases.A}:repository/{policy_cases.P}_*_{policy_cases.E}"
     plans = f"{policy_cases.BUCKET}/{policy_cases.PLAN_PREFIX}/*"
+    families = [
+        f"arn:aws:ecs:{policy_cases.R}:{policy_cases.A}:task-definition/{policy_cases.P}_{policy_cases.E}_{name}:*" for name in policy_cases.SERVING_SERVICES
+    ]
     statements = {
         "image_push": [
             {"Sid": "GetRegistryToken", "Effect": "Allow", "Action": ["ecr:GetAuthorizationToken"], "Resource": ["*"]},
@@ -235,6 +239,12 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
             {"Sid": "ReadCluster", "Effect": "Allow", "Resource": ["*"],
              "Action": ["ecs:DescribeClusters", "ecs:DescribeServices", "ecs:DescribeTasks", "ecs:ListTasks"]},
             {"Sid": "DescribeTaskDefinitions", "Effect": "Allow", "Action": ["ecs:DescribeTaskDefinition"], "Resource": ["*"]},
+            {"Sid": "RegisterServingTaskDefinitions", "Effect": "Allow", "Action": ["ecs:RegisterTaskDefinition"], "Resource": families,
+             "Condition": {"StringEquals": {"aws:RequestTag/Project": policy_cases.P}, "ForAnyValue:StringEquals": {"aws:TagKeys": ["Project"]}}},
+            {"Sid": "TagRegisteredTaskDefinitions", "Effect": "Allow", "Action": ["ecs:TagResource"], "Resource": families,
+             "Condition": {"StringEquals": {"ecs:CreateAction": "RegisterTaskDefinition"}}},
+            {"Sid": "PassServingRoles", "Effect": "Allow", "Action": ["iam:PassRole"], "Resource": list(policy_cases.SERVING_ROLES),
+             "Condition": {"StringEquals": {"iam:PassedToService": policy_cases.ECS_TASKS}}},
             {"Sid": "UpdateNamedServices", "Effect": "Allow", "Action": ["ecs:UpdateService"],
              "Resource": [policy_cases.DEPLOY_SERVICE, policy_cases.DEPLOY_STREAMLIT]},
         ],
@@ -261,6 +271,7 @@ def load_all() -> dict[str, dict[str, Any]]:
     documents["owner_snapshots"] = render_template((OWNER_DIRECTORY / "snapshots.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     documents[TASK_EXECUTION] = render_task_execution(OWNER_DIRECTORY)
     documents[policy_cases.DELIVERY_BOUNDARY] = render_template((BOUNDARY_DIRECTORY / DELIVERY_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
+    documents[policy_cases.DEPLOY_BOUNDARY] = render_template((BOUNDARY_DIRECTORY / DEPLOY_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
     documents["owner_serving_execution"] = render_template((OWNER_DIRECTORY / "serving_execution.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     return {**documents, **load_roles(), **load_delivery(documents)}
 
@@ -277,7 +288,7 @@ def evaluate_cases(documents: dict[str, dict[str, Any]], cases: list[policy_case
     for case in cases:
         boundary = bounds.get(case.principal)
         decision: Decision = decide(held[case.principal], case.request) if boundary is None else decide_bounded(held[case.principal], boundary, case.request)
-        if boundary is not None and case.principal not in (policy_cases.WIDE_ROLE, policy_cases.DELIVERY_WIDE) and not case.allowed and not decision.allowed:
+        if boundary is not None and case.principal not in (policy_cases.WIDE_ROLE, *policy_cases.WIDE_PRINCIPALS) and not case.allowed and not decision.allowed:
             own = decide(held[case.principal], case.request)
             decision = own if own.allowed else decision
         wrong_effect = decision.allowed != case.allowed
@@ -706,6 +717,14 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         document["Statement"].append({"Sid": "Padding", "Effect": "Deny", "Action": "sns:Publish", "Resource": "x" * room})
         (padded / DELIVERY_BOUNDARY_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         record("a boundary fits the old fixture but is over the limit at the longest names the variables accept", check_boundary_sizes(padded))
+        # The same plant in the deploy boundary, which has its own size to keep.
+        padded_deploy = root / "padded_deploy_boundary"
+        padded_deploy.mkdir()
+        document = json.loads((BOUNDARY_DIRECTORY / DEPLOY_BOUNDARY_FILE).read_text(encoding="utf-8"))
+        room = MAX_POLICY_CHARACTERS - non_whitespace_length(render_template(json.dumps(document), LONGEST_VALUES)) - 150
+        document["Statement"].append({"Sid": "Padding", "Effect": "Deny", "Action": "sns:Publish", "Resource": "x" * room})
+        (padded_deploy / DEPLOY_BOUNDARY_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        record("a deploy boundary fits the old fixture but is over the limit at the longest names the variables accept", check_boundary_sizes(padded_deploy))
         results[-1]["missed_by_the_longest_fixture"] = not check_sizes(padded)
         oidc = root / "github_oidc.tf"
         original_oidc = GITHUB_OIDC.read_text(encoding="utf-8")

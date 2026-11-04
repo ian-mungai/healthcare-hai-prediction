@@ -124,18 +124,36 @@ check "empty input is refused" refuses_empty_input
 check "a deployment id that is not an ECS one is refused" refuses_a_malformed_deployment_id
 check "the deploy workflow resolves the revision, then verifies the rollout with the script" deploy_workflow_verifies_the_rollout
 
-# --- GitHub plans, the owner applies (owner decision D18) ------------------------------------------------------------------------------
-# The deploy workflow only describes a task definition and updates a service. A workflow that registers one, or that applies Terraform, would
-# need a role that can do it, and no such role exists.
+# --- GitHub plans, the owner applies, and GitHub registers the serving revisions (owner decision D18) -----------------------------------
+# No workflow applies Terraform. The deploy workflow registers the next serving task definition revision itself, only through serving_release.sh:
+# it renders the revision from the running one, the check refuses the revision before it is registered and again after, and the service is
+# updated to the revision it registered.
 workflows=(.github/workflows/*.yml)
 no_workflow_applies_terraform() { ! grep -Eq '^[[:space:]]*(quiet )?terraform( -chdir=[^ ]+)? apply|terraform-apply|TERRAFORM_APPLY|gh_terraform_apply' "${workflows[@]}"; }
 no_apply_workflow_file() { [[ ! -e .github/workflows/terraform_apply.yml ]]; }
-deploy_workflow_registers_no_task_definition() { ! grep -Eq 'register-task-definition|RegisterTaskDefinition' "$deploy"; }
+lines_of() { grep -n "$1" "$deploy" | head -1 | cut -d: -f1; }
+deploy_workflow_registers_once() { [[ "$(grep -c 'aws ecs register-task-definition' "$deploy")" -eq 1 ]]; }
+deploy_workflow_renders_from_the_running_revision() { grep -q 'bash .github/scripts/serving_release.sh render' "$deploy" && grep -q 'describe-services' "$deploy"; }
+deploy_workflow_checks_before_it_registers() { [[ -n "$(lines_of 'bash .github/scripts/serving_release.sh check')" && -n "$(lines_of 'aws ecs register-task-definition')" && "$(lines_of 'bash .github/scripts/serving_release.sh check')" -lt "$(lines_of 'aws ecs register-task-definition')" ]]; }
+deploy_workflow_checks_the_registered_revision() { [[ "$(grep -c 'bash .github/scripts/serving_release.sh check' "$deploy")" -ge 2 ]]; }
+deploy_workflow_registers_the_rendered_file_only() { grep -q 'register-task-definition --cli-input-json "file://' "$deploy"; }
+deploy_workflow_updates_the_registered_revision() { [[ -n "$(lines_of 'aws ecs register-task-definition')" && "$(lines_of 'aws ecs register-task-definition')" -lt "$(lines_of 'aws ecs update-service')" ]]; }
+deploy_workflow_takes_a_digest_not_a_revision() { sed -n '/^on:/,/^permissions:/p' "$deploy" | grep -q 'image_digest:' && ! sed -n '/^on:/,/^permissions:/p' "$deploy" | grep -q 'task_definition:'; }
+deploy_workflow_limits_the_service_choice() { grep -A6 '      service:' "$deploy" | grep -q 'type: choice' && grep -A9 '      service:' "$deploy" | grep -q -- '- model_api' && grep -A10 '      service:' "$deploy" | grep -q -- '- streamlit'; }
+deploy_workflow_passes_no_input_to_the_shell_unquoted() { [[ "$(grep -c 'inputs\.' "$deploy")" -ge 1 && "$(grep -c 'inputs\.' "$deploy")" -eq "$(grep -cE '^[[:space:]]+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}$' "$deploy")" ]]; }
 plan_workflow_assumes_only_the_plan_role() { grep -q 'AWS_ROLE_TERRAFORM_PLAN' .github/workflows/terraform_plan.yml && ! grep -h 'role-to-assume' "${workflows[@]}" | grep -Eq 'APPLY'; }
 
 check "no workflow applies Terraform or names an apply environment or role" no_workflow_applies_terraform
 check "there is no apply workflow file" no_apply_workflow_file
-check "the deploy workflow registers no task definition" deploy_workflow_registers_no_task_definition
+check "the deploy workflow registers one task definition" deploy_workflow_registers_once
+check "the deploy workflow renders the revision from the running one" deploy_workflow_renders_from_the_running_revision
+check "the deploy workflow checks the revision before it registers" deploy_workflow_checks_before_it_registers
+check "the deploy workflow checks the registered revision again" deploy_workflow_checks_the_registered_revision
+check "the deploy workflow registers the rendered file and nothing else" deploy_workflow_registers_the_rendered_file_only
+check "the deploy workflow updates the service to the revision it registered" deploy_workflow_updates_the_registered_revision
+check "the deploy workflow takes an image digest, not a task definition revision" deploy_workflow_takes_a_digest_not_a_revision
+check "the deploy workflow offers the two serving services only" deploy_workflow_limits_the_service_choice
+check "the deploy workflow reads its inputs through the environment" deploy_workflow_passes_no_input_to_the_shell_unquoted
 check "the plan workflow assumes the plan role and no workflow assumes an apply role" plan_workflow_assumes_only_the_plan_role
 
 [[ $failures -eq 0 ]]
