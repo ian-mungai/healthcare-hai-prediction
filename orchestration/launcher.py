@@ -9223,6 +9223,13 @@ class Launcher:
         for key in keys:
             self.complete_request(key, result, error)
 
+    @staticmethod
+    def operation_key(name: str, record: Mapping[str, Any]) -> str:
+        """The worker key of one step of a recorded Docker Desktop operation, scoped to that record. An operation ends at its deadline while the stop of its
+        hung command still runs; a worker key shared by every operation would hold the next operation's command back and let the earlier command's result
+        end the next operation."""
+        return f"{name}:{record.get('id') or record.get('request') or ''}"
+
     def m_desktop_start(self, ctx: Ctx) -> Any:
         """Start Docker Desktop when the daemon does not answer and wait until the launcher serves, within one deadline (failure modes R7, R8, R15)."""
         deadline = self.seconds_param(ctx.params, "deadline", self.timings.start_wait)
@@ -9234,6 +9241,7 @@ class Launcher:
             record["requests"].append(ctx.key)
         else:
             ctx.state["launcher"]["desktop"] = {
+                "id": ctx.key,
                 "phase": "probe",
                 "requests": [ctx.key],
                 "at": utc_now(),
@@ -9258,11 +9266,13 @@ class Launcher:
                 message = f"Docker Desktop did not answer within {record['deadline']:g} s; open Docker Desktop, answer any dialog, then run the command again"
                 actions.append(lambda: self.finish_requests(requests, {}, Degraded(message)))
             elif record["phase"] == "probe":
-                if "desktop:ping" not in self.inflight:
-                    actions.append(lambda: self.spawn("desktop:ping", "desktopping", self.docker.ping))
+                ping_key = self.operation_key("desktop:ping", record)
+                if ping_key not in self.inflight:
+                    actions.append(lambda: self.spawn(ping_key, "desktopping", self.docker.ping))
             elif record["phase"] == "command":
-                if "desktop:cmd" not in self.inflight:
-                    actions.append(lambda: self.spawn("desktop:cmd", "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
+                command_key = self.operation_key("desktop:cmd", record)
+                if command_key not in self.inflight:
+                    actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
             elif self.status == "serving" and self.docker_ok:
                 state["launcher"]["desktop"] = None
                 result = {"started": bool(record["ran"]), "seconds": round(time.time() - record["began"], 1)}
@@ -9282,7 +9292,7 @@ class Launcher:
         """The daemon answered the start's first ping or did not: only a silent daemon gets the start command."""
         with self.tx() as state:
             record = state["launcher"].get("desktop")
-            if not record or record["phase"] != "probe":
+            if not record or record["phase"] != "probe" or key != self.operation_key("desktop:ping", record):
                 return
             record["phase"] = "wait" if outcome == "ok" and value else "command"
         if outcome == "ok" and value:
@@ -9294,7 +9304,7 @@ class Launcher:
         error: LauncherError | None = None
         with self.tx() as state:
             record = state["launcher"].get("desktop")
-            if not record or record["phase"] != "command":
+            if not record or record["phase"] != "command" or key != self.operation_key("desktop:cmd", record):
                 return
             if outcome == "ok":
                 record.update({"phase": "wait", "ran": True})
@@ -9423,11 +9433,12 @@ class Launcher:
             )
             actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
         elif restart["phase"] == "restart":
-            if "quit:cmd" not in self.inflight:
-                actions.append(lambda: self.spawn("quit:cmd", "quitcmd", self.run_desktop_command, self.cfg.quit_command, left))
-        elif "quit:ping" not in self.inflight and time.time() - restart.get("pinged", 0.0) >= 1.0:
+            command_key = self.operation_key("quit:cmd", restart)
+            if command_key not in self.inflight:
+                actions.append(lambda: self.spawn(command_key, "quitcmd", self.run_desktop_command, self.cfg.quit_command, left))
+        elif self.operation_key("quit:ping", restart) not in self.inflight and time.time() - restart.get("pinged", 0.0) >= 1.0:
             restart["pinged"] = time.time()
-            actions.append(lambda: self.spawn("quit:ping", "quitping", self.daemon_silent))
+            actions.append(lambda: self.spawn(self.operation_key("quit:ping", restart), "quitping", self.daemon_silent))
 
     def daemon_silent(self) -> bool:
         """Worker: True when the daemon no longer answers."""
@@ -9442,7 +9453,7 @@ class Launcher:
         error: LauncherError | None = None
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart or restart.get("kind") != "quit" or restart["phase"] != "restart":
+            if not restart or restart.get("kind") != "quit" or restart["phase"] != "restart" or key != self.operation_key("quit:cmd", restart):
                 return
             request = restart["request"]
             if outcome == "ok":
@@ -9461,7 +9472,7 @@ class Launcher:
             return
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart or restart.get("kind") != "quit" or restart["phase"] != "wait":
+            if not restart or restart.get("kind") != "quit" or restart["phase"] != "wait" or key != self.operation_key("quit:ping", restart):
                 return
             request, began = restart["request"], restart["began"]
             state["launcher"]["restart"] = None
