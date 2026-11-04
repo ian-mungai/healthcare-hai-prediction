@@ -360,3 +360,30 @@ run "the_shared_execution_role_injects_the_model_api_redis_password_and_nothing_
     error_message = "The project may create and put the password of the model API's Redis user, and it is not the shared Redis password."
   }
 }
+
+# Attachment targets, by literal role name: a right policy on another role is a grant to the wrong principal.
+run "the_serving_related_policies_are_attached_to_their_own_roles" {
+  command = plan
+
+  variables {
+    model_api_prepared          = true
+    model_api_prediction_writes = true
+    model_api_registry_key      = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix   = "serving/deployments"
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.task_execution_model_api[0].role == "example_project_task_execution_dev"
+    error_message = "The shared model API grant is attached to the shared execution role."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.task_execution_redis_acl[0].role == "example_project_task_execution_dev"
+    error_message = "The Redis user password grant is attached to the shared execution role, which injects it into the Redis task."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.model_api_read[0].role == "example_project_model_api_task_dev" && aws_iam_role_policy.model_api_prediction_writes[0].role == "example_project_model_api_task_dev"
+    error_message = "The read and the prediction write policies are attached to the model API task role."
+  }
+}
