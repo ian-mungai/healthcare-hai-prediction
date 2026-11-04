@@ -25,8 +25,9 @@ def run_argv(
     check: bool = False,
     capture_output: bool = True,
     text: bool = True,
+    own_session: bool = False,
 ) -> CompletedProcess[str]:
     """Adapt existing injected collector runners to the single captured-text launcher."""
     if not argv or not capture_output or not text:
         raise ValueError("Collector commands require nonempty argv and captured text output")
-    return run_command(argv[0], argv[1:], cwd=cwd, env=env, timeout=timeout, check=check)
+    return run_command(argv[0], argv[1:], cwd=cwd, env=env, timeout=timeout, check=check, own_session=own_session)

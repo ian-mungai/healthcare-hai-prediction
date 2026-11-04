@@ -134,8 +134,11 @@ class Names:
 
 
 def tolerant_runner(*args: Any, **kwargs: Any) -> CompletedProcess[str]:
-    """Run an AWS command; a successful command with no output (``set-desired-capacity``) answers an empty JSON object."""
-    result = run_argv(*args, **kwargs)
+    """Run an AWS command in its own session, so a terminal Ctrl-C aimed at the whole foreground group cannot kill a host-off request in flight.
+
+    A successful command with no output (``set-desired-capacity``) answers an empty JSON object.
+    """
+    result = run_argv(*args, own_session=True, **kwargs)
     if result.returncode == 0 and not result.stdout.strip():
         return CompletedProcess(result.args, 0, "{}", result.stderr)
     return result
