@@ -2089,6 +2089,7 @@ WORKER_KINDS = (
     "lakehouse_gold_checks",
     "lakehouse_gold_writer_setup",
     "lakehouse_gold_model_metadata_e2e",
+    "lakehouse_features_store",
     "lakehouse_features_sources",
     "lakehouse_features_columns",
     "combine_feature_sources",

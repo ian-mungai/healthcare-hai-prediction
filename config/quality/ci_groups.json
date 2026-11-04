@@ -380,6 +380,10 @@
       "job": "Lakehouse Gold Model Metadata E2E",
       "minutes": 30
     },
+    "lakehouse_features_store": {
+      "job": "Lakehouse Features Checks",
+      "minutes": 15
+    },
     "lakehouse_features_sources": {
       "job": "Feature Sources (Shard 1 of 16)",
       "minutes": 20
