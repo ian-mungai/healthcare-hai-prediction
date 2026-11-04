@@ -248,7 +248,8 @@ def predict(settings: Settings, hai_type: str, ccn: str, window_year: int) -> Pr
     connection.close()
     error = box.get("error")
     status: int | None = box.get("status")
-    if error is not None:
+    # A worker error that follows the deadline comes from the socket shut down above, so it never replaces the timeout.
+    if error is not None and kind != "timeout":
         kind = "timeout" if isinstance(error, TimeoutError) else "unreachable"
     outcome: Prediction | Failure
     if not kind and status == 200:
