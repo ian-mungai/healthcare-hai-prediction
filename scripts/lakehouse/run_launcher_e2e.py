@@ -10285,6 +10285,7 @@ ALL_CASES = (
     docker_release_skips_and_refusals,
     docker_release_quit,
     docker_release_quit_deadlines,
+    docker_release_stale_list,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,
