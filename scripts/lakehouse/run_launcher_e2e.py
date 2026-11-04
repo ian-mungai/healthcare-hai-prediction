@@ -3395,7 +3395,14 @@ def docker_release_stale_list(env: Env) -> dict[str, bool]:
     owner = {"kind": "any", "owner": True}
     set_mode(env, "quit", "noop")
     rogue = env.daemon.create_rogue("rogue-late", {"com.docker.compose.project": "other"}, running=True)
-    gate = env.daemon.add_gate("list", "after", match=lambda context: not context["all"] and not context["labels"])
+
+    def unfiltered(context: dict[str, Any]) -> bool:
+        """The release's listing: running containers only, no label filter."""
+        return not context["all"] and not context["labels"]
+
+    # The first gate holds the first release's listing, the second one the next release's own listing, so the late answer arrives while that one waits.
+    gate = env.daemon.add_gate("list", "after", match=unfiltered)
+    own_gate = env.daemon.add_gate("list", "after", match=unfiltered)
 
     def timed_release() -> tuple[BaseException | None, float]:
         began = time.monotonic()
@@ -3405,16 +3412,18 @@ def docker_release_stale_list(env: Env) -> dict[str, bool]:
     held, held_seconds = timed_release()
     listing_was_held = gate.reached.is_set()
     env.daemon.containers.pop(rogue)
-    late_answer = threading.Timer(0.5, gate.release)
-    late_answer.start()
-    env.threads.append(late_answer)
+    for seconds, held_gate in ((0.5, gate), (1.5, own_gate)):
+        timer = threading.Timer(seconds, held_gate.release)
+        timer.start()
+        env.threads.append(timer)
     next_release, next_seconds = timed_release()
     state = env.state()["launcher"]
     return {
         "a release whose listing is slow fails at its deadline": listing_was_held
         and refused(held, "degraded", "did not reach the quit within its deadline of 3 s")
         and 3 <= held_seconds < 10,
-        "the next release is not refused by the earlier listing": not refused(next_release, "refused"),
+        "the next release is not refused by the earlier listing, which arrived while its own listing was held": own_gate.reached.is_set()
+        and not refused(next_release, "refused"),
         "the next release lists for itself, runs its quit command and ends at its own deadline": refused(
             next_release, "degraded", "still answers 3 s after the quit command"
         )
