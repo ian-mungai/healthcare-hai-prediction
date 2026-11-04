@@ -1,8 +1,8 @@
 """A stand-in for the ``aws`` command, used by the group SIGINT case in ``host_session_group_signal``.
 
 It answers two autoscaling commands from a state file under the directory named by ``HOST_SESSION_FAKE_STATE``. A capacity change lands only after an
-in-flight window, so a command that is killed during the window changes nothing. It imports nothing from the repository, so it runs with
-``python -I host_session_fake_aws.py <aws arguments>``.
+in-flight window, so a command that is killed during the window changes nothing. The change also records the process and session identifiers of the
+command. It imports nothing from the repository, so it runs with ``python -I host_session_fake_aws.py <aws arguments>``.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ def answer(arguments: list[str]) -> int:
         return 0
     if (service, operation) == ("autoscaling", "set-desired-capacity"):
         (root / "requested").write_text(operation, encoding="utf-8")
+        (root / "session.json").write_text(json.dumps({"pid": os.getpid(), "sid": os.getsid(0)}), encoding="utf-8")
         time.sleep(IN_FLIGHT_SECONDS)
         desired = int(option(arguments, "--desired-capacity"))
         state_file.write_text(json.dumps({"desired": desired, "instances": [] if desired == 0 else ["i-stand-in"]}), encoding="utf-8")
