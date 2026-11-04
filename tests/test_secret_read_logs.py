@@ -33,9 +33,9 @@ from scripts.infrastructure import secret_store
 from tests.support import check
 
 ACCOUNT = "1" * 12
+FAKE_CREDENTIALS: dict[str, Any] = {"aws_access_key_id": "stand-in", "aws_secret_access_key": "stand-in", "region_name": "us-west-2"}
 ROLE = "example_project_job_publisher_task_dev"
 REGION = "us-west-2"
-FAKE_CREDENTIALS = {"aws_access_key_id": "stand-in", "aws_secret_access_key": "stand-in", "region_name": REGION}
 
 
 class Loopback(ThreadingHTTPServer):
@@ -142,7 +142,8 @@ def debug_logging() -> Iterator[Captured]:
 def client(service: str, server: Loopback) -> Any:
     import boto3
 
-    return boto3.session.Session(**FAKE_CREDENTIALS).client(service, endpoint_url=endpoint_of(server))
+    session: Any = boto3.session.Session(**FAKE_CREDENTIALS)
+    return session.client(service, endpoint_url=endpoint_of(server))
 
 
 def read_task_key(server: Loopback, _directory: Path) -> str:
