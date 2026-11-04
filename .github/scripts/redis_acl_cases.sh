@@ -8,13 +8,39 @@ tf="${REDIS_TF:-infra/services/redis.tf}"
 failures=0
 scratch="$(mktemp -d)"
 server_pid=""
-cleanup() {
+# The real redis-server is a child of the wrapper that start_server runs: it writes its own pid to a file, and its title names the scratch folder.
+alive() { kill -0 "$1" 2> /dev/null; }
+# Wait at most $2 seconds for the process $1 to end; fail when it is still alive (rule 6.8).
+wait_gone() {
+  local ticks=$(($2 * 10))
+  while alive "$1" && [[ $ticks -gt 0 ]]; do
+    sleep 0.1
+    ticks=$((ticks - 1))
+  done
+  ! alive "$1"
+}
+owned_servers() { pgrep -f "unixsocket:$scratch/redis.sock" || true; }
+# Stop the server by its own pid (then by the pids that the title finds, in case the pid file was never written), and fail when one is still alive.
+stop_server() {
+  local pid
+  local pids=""
+  [[ -s "$scratch/redis.pid" ]] && pids="$(< "$scratch/redis.pid")"
+  pids="$pids $(owned_servers)"
+  for pid in $pids; do
+    kill "$pid" 2> /dev/null || true
+    wait_gone "$pid" 5 || { kill -9 "$pid" 2> /dev/null || true; }
+    wait_gone "$pid" 2 || { echo "FAILED: the server $pid does not stop" >&2; return 1; }
+  done
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2> /dev/null || true
     wait "$server_pid" 2> /dev/null || true
   fi
+  if [[ -n "$(owned_servers)" ]]; then
+    echo "FAILED: a server started by these cases is still running" >&2
+    return 1
+  fi
 }
-trap 'cleanup; rm -r "$scratch"' EXIT
+trap 'stop_server || { rm -r "$scratch"; exit 1; }; rm -r "$scratch"' EXIT
 
 check() {
   local label="$1"
@@ -43,7 +69,7 @@ mkdir -p "$stub"
 real_server="$(command -v redis-server)"
 cat > "$stub/redis-server" << STUB
 #!/usr/bin/env bash
-sed -e 's|^bind .*|bind 127.0.0.1|' -e 's|^port .*|port 0|' -e 's|^dir .*|dir $scratch|' -e '/^save /d' | { cat; printf '%s\n' 'unixsocket $scratch/redis.sock' 'unixsocketperm 700'; } | exec "$real_server" -
+sed -e 's|^bind .*|bind 127.0.0.1|' -e 's|^port .*|port 0|' -e 's|^dir .*|dir $scratch|' -e '/^save /d' | { cat; printf '%s\n' 'unixsocket $scratch/redis.sock' 'unixsocketperm 700' 'pidfile $scratch/redis.pid'; } | exec "$real_server" -
 STUB
 chmod +x "$stub/redis-server"
 
