@@ -103,8 +103,13 @@ def host_tools(binary: Path, *, mac_gib: int, vm_gib: int, host_cpus: str) -> No
     """Synthetic host readings: CPU count, the Mac's free memory and the Docker VM's resident memory."""
     binary.mkdir(parents=True, exist_ok=True)
     executable(binary / "sysctl", response(host_cpus))
+    # The next session listing of a launch stop (`ps -A ...`) waits as many seconds as the file `ps.delay` next to this script says and removes the file, so
+    # one listing is slow: a case makes the stop of a killed command end after the reply to its caller.
     executable(
-        binary / "ps", f'if [ "$1" = "-axo" ]; then {response(f"{vm_gib * GIB // 1024} com.apple.Virtualization.VirtualMachine")}; else exec /bin/ps "$@"; fi'
+        binary / "ps",
+        f'if [ "$1" = "-axo" ]; then {response(f"{vm_gib * GIB // 1024} com.apple.Virtualization.VirtualMachine")}; '
+        'else if [ -f "$0.delay" ]; then wait_seconds=$(cat "$0.delay" 2>/dev/null || echo 0); rm -f "$0.delay"; sleep "$wait_seconds"; fi; '
+        'exec /bin/ps "$@"; fi',
     )
     executable(
         binary / "vm_stat",
@@ -3330,6 +3335,55 @@ def docker_release_quit_deadlines(env: Env) -> dict[str, bool]:
     }
 
 
+def slow_next_listing(env: Env, seconds: float) -> None:
+    """Make the next session listing of a launch stop wait ``seconds`` (the ``ps`` stand-in reads and removes the file)."""
+    (env.work / "bin" / "ps.delay").write_text(str(seconds))
+
+
+@case("docker_desktop_stale_stop", timings={"start_wait": 6, "quit_wait": 8})
+def docker_desktop_stale_stop(env: Env) -> dict[str, bool]:
+    """A hung Docker Desktop command is answered at the deadline while its stop still runs. The next call starts its own command and ends at its own
+    deadline: the result of the earlier command's stop must not fail it at once. The ``ps`` stand-in makes the first listing of the stop slow, so the
+    stop ends after the next call began, for the quit of docker_release and for desktop_start."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def timed(method: str, name: str, mode: str, deadline: int, delayed: bool) -> tuple[BaseException | None, float, list[tuple[int, str]]]:
+        """One call of ``method`` with its command in ``mode``: the error, the seconds it took and the runs of the command so far."""
+        set_mode(env, name, mode)
+        if delayed:
+            slow_next_listing(env, 1.5)
+        began = time.monotonic()
+        error = expect_error(lambda: client.call(method, {"owner": True, "deadline": deadline}, owner, timeout=60))
+        return error, time.monotonic() - began, command_runs(env, name)
+
+    hung_release, _, _ = timed("docker_release", "quit", "hang", 3, True)
+    quit_returns, quit_seconds, quit_runs = timed("docker_release", "quit", "noop", 3, False)
+    env.wait(lambda: not env.alive(quit_runs[0][0]), 10, "the hung quit command is gone")
+    quit_state = env.state()["launcher"]["restart"]
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    hung_start, _, _ = timed("desktop_start", "start", "hang", 3, True)
+    start_returns, start_seconds, start_runs = timed("desktop_start", "start", "noop", 3, False)
+    env.wait(lambda: not env.alive(start_runs[0][0]), 10, "the hung start command is gone")
+    return {
+        "a hanging quit command fails the release at the deadline": refused(hung_release, "degraded", "quit command did not end within 3 s"),
+        "the next release runs its own command and ends at its own deadline": refused(quit_returns, "degraded", "still answers 3 s after the quit command")
+        and 3 <= quit_seconds < 10
+        and [mode for _, mode in quit_runs] == ["hang", "noop"],
+        "no release record is left": quit_state is None,
+        "a hanging start command fails the start at the deadline": refused(hung_start, "degraded", "did not answer within 3 s"),
+        "the next start runs its own command and ends at its own deadline": refused(start_returns, "degraded", "did not answer within 3 s")
+        and 3 <= start_seconds < 10
+        and [mode for _, mode in start_runs] == ["hang", "noop"],
+        "no start record is left": env.state()["launcher"]["desktop"] is None,
+    }
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -4483,16 +4537,29 @@ def method_matrix(env: Env) -> dict[str, bool]:
     }
     bad = {"run_wrong_token", "run_unknown", "alloc_unknown"}
     results: dict[str, bool] = {}
+    unexpected: dict[str, list[str]] = {}
+
+    def refused_as_principal(method: str, label: str, principal: dict[str, Any]) -> bool:
+        """Call ``method`` with ``principal``; True when the launcher refuses it as a principal error. Any other answer is kept for the evidence."""
+        error = expect_error(partial(client.call, method, {}, principal))
+        if refused(error, "principal"):
+            return True
+        code = getattr(error, "code", None)
+        unexpected.setdefault(method, []).append(f"{label}: {'accepted' if error is None else f'{type(error).__name__} {code}: {error}'}")
+        return False
+
     for method, spec in launcher.METHODS.items():
         outcomes = []
         for label, principal in principals.items():
             if principal["kind"] not in spec.kinds or label in bad:
-                error = expect_error(partial(client.call, method, {}, principal))
-                outcomes.append(refused(error, "principal"))
+                outcomes.append(refused_as_principal(method, label, principal))
         if spec.owner_flag:
-            valid = next(p for label, p in principals.items() if p["kind"] in spec.kinds and label not in bad)
-            outcomes.append(refused(expect_error(partial(client.call, method, {}, valid)), "principal"))
+            valid_label, valid = next((label, p) for label, p in principals.items() if p["kind"] in spec.kinds and label not in bad)
+            outcomes.append(refused_as_principal(method, f"{valid_label} without the owner flag", valid))
         results[f"{method}: every wrong principal is refused"] = bool(outcomes) and all(outcomes)
+    if unexpected:
+        # The check names say which method failed; this file says what the launcher answered instead of a principal refusal (and its status then).
+        (env.report / "unexpected_answers.json").write_text(json.dumps({"answers": unexpected, "launcher": env.ping()}, indent=2))
     # Valid principals of another owner: the target is named in the request, the credentials are good, the owner is not theirs.
     hold_forever(env)
     run_b = env.acquire_run("run_b", "training")
