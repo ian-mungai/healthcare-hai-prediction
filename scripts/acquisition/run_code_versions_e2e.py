@@ -11,7 +11,20 @@ from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.acquisition import bls_api_contract, census_acs_api_contract, census_acs_detailed_contract, code_closure, hud_api_contract
+from scripts.acquisition import (
+    bls_api_contract,
+    census_acs_api_contract,
+    census_acs_detailed_contract,
+    cms_owners_contract,
+    code_closure,
+    collect_mmd_api,
+    hcai_util_contract,
+    hud_api_contract,
+    mmd_api_contract,
+    onc_mu_contract,
+    reference_download_contract,
+    wonder_export_contract,
+)
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canonical_hash, read_json, require
 
 
@@ -75,6 +88,15 @@ def exercise() -> list[dict]:
 
 
 CONTRACTS = [bls_api_contract, census_acs_api_contract, census_acs_detailed_contract, hud_api_contract]
+# Collectors that admit only the exact closure of their entry module, with the files every one of them reaches.
+CLOSURE_ADMISSIONS = [
+    (cms_owners_contract, "scripts.acquisition.store_cms_owners"),
+    (hcai_util_contract, "scripts.acquisition.store_hcai_util"),
+    (onc_mu_contract, "scripts.acquisition.store_onc_mu"),
+    (reference_download_contract, "scripts.acquisition.store_reference_download"),
+    (wonder_export_contract, "scripts.acquisition.store_wonder_export"),
+]
+SHARED_CLOSURE_FILES = ("scripts/process.py", "scripts/sdk_logs.py", "scripts/acquisition/source_registry.py")
 SYNTHETIC = {
     "pkg/__init__.py": "",
     "pkg/sub/__init__.py": "",
@@ -531,6 +553,63 @@ def hud_xlsx_cases(tree: Path) -> list[dict]:
     return cases
 
 
+def admission_cases(tree: Path) -> list[dict]:
+    """The keyed, filtered, reference and MMD collectors admit exactly the closure of their entry module.
+
+    Each case lists the real closure as the reviewed version. A byte change to any file of the closure must be refused, a byte change to a
+    file outside it must not matter, and a version in an older shape must stay readable for history."""
+    cases = []
+    collectors = [(contract, entry, contract.require_code, "VERSIONS_PATH") for contract, entry in CLOSURE_ADMISSIONS]
+    collectors.append((mmd_api_contract, "scripts.acquisition.collect_mmd_api", collect_mmd_api.require_reviewed_code, "CODE_VERSIONS_PATH"))
+    for contract, entry, require_code, versions_name in collectors:
+        name = entry.rsplit(".", 1)[1]
+        with patch.object(code_closure, "REPO_ROOT", tree):
+            files = code_closure.closure(entry, tree)
+            entry_file = entry.replace(".", "/") + ".py"
+            outside = [
+                p.relative_to(tree).as_posix() for p in sorted((tree / "scripts/acquisition").glob("*.py")) if p.relative_to(tree).as_posix() not in files
+            ]
+            cases.append({"name": f"{name}_closure_reaches_the_shared_files", "passed": all(shared in files for shared in SHARED_CLOSURE_FILES)})
+            versions = tree / f"{name}_admission_versions.json"
+            versions.write_text('{"versions": [{"code_sha256": ' + json.dumps(code_closure.closure_hashes(entry, tree)) + "}]}")
+            with patch.object(contract, versions_name, versions):
+                accepted = not refused(require_code)
+                cases.append({"name": f"{name}_admits_exactly_its_closure", "passed": accepted})
+                for target in [*SHARED_CLOSURE_FILES, entry_file]:
+                    original = (tree / target).read_bytes()
+                    (tree / target).write_bytes(original + b"\n# edit\n")
+                    try:
+                        cases.append({"name": f"{name}_refuses_a_change_to_{target.rsplit('/', 1)[1]}", "passed": accepted and refused(require_code)})
+                    finally:
+                        (tree / target).write_bytes(original)
+                original = (tree / outside[0]).read_bytes()
+                (tree / outside[0]).write_bytes(original + b"\n# edit\n")
+                try:
+                    cases.append({"name": f"{name}_ignores_a_change_outside_its_closure", "passed": accepted and not refused(require_code)})
+                finally:
+                    (tree / outside[0]).write_bytes(original)
+    # Older versions keep their shape: they stay admissible for the captures they approved, and only the exact closure admits new work.
+    for contract, entry in CLOSURE_ADMISSIONS:
+        name = entry.rsplit(".", 1)[1]
+        inventory = {f"scripts/acquisition/{n}.py": "1" * 64 for n in ("a", "b", "c")}
+        versions = tree / f"{name}_history_versions.json"
+        versions.write_text('{"versions": [{"code_sha256": ' + json.dumps(inventory) + "}]}")
+        with patch.object(contract, "VERSIONS_PATH", versions):
+            cases.append({"name": f"{name}_older_inventory_version_stays_admissible_for_history", "passed": contract.require_code(inventory) == inventory})
+    shapes = [dict.fromkeys(mmd_api_contract.CODE_FILES, "2" * 64), dict.fromkeys(mmd_api_contract.CURRENT_CODE_FILES, "3" * 64)]
+    with patch.object(code_closure, "REPO_ROOT", tree):
+        shapes.append(code_closure.closure_hashes("scripts.acquisition.collect_mmd_api", tree))
+    versions = tree / "mmd_api_shapes.json"
+    versions.write_text(json.dumps({"versions": [{"code_sha256": shape} for shape in shapes]}))
+    with patch.object(mmd_api_contract, "CODE_VERSIONS_PATH", versions):
+        try:
+            readable = mmd_api_contract.reviewed_code_versions() == shapes
+        except RegistryError:
+            readable = False
+        cases.append({"name": "mmd_api_four_file_five_file_and_closure_shapes_are_all_readable", "passed": readable})
+    return cases
+
+
 def main() -> None:
     """Write an immutable local report; no acquisition or cloud calls."""
     from scripts.acquisition.s3_store import encoded_json, write_once
@@ -544,7 +623,7 @@ def main() -> None:
         synthetic.mkdir()
         copy_root = Path(directory) / "repo"
         shutil.copytree(REPO_ROOT / "scripts", copy_root / "scripts", ignore=shutil.ignore_patterns("__pycache__", "tests"))
-        cases += synthetic_cases(synthetic) + contract_cases(copy_root) + hud_xlsx_cases(copy_root)
+        cases += synthetic_cases(synthetic) + contract_cases(copy_root) + hud_xlsx_cases(copy_root) + admission_cases(copy_root)
     write_once(args.output, encoded_json({"cases": cases, "passed": all(c["passed"] for c in cases)}))
     require(all(c["passed"] for c in cases), "Fingerprint representation E2E failed")
 
