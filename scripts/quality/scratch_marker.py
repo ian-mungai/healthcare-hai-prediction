@@ -24,11 +24,40 @@ class NotScratchFolder(RuntimeError):
     """A helper was asked to reset or clean a folder that no end-to-end runner made."""
 
 
+def text_form(path: Path) -> str:
+    """The path as the captured text output of a program shows it: each carriage return, with or without its newline, becomes one newline."""
+    return str(path).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def discovered_git_directory(folder: Path) -> Path | None:
+    """The Git directory that the first ``.git`` above ``folder`` names, read from the file system so that a carriage return in a path stays one."""
+    for directory in (folder, *folder.parents):
+        entry = directory / ".git"
+        if entry.is_dir():
+            return entry.resolve()
+        if entry.is_file():
+            with entry.open(encoding="utf-8", errors="surrogateescape", newline="") as handle:
+                line = handle.read().split("\n", 1)[0]
+            target = line.removeprefix("gitdir: ")
+            return (directory / target).resolve() if line.startswith("gitdir: ") else None
+    return None
+
+
 def git_directory(folder: Path) -> Path | None:
-    """The absolute Git directory of ``folder``, or None when it is not inside a Git repository."""
+    """The absolute Git directory of ``folder``, or None when it is not inside a Git repository.
+
+    Git decides whether there is one. Its answer reaches this process as text in which a carriage return became a newline, so a path with a newline in
+    it is taken from the file system instead when that path reads back exactly as Git's answer does.
+    """
     result = run_command("git", ["-C", str(folder), "rev-parse", "--absolute-git-dir"], timeout=GIT_SECONDS)
     text = result.stdout.strip()
-    return Path(text) if result.returncode == 0 and text else None
+    if result.returncode != 0 or not text:
+        return None
+    if "\n" in text:
+        found = discovered_git_directory(folder.resolve())
+        if found is not None and text_form(found) == text:
+            return found
+    return Path(text)
 
 
 def mark(folder: Path, runner: str) -> None:
