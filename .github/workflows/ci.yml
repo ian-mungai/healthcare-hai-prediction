@@ -387,7 +387,7 @@ jobs:
       - name: Run one feature sources shard with range selection
         env:
           CI_PART: feature_sources
-          FEATURE_SHARD: ${{ matrix.shard }}/8
+          FEATURE_SHARD: ${{ matrix.shard }}/16
           CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
@@ -500,7 +500,7 @@ jobs:
       - name: Combine reports and require complete disjoint case coverage
         if: ${{ steps.selection.outputs.run == 'true' }}
         run: |
-          .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite sources --count 8 --directory data/e2e/quality/feature_shards/sources
+          .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite sources --count 16 --directory data/e2e/quality/feature_shards/sources
           .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite columns --count 4 --directory data/e2e/quality/feature_shards/columns
 
       - name: Retain the combined evidence
