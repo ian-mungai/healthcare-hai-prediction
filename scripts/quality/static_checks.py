@@ -202,8 +202,8 @@ def scan(directory: Path, output: Path) -> bool:
         report["checkov_version"] = importlib.metadata.version("checkov")
         report["implementation_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         report["limits"] = (
-            "Static source analysis only; no state, tfvars or cloud calls. trivy uses its embedded checks offline. "
-            "Resource-scoped source exceptions are reported, not treated as implemented controls. Temporary copies removed."
+            "Static source analysis only. The scan reads no state or tfvars and makes no cloud calls. trivy uses its embedded checks offline. "
+            "Resource-scoped source exceptions are reported, not treated as implemented controls. Temporary copies are removed."
         )
         report["reproduce"] = [
             ".venv/bin/python",

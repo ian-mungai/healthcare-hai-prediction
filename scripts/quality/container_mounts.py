@@ -557,7 +557,7 @@ def main(argv: list[str] | None = None) -> int:
     for finding in findings:
         sys.stderr.write(f"{finding}\n")
     if findings:
-        sys.stderr.write(f"Use a module available at this container's mounted paths or correct its declaration. Ask the owner if the rule is wrong ({RULE}).\n")
+        sys.stderr.write(f"Use a module available at this container's mounted paths or change its declaration. Ask the owner if the rule is wrong ({RULE}).\n")
     else:
         sys.stdout.write(f"Container imports passed: {count} declared invocations.\n")
     return int(bool(findings))

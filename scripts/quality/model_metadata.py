@@ -115,8 +115,8 @@ COMPARISONS = {
 }
 UNSUPPORTED_STATEMENTS = (nodes.Extends, nodes.Include, nodes.Import, nodes.FromImport)
 SCOPED_STATEMENTS = (nodes.Scope, nodes.ScopedEvalContextModifier, nodes.FilterBlock, nodes.With, nodes.Block)
-HELP = f"Fix the metadata in the YAML file. If the rule seems wrong for this case, ask the owner; never skip the hook. Rules: {DOCUMENT}"
-ESCALATION = f"If the file is valid and the check is wrong, ask the owner; never skip the hook. Rules: {DOCUMENT}"
+HELP = f"Fix the metadata in the YAML file. If the rule seems wrong for this case, ask the owner. Never skip the hook. Rules: {DOCUMENT}"
+ESCALATION = f"If the file is valid and the check is wrong, ask the owner. Never skip the hook. Rules: {DOCUMENT}"
 
 
 class Unknown:
@@ -1559,11 +1559,11 @@ def check(project: Project) -> list[Problem]:
                     if parent_carried & carried:
                         attributed = True
                         label = ", ".join(sorted(carried & parent_carried))
-                        add("class-inheritance", entry, f"{model.name} is {own} but its input {ref.name} is Confidential; output carries {label}{explanation}")
+                        add("class-inheritance", entry, f"{model.name} is {own} but its input {ref.name} is Confidential. Output carries {label}{explanation}")
                 if not attributed:
                     add("class-inheritance", entry, f"{model.name} is {own} but output carries {', '.join(sorted(carried))}{explanation}")
         if "confidential_columns" in entry.meta:
-            add("confidential-columns", entry, f"{model.name}: confidential_columns is source-only; a model cannot authorize its own output columns")
+            add("confidential-columns", entry, f"{model.name}: confidential_columns is source-only. A model cannot authorize its own output columns")
         if project.conservative.get(model.name) == "unresolved relation in compiled SQL":
             add("unresolved-reference", entry, f"{model.name}: unresolved relation in compiled SQL")
         if not model.is_fact:
@@ -1577,7 +1577,7 @@ def check(project: Project) -> list[Problem]:
                 not_allowed(entry, f"{model.name}.{column}: additivity", declared["additivity"], ADDITIVITY, entry.column_lines.get(column))
             axes = declared.get("additive_across")
             if declared.get("additivity") == "semi_additive" and not lists_axes(axes):
-                message = f"{model.name}.{column} is semi_additive but meta.additive_across is {axes!r}; it must list the axes the measure sums across"
+                message = f"{model.name}.{column} is semi_additive but meta.additive_across is {axes!r}. It must list the axes the measure sums across"
                 add("additive-across", entry, message, entry.column_lines.get(column))
             if model.name == "fct_cost_report" and declared.get("additivity") == "semi_additive" and declared.get("additivity_note") != COST_REPORT_NOTE:
                 message = f"{model.name}.{column} is semi_additive but meta.additivity_note must be {COST_REPORT_NOTE!r}"
@@ -1642,7 +1642,7 @@ def rows(path: Path) -> Generator[tuple[bool, Any], None, None]:
                         yield True, json.loads(line)
             case ".json":
                 if path.stat().st_size > MAX_JSON_BYTES:
-                    raise ScanError("JSON exceeds the bounded-reader limit; export it as JSONL")
+                    raise ScanError("JSON exceeds the bounded-reader limit. Export it as JSONL")
                 value = json.load(handle)
                 for row in value if isinstance(value, list) else [value]:
                     yield True, row
@@ -1766,7 +1766,7 @@ def scan_personal_data(argv: list[str]) -> int:
     except (OSError, UnicodeError, json.JSONDecodeError, csv.Error, ScanError, RecursionError) as error:
         cause = str(error) if isinstance(error, ScanError) else type(error).__name__
         args.output.write_text(json.dumps({"complete": False, "error_kind": cause, "tables": []}, indent=2) + "\n")
-        sys.stderr.write("personal-data scan incomplete; inspect the export manifest and supported formats\n")
+        sys.stderr.write("personal-data scan incomplete. Inspect the export manifest and supported formats\n")
         return 2
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     sys.stdout.write(f"personal-data scan: {len(report['tables'])} tables, {report['matched_tables']} with possible personal data\n")

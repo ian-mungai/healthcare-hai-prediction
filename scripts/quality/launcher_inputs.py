@@ -278,21 +278,21 @@ def problems(root: Path, tracked: set[str], committed: dict[str, Any]) -> list[s
         f"{folder}/: in folders but the suite no longer reads it whole" for folder in sorted(set(committed.get("folders", [])) - set(computed["folders"]))
     ]
     lines += [f"{path}: in the list but the suite no longer needs it" for path in sorted(held - wanted) if path in tracked]
-    lines += [f"{path}: in the list but not tracked (deleted or renamed)" for path in sorted(held - tracked)]
+    lines += [f"{path}: in the list but not tracked (removed or renamed)" for path in sorted(held - tracked)]
     lines += [
         f"{item['module']}: ignored read {item['text']!r} is no longer in the module (remove it from ignored_reads)"
         for item in committed.get("ignored_reads", [])
         if (item["module"], item["text"]) not in computed["ignored"]
     ]
     lines += [
-        f"{item['module']}: ignored read {item['text']!r} now occurs on {occurrences} but ignored_reads covers {sorted(item.get('lines', []))}; review each "
+        f"{item['module']}: ignored read {item['text']!r} now occurs on {occurrences} but ignored_reads covers {sorted(item.get('lines', []))}. Review each "
         "occurrence and update its lines by hand (a genuine read needs no ignore)"
         for item in committed.get("ignored_reads", [])
         if (occurrences := computed["ignored"].get((item["module"], item["text"]))) is not None and occurrences != sorted(item.get("lines", []))
     ]
     declared = {item["module"] for item in committed.get("inventory_reads", [])}
     lines += [
-        f"{path}: lists files by inventory ({count} sites) but inventory_reads has no entry for it; add the path pattern of the files it reads"
+        f"{path}: lists files by inventory ({count} sites) but inventory_reads has no entry for it. Add the path pattern of the files it reads"
         for path, count in computed["inventory_sites"].items()
         if path not in declared
     ]
@@ -303,11 +303,11 @@ def problems(root: Path, tracked: set[str], committed: dict[str, Any]) -> list[s
     for path in sorted(set(computed["inventory_sites"]) | set(committed.get("inventory_sites", {}))):
         now, before = computed["inventory_sites"].get(path, 0), committed.get("inventory_sites", {}).get(path, 0)
         if now != before:
-            lines.append(f"{path}: {now} inventory sites, the list records {before}; review its inventory_reads pattern and run --write")
+            lines.append(f"{path}: {now} inventory sites, the list records {before}. Review its inventory_reads pattern. Run --write")
     for path in sorted(set(computed["dynamic_sites"]) | set(committed["dynamic_sites"])):
         if computed["dynamic_sites"].get(path, 0) != committed["dynamic_sites"].get(path, 0):
             now, before = computed["dynamic_sites"].get(path, 0), committed["dynamic_sites"].get(path, 0)
-            lines.append(f"{path}: {now} calls import by a computed name, the list records {before}; review and run --write")
+            lines.append(f"{path}: {now} calls import by a computed name, the list records {before}. Review the sites. Run --write")
     body = root / BODY
     modules = re.findall(r"-m ([\w.]+)", body.read_text(encoding="utf-8")) if body.exists() else []
     entries = {path.removesuffix(".py").replace("/", ".") for path in committed["entry_points"]}

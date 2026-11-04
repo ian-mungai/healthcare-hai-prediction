@@ -49,7 +49,7 @@ def install() -> str:
         return f"unchanged  markdownlint-cli2 {pinned}"
     node = run_command("node", ["--version"], timeout=30, check=True).stdout.strip()
     if int(node.lstrip("v").split(".")[0]) < NODE_MAJOR_MINIMUM:
-        raise SystemExit(f"markdownlint-cli2 needs Node.js {NODE_MAJOR_MINIMUM} or later; found {node}; nothing was installed")
+        raise SystemExit(f"markdownlint-cli2 needs Node.js {NODE_MAJOR_MINIMUM} or later. Found {node}. Nothing was installed")
     DESTINATION.mkdir(parents=True, exist_ok=True)
     for name in FILES:
         shutil.copyfile(SOURCE / name, DESTINATION / name)
@@ -57,7 +57,7 @@ def install() -> str:
     if result.returncode:
         for name in FILES:  # A failed install must not look current on the next run.
             (DESTINATION / name).unlink(missing_ok=True)
-        raise SystemExit(f"npm ci failed for markdownlint-cli2 {pinned}; nothing usable was installed:\n{result.stderr[-2000:]}")
+        raise SystemExit(f"npm ci failed for markdownlint-cli2 {pinned}. Nothing usable was installed:\n{result.stderr[-2000:]}")
     return f"installed  markdownlint-cli2 {pinned} (npm ci, lockfile integrity verified, Node.js {node})"
 
 

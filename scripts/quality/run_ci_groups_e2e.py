@@ -4799,7 +4799,7 @@ def gate_release_cases(scratch: Path) -> list[dict[str, Any]]:
             "error",
             0,
             "failed",
-            "failed (exit 4: launcher: docker quit failed: boom [command_failed]); the gate result stands",
+            "failed (exit 4: launcher: docker quit failed: boom [command_failed]). The gate result stands",
         ),
         gate_release_case(scratch, "pre_push_unreadable_release_answer_keeps_the_exit_zero", "garbage", 0, "failed", "failed (unreadable answer: not json)"),
         exception_release_case(scratch),
@@ -4809,8 +4809,8 @@ def gate_release_cases(scratch: Path) -> list[dict[str, Any]]:
         "        released = release(root, started, release_registry)", '        released = {"outcome": "skipped", "detail": "planted", "seconds": 0.0}'
     )
     blocking = source_edit(
-        '    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\\n")\n    return 0',
-        '    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\\n")\n    return 0 if released["outcome"] != "refused" else 1',
+        '    sys.stdout.write(f"pre-push: all steps passed. Logs are in {output}\\n")\n    return 0',
+        '    sys.stdout.write(f"pre-push: all steps passed. Logs are in {output}\\n")\n    return 0 if released["outcome"] != "refused" else 1',
     )
     results += [
         planted_case("dropped_release", failing_step_release_case, scratch, mutate=dropped),

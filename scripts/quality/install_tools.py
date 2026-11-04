@@ -333,7 +333,7 @@ def publish(path: Path, content: bytes, mode: int) -> None:
         raise ValueError("Symlink destination is not allowed")
     if path.exists():
         if path.read_bytes() != content or stat.S_IMODE(path.stat().st_mode) != mode:
-            raise ValueError("Existing installation differs; review before replacing it")
+            raise ValueError("Existing installation differs. Review it before you replace it")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
@@ -387,7 +387,7 @@ def install(manifest: Path, destination: Path, archives: Path | None, tools: lis
         )
     for path, content, mode in pending:
         if path.is_symlink() or (path.exists() and (path.read_bytes() != content or stat.S_IMODE(path.stat().st_mode) != mode)):
-            raise ValueError("Existing installation differs; no files were replaced")
+            raise ValueError("Existing installation differs. No files were replaced")
     for path, content, mode in pending:
         publish(path, content, mode)
 

@@ -280,7 +280,7 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
         step["timeout_seconds"] = seconds if step is not first else int(config["pre_push"]["changed_file_seconds"]) * 2
         step["argv"] = command(root, step)
     if small:
-        reason += "; small change: the hook partitions and the acquisition hook stay with hosted CI"
+        reason += ". This is a small change: the hook partitions and the acquisition hook stay with hosted CI"
     return {"scope": scope, "reason": reason, "start": start, "end": end, "output": str(output), "first": first, "steps": steps}
 
 
@@ -388,10 +388,10 @@ def release_line(released: dict[str, Any]) -> str:
     if outcome == "skipped":
         return f"pre-push: Docker release: skipped ({detail})\n"
     if outcome == "refused":
-        return f"pre-push: Docker release: refused ({detail}); Docker left running\n"
+        return f"pre-push: Docker release: refused ({detail}). Docker is left running\n"
     return (
-        f"pre-push: Docker release: failed ({detail}); the gate result stands; "
-        "run .venv/bin/python -m orchestration.launcher docker-start --owner before the next heavy run\n"
+        f"pre-push: Docker release: failed ({detail}). The gate result stands. "
+        "Run .venv/bin/python -m orchestration.launcher docker-start --owner before the next heavy run\n"
     )
 
 
@@ -460,9 +460,9 @@ def refusals(root: Path, end: str) -> list[str]:
 
 
 def refuse(problems: list[str]) -> int:
-    sys.stdout.write("pre-push: refused; no check ran\n")
+    sys.stdout.write("pre-push: refused. No check ran\n")
     sys.stdout.write("".join(f"pre-push:   {problem}\n" for problem in problems))
-    sys.stdout.write("pre-push: push only references of the checked-out commit or of commits in origin/main, and commit or stash tracked changes\n")
+    sys.stdout.write("pre-push: push only references of the checked-out commit or of commits in origin/main. Commit or stash tracked changes\n")
     return 1
 
 
@@ -506,7 +506,7 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
         if first_result["exit"] != 0:
             sys.stdout.write("\n".join(first_result["output"].splitlines()[-80:]) + "\n" + first_result["error"] + "\n")
             record(output, chosen, [{k: v for k, v in first_result.items() if k != "output"}], decisions)
-            sys.stdout.write(f"pre-push: failed steps: {first['name']}; the long groups did not start; logs in {output}\n")
+            sys.stdout.write(f"pre-push: failed steps: {first['name']}. The long groups did not start. Logs are in {output}\n")
             return 1
     started = time.time()
     try:
@@ -522,9 +522,9 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
     failed = [result["name"] for result in results if result["exit"] != 0]
     record(output, chosen, [{k: v for k, v in result.items() if k != "output"} for result in results], decisions, released)
     if failed:
-        sys.stdout.write(f"pre-push: failed steps: {', '.join(failed)}; logs in {output}\n")
+        sys.stdout.write(f"pre-push: failed steps: {', '.join(failed)}. Logs are in {output}\n")
         return 1
-    sys.stdout.write(f"pre-push: all steps passed; logs in {output}\n")
+    sys.stdout.write(f"pre-push: all steps passed. Logs are in {output}\n")
     return 0
 
 
@@ -536,7 +536,7 @@ def check_shim(root: Path) -> int:
     if active and command_code == 0 and commands.splitlines() == [SHIM_COMMAND]:
         sys.stdout.write(f"pre-push: the Git config hook {SHIM_NAME} runs the gate\n")
         return 0
-    sys.stdout.write(f"pre-push: refused; the Git config hook {SHIM_NAME} that runs the gate is missing, disabled or changed; run `{INSTALL_HINT}` once\n")
+    sys.stdout.write(f"pre-push: refused. The Git config hook {SHIM_NAME} that runs the gate is missing, disabled or changed. Run `{INSTALL_HINT}` once\n")
     return 1
 
 

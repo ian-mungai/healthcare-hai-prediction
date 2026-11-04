@@ -72,7 +72,7 @@ DOCKER_WORD = re.compile(r"(?<![\w.-])docker(?:-compose)?(?![\w.-])")
 SHELL_NAMES = ("sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh")
 ENGINE_API = {"DockerApi", "UnixConnection", "EventStream"}
 SOCKET = re.compile(r"docker\.sock")
-FIX = f"ask the launcher through its client (orchestration/launcher.py); only {LAUNCHER} may call Docker"
+FIX = f"ask the launcher through its client (orchestration/launcher.py). Only {LAUNCHER} may call Docker"
 
 # The process-starting functions: (module, name) -> how the call names its program.
 # Roles: "program" (a path or name), "argv" (a list whose first element is the program, or a string program), "shell" (a shell command
@@ -858,7 +858,7 @@ class Checker:
             elif isinstance(node, ast.Import | ast.ImportFrom) and any(
                 (alias.name if isinstance(node, ast.Import) else str(node.module or "")).split(".")[0] == "ctypes" for alias in node.names
             ):
-                found.append(Finding(f"{path}:{node.lineno}", "ctypes is imported; it can call the C library's process functions"))
+                found.append(Finding(f"{path}:{node.lineno}", "ctypes is imported. It can call the C library's process functions"))
             elif (
                 isinstance(node, ast.Name)
                 and node.id in DYNAMIC_CODE
@@ -1040,7 +1040,7 @@ def rebound_line(root: Path, entry: dict[str, object], text: str) -> tuple[int |
     reviewed = reviewed_text(root, str(entry["path"]), str(entry["file_sha256"]))
     if reviewed is None:
         # Without the reviewed copy the ordinal cannot be verified, so an edited duplicate could be mistaken for its twin: fail closed.
-        return None, f"the reviewed copy (file hash) is not in the work tree, index or the file's last {HISTORY_VERSIONS} versions; review the line again"
+        return None, f"the reviewed copy (file hash) is not in the work tree, index or the file's last {HISTORY_VERSIONS} versions. Review the line again"
     old_hits = code_lines(reviewed, code_sha)
     if old not in old_hits:
         return None, f"the reviewed line is ambiguous: line {old} of the reviewed copy is not the reviewed code"
@@ -1124,7 +1124,7 @@ def reviewed_findings(entries: list[dict[str, object]], found: list[Finding], mo
             left.append(
                 Finding(
                     f"{relative}:{entry.get('line', 1)}",
-                    f"a reviewed entry in {REVIEWED} does not match the reviewed code (file, imports or count); review it again",
+                    f"a reviewed entry in {REVIEWED} does not match the reviewed code (file, imports or count). Review it again",
                 )
             )
     return left
@@ -1171,7 +1171,7 @@ def main(argv: list[str] | None = None) -> int:
         for failure in failures:
             sys.stderr.write(f"{failure}\n")
         if failures:
-            sys.stderr.write(f"docker-calls rebind: {len(failures)} entries need a new review; nothing written to {REVIEWED}\n")
+            sys.stderr.write(f"docker-calls rebind: {len(failures)} entries need a new review. Nothing was written to {REVIEWED}\n")
             return 1
         for change in changes:
             sys.stdout.write(f"{change}\n")

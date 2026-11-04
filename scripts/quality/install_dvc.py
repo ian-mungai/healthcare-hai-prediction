@@ -82,7 +82,7 @@ def install(source: Path | None = None, build_source: Path | None = None, destin
         result = run_command(python, [*pip, "-r", str(requirements)], timeout=PIP_DEADLINE)
         if result.returncode:
             shutil.rmtree(destination, ignore_errors=True)
-            raise SystemExit(f"pip install failed for dvc {pinned} from {requirements.name}; nothing usable was installed:\n{result.stderr[-2000:]}")
+            raise SystemExit(f"pip install failed for dvc {pinned} from {requirements.name}. Nothing usable was installed:\n{result.stderr[-2000:]}")
     shutil.copyfile(source, destination / "requirements.txt")
     return f"installed  dvc {pinned} with dvc-s3 {pinned_version('dvc-s3', source)} (hashes verified) in {destination}"
 

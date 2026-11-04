@@ -85,7 +85,7 @@ def install() -> str:
         pip = [str(DESTINATION / "bin/python"), "-m", "pip", "install", "--quiet", "--require-hashes", "--only-binary=:all:", "-r", str(source)]
         result = run_command(pip[0], pip[1:], timeout=900)
         if result.returncode:
-            raise SystemExit(f"pip install failed for sqlfluff {pinned}; nothing usable was installed:\n{result.stderr[-2000:]}")
+            raise SystemExit(f"pip install failed for sqlfluff {pinned}. Nothing usable was installed:\n{result.stderr[-2000:]}")
         shutil.copyfile(source, INSTALLED)
     return f"installed  sqlfluff {pinned} with the dbt templater (hashes verified) in {DESTINATION.relative_to(ROOT)}"
 
@@ -99,7 +99,7 @@ def install_packages() -> str:
     if result.returncode:
         raise SystemExit(f"dbt deps failed:\n{(result.stdout + result.stderr)[-2000:]}")
     if lock.read_bytes() != before:
-        raise SystemExit("dbt deps changed dbt/package-lock.yml; restore it and pin the packages there")
+        raise SystemExit("dbt deps changed dbt/package-lock.yml. Restore it and pin the packages there")
     return "installed  dbt packages from dbt/package-lock.yml"
 
 

@@ -72,7 +72,7 @@ def install(name: str) -> str:
         pip = [str(destination / "bin/python"), "-m", "pip", "install", "--quiet", "--require-hashes", "--only-binary=:all:", "-r", str(source)]
         result = run_command(pip[0], pip[1:], timeout=900)
         if result.returncode:
-            raise SystemExit(f"pip install failed for {name} {entry['version']}; nothing usable was installed:\n{result.stderr[-2000:]}")
+            raise SystemExit(f"pip install failed for {name} {entry['version']}. Nothing usable was installed:\n{result.stderr[-2000:]}")
         shutil.copyfile(source, destination / "requirements.txt")
     return f"installed  {name} {entry['version']} (hashes verified) in {destination.relative_to(ROOT)}"
 
@@ -81,7 +81,7 @@ def main() -> int:
     """Install the selected Python lint tools (all by default) and report the result."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tool", action="append", choices=TOOLS, help="install only this tool (repeat to select more)")
-    parser.add_argument("--check", action="store_true", help="install nothing; exit 1 when a selected tool is missing or differs from its pin")
+    parser.add_argument("--check", action="store_true", help="install nothing. Exit 1 when a selected tool is missing or differs from its pin")
     args = parser.parse_args()
     stale = False
     for name in args.tool or TOOLS:

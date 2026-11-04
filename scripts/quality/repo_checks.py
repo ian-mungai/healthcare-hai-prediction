@@ -34,7 +34,7 @@ from scripts.process import run_command
 from scripts.quality.markdown_links import check_links
 
 POLICY = "scripts/quality/repo_checks.py"
-ASK = "if the rule seems wrong here, stop and ask the repository owner; there are no bypasses (no SKIP= or --no-verify)"
+ASK = "if the rule seems wrong here, stop and ask the repository owner. There are no bypasses (no SKIP= or --no-verify)"
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
 DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjson", ".avro", ".db", ".sqlite"}
@@ -180,8 +180,8 @@ PLAN_REFERENCES = (
 
 PRIVACY_RULE = f"{POLICY}: privacy scan"
 PRIVACY_FIX = (
-    "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid) or read it from configuration;"
-    " if it is meant to be public, add a reasoned entry to .privacy_allowlist"
+    "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid) or read it from configuration."
+    " If it is meant to be public, add a reasoned entry to .privacy_allowlist"
 )
 ALLOWLIST = ".privacy_allowlist"
 PRIVACY_PATTERNS = {
@@ -200,8 +200,8 @@ PRIVACY_PATTERNS = {
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
 WRITING_RULE = (
-    f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes, "
-    "internal references; em dashes in declared article files)"
+    f"{POLICY}: writing check. It checks the Oxford comma, date format, time-bound words, dashes, semicolons, slashes and internal references. "
+    "In declared article files it also checks em dashes"
 )
 WRITING_ALLOWLIST = ".writing_allowlist"
 # Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
@@ -308,7 +308,7 @@ def credential_files(paths: list[str]) -> list[Finding]:
         name = Path(path).name
         is_env = (name == ".env" or name.startswith(".env.")) and name != ".env.example"
         if is_env or any(fnmatch.fnmatch(name, pattern) for pattern in CREDENTIAL_NAMES):
-            fix = "remove it from the commit (git rm --cached) and ignore it; keep secrets in the secret store (Parameter Store or Secrets Manager)"
+            fix = "remove it from the commit (git rm --cached) and ignore it. Keep secrets in the secret store (Parameter Store or Secrets Manager)"
             findings.append(Finding(path, "credential, state or saved-plan file staged", f"{POLICY}: secrets and credential files", fix))
     return findings
 
@@ -318,7 +318,7 @@ def data_files(paths: list[str]) -> list[Finding]:
     findings = []
     for path in paths:
         if Path(path).suffix.lower() in DATA_EXTENSIONS and not (path.startswith(DATA_FOLDERS) or path in DATA_FILES):
-            fix = f"keep data in S3; put synthetic samples in {', '.join(DATA_FOLDERS)}; never commit real personal data"
+            fix = f"keep data in S3. Put synthetic samples in {', '.join(DATA_FOLDERS)}. Never commit real personal data"
             findings.append(Finding(path, "data file outside the declared folder", f"{POLICY}: data files", fix))
         if os.path.getsize(path) > MAX_BYTES and "filter: lfs" not in git("check-attr", "filter", "--", path):
             fix = "keep it out of Git (S3, a release asset) or track it with Git LFS"
@@ -337,7 +337,7 @@ def suppressions(paths: list[str]) -> list[Finding]:
                 bool(codes) and all(APPROVED_SUPPRESSIONS.get(code) == path for code in codes) and bool(REASON.match(match.group("rest") if match else ""))
             )
             if (match and not approved) or OTHER_SUPPRESSIONS.search(line):
-                fix = f"fix the code so the check passes; the only approved exception is S603 in {LAUNCHER}"
+                fix = f"fix the code so the check passes. The only approved exception is S603 in {LAUNCHER}"
                 findings.append(Finding(f"{path}:{number}", "suppression comment not in the approved list", f"{POLICY}: lint settings", fix))
     return findings
 
@@ -1014,7 +1014,7 @@ def attribution_findings(location: str, message: str) -> list[Finding]:
                     f"{location}:{number}",
                     "AI attribution in commit message",
                     f"{POLICY}: commit messages",
-                    "remove the AI credit or session line; keep human co-authors and factual descriptions of the change",
+                    "remove the AI credit or session line. Keep human co-authors and factual descriptions of the change",
                 )
             )
     return findings
@@ -1033,7 +1033,7 @@ def plan_reference_findings(location: str, message: str, *, comments: bool = Fal
                         f"{location}:{number}",
                         f"internal plan reference in commit message: {form}",
                         f"{POLICY}: commit messages",
-                        "say what changed in plain words; keep unit and lane codes, review rounds, patch hashes and snapshot IDs in the plan records",
+                        "say what changed in plain words. Keep unit and lane codes, review rounds, patch hashes and snapshot IDs in the plan records",
                     )
                 )
     return findings
@@ -1254,7 +1254,7 @@ def privacy_scan() -> tuple[list[Finding], list[str]]:
                 raise UnicodeDecodeError("utf-8", data[:1], 0, 1, "binary")
             text = data.decode("utf-8")
         except UnicodeDecodeError:
-            unreviewed.append(f"{path}: unreviewed: cannot be read as text; inspect it before publishing")
+            unreviewed.append(f"{path}: unreviewed: cannot be read as text. Inspect it before publishing")
             continue
         for number, line in enumerate(text.splitlines(), 1):
             for kind in line_privacy(line, values):
@@ -1441,7 +1441,7 @@ def front_matter_problems(text: str) -> list[str]:
     try:
         data = load_yaml("\n".join(lines[1:end]))
     except ValueError as error:
-        return [f"front matter is not valid YAML ({error}); quote values that contain ': '"]
+        return [f"front matter is not valid YAML ({error}). Quote values that contain ': '"]
     if not isinstance(data, dict):
         return ["front matter is not valid YAML: expected key: value lines"]
     problems = []
@@ -1500,7 +1500,7 @@ def main() -> int:
         "check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references", "markdown-links"]
     )
     parser.add_argument("paths", nargs="*")
-    parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
+    parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore (the default scope). Ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
     parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST), help="writing-check: make a warn-first kind block")

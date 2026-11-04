@@ -37,7 +37,7 @@ def git(*args: str) -> str:
     """Read Git state without returning failed-command output that may contain document content."""
     result = run_command("git", args)
     if result.returncode:
-        raise ReviewError("Git state could not be read; run from the repository root and resolve index errors")
+        raise ReviewError("Git state could not be read. Run from the repository root and resolve index errors")
     return result.stdout
 
 
@@ -50,7 +50,7 @@ def inventory() -> dict[str, tuple[str, str]]:
         metadata, path = entry.split("\t", 1)
         mode, blob, stage = metadata.split()
         if stage != "0":
-            raise ReviewError(f"{path!r}: unresolved index conflict; resolve it before reviewing")
+            raise ReviewError(f"{path!r}: unresolved index conflict. Resolve it before reviewing")
         if path != RECORD:
             files[path] = (mode, blob)
     return files
@@ -81,10 +81,10 @@ def document_paths(files: dict[str, tuple[str, str]], extra: list[str]) -> list[
         paths = [path for path in paths if path == "README.md"]
     for path in paths:
         if files[path][0] not in {"100644", "100755"}:
-            raise ReviewError(f"{path!r}: documentation links/submodules are unsupported; review and stage a regular file")
+            raise ReviewError(f"{path!r}: documentation links/submodules are unsupported. Review and stage a regular file")
     for path in git("ls-files", "--others", "--exclude-standard", "-z").split("\0"):
         if path and is_document(path) and (released or path == "README.md"):
-            raise ReviewError(f"{path!r}: untracked documentation is unreviewed; include it in the staged review")
+            raise ReviewError(f"{path!r}: untracked documentation is unreviewed. Include it in the staged review")
     return paths
 
 
@@ -93,7 +93,7 @@ def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in pairs:
         if key in value:
-            raise ReviewError("duplicate JSON key; retain one unambiguous value per field")
+            raise ReviewError("duplicate JSON key. Retain one unambiguous value per field")
         value[key] = item
     return value
 
@@ -103,7 +103,7 @@ def parse_record(content: str) -> dict[str, object]:
     try:
         value: object = json.loads(content, object_pairs_hook=object_pairs)
     except json.JSONDecodeError as error:
-        raise ReviewError(f"invalid JSON at line {error.lineno}; repair the record") from error
+        raise ReviewError(f"invalid JSON at line {error.lineno}. Fix the record") from error
     if not isinstance(value, dict):
         raise ReviewError("record must be a JSON object")
     return cast(dict[str, object], value)
@@ -147,7 +147,7 @@ def validate(record: dict[str, object], files: dict[str, tuple[str, str]]) -> in
     check_header(record)
     paths = document_paths(files, extras(record["extra_documents"]))
     if record["snapshot_sha256"] != snapshot(files):
-        raise ReviewError("staged files changed since review; review the changes and refresh the evidence")
+        raise ReviewError("staged files changed since review. Review the changes and refresh the evidence")
     items = record["documents"]
     if not isinstance(items, list):
         raise ReviewError("documents must be a list of per-document review outcomes")
@@ -160,14 +160,14 @@ def validate(record: dict[str, object], files: dict[str, tuple[str, str]]) -> in
             raise ReviewError("documents inventory contains an extra, invalid or duplicate path")
         seen.add(path)
         if item["blob"] != files[path][1]:
-            raise ReviewError(f"{path!r}: reviewed blob differs from the staged document; review its staged content")
+            raise ReviewError(f"{path!r}: reviewed blob differs from the staged document. Review its staged content")
         if not isinstance(item["outcome"], str) or item["outcome"] not in OUTCOMES:
-            raise ReviewError(f"{path!r}: review unresolved; use current, updated or historical only after completing the review")
+            raise ReviewError(f"{path!r}: review unresolved. Use current, updated or historical only after completing the review")
         if not isinstance(item["notes"], str) or not item["notes"].strip():
             raise ReviewError(f"{path!r}: describe what was checked and any correction or historical limitation")
     missing = set(paths) - seen
     if missing:
-        raise ReviewError(f"{sorted(missing)[0]!r}: missing review outcome; review every inventoried document")
+        raise ReviewError(f"{sorted(missing)[0]!r}: missing review outcome. Review every inventoried document")
     return len(paths)
 
 
@@ -228,10 +228,10 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
         old_items = old.get("documents")
         old_paths = sorted([item.get("path") for item in old_items if isinstance(item, dict)], key=str) if isinstance(old_items, list) else None
         if old.get("snapshot_sha256") == current_snapshot and old.get("extra_documents") == extra and old_paths == paths:
-            sys.stdout.write("Existing evidence for this snapshot preserved; complete any pending outcomes in the local record.\n")
+            sys.stdout.write("Existing evidence for this snapshot is preserved. Complete any pending outcomes in the local record.\n")
             return
         if not refresh:
-            raise ReviewError("existing evidence is stale; preserve needed history, then use prepare --refresh to draft pending outcomes")
+            raise ReviewError("existing evidence is stale. Preserve needed history, then use prepare --refresh to draft pending outcomes")
     record = {
         "schema_version": 1,
         "reviewer": reviewer,
@@ -250,7 +250,7 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
     documents = cast(list[dict[str, str]], record["documents"])
     pending = sum(1 for item in documents if item["outcome"] == "pending")
     kept = len(paths) - pending
-    sys.stdout.write(f"Drafted {pending} pending document reviews in {RECORD}; carried forward {kept} unchanged outcomes; no new review has been attested.\n")
+    sys.stdout.write(f"Drafted {pending} pending document reviews in {RECORD}. Carried forward {kept} unchanged outcomes. No new review has been attested.\n")
 
 
 def main() -> int:
@@ -258,7 +258,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check")
-    commands.add_parser("check-untracked", help="verify local review evidence is absent from the Git index")
+    commands.add_parser("check-untracked", help="check that local review evidence is absent from the Git index")
     draft = commands.add_parser("prepare")
     draft.add_argument("--reviewer", required=True)
     draft.add_argument("--reviewed-at", required=True)
@@ -271,13 +271,13 @@ def main() -> int:
             raise ReviewError("run from the repository root")
         files = inventory()
         if git("ls-files", "--", RECORD).strip():
-            raise ReviewError("review evidence must stay local; remove it from the index with git rm --cached -- .documentation_review.json")
+            raise ReviewError("review evidence must stay local. Remove it from the index with git rm --cached -- .documentation_review.json")
         if run_command("git", ["check-ignore", "-q", "--", RECORD]).returncode:
             # An ignored record cannot be staged by git add . [708].
-            raise ReviewError(f"review evidence must be ignored; add /{RECORD} to .gitignore")
+            raise ReviewError(f"review evidence must be ignored. Add /{RECORD} to .gitignore")
         if args.command == "check-untracked":
             sys.stdout.write(
-                "documentation review: local-only storage verified (untracked and ignored); substantive review is checked locally, not in hosted CI\n"
+                "documentation review: local-only storage verified (untracked and ignored). Substantive review is checked locally, not in hosted CI\n"
             )
         elif args.command == "prepare":
             if args.carry_forward and not args.refresh:
@@ -285,16 +285,16 @@ def main() -> int:
             prepare(files, args.reviewer, args.reviewed_at, args.extra_document, args.refresh, args.carry_forward)
         else:
             if not Path(RECORD).is_file():
-                raise ReviewError("no local review record; prepare and complete the ignored evidence")
+                raise ReviewError("no local review record. Prepare and complete the ignored evidence")
             count = validate(parse_record(Path(RECORD).read_text()), files)
-            sys.stdout.write(f"documentation review: PASS ({count} documents; staged snapshot matches)\n")
+            sys.stdout.write(f"documentation review: PASS ({count} documents, staged snapshot matches)\n")
     except (ReviewError, OSError, UnicodeError, TimeoutExpired) as error:
-        message = str(error) if isinstance(error, ReviewError) else "a required file or program is inaccessible; check local setup"
+        message = str(error) if isinstance(error, ReviewError) else "a required file or program is inaccessible. Check local setup"
         sys.stderr.write(
             f"{RECORD}:1: documentation review: BLOCK: {message}\n"
             f"  Rule: {POLICY}\n"
-            "  Fix: stage the intended files, prepare the review, inspect every document, complete outcomes/notes in the ignored local record.\n"
-            "  If this blocks a valid change, fix the check or ask the repository owner; do not bypass it.\n"
+            "  Fix: stage the intended files. Prepare the review. Inspect every document. Complete the outcomes and notes in the ignored local record.\n"
+            "  If this blocks a valid change, fix the check or ask the repository owner. Do not bypass it.\n"
         )
         return 1
     return 0

@@ -68,7 +68,7 @@ class ScratchWorktrees:
         ``close`` cannot hide the worktree from the removal or the check.
         """
         if path.exists() and any(path.iterdir()):
-            raise FileExistsError(f"{path} is not empty; the fallback removal would delete it")
+            raise FileExistsError(f"{path} is not empty. The fallback removal would delete it")
         resolved = path.resolve()
         self.paths.append(resolved)
         run_command(
@@ -118,7 +118,7 @@ class ScratchWorktrees:
             self.problems.append(f"folders of worktrees this run added still exist: {kept}")
         self.after = self.listing("after")
         if self.after != self.before:
-            self.notes.append("the registered worktrees changed during the run (other runs add and remove their own; report only)")
+            self.notes.append("the registered worktrees changed during the run (other runs add and remove their own). This note is for the report only")
 
     def close(self) -> dict[str, Any]:
         """Remove everything this run added, restore the signal handlers and return the record; problems are also printed to standard error.

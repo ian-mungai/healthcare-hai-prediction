@@ -157,7 +157,7 @@ def osv_scanner() -> int:
         output = Path(folder) / "report.json"
         result = run_command(binary, [*arguments, "--output-file", str(output)], cwd=ROOT, timeout=300)
         if result.returncode not in {0, 1} or not output.is_file():
-            raise ValueError(f"uv.lock:1: osv-scanner failed ({result.returncode}); it needs network access to osv.dev: {result.stderr[-1500:]}")
+            raise ValueError(f"uv.lock:1: osv-scanner failed ({result.returncode}). It needs network access to osv.dev: {result.stderr[-1500:]}")
         document = json.loads(output.read_text(encoding="utf-8"))
     issues = []
     for entry in document.get("results", []):

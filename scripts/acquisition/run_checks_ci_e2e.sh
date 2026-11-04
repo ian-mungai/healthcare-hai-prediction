@@ -48,7 +48,7 @@ cleanup() {
   else
     echo "PASS scratch_worktree_removed" | tee -a "$results"
     if [[ "$after" != "$before" ]]; then
-      echo "NOTE the registered worktrees changed during the run (other runs add and remove their own; report only); see $out/worktrees_before.txt and $out/worktrees_after.txt" | tee -a "$results"
+      echo "NOTE the registered worktrees changed during the run (other runs add and remove their own). This note is for the report only. See $out/worktrees_before.txt and $out/worktrees_after.txt" | tee -a "$results"
     fi
   fi
   if ((interrupted)) && [[ "$status" == 0 ]]; then status=130; fi

@@ -252,11 +252,11 @@ def macro_usage(sources: list[str]) -> int:
     if unknown := sorted(called - macros.keys()):
         raise ValueError(f"dbt/macros:1: manifest cannot resolve macro dependency {unknown[0]}")
     unused = sorted(own.keys() - called)
-    sys.stdout.write(f"Macro usage: {len(own)} definitions in {len(inventory)} files; {len(own) - len(unused)} have callers recorded in the fresh manifest\n")
+    sys.stdout.write(f"Macro usage: {len(own)} definitions in {len(inventory)} files. {len(own) - len(unused)} have callers recorded in the fresh manifest\n")
     for key in unused:
         name, path = own[key]["name"], "dbt/" + own[key]["original_file_path"]
         line = declared[path, name]
-        sys.stderr.write(f"{path}:{line}: unused macro {name}; call it through a recorded model, test, hook or macro, or review its retirement.\n")
+        sys.stderr.write(f"{path}:{line}: unused macro {name}. Call it through a recorded model, test, hook or macro, or review its retirement.\n")
     return int(bool(unused))
 
 
@@ -451,7 +451,7 @@ def build_contexts() -> int:
                     if reference.casefold() in earlier or (reference.isdigit() and int(reference) < stage) or reference in contexts:
                         continue
                     sys.stderr.write(
-                        f"{name}:{number}: unknown COPY --from={reference} for {service}; use an earlier stage or a declared named build context.\n"
+                        f"{name}:{number}: unknown COPY --from={reference} for {service}. Use an earlier stage or a declared named build context.\n"
                     )
                     failed = True
     return int(failed)

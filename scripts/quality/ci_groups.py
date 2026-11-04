@@ -164,9 +164,9 @@ def plan(scope: str, part: str, start: str = "", end: str = "", paths: list[str]
         listed = [pattern for patterns in config["groups"].values() for pattern in patterns] + config["passive"]
         unclassified = next((path for path in changed if not any(re.search(pattern, path) for pattern in listed)), None)
         if trigger:
-            changed, reason = None, f"{reason}; {trigger} selects every group"
+            changed, reason = None, f"{reason}. {trigger} selects every group"
         elif unclassified:
-            changed, reason = None, f"{reason}; unclassified path {unclassified} selects every group"
+            changed, reason = None, f"{reason}. Unclassified path {unclassified} selects every group"
     run: list[str] = []
     skip: dict[str, str] = {}
     layers = selected_layers(changed, config) if changed is not None else set()
@@ -207,7 +207,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     parts = valid_parts(load())
     if args.scope not in SCOPES or args.part not in parts:
-        sys.stderr.write(f"scope must be one of {', '.join(SCOPES)} and part one of {', '.join(sorted(parts))}; got {args.scope}, {args.part}\n")
+        sys.stderr.write(
+            f"scope must be one of {', '.join(SCOPES)}. Part must be one of {', '.join(sorted(parts))}. Got scope {args.scope} and part {args.part}\n"
+        )
         return 2
     result = plan(args.scope, args.part, args.start, args.end, args.paths)
     if args.format == "json":
