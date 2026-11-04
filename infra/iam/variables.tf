@@ -14,8 +14,8 @@ variable "aws_region" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]+$", var.aws_region))
-    error_message = "Supply an AWS region code such as eu-west-1, without surrounding whitespace."
+    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]+$", var.aws_region)) && length(var.aws_region) <= 14
+    error_message = "Supply an AWS region code of at most 14 characters, such as eu-west-1, without surrounding whitespace. The delivery boundary size check is set for that length."
   }
 }
 
@@ -44,8 +44,8 @@ variable "project_name" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9_]{2,79}$", var.project_name))
-    error_message = "Use a lowercase project name containing letters, digits and underscores."
+    condition     = can(regex("^[a-z][a-z0-9_]{2,36}$", var.project_name))
+    error_message = "Use a lowercase project name of 3 to 37 characters containing letters, digits and underscores. The longest role name, <project>_job_openmetadata_task_prod, must fit the 64 characters of an IAM role name, and the delivery boundary size check is set for that length."
   }
 }
 
