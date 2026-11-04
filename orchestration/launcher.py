@@ -7692,6 +7692,7 @@ class Launcher:
         if catalog["phase"] == "tearing_down":
             raise LauncherError("the catalog is being torn down", "refused")
         ctx.state["launcher"]["catalog"] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "services": {},
@@ -7949,7 +7950,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "netremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("catalog:confirm", "catalogconfirm", self.catalog_absent))
+            confirm_key = self.operation_key("catalog:confirm", catalog)
+            actions.append(lambda: self.spawn(confirm_key, "catalogconfirm", self.catalog_absent))
 
     def catalog_absent(self) -> bool:
         """Worker: True when no catalog service container and no catalog network exist."""
@@ -7978,7 +7980,7 @@ class Launcher:
             return
         with self.tx() as state:
             catalog = self.catalog_record(state)
-            if catalog["phase"] != "tearing_down":
+            if catalog["phase"] != "tearing_down" or key != self.operation_key("catalog:confirm", catalog):
                 return
             error = catalog.get("error", "")
             state["launcher"]["catalog"] = {"phase": "down", "services": {}, "error": error, "down_at": utc_now()}
@@ -8064,6 +8066,7 @@ class Launcher:
                 raise LauncherError("the orchestration stack is up with other parameters; orchestration_down first", "refused")
             return {"phase": stack["phase"]}
         ctx.state["launcher"]["orchestration"] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "services": {},
@@ -8281,7 +8284,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("orch:confirm", "orchconfirm", self.orchestration_absent))
+            confirm_key = self.operation_key("orch:confirm", stack)
+            actions.append(lambda: self.spawn(confirm_key, "orchconfirm", self.orchestration_absent))
 
     def orchestration_absent(self) -> bool:
         """Worker: True when no container and no network of the orchestration stack exist, in any state."""
@@ -8310,7 +8314,7 @@ class Launcher:
             return
         with self.tx() as state:
             stack = self.orchestration_record(state)
-            if stack["phase"] != "tearing_down":
+            if stack["phase"] != "tearing_down" or key != self.operation_key("orch:confirm", stack):
                 return
             state["launcher"]["orchestration"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
             for service in ORCHESTRATION_MEMORY:
@@ -8436,6 +8440,7 @@ class Launcher:
             return {"phase": stack["phase"]}
         self.initialize_lineage_config(checkout, Path(folder))
         ctx.state["launcher"]["lineage"] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "services": {},
@@ -8688,7 +8693,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "lineagenetremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("lineage:confirm", "lineageconfirm", self.lineage_absent))
+            confirm_key = self.operation_key("lineage:confirm", stack)
+            actions.append(lambda: self.spawn(confirm_key, "lineageconfirm", self.lineage_absent))
 
     def lineage_absent(self) -> bool:
         """Worker: True when no container and no network of the lineage stack exist, in any state."""
@@ -8717,7 +8723,7 @@ class Launcher:
             return
         with self.tx() as state:
             stack = self.lineage_record(state)
-            if stack["phase"] != "tearing_down":
+            if stack["phase"] != "tearing_down" or key != self.operation_key("lineage:confirm", stack):
                 return
             state["launcher"]["lineage"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
             for service in LINEAGE_MEMORY:
@@ -8771,6 +8777,7 @@ class Launcher:
             raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
         checkout = self.cfg.root
         ctx.state["launcher"][online_store.STACK] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "service": None,
@@ -9002,7 +9009,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "onlinenetremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("online:confirm", "onlineconfirm", self.online_absent))
+            confirm_key = self.operation_key("online:confirm", record)
+            actions.append(lambda: self.spawn(confirm_key, "onlineconfirm", self.online_absent))
 
     def online_absent(self) -> bool:
         """Worker: True when no container and no network of the online store exist, in any state."""
@@ -9031,7 +9039,7 @@ class Launcher:
             return
         with self.tx() as state:
             record = self.online_record(state)
-            if record["phase"] != "tearing_down":
+            if record["phase"] != "tearing_down" or key != self.operation_key("online:confirm", record):
                 return
             state["launcher"][online_store.STACK] = {"phase": "down", "service": None, "error": record.get("error", ""), "down_at": utc_now()}
             state["services"].pop(online_store.SERVICE, None)
@@ -9230,9 +9238,9 @@ class Launcher:
 
     @staticmethod
     def operation_key(name: str, record: Mapping[str, Any]) -> str:
-        """The worker key of one step of a recorded Docker Desktop operation or release, scoped to that record. An operation ends at its deadline while its
-        worker (the stop of a hung command, a slow listing) still runs; a worker key shared by every operation would hold the next operation's worker back
-        and let the earlier worker's result end or refuse the next operation."""
+        """The worker key of one step of a recorded operation (Docker Desktop, a release, a restart or a stack teardown), scoped to that record. An operation
+        ends at its deadline while its worker (the stop of a hung command, a slow listing) still runs; a worker key shared by every operation would hold
+        the next operation's worker back and let the earlier worker's result end or refuse the next operation."""
         return f"{name}:{record.get('id') or record.get('request') or ''}"
 
     def m_desktop_start(self, ctx: Ctx) -> Any:
@@ -9735,8 +9743,9 @@ class Launcher:
                 if attempt is not None and is_open(attempt):
                     attempt["cancel_intent"] = attempt["cancel_intent"] or {"reason": "mlflow_down", "at": utc_now()}
                     return
-            if "mlflow:stop" not in self.inflight:
-                actions.append(partial(self.spawn, "mlflow:stop", "mlflow_stop", self.remove_mlflow_shared))
+            stop_key = self.mlflow_stop_key(stack)
+            if stop_key not in self.inflight:
+                actions.append(partial(self.spawn, stop_key, "mlflow_stop", self.remove_mlflow_shared))
 
     def expire_mlflow_startup(self) -> None:
         """Record startup or cleanup expiry even while the Docker connection is unavailable."""
@@ -9850,6 +9859,11 @@ class Launcher:
             stack["stop_deadline"] = time.time() + mlflow_service.RELEASE_SECONDS
         return {"phase": stack["phase"]}
 
+    @staticmethod
+    def mlflow_stop_key(stack: Mapping[str, Any]) -> str:
+        """The worker key of one teardown of the MLflow stack: its stop deadline, which every teardown sets anew (so does the owner's retry)."""
+        return f"mlflow:stop:{stack.get('stop_deadline')!r}"
+
     def remove_mlflow_shared(self) -> bool:
         """Remove only the registry's shared MLflow networks and confirm all service containers are gone."""
         label = f"{LABEL_STACK}={mlflow_service.STACK}"
@@ -9870,7 +9884,7 @@ class Launcher:
             return
         with self.tx() as state:
             stack = state["launcher"].get("mlflow", {})
-            if stack.get("phase") != "tearing_down":
+            if stack.get("phase") != "tearing_down" or key != self.mlflow_stop_key(stack):
                 return
             state["launcher"]["mlflow"] = {"phase": "down", "error": stack.get("error", "")}
             for service in mlflow_service.SERVICES:
