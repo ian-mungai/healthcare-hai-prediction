@@ -1,0 +1,349 @@
+"""Offline cases for the OpenMetadata image mirror of ``push_images``; no program starts, no registry or AWS is contacted.
+
+Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.push_images_cases``. ``scripts/infrastructure/run_push_images_e2e.py`` runs
+them and keeps the report. The cases call the command line of ``push_images`` (``check``, ``plan`` and ``record``) on a scratch copy of the two image
+files, and the list and plan functions on the real image list. The upstream digests below are the linux/arm64 entries of the selected releases that the
+owner read from the Docker Hub registry on Nov 3 2026; they are the oracle for the pins in ``infra/services/images.json``.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import copy
+import io
+import json
+import shutil
+import sys
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from scripts.infrastructure import push_images
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+UPSTREAM = {
+    "openmetadata_server": "sha256:010d63887c5b428d877a84e7edd65a152894145e0bb0a90aabf334cd70815a0c",
+    "openmetadata_ingestion": "sha256:cd28c0b1f64b9c3581badf996f7fef6ffea3918754d588095b2f04a8c9f3dca4",
+    "openmetadata_search": "sha256:6836708871685e272ad9042285e1c680790fe4315b047279ad16f761da2f4b70",
+}
+METADATA_KEY = {"openmetadata_server": "server", "openmetadata_ingestion": "ingestion", "openmetadata_search": "search"}
+UPSTREAM_NAME = {
+    "openmetadata_server": "docker.io/openmetadata/server",
+    "openmetadata_ingestion": "docker.io/openmetadata/ingestion",
+    "openmetadata_search": "docker.io/opensearchproject/opensearch",
+}
+RELEASE = {"openmetadata_server": "2.0.7", "openmetadata_ingestion": "2.0.7", "openmetadata_search": "3.3.2"}
+ACCOUNT = str(2 * 10**11 + 7)
+OTHER = "sha256:" + "ab" * 32
+SERVICES_FILE = "infra/services/images.json"
+METADATA_FILE = "config/metadata/images.json"
+DIGEST_FILE = "infra/services/images.auto.tfvars.json"
+
+Case = Callable[[], dict[str, bool]]
+
+
+def scratch_root(directory: Path) -> Path:
+    """A scratch repository root: links to everything in the repository except the folders of the two image files, which hold copies.
+
+    The check reads build contexts and local pins through the root, so the links keep it valid. Only the two copies and the variable file are written.
+    """
+    for entry in REPO_ROOT.iterdir():
+        if entry.name not in ("infra", "config", ".git"):
+            (directory / entry.name).symlink_to(entry)
+    for top, copied in (("infra", "services"), ("config", "metadata")):
+        (directory / top).mkdir()
+        for entry in (REPO_ROOT / top).iterdir():
+            if entry.name != copied:
+                (directory / top / entry.name).symlink_to(entry)
+        (directory / top / copied).mkdir()
+        for entry in (REPO_ROOT / top / copied).iterdir():
+            if entry.name == "images.json":
+                shutil.copy(entry, directory / top / copied / entry.name)
+            elif entry.name != "images.auto.tfvars.json":
+                (directory / top / copied / entry.name).symlink_to(entry)
+    return directory
+
+
+def said(result: tuple[int, str, str]) -> str:
+    """Everything a command line printed, standard output and standard error."""
+    return result[1] + result[2]
+
+
+def run(root: Path, *arguments: str) -> tuple[int, str, str]:
+    """One command line of ``push_images`` on a scratch root: the exit code, the standard output and the standard error."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = push_images.main(["--root", str(root), *arguments])
+        except SystemExit as stop:
+            code = int(stop.code) if isinstance(stop.code, int) else 1
+    return code, out.getvalue(), err.getvalue()
+
+
+def read(root: Path, relative: str) -> Any:
+    """A JSON file of the scratch root, or ``None`` when it does not exist."""
+    path = root / relative
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def digests_of(root: Path) -> dict[str, str]:
+    """The digests of the services variable file, or an empty map."""
+    return dict((read(root, DIGEST_FILE) or {}).get("image_digests", {}))
+
+
+def metadata_digests(root: Path) -> dict[str, str]:
+    """The ``digest`` field of the server, ingestion and search images of the scratch metadata image file."""
+    images = read(root, METADATA_FILE)["images"]
+    return {name: images[key]["digest"] for name, key in METADATA_KEY.items()}
+
+
+def assignments(digests: dict[str, str]) -> list[str]:
+    return [f"{name}={digest}" for name, digest in digests.items()]
+
+
+def repository_urls(directory: Path) -> Path:
+    """A repository URL file for every image of the list, in the plain object form."""
+    config = push_images.load_config(REPO_ROOT / SERVICES_FILE)
+    path = directory / "urls.json"
+    path.write_text(json.dumps({name: f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_{name}_dev" for name in config["images"]}), encoding="utf-8")
+    return path
+
+
+def real_config() -> dict[str, Any]:
+    return push_images.load_config(REPO_ROOT / SERVICES_FILE)
+
+
+def list_pins() -> dict[str, bool]:
+    """The list holds the three images as mirrors of the selected upstream arm64 digests, and the database image stays out."""
+    config = real_config()
+    images = config["images"]
+    metadata = json.loads((REPO_ROOT / METADATA_FILE).read_text(encoding="utf-8"))["images"]
+    pins = {
+        name: str(images.get(name, {}).get("source")) == f"{UPSTREAM_NAME[name]}@{UPSTREAM[name]}" and images.get(name, {}).get("kind") == "mirror"
+        for name in UPSTREAM
+    }
+    return {
+        "the list is valid with the three images": push_images.check(config) == [],
+        "each image is a mirror of its selected upstream release pinned by the linux/arm64 digest": all(pins.values()),
+        "each tag follows the release": all(images.get(name, {}).get("tag") == f"{RELEASE[name]}-arm64" for name in UPSTREAM),
+        "each image names its entry of the metadata image file, whose upstream and release match": all(
+            images.get(name, {}).get("metadata_image") == key and metadata[key]["upstream"] == UPSTREAM_NAME[name] and metadata[key]["release"] == RELEASE[name]
+            for name, key in METADATA_KEY.items()
+        ),
+        "the database image is not in the list": not any("database" in name for name in images),
+    }
+
+
+def list_refusals() -> dict[str, bool]:
+    """A pin that is not the selected digest, a missing entry, a build, an unpinned source or another upstream name is refused with the cause."""
+    base = real_config()
+
+    def problems(mutate: Callable[[dict[str, Any]], None]) -> str:
+        config = copy.deepcopy(base)
+        mutate(config["images"])
+        return "\n".join(push_images.check(config))
+
+    def unpinned(images: dict[str, Any]) -> None:
+        images["openmetadata_server"]["source"] = "docker.io/openmetadata/server:2.0.7"
+
+    def other_name(images: dict[str, Any]) -> None:
+        images["openmetadata_ingestion"]["source"] = "docker.io/someone/ingestion@" + UPSTREAM["openmetadata_ingestion"]
+
+    def wrong_tag(images: dict[str, Any]) -> None:
+        images["openmetadata_search"]["tag"] = "latest"
+
+    def as_build(images: dict[str, Any]) -> None:
+        images["openmetadata_server"] = {"kind": "build", "context": ".", "local_tag": "x", "tag": "x", "arm64": "x", "runs_as": "x"}
+
+    def no_link(images: dict[str, Any]) -> None:
+        del images["openmetadata_search"]["metadata_image"]
+
+    def no_check(images: dict[str, Any]) -> None:
+        del images["openmetadata_server"]["read_back"]
+
+    def removed(images: dict[str, Any]) -> None:
+        del images["openmetadata_ingestion"]
+
+    return {
+        "an unpinned source is refused": "openmetadata_server" in problems(unpinned) and "not pinned by digest" in problems(unpinned),
+        "a source from another upstream name is refused": "openmetadata_ingestion" in problems(other_name) and "upstream" in problems(other_name),
+        "a tag that is not the release is refused": "openmetadata_search" in problems(wrong_tag) and "tag" in problems(wrong_tag),
+        "a build instead of a mirror is refused": "openmetadata_server" in problems(as_build) and "mirror" in problems(as_build),
+        "a missing metadata link is refused": "openmetadata_search" in problems(no_link) and "metadata_image" in problems(no_link),
+        "a missing digest read-back is refused": "openmetadata_server" in problems(no_check) and "read_back" in problems(no_check),
+        "a removed image is refused": "openmetadata_ingestion" in problems(removed),
+    }
+
+
+def plan_lines() -> dict[str, bool]:
+    """The plan mirrors each image by its digest, skips one that ECR holds with that digest and reads the digest back."""
+    config = real_config()
+    with tempfile.TemporaryDirectory(prefix="push_images_plan_") as directory:
+        urls = push_images.repository_urls(repository_urls(Path(directory)))
+    lines = push_images.plan(config, urls, "example_profile", "us-west-2", list(UPSTREAM))
+    text = "\n".join(lines)
+    return {
+        "each image is pulled for linux/arm64 by its upstream digest": all(
+            f"docker pull --platform linux/arm64 {UPSTREAM_NAME[n]}@{UPSTREAM[n]}" in text for n in UPSTREAM
+        ),
+        "the pull and push run only when ECR does not hold the digest": all(
+            any(f"imageDigest={UPSTREAM[n]}" in line and "||" in line and "docker pull" in line for line in lines) for n in UPSTREAM
+        ),
+        "the ECR digest is read back and compared with the upstream digest": all(
+            any(f"= {UPSTREAM[n]}" in line and "exit 1" in line for line in lines) for n in UPSTREAM
+        ),
+        "no image is pulled by a tag alone": not any(line.startswith("docker pull") and "@sha256:" not in line for line in lines),
+        "the plan names the record command with the three names": "push_images record" in text and all(f"{n}=sha256:<DIGEST>" in text for n in UPSTREAM),
+        "the database image is not planned": "database" not in text,
+    }
+
+
+def record_flow() -> dict[str, bool]:
+    """Matching digests are written to both files, a rerun changes nothing and a partial record leaves the other images unresolved."""
+    with tempfile.TemporaryDirectory(prefix="push_images_record_") as directory:
+        root = scratch_root(Path(directory))
+        before_services = (root / SERVICES_FILE).read_bytes()
+        unresolved_before = metadata_digests(root)
+        partial_code, _, _ = run(root, "record", f"openmetadata_server={UPSTREAM['openmetadata_server']}")
+        partial_metadata = metadata_digests(root)
+        partial_tfvars = digests_of(root)
+        code, out, err = run(root, "record", *assignments(UPSTREAM))
+        files = {relative: (root / relative).read_bytes() for relative in (METADATA_FILE, DIGEST_FILE)}
+        again_code, _, _ = run(root, "record", *assignments(UPSTREAM))
+        again = {relative: (root / relative).read_bytes() for relative in (METADATA_FILE, DIGEST_FILE)}
+        recorded_metadata = metadata_digests(root)
+        recorded_tfvars = digests_of(root)
+        database = read(root, METADATA_FILE)["images"]["database"]
+        services_after = (root / SERVICES_FILE).read_bytes()
+    return {
+        "the metadata file starts with all three digests unresolved": all(value.startswith("TO_RESOLVE") for value in unresolved_before.values()),
+        "a partial record writes only that digest to both files": partial_code == 0
+        and partial_metadata["openmetadata_server"] == UPSTREAM["openmetadata_server"]
+        and partial_metadata["openmetadata_ingestion"].startswith("TO_RESOLVE")
+        and partial_tfvars == {"openmetadata_server": UPSTREAM["openmetadata_server"]},
+        "a full record writes the three digests to the metadata file and the services variable file": code == 0
+        and recorded_metadata == UPSTREAM
+        and recorded_tfvars == UPSTREAM,
+        "a rerun with the same digests exits zero and changes neither file": again_code == 0 and again == files,
+        "the database image gets no digest and the image list itself is untouched": "digest" not in database and services_after == before_services,
+        "the output names the recorded count and the variable file": f"Recorded 3 digests in {DIGEST_FILE}" in out and not err,
+    }
+
+
+def record_refusals() -> dict[str, bool]:
+    """An ECR digest that differs from the upstream digest, the database image, an unknown name and a malformed digest change nothing and say why."""
+    with tempfile.TemporaryDirectory(prefix="push_images_refuse_") as directory:
+        root = scratch_root(Path(directory))
+        reference = {relative: (root / relative).read_bytes() for relative in (METADATA_FILE,)}
+        mismatch = run(root, "record", f"openmetadata_server={OTHER}")
+        mixed = run(root, "record", f"openmetadata_ingestion={UPSTREAM['openmetadata_ingestion']}", f"openmetadata_search={OTHER}")
+        database = run(root, "record", f"openmetadata_database={UPSTREAM['openmetadata_server']}")
+        unknown = run(root, "record", f"openmetadata_other={UPSTREAM['openmetadata_server']}")
+        malformed = run(root, "record", "openmetadata_server=sha256:1234")
+        unchanged = {relative: (root / relative).read_bytes() for relative in reference} == reference and not (root / DIGEST_FILE).exists()
+    return {
+        "an ECR digest that differs from the upstream digest exits one and names the image and both digests": mismatch[0] == 1
+        and "openmetadata_server" in mismatch[2]
+        and OTHER in mismatch[2]
+        and UPSTREAM["openmetadata_server"] in mismatch[2]
+        and "differs" in mismatch[2],
+        "one differing digest among valid ones fails the whole record": mixed[0] == 1 and "openmetadata_search" in mixed[2],
+        "the database image cannot be recorded": database[0] == 1 and "openmetadata_database" in database[2],
+        "an unknown name cannot be recorded": unknown[0] == 1 and "openmetadata_other" in unknown[2],
+        "a malformed digest cannot be recorded": malformed[0] == 1 and "sha256" in malformed[2],
+        "after every refusal neither file has changed and no variable file exists": unchanged,
+    }
+
+
+def require_resolved() -> dict[str, bool]:
+    """The plain check passes with unresolved digests; the activation check fails on each cause and passes once both files agree."""
+    with tempfile.TemporaryDirectory(prefix="push_images_resolved_") as directory:
+        root = scratch_root(Path(directory))
+        plain = run(root, "check")
+        fresh = run(root, "check", "--require-resolved")
+        run(root, "record", *assignments(UPSTREAM))
+        resolved = run(root, "check", "--require-resolved")
+        tfvars = root / DIGEST_FILE
+        saved = tfvars.read_text(encoding="utf-8")
+        tfvars.write_text(json.dumps({"image_digests": {k: v for k, v in digests_of(root).items() if k != "openmetadata_search"}}), encoding="utf-8")
+        missing = run(root, "check", "--require-resolved")
+        tfvars.write_text(json.dumps({"image_digests": {**digests_of(root), "openmetadata_ingestion": OTHER}}), encoding="utf-8")
+        differs = run(root, "check", "--require-resolved")
+        tfvars.write_text(saved, encoding="utf-8")
+        tfvars.unlink()
+        no_file = run(root, "check", "--require-resolved")
+    return {
+        "the plain check passes while the digests are unresolved": plain[0] == 0,
+        "the activation check fails while the digests are unresolved and names each image": fresh[0] == 1
+        and all(name in said(fresh) for name in UPSTREAM)
+        and "TO_RESOLVE" in said(fresh),
+        "the activation check passes once the digests are recorded": resolved[0] == 0,
+        "the activation check fails when the variable file lacks an image": missing[0] == 1 and "openmetadata_search" in said(missing),
+        "the activation check fails when the two files differ": differs[0] == 1 and "openmetadata_ingestion" in said(differs) and "differs" in said(differs),
+        "the activation check fails when the variable file does not exist": no_file[0] == 1 and DIGEST_FILE in said(no_file),
+    }
+
+
+WATCHED = ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn", "os.fork", "pty.spawn")
+STARTS: list[str] = []
+WATCHING: list[bool] = []
+
+
+def watch(event: str, arguments: tuple[object, ...]) -> None:
+    """An audit hook that records a program start while a case is watching; a hook cannot be removed, so it only reads the flag."""
+    if WATCHING and event in WATCHED:
+        STARTS.append(event)
+
+
+def no_program() -> dict[str, bool]:
+    """The command line starts no program: the audit events of every way to start one are recorded, and every command still finishes."""
+    if watch not in AUDITED:
+        sys.addaudithook(watch)
+        AUDITED.append(watch)
+    STARTS.clear()
+    WATCHING.append(True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="push_images_quiet_") as directory:
+            root = scratch_root(Path(directory))
+            urls = repository_urls(Path(directory))
+            codes = [
+                run(root, "check")[0],
+                run(root, "plan", "--repository-urls", str(urls), "--profile", "p", "--region", "us-west-2", "--only", *UPSTREAM)[0],
+                run(root, "record", *assignments(UPSTREAM))[0],
+            ]
+    finally:
+        WATCHING.clear()
+    return {"check, plan and record all exit zero without starting a program": codes == [0, 0, 0] and not STARTS}
+
+
+AUDITED: list[object] = []
+
+
+CASES: dict[str, Case] = {
+    "list_pins": list_pins,
+    "list_refusals": list_refusals,
+    "plan_lines": plan_lines,
+    "record_flow": record_flow,
+    "record_refusals": record_refusals,
+    "require_resolved": require_resolved,
+    "no_program": no_program,
+}
+
+
+def main() -> int:
+    """Run every case and print one line per check; exit one when a check fails or a case raises."""
+    failed = False
+    for name, function in CASES.items():
+        try:
+            checks = function()
+        except Exception as error:
+            checks = {f"the case ended with {type(error).__name__}": False}
+        for check, ok in checks.items():
+            sys.stdout.write(f"{'PASS' if ok else 'FAIL'} {name}: {check}\n")
+            failed = failed or not ok
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

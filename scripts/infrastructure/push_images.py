@@ -2,7 +2,7 @@
 
 The coordinating agent runs the printed Docker and AWS commands, because only the launcher may call Docker. Three commands, run from the repository root:
 
-    .venv/bin/python -m scripts.infrastructure.push_images check
+    .venv/bin/python -m scripts.infrastructure.push_images check [--require-resolved]
     .venv/bin/python -m scripts.infrastructure.push_images plan --repository-urls urls.json --profile <PROFILE> --region <REGION> [--only NAME ...]
     .venv/bin/python -m scripts.infrastructure.push_images record NAME=sha256:<DIGEST> [NAME=sha256:<DIGEST> ...]
 
@@ -13,6 +13,13 @@ local stack uses. ``plan`` prints the commands for each image. ``urls.json`` is 
 the pinned source digest (mirror), the local image ID (build) or the source commit (source build). The printed push is skipped when ECR already
 holds that tag, and the digest to record is read back from ECR. ``record`` merges those digests into ``infra/services/images.auto.tfvars.json``, the
 variable file the services stack reads. Images run by digest, never by tag, so a rerun that finds the same tag records the same digest.
+
+The three OpenMetadata images (``openmetadata_server``, ``openmetadata_ingestion`` and ``openmetadata_search``) are mirrors pinned to the linux/arm64
+digest of the selected upstream release, and each names its entry in ``config/metadata/images.json`` (``metadata_image``). Their plan skips the pull and
+the push when ECR already holds the digest, and reads the ECR digest back and stops when it differs from the pinned one (``read_back``). ``record`` takes
+only a digest equal to the pin for these images and writes it to the variable file and to ``config/metadata/images.json`` together. ``check
+--require-resolved`` is the activation check: it fails while a digest in that file is still ``TO_RESOLVE`` or the two files disagree. The finite catalog
+task's database image is not part of this list.
 """
 
 from __future__ import annotations
@@ -29,8 +36,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG = ROOT / "infra/services/images.json"
-DIGESTS = ROOT / "infra/services/images.auto.tfvars.json"
+CONFIG_FILE = "infra/services/images.json"
+DIGESTS_FILE = "infra/services/images.auto.tfvars.json"
+METADATA_FILE = "config/metadata/images.json"
+CONFIG = ROOT / CONFIG_FILE
+DIGESTS = ROOT / DIGESTS_FILE
+METADATA = ROOT / METADATA_FILE
+OPENMETADATA = {"openmetadata_server": "server", "openmetadata_ingestion": "ingestion", "openmetadata_search": "search"}
 PLATFORM = "linux/arm64"
 KINDS = ("mirror", "build", "source", "blocked")
 SERVICE_IMAGES = ("postgres", "redis", "polaris", "polaris_admin", "airflow")
@@ -98,9 +110,57 @@ def source_problems(name: str, image: dict[str, Any]) -> list[str]:
     return problems
 
 
+def openmetadata_problems(images: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> list[str]:
+    """Problems with the three OpenMetadata mirrors: present, pinned to the upstream name and release of the metadata image file and read back from ECR."""
+    problems: list[str] = []
+    for name, key in OPENMETADATA.items():
+        image = images.get(name)
+        if image is None:
+            problems.append(f"the OpenMetadata mirror needs an entry for {name}")
+            continue
+        entry = metadata.get("images", {}).get(key, {})
+        if image.get("kind") != "mirror":
+            problems.append(f"{name}: an OpenMetadata image must be a mirror of the upstream image")
+            continue
+        if image.get("metadata_image") != key:
+            problems.append(f"{name}: metadata_image must be {key}, the entry of {METADATA_FILE}")
+        if image.get("read_back") != "equal":
+            problems.append(f"{name}: read_back must be equal, so that the ECR digest is compared with the pinned upstream digest")
+        source = str(image.get("source", ""))
+        if not source.startswith(f"{entry.get('upstream')}@sha256:"):
+            problems.append(f"{name}: source must be the upstream {entry.get('upstream')} pinned by digest")
+        if image.get("tag") != f"{entry.get('release')}-arm64":
+            problems.append(f"{name}: the tag must be the release {entry.get('release')} followed by -arm64")
+        if image.get("local_reference", True) is not False:
+            problems.append(f"{name}: local_reference must be false, because the local stack does not run this image")
+    return problems
+
+
+def unresolved_problems(config: dict[str, Any], root: Path) -> list[str]:
+    """Problems for the activation check: a digest still ``TO_RESOLVE``, a missing variable file or entry and files that disagree with each other or the pin."""
+    metadata = json.loads((root / METADATA_FILE).read_text(encoding="utf-8"))["images"]
+    path = root / DIGESTS_FILE
+    recorded: dict[str, str] = dict(json.loads(path.read_text(encoding="utf-8")).get("image_digests", {})) if path.exists() else {}
+    problems = [] if path.exists() else [f"{DIGESTS_FILE} does not exist; run record after the push"]
+    for name, key in OPENMETADATA.items():
+        digest = str(metadata.get(key, {}).get("digest", ""))
+        if not DIGEST.match(digest):
+            problems.append(f"{name}: the digest in {METADATA_FILE} is still {digest.split(':')[0] or 'missing'}; run record after the push")
+        if path.exists() and name not in recorded:
+            problems.append(f"{name}: missing from {DIGESTS_FILE}")
+        elif path.exists() and DIGEST.match(digest) and recorded[name] != digest:
+            problems.append(f"{name}: {DIGESTS_FILE} differs from {METADATA_FILE}")
+        pin = str(config["images"].get(name, {}).get("source", "")).rpartition("@")[2]
+        if DIGEST.match(digest) and digest != pin:
+            problems.append(f"{name}: the digest in {METADATA_FILE} differs from the pinned upstream digest")
+    return problems
+
+
 def check(config: dict[str, Any], root: Path = ROOT) -> list[str]:
     """Every problem of the image list, as text lines; an empty list means the list is valid."""
     problems: list[str] = []
+    metadata_file = root / METADATA_FILE
+    problems.extend(openmetadata_problems(config["images"], json.loads(metadata_file.read_text(encoding="utf-8")) if metadata_file.exists() else {}))
     images: dict[str, dict[str, Any]] = config["images"]
     problems.extend(f"the services stack needs an entry for {name}" for name in SERVICE_IMAGES if name not in images)
     local_references = "\n".join((root / name).read_text(encoding="utf-8") for name in LOCAL_PIN_FILES if (root / name).is_file())
@@ -190,6 +250,8 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
     repository = urlsplit("//" + url).path.lstrip("/")
     tag_variable = f"TAG_{name.upper()}"
     lines: list[str] = []
+    if image.get("read_back") == "equal":
+        return mirror_lines(name, image, url, profile, region)
     if image["kind"] == "mirror":
         local = str(image["source"])
         suffix = local.rsplit("@sha256:", maxsplit=1)[1][:12]
@@ -224,6 +286,25 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
     return lines
 
 
+def mirror_lines(name: str, image: dict[str, Any], url: str, profile: str, region: str) -> list[str]:
+    """The commands that mirror one pinned upstream image: skip it when ECR holds the digest, push it once and stop when the ECR digest differs."""
+    repository = urlsplit("//" + url).path.lstrip("/")
+    source = str(image["source"])
+    digest = source.rpartition("@")[2]
+    tag_variable = f"TAG_{name.upper()}"
+    tag = f"{image['tag']}-{digest.removeprefix('sha256:')[:12]}"
+    target = f"{url}:${tag_variable}"
+    describe = f"aws ecr describe-images --profile {profile} --region {region} --repository-name {repository}"
+    inspect = f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {source}"
+    return [
+        f"{tag_variable}={tag}",
+        f"{describe} --image-ids imageDigest={digest} >/dev/null 2>&1 || {{ docker pull --platform {PLATFORM} {source} "
+        f'&& [ "$({inspect})" = {PLATFORM} ] && docker tag {source} {target} && docker push {target}; }}   # skipped when ECR holds the digest',
+        f"[ \"$({describe} --image-ids imageTag=${tag_variable} --query 'imageDetails[0].imageDigest' --output text)\" = {digest} ] "
+        f'|| {{ echo "{name}: the ECR digest differs from the pinned upstream digest" >&2; exit 1; }}   # the digest to record for {name} is {digest}',
+    ]
+
+
 def plan(config: dict[str, Any], urls: dict[str, str], profile: str, region: str, only: list[str]) -> list[str]:
     """The commands for the chosen images, in order, as text lines; blocked images appear as comments."""
     images: dict[str, dict[str, Any]] = config["images"]
@@ -253,18 +334,8 @@ def plan(config: dict[str, Any], urls: dict[str, str], profile: str, region: str
     return lines
 
 
-def record(config: dict[str, Any], assignments: list[str], path: Path = DIGESTS) -> dict[str, str]:
-    """Merge ``name=digest`` pairs into the variable file and return its digests; the file is replaced atomically and written the same way each run."""
-    known: set[str] = {name for name, image in config["images"].items() if image["kind"] != "blocked"}
-    current: dict[str, str] = {}
-    if path.exists():
-        current = dict(json.loads(path.read_text(encoding="utf-8")).get("image_digests", {}))
-    for assignment in assignments:
-        name, separator, digest = assignment.partition("=")
-        if not separator or name not in known or not DIGEST.match(digest):
-            raise ImagesError(f"{name or assignment}: use NAME=sha256:<64 hex digits> with an image that is not blocked")
-        current[name] = digest
-    text = json.dumps({"image_digests": dict(sorted(current.items()))}, indent=2) + "\n"
+def write_atomically(path: Path, text: str) -> None:
+    """Replace a file with the text through a temporary file in its folder."""
     handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".images_", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -273,14 +344,44 @@ def record(config: dict[str, Any], assignments: list[str], path: Path = DIGESTS)
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+def record(config: dict[str, Any], assignments: list[str], path: Path = DIGESTS, metadata_path: Path = METADATA) -> dict[str, str]:
+    """Merge ``name=digest`` pairs into the variable file and the OpenMetadata ones also into the metadata image file; return the variable file's digests.
+
+    An OpenMetadata image takes only the digest equal to its pin. Everything is checked before the first write, and a rerun writes the same bytes.
+    """
+    known: set[str] = {name for name, image in config["images"].items() if image["kind"] != "blocked"}
+    current: dict[str, str] = {}
+    if path.exists():
+        current = dict(json.loads(path.read_text(encoding="utf-8")).get("image_digests", {}))
+    for assignment in assignments:
+        name, separator, digest = assignment.partition("=")
+        if not separator or name not in known or not DIGEST.match(digest):
+            raise ImagesError(f"{name or assignment}: use NAME=sha256:<64 hex digits> with an image that is not blocked")
+        pin = str(config["images"][name].get("source", "")).rpartition("@")[2]
+        if name in OPENMETADATA and digest != pin:
+            raise ImagesError(f"{name}: the ECR digest {digest} differs from the pinned upstream digest {pin}; nothing was recorded")
+        current[name] = digest
+    texts = {path: json.dumps({"image_digests": dict(sorted(current.items()))}, indent=2) + "\n"}
+    chosen = {name: current[name] for name in OPENMETADATA if name in current}
+    if chosen and metadata_path.exists():
+        document = json.loads(metadata_path.read_text(encoding="utf-8"))
+        for name, digest in chosen.items():
+            document["images"][OPENMETADATA[name]]["digest"] = digest
+        texts[metadata_path] = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    for target, text in texts.items():
+        write_atomically(target, text)
     return dict(sorted(current.items()))
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run one command and return the exit code."""
     cli = argparse.ArgumentParser(description=__doc__.split("\n", maxsplit=1)[0] if __doc__ else None)
+    cli.add_argument("--root", type=Path, default=ROOT, help="the repository folder that holds the image files (a test passes a scratch copy)")
     commands = cli.add_subparsers(dest="command", required=True)
-    commands.add_parser("check", help="validate the image list offline")
+    checker = commands.add_parser("check", help="validate the image list offline")
+    checker.add_argument("--require-resolved", action="store_true", help="also fail while an OpenMetadata digest is still TO_RESOLVE or the files disagree")
     planner = commands.add_parser("plan", help="print the build, push and digest commands")
     planner.add_argument("--repository-urls", type=Path, required=True)
     planner.add_argument("--profile", required=True)
@@ -289,21 +390,24 @@ def main(argv: list[str] | None = None) -> int:
     recorder = commands.add_parser("record", help="merge pushed digests into the services variable file")
     recorder.add_argument("assignments", nargs="+")
     args = cli.parse_args(argv)
+    root: Path = args.root
     try:
-        config = load_config()
+        config = load_config(root / CONFIG_FILE)
         if args.command == "check":
-            problems = check(config)
+            problems = check(config, root)
+            if args.require_resolved:
+                problems += unresolved_problems(config, root)
             sys.stdout.write("\n".join(problems or ["The image list is valid."]) + "\n")
             return 1 if problems else 0
         if args.command == "plan":
-            problems = check(config)
+            problems = check(config, root)
             if problems:
                 sys.stderr.write("\n".join(problems) + "\n")
                 return 1
             sys.stdout.write("\n".join(plan(config, repository_urls(args.repository_urls), args.profile, args.region, args.only)) + "\n")
             return 0
-        digests = record(config, args.assignments)
-        sys.stdout.write(f"Recorded {len(digests)} digests in {DIGESTS.relative_to(ROOT)}.\n")
+        digests = record(config, args.assignments, root / DIGESTS_FILE, root / METADATA_FILE)
+        sys.stdout.write(f"Recorded {len(digests)} digests in {DIGESTS_FILE}.\n")
         return 0
     except (ImagesError, OSError, ValueError) as error:
         sys.stderr.write(f"{error}\n")

@@ -86,6 +86,22 @@ The persistent catalog needs two Parameter Store passwords: `/healthcare_hai_pre
 
 The command generates each value in memory only when its parameter is absent and writes it as a `SecureString` without overwrite. It reads the value back and prints only the parameter name with `created` or `present`. A rerun changes nothing. The administrator password has 40 characters with an upper-case letter, a lower-case letter, a digit and a special character. The database password holds only letters, digits, dash and underscore. IAM has no condition for the overwrite flag, so the project user's statement `SetUpOpenMetadataPasswords` allows `ssm:GetParameter` and `ssm:PutParameter` on exactly these two names. The command itself never overwrites. The statement needs no key permission, because both parameters use the AWS managed key `aws/ssm`. Run `manage_policies plan` and `manage_policies apply` once so that the project user receives the statement.
 
+## Persistent catalog images
+
+The persistent catalog runs three mirrored images: `openmetadata_server` and `openmetadata_ingestion` at release 2.0.7 and `openmetadata_search` (OpenSearch) at release 3.3.2. `infra/services/images.json` pins each to the `linux/arm64` digest of its release and names its entry in `config/metadata/images.json`. The finite catalog task's database image is not part of this list. The owner runs the printed commands, because only the launcher calls Docker:
+
+```sh
+.venv/bin/python -m scripts.infrastructure.push_images plan --repository-urls <URLS_FILE> --profile <PROFILE> --region <REGION> --only openmetadata_server openmetadata_ingestion openmetadata_search
+```
+
+The plan skips an image that ECR already holds with the pinned digest. After a push it reads the ECR digest back and stops when it differs from the pinned one. Then record the digests, which writes `infra/services/images.auto.tfvars.json` and the `digest` fields of `config/metadata/images.json` together. A digest that differs from the pin is refused and nothing is written:
+
+```sh
+.venv/bin/python -m scripts.infrastructure.push_images record openmetadata_server=sha256:<DIGEST> openmetadata_ingestion=sha256:<DIGEST> openmetadata_search=sha256:<DIGEST>
+```
+
+Before the activation apply, run `.venv/bin/python -m scripts.infrastructure.push_images check --require-resolved`. It fails while a digest is still `TO_RESOLVE` or the two files disagree. The plain `check` does not fail on that, so a commit is never blocked by a digest that has not been pushed yet.
+
 ## Start by hand
 
 A hand start needs the cluster, the job subnet and the lakehouse job security group from the IAM outputs and the private address of the host. It needs no broker. The task runs the same containers and stops itself at the same deadline. Write the overrides with `scripts.orchestration.job_overrides`, which reads the container and its empty variables from the broker table and refuses by name when a value is missing:
