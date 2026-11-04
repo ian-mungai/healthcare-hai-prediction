@@ -3656,11 +3656,13 @@ def mlflow_stop_overlap(env: Env) -> dict[str, bool]:
     }
     older_gate.release()
     time.sleep(2)
+    survived = network in env.daemon.networks
+    env.daemon.networks.pop(network, None)  # the case planted it: the check that nothing of the case is left over must not find it
     return {
         "the older stop worker was running": older_running,
         "the retry does not publish down while the older stop worker runs": not down_while_older_runs,
         "the retry is down once the older stop worker returned": record_phase(env, "mlflow") == "down",
-        "the network of a newer start survives the older stop worker": network in env.daemon.networks,
+        "the network of a newer start survives the older stop worker": survived,
     }
 
 
