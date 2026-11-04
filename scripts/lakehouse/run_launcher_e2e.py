@@ -3455,6 +3455,55 @@ def event_stream_idle(env: Env) -> dict[str, bool]:
     }
 
 
+@case("docker_restart_stale_ping", timings={"restart_answer": 3})
+def docker_restart_stale_ping(env: Env) -> dict[str, bool]:
+    """A docker_restart that ends at its answer deadline while its ping is still pending must not let that ping finish the next restart. The fake daemon
+    holds the ping of the first restart and releases it when the next restart waits for its own answer, which only its own ping, a second after its command,
+    may give."""
+    env.settings["restart_command"] = desktop_command(env, "restart", "/_test/restart?down=1")
+    env.write_settings()
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    set_mode(env, "restart", "noop")
+    gate = env.daemon.add_gate("ping", "after")
+
+    def restart() -> tuple[Any, BaseException | None, float]:
+        began = time.monotonic()
+        result: Any = None
+        error = expect_error(lambda: client.call("docker_restart", {"owner": True}, owner, timeout=60))
+        if error is None:
+            result = {}
+        return result, error, time.monotonic() - began
+
+    _, first_error, _ = restart()
+    ping_was_held = gate.reached.is_set()
+
+    def release_when_waiting() -> None:
+        env.wait(lambda: (env.state()["launcher"].get("restart") or {}).get("phase") == "wait", 10, "the next restart waits for its answer")
+        gate.release()
+
+    releaser = threading.Thread(target=release_when_waiting)
+    releaser.start()
+    env.threads.append(releaser)
+    outcome: list[Any] = []
+    began = time.monotonic()
+    try:
+        outcome.append(client.call("docker_restart", {"owner": True}, owner, timeout=60))
+    except launcher.ClientError as error:
+        outcome.append(error)
+    seconds = time.monotonic() - began
+    return {
+        "a restart whose ping is held fails at its answer deadline": ping_was_held
+        and refused(first_error, "degraded", "did not answer within 3 s after the restart"),
+        "the next restart is done, with the catalog stopped": bool(outcome) and isinstance(outcome[0], dict) and outcome[0].get("phase") == "done",
+        "the next restart waits for its own ping, a second after its command": seconds >= 1.0,
+        "no restart record is left": env.state()["launcher"]["restart"] is None,
+        "the restart command ran twice": [mode for _, mode in command_runs(env, "restart")] == ["noop", "noop"],
+    }
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -10309,6 +10358,7 @@ ALL_CASES = (
     docker_release_quit_deadlines,
     docker_release_stale_list,
     event_stream_idle,
+    docker_restart_stale_ping,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,
