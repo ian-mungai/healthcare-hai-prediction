@@ -2,10 +2,12 @@
 
 It keeps the images of one fake registry in ``ecr.json`` under the folder named by ``PUSH_IMAGES_FAKE_STATE`` and appends every command to
 ``commands.log``. ``aws ecr describe-images`` answers from that list by tag or by digest and fails with ``ImageNotFoundException`` (exit 254) when
-nothing matches. ``docker push`` adds the pushed tag with the digest in ``PUSH_IMAGES_FAKE_DIGEST`` and refuses a tag that exists, as an immutable
-repository does. Every other docker command succeeds and prints what the plan expects. It decides nothing that the cases prove: whether a plan skips,
-pushes or stops comes only from the shell lines of the plan. It imports nothing from the repository, so it runs with ``python -I
-push_images_fake_cloud.py aws|docker <arguments>``.
+nothing matches. Only a successful ``docker push`` changes the registry: it adds the pushed tag with the digest in ``PUSH_IMAGES_FAKE_DIGEST`` and
+replaces ``ecr.json`` by rename, so a concurrent reader never sees a partial file. A push is refused for a tag that exists, as an immutable
+repository does, and for an image that was not tagged first, as docker does. ``docker login --password-stdin`` reads its input to the end, as docker
+does. ``docker image inspect`` prints ``PUSH_IMAGES_FAKE_PLATFORM`` (default linux/arm64). Every other docker command succeeds.
+It decides nothing that the cases prove: whether a plan skips, pushes or stops comes only from
+the shell lines of the plan. It imports nothing from the repository, so it runs with ``python -I push_images_fake_cloud.py aws|docker <arguments>``.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -57,9 +60,25 @@ def docker(arguments: list[str], images: list[dict[str, str]]) -> int:
             sys.stderr.write("tag invalid: the tag already exists in the repository and the repository is immutable\n")
             return 1
         images.append({"repository": repository, "tag": tag, "digest": os.environ["PUSH_IMAGES_FAKE_DIGEST"]})
+        save(images)
+    elif arguments[:1] == ["login"] and "--password-stdin" in arguments:
+        sys.stdin.read()
     elif arguments[:2] == ["image", "inspect"]:
         sys.stdout.write(os.environ.get("PUSH_IMAGES_FAKE_PLATFORM", "linux/arm64") + "\n")
     return 0
+
+
+def save(images: list[dict[str, str]]) -> None:
+    """Replace the registry file by rename, so that a process that reads it at the same time sees the old or the new file and never a partial one."""
+    registry = Path(os.environ["PUSH_IMAGES_FAKE_STATE"]) / "ecr.json"
+    handle, temporary = tempfile.mkstemp(dir=registry.parent, prefix="ecr.json.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(images))
+        os.replace(temporary, registry)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def main(argv: list[str]) -> int:
@@ -69,9 +88,7 @@ def main(argv: list[str]) -> int:
         log.write(" ".join(argv) + "\n")
     registry = state / "ecr.json"
     images: list[dict[str, str]] = json.loads(registry.read_text(encoding="utf-8"))
-    code = aws(argv[1:], images) if argv[0] == "aws" else docker(argv[1:], images)
-    registry.write_text(json.dumps(images), encoding="utf-8")
-    return code
+    return aws(argv[1:], images) if argv[0] == "aws" else docker(argv[1:], images)
 
 
 if __name__ == "__main__":

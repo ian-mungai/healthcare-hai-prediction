@@ -15,7 +15,7 @@ import json
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -201,10 +201,9 @@ def plan_lines() -> dict[str, bool]:
     }
 
 
-def run_plan(
-    images: list[dict[str, str]], pushed_digest: str, name: str = "openmetadata_server", platform: str = "linux/arm64"
-) -> tuple[int, list[str], list[dict[str, str]]]:
-    """Run the printed plan of one image as shell against the fake registry: the exit code, the commands the stand-in saw and the registry afterwards."""
+@contextlib.contextmanager
+def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "linux/arm64") -> Iterator[tuple[Path, dict[str, str]]]:
+    """A scratch folder with the stand-in ``aws`` and ``docker`` first on a PATH that holds only ``/usr/bin`` and ``/bin`` besides, and a registry."""
     with tempfile.TemporaryDirectory(prefix="push_images_shell_") as directory:
         folder = Path(directory)
         bin_directory = folder / "bin"
@@ -214,14 +213,22 @@ def run_plan(
             shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{Path(fake_cloud.__file__).resolve()}" {command} "$@"\n', encoding="utf-8")
             shim.chmod(0o755)
         (folder / "ecr.json").write_text(json.dumps(images), encoding="utf-8")
-        urls = push_images.repository_urls(repository_urls(folder))
-        (folder / "plan.sh").write_text("\n".join(push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name])) + "\n", encoding="utf-8")
         environment = {
             "PATH": f"{bin_directory}:/usr/bin:/bin",
             "PUSH_IMAGES_FAKE_STATE": str(folder),
             "PUSH_IMAGES_FAKE_DIGEST": pushed_digest,
             "PUSH_IMAGES_FAKE_PLATFORM": platform,
         }
+        yield folder, environment
+
+
+def run_plan(
+    images: list[dict[str, str]], pushed_digest: str, name: str = "openmetadata_server", platform: str = "linux/arm64"
+) -> tuple[int, list[str], list[dict[str, str]]]:
+    """Run the printed plan of one image as shell against the fake registry: the exit code, the commands the stand-in saw and the registry afterwards."""
+    with sandbox(images, pushed_digest, platform) as (folder, environment):
+        urls = push_images.repository_urls(repository_urls(folder))
+        (folder / "plan.sh").write_text("\n".join(push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name])) + "\n", encoding="utf-8")
         result = run_command("sh", ["-e", "plan.sh"], cwd=folder, env=environment, timeout=60)
         commands = (folder / "commands.log").read_text(encoding="utf-8").splitlines()
         registry = json.loads((folder / "ecr.json").read_text(encoding="utf-8"))
@@ -266,6 +273,78 @@ def plan_execution() -> dict[str, bool]:
         "a registry that holds only other digests is not taken for a match": wrong_held[0] == 1 and docker_ran(wrong_held[1], "push"),
         "an image that is not linux/arm64 is not pushed": wrong_platform[0] != 0 and not docker_ran(wrong_platform[1], "push") and wrong_platform[2] == [],
         "no verification reads an image by tag": not any(tag_lookups(result[1]) for result in (held_same, held_other, empty, differs, wrong_held)),
+    }
+
+
+def fingerprint(path: Path) -> tuple[int, int, bytes]:
+    """The inode, the modification time in nanoseconds and the bytes of a file: any rewrite, even with the same content, changes the first two."""
+    status = path.stat()
+    return status.st_ino, status.st_mtime_ns, path.read_bytes()
+
+
+READ_ONLY = """aws ecr get-login-password --profile p --region r | docker login --username AWS --password-stdin registry.example
+aws ecr describe-images --profile p --region r --repository-name {repository} --image-ids imageDigest={digest} >/dev/null
+aws ecr describe-images --profile p --region r --repository-name {repository} --image-ids imageTag=absent >/dev/null 2>&1 || true
+docker pull --platform linux/arm64 {source}
+docker tag {source} registry.example/{repository}:t
+docker image inspect --format x {source} >/dev/null
+"""
+STRESS = """pids=""
+for attempt in $(seq 1 {count}); do
+  (aws ecr get-login-password --profile p --region r | docker login --username AWS --password-stdin registry.example) &
+  pids="$pids $!"
+  (aws ecr describe-images --profile p --region r --repository-name {repository} --image-ids imageDigest={digest} >/dev/null) &
+  pids="$pids $!"
+done
+status=0
+for pid in $pids; do
+  wait "$pid" || status=1
+done
+exit $status
+"""
+STRESS_COUNT = 20
+
+
+def registry_file() -> dict[str, bool]:
+    """The stand-in rewrites the registry file only for a successful push, and then by rename; concurrent logins and lookups never see a partial file."""
+    name = "openmetadata_server"
+    values = {"repository": f"example_project_{name}_dev", "digest": UPSTREAM[name], "source": f"{UPSTREAM_NAME[name]}@{UPSTREAM[name]}"}
+    with sandbox([held(name, "kept")], UPSTREAM[name]) as (folder, environment):
+        registry = folder / "ecr.json"
+        before = fingerprint(registry)
+        (folder / "reads.sh").write_text(READ_ONLY.format(**values), encoding="utf-8")
+        reads = run_command("bash", ["-e", "-o", "pipefail", "reads.sh"], cwd=folder, env=environment, timeout=60)
+        after_reads = fingerprint(registry)
+        (folder / "stress.sh").write_text(STRESS.format(count=STRESS_COUNT, **values), encoding="utf-8")
+        stress = run_command("bash", ["-e", "-o", "pipefail", "stress.sh"], cwd=folder, env=environment, timeout=120)
+        after_stress = fingerprint(registry)
+        logged = (folder / "commands.log").read_text(encoding="utf-8").splitlines()
+    with sandbox([], UPSTREAM[name]) as (folder, environment):
+        registry = folder / "ecr.json"
+        before_push = fingerprint(registry)
+        urls = push_images.repository_urls(repository_urls(folder))
+        (folder / "plan.sh").write_text("\n".join(push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name])) + "\n", encoding="utf-8")
+        pushed = run_command("sh", ["-e", "plan.sh"], cwd=folder, env=environment, timeout=60)
+        after_push = fingerprint(registry)
+        leftovers = sorted(item.name for item in folder.iterdir() if item.name.startswith("ecr.json") and item.name != "ecr.json")
+    with sandbox([held(name, "kept")], UPSTREAM[name]) as (folder, environment):
+        registry = folder / "ecr.json"
+        before_refusal = fingerprint(registry)
+        target = f"registry.example/{values['repository']}:kept"
+        (folder / "refused.sh").write_text(f"docker tag {values['source']} {target}\ndocker push {target}\n", encoding="utf-8")
+        refused = run_command("sh", ["-e", "refused.sh"], cwd=folder, env=environment, timeout=60)
+        after_refusal = fingerprint(registry)
+    return {
+        "a push that ECR refuses for an existing tag fails and leaves the registry file untouched": refused.returncode != 0 and after_refusal == before_refusal,
+        "login, lookup, pull, tag and inspect commands leave the registry file untouched": reads.returncode == 0 and after_reads == before,
+        f"{STRESS_COUNT} concurrent login pipelines and lookups all succeed and leave the registry file untouched": stress.returncode == 0
+        and after_stress == before
+        and sum(line.startswith("aws ecr get-login-password") for line in logged) >= STRESS_COUNT,
+        "a successful push replaces the registry file by rename with the new image in it": pushed.returncode == 0
+        and after_push[0] != before_push[0]
+        and json.loads(after_push[2]) != json.loads(before_push[2])
+        and len(json.loads(after_push[2])) == 1,
+        "a push leaves no temporary file beside the registry file": leftovers == [],
     }
 
 
@@ -395,6 +474,7 @@ CASES: dict[str, Case] = {
     "list_refusals": list_refusals,
     "plan_lines": plan_lines,
     "plan_execution": plan_execution,
+    "registry_file": registry_file,
     "record_flow": record_flow,
     "record_refusals": record_refusals,
     "require_resolved": require_resolved,
