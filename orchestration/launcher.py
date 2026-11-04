@@ -9156,16 +9156,17 @@ class Launcher:
         if restart.get("kind") == "quit":
             self.advance_quit(state, restart, actions)
         elif restart["phase"] == "restart":
-            if "restart:cmd" not in self.inflight:
-                actions.append(lambda: self.spawn("restart:cmd", "restartcmd", self.run_restart_command))
+            command_key = self.operation_key("restart:cmd", restart)
+            if command_key not in self.inflight:
+                actions.append(lambda: self.spawn(command_key, "restartcmd", self.run_restart_command))
         elif restart["phase"] == "wait":
             waited = time.time() - restart.get("started", time.time())
             if waited > self.timings.restart_answer:
                 state["launcher"]["restart"] = None
                 message = f"Docker did not answer within {self.timings.restart_answer:g} s after the restart"
                 actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
-            elif self.status == "serving" and self.docker_ok and "restart:ping" not in self.inflight and waited > 1:
-                actions.append(lambda: self.spawn("restart:ping", "restartping", self.docker.ping))
+            elif self.status == "serving" and self.docker_ok and self.operation_key("restart:ping", restart) not in self.inflight and waited > 1:
+                actions.append(lambda: self.spawn(self.operation_key("restart:ping", restart), "restartping", self.docker.ping))
 
     def run_restart_command(self) -> int:
         """Worker: the restart command of the Docker application."""
@@ -9187,7 +9188,7 @@ class Launcher:
         request_key = ""
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart:
+            if not restart or restart["phase"] != "restart" or key != self.operation_key("restart:cmd", restart):
                 return
             request_key = restart["request"]
             if outcome != "ok":
@@ -9204,7 +9205,7 @@ class Launcher:
         request_key = ""
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart or restart["phase"] != "wait" or self.status != "serving":
+            if not restart or restart["phase"] != "wait" or self.status != "serving" or key != self.operation_key("restart:ping", restart):
                 return
             request_key = restart["request"]
             state["launcher"]["restart"] = None
