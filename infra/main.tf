@@ -127,6 +127,30 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
+  # Saved Terraform plans live under terraform_plans/<stack>/<commit>/ (owner decision D18) and hold values, so they expire quickly: current objects 7 days after they are
+  # written and replaced versions 1 day after. S3 lets a rule carry either days or the delete-marker cleanup, so the markers of expired plans stay, as for Athena results. The
+  # rule follows the flag of the plans prefix, and no other rule covers this prefix.
+  dynamic "rule" {
+    for_each = var.terraform_state_enabled ? [1] : []
+
+    content {
+      id     = "expire_saved_plans"
+      status = "Enabled"
+
+      filter {
+        prefix = "terraform_plans/"
+      }
+
+      expiration {
+        days = 7
+      }
+
+      noncurrent_version_expiration {
+        noncurrent_days = 1
+      }
+    }
+  }
+
   # Athena writes query results here, and they hold rows of the Public research data. Current results expire after 7 days, replaced versions after 1 day. S3 lets
   # a rule carry either days or the delete-marker cleanup, so the markers of expired results stay. The prefix is exact: no other key matches it. The rule changes
   # the live lifecycle configuration, so it exists only while the owner sets athena_retention_enabled; a default plan leaves it out.
