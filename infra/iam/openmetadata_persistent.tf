@@ -29,11 +29,11 @@ variable "openmetadata_bot_token_names" {
 
   validation {
     condition = (
-      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion", "comparison"])
-      && alltrue([for name in values(var.openmetadata_bot_token_names) : length(name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", name)) && !can(regex("^/(?i:aws|ssm)", name))])
-      && length(distinct(values(var.openmetadata_bot_token_names))) == 3
-      && !contains(values(var.openmetadata_bot_token_names), var.openmetadata_admin_password_name)
-      && !contains(values(var.openmetadata_bot_token_names), var.openmetadata_db_password_name)
+      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion", "comparison"]) &&
+      alltrue([for name in values(var.openmetadata_bot_token_names) : length(name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", name)) && !can(regex("^/(?i:aws|ssm)", name))]) &&
+      length(distinct(values(var.openmetadata_bot_token_names))) == 3 &&
+      !contains(values(var.openmetadata_bot_token_names), var.openmetadata_admin_password_name) &&
+      !contains(values(var.openmetadata_bot_token_names), var.openmetadata_db_password_name)
     )
     error_message = "Name exactly the callers lineage, ingestion and comparison, each with its own parameter path of letters, digits and underscores, none equal to another or to the administrator or database password."
   }
