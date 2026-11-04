@@ -409,12 +409,87 @@ def saved_plan(root: Path) -> dict[str, bool]:
     }
 
 
+ADMIN_NAME = secret_store.PREFIX + "openmetadata_admin_password"
+DB_NAME = secret_store.PREFIX + "openmetadata_db_password"
+ADMIN_POLICY = (r"[A-Z]", r"[a-z]", r"[0-9]", r"[^A-Za-z0-9]")
+
+
+def meets_admin_policy(value: str) -> bool:
+    """OpenMetadata's rule for a new administrator password: 8 to 56 characters with upper and lower case letters, a digit and a special character."""
+    return 8 <= len(value) <= 56 and all(re.search(pattern, value) for pattern in ADMIN_POLICY)
+
+
+def openmetadata_passwords(root: Path) -> dict[str, bool]:
+    """The setup creates the catalog's two passwords once, straight into Parameter Store, and a rerun or a partial store changes only what is absent."""
+    from scripts.infrastructure import openmetadata_secrets
+
+    began = time.time() - 1
+    printed = io.StringIO()
+
+    def run(stand_in: StandIn) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+            code = openmetadata_secrets.main(["--root", str(root)], endpoint=stand_in.endpoint)
+        printed.write(buffer.getvalue())
+        return code, buffer.getvalue()
+
+    with StandIn() as fresh:
+        first, first_output = run(fresh)
+        admin, database = fresh.values.get(ADMIN_NAME, ""), fresh.values.get(DB_NAME, "")
+        writes_first = fresh.writes()
+        second, second_output = run(fresh)
+        writes_rerun = fresh.writes()
+        stored_names = set(fresh.values)
+        written_types = {(item["type"], item["tier"]) for item in fresh.writes_seen}
+    with StandIn(values={ADMIN_NAME: "kept-" + os.urandom(6).hex()}) as partial:
+        kept = partial.values[ADMIN_NAME]
+        partial_exit, partial_output = run(partial)
+        partial_changes = [entry for entry in partial.changed() if entry[1] in (ADMIN_NAME, DB_NAME)]
+        partial_db = partial.values.get(DB_NAME, "")
+        partial_admin = partial.values[ADMIN_NAME]
+    with StandIn(denied={"CreateParameter"}) as denied:
+        denied_exit, denied_text = run(denied)
+        denied_values = dict(denied.values)
+    with StandIn() as outside:
+        outside_store = secret_store.open_store(root, outside.endpoint)
+        default_refuses = refusal(lambda: outside_store.put(ADMIN_NAME, "x" * 12))
+        outside_writes = outside.writes()
+    secrets_seen = [value for value in (admin, database, kept, partial_db) if value]
+    return {
+        "a first run exits zero and creates both passwords": first == 0 and bool(admin) and bool(database) and writes_first == 2,
+        "the administrator password meets the OpenMetadata password rule": meets_admin_policy(admin),
+        "the two passwords differ, and the database password is long and holds only letters, digits, dash and underscore": admin != database
+        and re.fullmatch(r"[A-Za-z0-9_-]{32,}", database) is not None,
+        "a rerun exits zero and writes nothing": second == 0 and writes_rerun == writes_first,
+        "only the two catalog names reach the store, as SecureString on the standard tier": stored_names == {ADMIN_NAME, DB_NAME}
+        and written_types == {("SecureString", "Standard")},
+        "a store that holds one password keeps it and creates only the other": partial_exit == 0
+        and partial_admin == kept
+        and partial_changes == [("CreateParameter", DB_NAME)]
+        and bool(partial_db),
+        "a missing create permission fails visibly, names the secret and creates nothing": denied_exit != 0
+        and ADMIN_NAME in denied_text
+        and "creating" in denied_text
+        and not denied_values,
+        "the default store still refuses to write a catalog name": default_refuses is not None and outside_writes == 0,
+        "the output names each secret as created, then as present, and shows no value": f"{ADMIN_NAME}: created" in first_output
+        and f"{DB_NAME}: created" in first_output
+        and f"{ADMIN_NAME}: present" in second_output
+        and f"{DB_NAME}: present" in second_output
+        and f"{ADMIN_NAME}: present" in partial_output
+        and f"{DB_NAME}: created" in partial_output
+        and not any(value in printed.getvalue() for value in secrets_seen),
+        "no file under the scratch folder or the repository holds a password": not files_holding(secrets_seen, [Path(tempfile.gettempdir()), root], began),
+    }
+
+
 CASES: dict[str, Case] = {
     "store_behaviour": store_behaviour,
     "store_races": store_races,
     "store_deadline": store_deadline,
     "terraform_names": terraform_names,
     "saved_plan": saved_plan,
+    "openmetadata_passwords": openmetadata_passwords,
 }
 
 

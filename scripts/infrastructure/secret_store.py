@@ -198,15 +198,18 @@ def project_settings(root: Path) -> dict[str, str]:
 class SecretStore:
     """The managed secrets through one Parameter Store client; the shared API keys, read only, through a Secrets Manager client made on first use."""
 
-    def __init__(self, parameters: Any, shared: Callable[[], Any] | None = None) -> None:
+    def __init__(self, parameters: Any, shared: Callable[[], Any] | None = None, writable: tuple[str, ...] = ()) -> None:
         self.parameters = parameters
         self.shared = shared
         self.shared_client: Any = None
+        self.writable = writable
 
-    @staticmethod
-    def check(name: str, write: bool = False) -> None:
-        """Refuse a name outside the allowed set before a request: the 16 managed names for a write, with the read-only and shared names for a read."""
-        allowed = MANAGED if write else (*MANAGED, *READ_ONLY, *SHARED)
+    def check(self, name: str, write: bool = False) -> None:
+        """Refuse a name outside the allowed set before a request.
+
+        A write takes the managed names and the extra names that this store was opened for; a read also takes the read-only and shared names.
+        """
+        allowed = (*MANAGED, *self.writable) if write else (*MANAGED, *self.writable, *READ_ONLY, *SHARED)
         if name not in allowed:
             raise SecretStoreError(f"{name} is not a managed secret name")
 
@@ -363,8 +366,11 @@ def client_config() -> Config:
     return Config(**CLIENT_OPTIONS)
 
 
-def open_store(root: Path, endpoint: str | None = None) -> SecretStore:
-    """The store for the project profile and region; ``endpoint`` is a loopback stand-in that only a test registry names."""
+def open_store(root: Path, endpoint: str | None = None, writable: tuple[str, ...] = ()) -> SecretStore:
+    """The store for the project profile and region; ``endpoint`` is a loopback stand-in that only a test registry names.
+
+    ``writable`` adds names that only one setup script writes, such as the catalog passwords; a store opened without it refuses to write them.
+    """
     import boto3
 
     settings = {"aws_profile": "", "aws_region": "us-west-2"} if endpoint else project_settings(root)
@@ -374,11 +380,12 @@ def open_store(root: Path, endpoint: str | None = None) -> SecretStore:
     try:
         if endpoint is None:
             session = boto3.Session(profile_name=settings["aws_profile"], region_name=settings["aws_region"])
-            return SecretStore(session.client("ssm", config=config), lambda: session.client("secretsmanager", config=config))
+            return SecretStore(session.client("ssm", config=config), lambda: session.client("secretsmanager", config=config), writable)
         session = boto3.Session(aws_access_key_id=STAND_IN_CREDENTIAL, aws_secret_access_key=STAND_IN_CREDENTIAL, region_name=settings["aws_region"])
         return SecretStore(
             session.client("ssm", config=config, endpoint_url=endpoint),
             lambda: session.client("secretsmanager", config=config, endpoint_url=endpoint),
+            writable,
         )
     except (BotoCoreError, ValueError) as error:
         raise SecretStoreError(f"setting up the Parameter Store client failed: {type(error).__name__}") from None
