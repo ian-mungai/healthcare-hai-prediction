@@ -16,8 +16,10 @@ from __future__ import annotations
 import io
 import json
 import logging
+import queue
 import secrets
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,6 +45,9 @@ class Loopback(ThreadingHTTPServer):
 
     marker: str
     calls: list[str]
+    gated: bool = False
+    arrivals: list[threading.Event]
+    arrived: threading.Semaphore
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -65,6 +70,12 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(body or "{}")
             name = str(request.get("SecretId") or request.get("Name") or "")
             server.calls.append(target.rpartition(".")[2])
+            if server.gated:
+                # The caller is inside its guard: hold the answer until the case releases this arrival, so the order of the answers is the case's.
+                gate = threading.Event()
+                server.arrivals.append(gate)
+                server.arrived.release()
+                gate.wait(30)
             if target.endswith("GetSecretValue"):
                 answer: dict[str, Any] = {"Name": name, "VersionId": "v1", "SecretString": server.marker, "VersionStages": ["AWSCURRENT"]}
             else:
@@ -82,11 +93,14 @@ class Handler(BaseHTTPRequestHandler):
 def loopback(marker: str) -> Iterator[Loopback]:
     server = Loopback(("127.0.0.1", 0), Handler)
     server.marker, server.calls = marker, []
+    server.arrivals, server.arrived = [], threading.Semaphore(0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield server
     finally:
+        for gate in server.arrivals:
+            gate.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=10)
@@ -224,3 +238,99 @@ def test_protection_keeps_a_higher_disable_level_and_restores_after_a_failure() 
     with sdk_logs.quiet_sdk_logs():
         check(logging.root.manager.disable >= logging.DEBUG, "the protection must switch DEBUG off")
     check(logging.root.manager.disable == logging.NOTSET, "the protection must switch logging back on")
+
+
+OVERLAPS = {
+    "task key and shared store": (read_task_key, read_shared_key_store),
+    "pseudonym key and parameter store": (read_pseudonym_key, read_parameter_store),
+    "two task keys": (read_task_key, read_task_key),
+}
+
+
+@pytest.mark.parametrize("pair", sorted(OVERLAPS))
+def test_overlapping_secret_reads_log_no_value_and_restore_logging(pair: str, tmp_path: Path) -> None:
+    """Two real reads are inside their guards together and the first answer arrives and returns while the second is still waiting for its own.
+
+    The second answer must not be logged, logging must stay off while the second read is active and logging must be back on after both end.
+    """
+    marker = "marker" + secrets.token_hex(16)
+    readers = OVERLAPS[pair]
+    values: dict[str, str] = {}
+    done: queue.Queue[str] = queue.Queue()
+
+    def run(label: str, reader: Callable[[Loopback, Path], str], server: Loopback) -> None:
+        folder = tmp_path / label
+        folder.mkdir()
+        values[label] = reader(server, folder)
+        done.put(label)
+
+    with loopback(marker) as server, debug_logging() as captured:
+        server.gated = True
+        threads = [threading.Thread(target=run, args=(f"reader_{index}", reader, server), daemon=True) for index, reader in enumerate(readers)]
+        for thread in threads:
+            # One at a time, so the first reader to enter its guard is the first arrival and the first to be released.
+            thread.start()
+            check(server.arrived.acquire(timeout=20), "each read must reach the server while inside its guard")
+        server.arrivals[0].set()
+        done.get(timeout=20)
+        while_second_waits = logging.root.manager.disable
+        server.arrivals[1].set()
+        done.get(timeout=20)
+        for thread in threads:
+            thread.join(timeout=20)
+        after_both = logging.root.manager.disable
+    check(while_second_waits >= logging.DEBUG, f"{pair}: the first reader left while the second was active and switched logging back on")
+    check(sorted(values.values()) == [marker, marker], f"{pair}: both reads must return the value")
+    check(marker not in captured.text(), f"{pair}: the second read's response was logged")
+    check(after_both == logging.NOTSET, f"{pair}: logging stays disabled after both reads end (disable={after_both})")
+
+
+def test_nested_and_threaded_guards_restore_only_when_the_last_one_leaves() -> None:
+    logging.disable(logging.NOTSET)
+    inside: list[int] = []
+    with sdk_logs.quiet_sdk_logs():
+        with sdk_logs.quiet_sdk_logs():
+            inside.append(logging.root.manager.disable)
+        inside.append(logging.root.manager.disable)
+        worker = threading.Thread(target=lambda: inside.append(_enter_and_read_level()))
+        worker.start()
+        worker.join(timeout=10)
+        inside.append(logging.root.manager.disable)
+    check(all(level >= logging.DEBUG for level in inside), f"logging stays off until the last guard leaves: {inside}")
+    check(logging.root.manager.disable == logging.NOTSET, "the last guard to leave restores the level the first one saw")
+    with pytest.raises(RuntimeError), sdk_logs.quiet_sdk_logs(), sdk_logs.quiet_sdk_logs():
+        raise RuntimeError("read failed")
+    check(logging.root.manager.disable == logging.NOTSET, "an exception inside nested guards still restores the level")
+
+
+def _enter_and_read_level() -> int:
+    with sdk_logs.quiet_sdk_logs():
+        return logging.root.manager.disable
+
+
+def test_readers_entering_together_save_the_level_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without one lock around the first entry, a reader that arrives just after the first one raised the threshold saves that raised level as its own.
+
+    The switch call is slowed after it has taken effect, so a second and a third reader arrive inside that window. Every reader must find the guard held,
+    and the level after all of them leave must be the level before the first one entered.
+    """
+    original = logging.disable
+
+    def slow_disable(level: int = logging.CRITICAL) -> None:
+        original(level)
+        time.sleep(0.05)
+
+    logging.disable(logging.NOTSET)
+    monkeypatch.setattr(logging, "disable", slow_disable)
+    threads = [threading.Thread(target=_hold_the_guard, daemon=True) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    monkeypatch.setattr(logging, "disable", original)
+    check(logging.root.manager.disable == logging.NOTSET, f"readers that entered together left the threshold at {logging.root.manager.disable}")
+
+
+def _hold_the_guard() -> None:
+    with sdk_logs.quiet_sdk_logs():
+        time.sleep(0.2)
