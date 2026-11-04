@@ -399,7 +399,7 @@ run "state_prefix_rule_expires_replaced_versions_only" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
       alltrue([
         for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
         one(rule.filter).prefix == "terraform_state/" &&
@@ -417,7 +417,7 @@ run "state_prefix_rule_expires_replaced_versions_only" {
       for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
       (length(rule.expiration) == 0 || one(rule.expiration).expired_object_delete_marker == true) &&
       (length(rule.noncurrent_version_expiration) == 0 || one(rule.filter).prefix != "")
-      if rule.id != "expire_replaced_state_versions"
+      if !contains(["expire_replaced_state_versions", "expire_saved_plans"], rule.id)
     ])
     error_message = "No other rule may expire a current object, and no other rule may expire versions of the whole bucket."
   }
@@ -772,5 +772,67 @@ run "the_plan_role_can_only_save_plans" {
       join(",", tolist(statement.Condition.ArnLike["aws:PrincipalArn"])) == "arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev"
     ])
     error_message = "The plan role puts objects under terraform_plans/ and may not read, list or delete there, so one pull request cannot read another job's plan."
+  }
+}
+
+# Saved plans (D18, owner answer on retention): a saved plan holds values, so current objects expire after 7 days and replaced versions after 1 day. The rule
+# follows the flag of the plans prefix, and every other rule stays as it was.
+run "saved_plans_expire_after_seven_days_and_replaced_versions_after_one" {
+  command = plan
+
+  variables {
+    terraform_state_enabled          = true
+    terraform_state_admin_principals = ["role/example_admin"]
+  }
+
+  assert {
+    condition = (
+      length([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_saved_plans"]) == 1 &&
+      alltrue([
+        for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+        rule.status == "Enabled" &&
+        one(rule.filter).prefix == "terraform_plans/" &&
+        one(rule.expiration).days == 7 &&
+        one(rule.noncurrent_version_expiration).noncurrent_days == 1 &&
+        length(rule.abort_incomplete_multipart_upload) == 0
+        if rule.id == "expire_saved_plans"
+      ])
+    )
+    error_message = "Saved plans expire 7 days after they are written and their replaced versions 1 day after, under terraform_plans/ only."
+  }
+
+  assert {
+    condition = (
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset([
+        "abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_replaced_state_versions", "expire_saved_plans"
+      ])
+    )
+    error_message = "The saved plans rule is added to the existing rules and replaces none."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      one(rule.filter).prefix != "terraform_plans/"
+      if rule.id != "expire_saved_plans" && rule.id != "abort_incomplete_uploads"
+    ])
+    error_message = "No other rule may cover the saved plans prefix."
+  }
+
+  assert {
+    condition = (
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : one(rule.noncurrent_version_expiration).noncurrent_days == 30 if rule.id == "expire_replaced_lakehouse_versions"]) &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : one(rule.noncurrent_version_expiration).noncurrent_days == 90 if rule.id == "expire_replaced_state_versions"])
+    )
+    error_message = "The lakehouse (30 days) and state (90 days) rules are unchanged."
+  }
+}
+
+run "saved_plans_rule_is_off_without_the_state_flag" {
+  command = plan
+
+  assert {
+    condition     = length([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_saved_plans"]) == 0
+    error_message = "With the flag off the lifecycle configuration stays as it was."
   }
 }
