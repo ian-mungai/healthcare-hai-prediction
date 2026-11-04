@@ -3611,6 +3611,50 @@ def mlflow_stale_stop(env: Env) -> dict[str, bool]:
     return stale_result_checks(env, f"{launcher.LABEL_STACK}={mlflow_service.STACK}", begin_older, begin_newer, "mlflow")
 
 
+@case("mlflow_stop_overlap")
+def mlflow_stop_overlap(env: Env) -> dict[str, bool]:
+    """Only one MLflow stop worker runs at a time. The first stop worker is late (the fake daemon holds its container listing) when the teardown passes its
+    deadline and the owner asks for the shutdown again. The retry must wait for that worker and must not publish down while it runs; a network of a newer start
+    that appears once the stack is down must survive the late worker, which would otherwise list networks by the shared stack label and remove it."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    label = f"{launcher.LABEL_STACK}={mlflow_service.STACK}"
+
+    def stack_listing(context: dict[str, Any]) -> bool:
+        return label in context["labels"]
+
+    older_gate = env.daemon.add_gate("list", "after", match=stack_listing)
+    write_launcher_record(env, "mlflow", {"phase": "tearing_down", "services": {}, "error": "", "stop_deadline": time.time() + 120})
+    older_running = older_gate.wait_reached(15)
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        state["launcher"]["mlflow"]["stop_deadline"] = time.time() - 1
+    env.wait(lambda: record_phase(env, "mlflow") == "cleanup_failed", 10, "the older teardown has passed its deadline")
+    client.call("mlflow_down", {"owner": True}, owner)
+    down_while_older_runs = False
+    with contextlib.suppress(CaseFailure):
+        down_while_older_runs = bool(env.wait(lambda: record_phase(env, "mlflow") == "down", 4, "down while the older stop worker is held"))
+    if not down_while_older_runs:
+        older_gate.release()
+        env.wait(lambda: record_phase(env, "mlflow") == "down", 15, "the retry is down once the older stop worker returned")
+    network = os.urandom(16).hex()
+    env.daemon.networks[network] = {
+        "Id": network,
+        "Name": "network-of-a-newer-start",
+        "Labels": {launcher.LABEL_REGISTRY: env.registry_id(), launcher.LABEL_STACK: mlflow_service.STACK},
+        "Internal": True,
+    }
+    older_gate.release()
+    time.sleep(2)
+    return {
+        "the older stop worker was running": older_running,
+        "the retry does not publish down while the older stop worker runs": not down_while_older_runs,
+        "the retry is down once the older stop worker returned": record_phase(env, "mlflow") == "down",
+        "the network of a newer start survives the older stop worker": network in env.daemon.networks,
+    }
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -10471,6 +10515,7 @@ ALL_CASES = (
     lineage_stale_confirm,
     online_store_stale_confirm,
     mlflow_stale_stop,
+    mlflow_stop_overlap,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,
