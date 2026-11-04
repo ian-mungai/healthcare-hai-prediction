@@ -494,6 +494,45 @@ def openmetadata_passwords(root: Path) -> dict[str, bool]:
     }
 
 
+def model_api_redis_password(root: Path) -> dict[str, bool]:
+    """The tool for the model API's Redis user password writes it once into Parameter Store, prints and keeps it nowhere, and never overwrites it."""
+    from scripts.infrastructure import create_model_api_redis_password as tool
+
+    began = time.time() - 1
+    name = secret_store.MODEL_API_REDIS_PASSWORD
+    first, second, denied_text = io.StringIO(), io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory(prefix="redis_password_cases_") as scratch, StandIn(shared={}) as stand_in:
+        with contextlib.redirect_stdout(first), contextlib.redirect_stderr(first):
+            code_first = tool.run(root, stand_in.endpoint)
+        stored = stand_in.values.get(name, "")
+        writes_first = stand_in.writes()
+        with contextlib.redirect_stdout(second), contextlib.redirect_stderr(second):
+            code_second = tool.run(root, stand_in.endpoint)
+        stand_in.values[name] = "kept-" + os.urandom(4).hex()
+        kept = stand_in.values[name]
+        with contextlib.redirect_stdout(second), contextlib.redirect_stderr(second):
+            tool.run(root, stand_in.endpoint)
+        unchanged_after_rerun = stand_in.values[name] == kept and stand_in.writes() == writes_first
+        del stand_in.values[name]
+        stand_in.denied.add("CreateParameter")
+        with contextlib.redirect_stdout(denied_text), contextlib.redirect_stderr(denied_text):
+            code_denied = tool.run(root, stand_in.endpoint)
+        stand_in.denied.clear()
+        written_types = {(item["type"], item["tier"]) for item in stand_in.writes_seen}
+        leaked_files = files_holding([stored], [Path(scratch), root / "data"], began) if stored else ["unchecked"]
+    printed = first.getvalue() + second.getvalue() + denied_text.getvalue()
+    return {
+        "the first run creates the parameter and exits 0": code_first == 0 and bool(stored) and writes_first == 1,
+        "the generated password is long and random": len(stored) >= 32 and stored == stored.strip() and tool.secret_store.is_fernet_key(stored) is False,
+        "it is a SecureString on the standard tier": written_types == {("SecureString", "Standard")},
+        "a second run exits 0, changes nothing and says so": code_second == 0 and "already exists" in second.getvalue() and unchanged_after_rerun,
+        "a denied create exits 1 and names the secret": code_denied == 1 and name in denied_text.getvalue(),
+        "no output holds the value": bool(stored) and stored not in printed and kept not in printed,
+        "no file written since the run holds the value": leaked_files == [],
+        "the tool names exactly the model API Redis parameter": tool.NAME == name == secret_store.PREFIX + "model_api_redis_password",
+    }
+
+
 CASES: dict[str, Case] = {
     "store_behaviour": store_behaviour,
     "store_races": store_races,
@@ -501,6 +540,7 @@ CASES: dict[str, Case] = {
     "terraform_names": terraform_names,
     "saved_plan": saved_plan,
     "openmetadata_passwords": openmetadata_passwords,
+    "model_api_redis_password": model_api_redis_password,
 }
 
 

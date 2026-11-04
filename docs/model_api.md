@@ -62,6 +62,16 @@ Each identified key has a token bucket held in the process. The defaults are 60 
 
 The service follows the serving read contract of the online feature store (`scripts/features/serving_contract_client.py`). It reads the Redis marker, then the features of the model, then the marker again. It answers 503 if the marker is not ready, holds another schema hash than the model was trained with or changed during the read. It answers 404 when the hospital-window was never written. Every Redis call has a one second timeout and none is retried. A feature that the store does not answer gives 503 and no partial prediction. A requested view whose row is absent (no event time) gives 503, because an absent row is not a value published as null. A value published as null reaches the model as NaN. The model's own preprocessing decides.
 
+## Redis user
+
+On AWS the API does not use the shared Redis password. It logs in as its own Redis user, `model_api`, which the Redis task creates at start from a password of its own, the Parameter Store parameter `/healthcare_hai_prediction/model_api_redis_password`. The user may run only the read commands the serving client sends (HMGET, HGET, HGETALL, EXISTS, PING and the connection commands) and may select databases 1 (the Feast hashes) and 2 (the marker). A connection starts in database 0, which a Redis ACL cannot refuse. Nothing is stored there. The user cannot write it. The serving execution role reads this one Redis parameter. It never reads the shared `redis_password`.
+
+The owner creates the parameter once, before the services stack runs with the model API on. The tool generates the value in memory and writes it as a SecureString. It prints and keeps the value nowhere. A rerun changes nothing:
+
+```bash
+.venv/bin/python -m scripts.infrastructure.create_model_api_redis_password
+```
+
 ## Two versions in one process
 
 A deployment record names the stable version, at most one canary version and the canary's share. The stable version is the production alias at the time of the deploy. The service keeps both models in memory for each served HAI type.
