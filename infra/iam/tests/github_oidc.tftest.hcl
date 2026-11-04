@@ -1068,3 +1068,20 @@ run "the_delivery_boundary_allows_registering_and_passing_for_the_serving_tasks_
     error_message = "The deploy role's registration and PassRole must be allowed by the boundary, or the boundary refuses them."
   }
 }
+
+run "each_delivery_policy_is_attached_to_its_own_role" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.github["image_push"].role == "example_project_gh_image_push_dev" &&
+      aws_iam_role_policy.github["deploy"].role == "example_project_gh_deploy_dev" &&
+      aws_iam_role_policy.github["terraform_plan"].role == "example_project_gh_terraform_plan_dev"
+    )
+    error_message = "The push, deploy and plan policies are attached to the push, deploy and plan roles, each to its own and to no other."
+  }
+}

@@ -150,6 +150,20 @@ check "render refuses a service that is not served" render_refusal airflow "$dig
 check "render refuses a definition whose container is not named for the service" test "$(printf '%s' "$(vary model_api '.containerDefinitions[0].name = "other"')" | bash "$script" render model_api "$digest" > /dev/null 2>&1 && echo 0 || echo $?)" = 1
 check "render keeps a foreign secret so that the check can refuse it" test "$(printf '%s' "$(vary model_api '.containerDefinitions[0].secrets += [{name: "X", valueFrom: env.V}]' "$(parameter /healthcare_hai_prediction/redis_password)")" | bash "$script" render model_api "$digest" 2> /dev/null | bash "$script" check model_api > /dev/null 2>&1 && echo 0 || echo $?)" = 1
 
+# --- a definition file in place of standard input -------------------------------------------------------------------------------------------------
+file_scratch="$(mktemp -d)"
+trap 'rm -r "$file_scratch"' EXIT
+printf '%s' "$good_api" > "$file_scratch/good.json"
+printf '%s' "$(vary model_api '.taskRoleArn = env.V' "$(role example_project_task_execution_dev)")" > "$file_scratch/bad.json"
+file_accepted() { bash "$script" "$@" > /dev/null 2>&1 < /dev/null; }
+check "check reads a definition file" file_accepted check model_api "$file_scratch/good.json"
+file_refusal() { local code=0; bash "$script" "$@" > /dev/null 2>&1 < /dev/null || code=$?; [[ "$code" -eq 1 ]]; }
+check "check refuses a definition file that names another role" file_refusal check model_api "$file_scratch/bad.json"
+check "check refuses a definition file that does not exist" file_refusal check model_api "$file_scratch/absent.json"
+check "check ignores standard input when it is given a file" test "$(printf '%s' "$(vary model_api '.family = env.V' other)" | bash "$script" check model_api "$file_scratch/good.json" > /dev/null 2>&1 && echo 0 || echo $?)" = 0
+check "render reads a definition file" test "$(bash "$script" render model_api "$digest" "$file_scratch/good.json" 2> /dev/null < /dev/null | jq -r '.containerDefinitions[0].image')" = "$registry/example_project_model_api_dev@$digest"
+check "render refuses a definition file that does not exist" file_refusal render model_api "$digest" "$file_scratch/absent.json"
+
 # --- the configuration ------------------------------------------------------------------------------------------------------------------------
 check "the configuration names exactly the two serving services" test "$(jq -r '.services | keys | join(",")' "$config")" = "model_api,streamlit"
 check "the configuration names no control-plane parameter" test "$(jq -r '[.services[].parameters[]] | map(select(test("postgres|/redis_password$|airflow|marquez|polaris_root|mlflow_db|mlflow_admin|broker|grafana"))) | length' "$config")" = "0"

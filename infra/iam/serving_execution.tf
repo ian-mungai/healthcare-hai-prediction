@@ -16,7 +16,7 @@ resource "aws_iam_role_policy" "serving_execution" {
   count = var.model_api_prepared ? 1 : 0
 
   name = "serving_execution"
-  role = aws_iam_role.serving_execution[0].id
+  role = aws_iam_role.serving_execution[0].name
   policy = templatefile("${path.module}/owner_policies/serving_execution.json", merge(local.owner_policy_values, {
     MODEL_API_KEY_HASHES_NAME              = var.model_api_key_hashes_name
     AWS_POLARIS_SERVING_CLIENT_ID_NAME     = var.aws_polaris_serving_client_id_name

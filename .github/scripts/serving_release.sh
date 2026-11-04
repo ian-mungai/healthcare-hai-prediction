@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Model releases (owner decision D18): GitHub registers new serving task definition revisions itself. Two modes, both reading a task definition on standard input:
-#   render <service> <digest>   Reads the running revision, as "aws ecs describe-task-definition --query taskDefinition" prints it, and prints the registration input
+# Model releases (owner decision D18): GitHub registers new serving task definition revisions itself. Two modes, both reading a task definition from the file named last or from standard input:
+#   render <service> <digest> [file]   Reads the running revision, as "aws ecs describe-task-definition --query taskDefinition" prints it, and prints the registration input
 #                               for the next one: the read-only fields dropped, the image of the container named for the service set to the project repository at
 #                               <digest>, the execution role set to the dedicated serving execution role and the Project tag that the deploy role's registration requires.
-#   check <service>             Exits 1 unless the definition names only what the serving tasks may use: the family of the service, its task role, the serving
+#   check <service> [file]      Exits 1 unless the definition names only what the serving tasks may use: the family of the service, its task role, the serving
 #                               execution role, images of its own repository pinned by digest, and secrets from its own list of Parameter Store parameters (config/aws/serving_release.json).
 #                               It also refuses registry credentials, environment files and secret log options, which name other stores. It reads the definition
 #                               bare or wrapped as {"taskDefinition": ...}, so the same check covers the definition before it is registered and the revision after.
@@ -41,7 +41,14 @@ repository_name="${project}_${repository}_${environment}"
 parameter_prefix="arn:aws:ssm:$region:$account:parameter"
 allowed_parameters="$(jq -c --arg service "$service" --arg prefix "$parameter_prefix" '[.services[$service].parameters[] | $prefix + .]' "$config")"
 
-definition="$(cat)"
+# The definition comes from the file named last, or from standard input when none is named.
+if [[ "$mode" == render ]]; then input_file="${4:-}"; else input_file="${3:-}"; fi
+if [[ -n "$input_file" ]]; then
+  [[ -f "$input_file" ]] || refuse "The definition file does not exist."
+  definition="$(cat "$input_file")"
+else
+  definition="$(cat)"
+fi
 [[ -n "$definition" ]] || refuse "No task definition was given."
 definition="$(printf '%s' "$definition" | jq -c 'if type == "object" and has("taskDefinition") then .taskDefinition else . end')" || refuse "The task definition is not JSON."
 

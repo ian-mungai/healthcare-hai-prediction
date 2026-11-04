@@ -160,3 +160,19 @@ run "the_serving_execution_role_pulls_two_images_and_writes_two_log_streams" {
     error_message = "The role pulls the model API and dashboard images and writes only their own log streams, in the shared log group that the services stack gives them. The shared role's project-wide patterns are not used."
   }
 }
+
+# A policy that is right but attached to another role is a grant to the wrong principal, so the target is asserted by its literal name.
+run "the_serving_execution_policy_is_attached_to_the_serving_execution_role" {
+  command = plan
+
+  variables {
+    model_api_prepared        = true
+    model_api_registry_key    = "lakehouse/feast/registry.pb"
+    model_api_manifest_prefix = "serving/deployments"
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.serving_execution[0].role == "example_project_serving_execution_dev" && aws_iam_role.serving_execution[0].name == "example_project_serving_execution_dev"
+    error_message = "The serving execution policy is attached to the serving execution role and to no other role."
+  }
+}

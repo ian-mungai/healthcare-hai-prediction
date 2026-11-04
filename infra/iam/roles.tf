@@ -154,7 +154,7 @@ resource "aws_iam_role_policy" "task_execution_model_api" {
   count = var.model_api_prepared ? 1 : 0
 
   name = "task_execution_model_api"
-  role = aws_iam_role.task_execution.id
+  role = aws_iam_role.task_execution.name
   policy = templatefile("${path.module}/owner_policies/task_execution_model_api.json", merge(local.owner_policy_values, {
     MODEL_API_KEY_HASHES_NAME              = var.model_api_key_hashes_name
     AWS_POLARIS_SERVING_CLIENT_ID_NAME     = var.aws_polaris_serving_client_id_name
@@ -171,7 +171,7 @@ resource "aws_iam_role_policy" "task_execution_redis_acl" {
   count = var.model_api_prepared ? 1 : 0
 
   name = "task_execution_redis_acl"
-  role = aws_iam_role.task_execution.id
+  role = aws_iam_role.task_execution.name
   policy = templatefile("${path.module}/owner_policies/task_execution_redis_acl.json", merge(local.owner_policy_values, {
     MODEL_API_REDIS_PASSWORD_NAME = var.model_api_redis_password_name
   }))
