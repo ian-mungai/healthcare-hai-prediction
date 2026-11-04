@@ -9743,9 +9743,11 @@ class Launcher:
                 if attempt is not None and is_open(attempt):
                     attempt["cancel_intent"] = attempt["cancel_intent"] or {"reason": "mlflow_down", "at": utc_now()}
                     return
-            stop_key = self.mlflow_stop_key(stack)
-            if stop_key not in self.inflight:
-                actions.append(partial(self.spawn, stop_key, "mlflow_stop", self.remove_mlflow_shared))
+            # One stop worker at a time: it lists and removes by the shared stack label, so a second worker (a retry's, while an earlier one is late) could
+            # remove the networks of a start that follows the retry's down. The retry waits for the running worker, within its stop deadline; the key only tells
+            # whose result it is.
+            if not any(key.startswith("mlflow:stop:") for key in self.inflight):
+                actions.append(partial(self.spawn, self.mlflow_stop_key(stack), "mlflow_stop", self.remove_mlflow_shared))
 
     def expire_mlflow_startup(self) -> None:
         """Record startup or cleanup expiry even while the Docker connection is unavailable."""
