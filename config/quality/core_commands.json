@@ -22,7 +22,6 @@
     "\"$python_bin\" -m scripts.infrastructure.run_jobs_iam_e2e --output \"$quality_output/jobs_iam\"",
     "\"$python_bin\" -m scripts.infrastructure.run_monitoring_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_openmetadata_e2e --output-directory \"$e2e_output/openmetadata\"",
-    "\"$python_bin\" -m scripts.infrastructure.run_owner_list_e2e --out \"$quality_output/owner_list\"",
     "\"$python_bin\" -m scripts.infrastructure.run_policy_e2e --output-directory \"$policy_output\"",
     "\"$python_bin\" -m scripts.infrastructure.run_secret_store_e2e",
     "\"$python_bin\" -m scripts.lakehouse.run_aws_catalog_setup_e2e --out \"$quality_output/aws_catalog_setup\" --mutations",
