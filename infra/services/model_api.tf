@@ -124,6 +124,22 @@ variable "model_api_writer_client_credential_name" {
   }
 }
 
+variable "model_api_redis_password_name" {
+  description = "Parameter Store SecureString name of the password of the read-only Redis user the model API reads the Feast online store with (D18). The Redis task creates the user from it. The shared Redis password stays with the control plane."
+  type        = string
+  default     = "/healthcare_hai_prediction/model_api_redis_password"
+
+  validation {
+    condition     = length(var.model_api_redis_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.model_api_redis_password_name)) && !can(regex("^/(?i:aws|ssm)", var.model_api_redis_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+
+  validation {
+    condition     = var.model_api_redis_password_name != var.redis_password_name
+    error_message = "The model API's Redis user has a password of its own: the shared Redis password stays with the control plane."
+  }
+}
+
 variable "model_api_mlflow_user_name" {
   description = "Parameter Store SecureString name of the MLflow login the API uses to read model versions."
   type        = string
@@ -155,6 +171,7 @@ locals {
     model_api_writer_credential = var.model_api_writer_client_credential_name
     model_api_mlflow_user       = var.model_api_mlflow_user_name
     model_api_mlflow_credential = var.model_api_mlflow_credential_name
+    model_api_redis_password    = var.model_api_redis_password_name
   } : {}
 
   model_api_environment = {
@@ -175,6 +192,7 @@ locals {
     MODEL_API_RATE_PER_MINUTE       = tostring(var.model_api_rate_per_minute)
     POLARIS_URI                     = "http://127.0.0.1:8181/api/catalog"
     PYTHONDONTWRITEBYTECODE         = "1"
+    REDIS_USERNAME                  = "model_api"
     TMPDIR                          = "/tmp"
   }
 
@@ -194,7 +212,7 @@ locals {
         { name = "POLARIS_CLIENT_SECRET", valueFrom = local.secret_arn["model_api_writer_credential"] },
         { name = "MLFLOW_TRACKING_USERNAME", valueFrom = local.secret_arn["model_api_mlflow_user"] },
         { name = "MLFLOW_TRACKING_PASSWORD", valueFrom = local.secret_arn["model_api_mlflow_credential"] },
-        { name = "REDIS_PASSWORD", valueFrom = local.secret_arn["redis_password"] },
+        { name = "REDIS_PASSWORD", valueFrom = local.secret_arn["model_api_redis_password"] },
       ]
       portMappings = [{ containerPort = local.model_api_port, hostPort = local.model_api_port, protocol = "tcp" }]
       linuxParameters = {
