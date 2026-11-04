@@ -490,11 +490,10 @@ run "every_other_principal_is_denied_the_state_prefix" {
       join(",", sort(tolist(statement.Condition.ArnNotLike["aws:PrincipalArn"]))) == join(",", sort([
         "arn:aws:iam::111111111111:user/example_project_dev",
         "arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev",
-        "arn:aws:iam::111111111111:role/example_project_gh_terraform_apply_dev",
         "arn:aws:iam::111111111111:role/example_admin"
       ]))
     ])
-    error_message = "Only the project user, the two Terraform CI roles and the named administrator may touch terraform_state/. Every lakehouse, job, feature and Athena principal is denied by name-free exclusion."
+    error_message = "Only the project user, the Terraform plan role and the named administrator may touch terraform_state/. Every lakehouse, job, feature and Athena principal is denied by name-free exclusion."
   }
 
   assert {
@@ -503,9 +502,9 @@ run "every_other_principal_is_denied_the_state_prefix" {
       statement.Sid == "DenyIamStateToProjectIdentities" &&
       statement.Effect == "Deny" &&
       join(",", tolist(statement.Resource)) == "arn:aws:s3:::example-project-ci-bucket/terraform_state/iam/*" &&
-      length(statement.Condition.ArnLike["aws:PrincipalArn"]) == 3
+      length(statement.Condition.ArnLike["aws:PrincipalArn"]) == 2
     ])
-    error_message = "The project user and the two CI roles must be denied the iam stack's state."
+    error_message = "The project user and the plan role must be denied the iam stack's state."
   }
 }
 

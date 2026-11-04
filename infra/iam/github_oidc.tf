@@ -2,31 +2,31 @@
 # below has no instance, so the stack plans no change. The owner applies it with the administrator profile like every other
 # role of this stack, because the project profile may not create roles.
 #
-# Four roles, one per purpose. Each trusts one exact web identity subject of the one repository, with no pattern:
+# Three roles, one per purpose. Each trusts one exact web identity subject of the one repository, with no pattern:
 #   image_push       environment image-push           pushes images to the project repositories
-#   deploy           environment model-api-deploy     updates the named model API service
+#   deploy           environment model-api-deploy     updates the named serving services
 #   terraform_plan   pull requests, environment terraform-plan   read-only, plans without a lock
-#   terraform_apply  environment terraform-apply      attaches the project's own service policies, nothing wider
+# No role applies Terraform (owner decision D18): GitHub plans with the read-only plan role and the owner applies the saved plan. Each role
+# holds one inline policy and no attached policy, so the coverage checks (scripts/infrastructure/run_policy_e2e.py) see all it can do.
 # A pull request subject reaches only the plan role. The environments carry the owner's approval and the main-only branch rule
 # on the GitHub side; GitHub also issues no web identity token to a workflow that a fork pull request starts.
 #
-# The permissions stay inside the project profile's approved list (policies/*.json): the apply role attaches those policies by
-# ARN, and every action of the other roles is checked against the actions of the same files.
+# The permissions stay inside the project profile's approved list (policies/*.json): every action of the roles is checked against the
+# actions of the same files.
 locals {
   github_issuer       = "token.actions.githubusercontent.com"
   github_subject_base = "repo:${var.github_repository}"
   # Every delivery role carries one permissions boundary that the administrator creates at bootstrap from infra/iam/boundary/. The
   # boundary policy must exist before the owner applies this file with the flag on. The delivery boundary holds exactly the grants of
-  # the four roles below. The project role boundary cannot hold them: it has no room for them in the 6,144 characters IAM allows.
+  # the three roles below. The project role boundary cannot hold them: it has no room for them in the 6,144 characters IAM allows.
   github_boundary_file = "healthcare_hai_prediction_delivery_boundary_policy.json"
   github_boundary_arn  = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_delivery_boundary"
   github_provider_arn  = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : try(aws_iam_openid_connect_provider.github[0].arn, "")
 
-  # The stacks that continuous delivery may plan and apply. The IAM stack and the storage stack stay with the owner.
+  # The stacks that continuous delivery may plan. The IAM stack and the storage stack stay with the owner.
   github_state_stacks = ["platform", "services", "jobs"]
   github_state_prefix = "terraform_state"
   github_state_keys   = [for stack in local.github_state_stacks : "${local.github_state_prefix}/${stack}/terraform.tfstate"]
-  github_lock_keys    = [for key in local.github_state_keys : "${key}.tflock"]
   github_state_bucket = "arn:aws:s3:::${var.data_bucket_name}"
 
   github_roles = var.github_oidc_enabled ? {
@@ -40,11 +40,7 @@ locals {
     }
     terraform_plan = {
       subjects    = ["${local.github_subject_base}:pull_request", "${local.github_subject_base}:environment:terraform-plan"]
-      description = "GitHub Actions Terraform plan: read-only, for pull requests of this repository and the plan step before an apply."
-    }
-    terraform_apply = {
-      subjects    = ["${local.github_subject_base}:environment:terraform-apply"]
-      description = "GitHub Actions Terraform apply: applies the platform, services and jobs stacks from the terraform-apply environment after the owner approves."
+      description = "GitHub Actions Terraform plan: read-only, for pull requests of this repository. The owner applies the saved plan."
     }
   } : {}
 
@@ -66,8 +62,7 @@ locals {
   }
 
   # What the project profile's approved policies allow, read from the same files the policy scripts render.
-  approved_policy_files    = fileset("${path.module}/policies", "*.json")
-  approved_policy_services = toset([for file in local.approved_policy_files : regex("_([a-z0-9]+)_policy\\.json$", file)[0]])
+  approved_policy_files = fileset("${path.module}/policies", "*.json")
   approved_actions = toset(flatten([
     for file in local.approved_policy_files : [
       for statement in jsondecode(file("${path.module}/policies/${file}")).Statement :
@@ -209,24 +204,6 @@ locals {
       local.github_plan_read_statements,
       local.github_state_read
     )
-
-    terraform_apply = concat(
-      local.github_state_read,
-      [
-        {
-          Sid      = "WriteStateObjects"
-          Effect   = "Allow"
-          Action   = ["s3:PutObject"]
-          Resource = [for key in local.github_state_keys : "${local.github_state_bucket}/${key}"]
-        },
-        {
-          Sid      = "HoldStateLocks"
-          Effect   = "Allow"
-          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-          Resource = [for key in local.github_lock_keys : "${local.github_state_bucket}/${key}"]
-        }
-      ]
-    )
   }
 
   github_policies = {
@@ -324,20 +301,6 @@ resource "aws_iam_role_policy" "github" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "github_apply" {
-  for_each = var.github_oidc_enabled ? toset(var.github_oidc_apply_policy_services) : toset([])
-
-  role       = aws_iam_role.github["terraform_apply"].name
-  policy_arn = "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_${each.key}_policy"
-
-  lifecycle {
-    precondition {
-      condition     = contains(local.approved_policy_services, each.key)
-      error_message = "The apply role may attach only a service policy that exists in infra/iam/policies."
-    }
-  }
-}
-
 output "github_oidc_contract" {
   description = "What the GitHub delivery roles are, for the workflow settings. Names only."
   value = {
@@ -350,7 +313,7 @@ output "github_oidc_contract" {
 }
 
 output "github_oidc_actions_outside_approved_list" {
-  description = "Actions that the push, deploy, plan and apply roles allow beyond the approved project policies. Must be empty."
+  description = "Actions that the push, deploy and plan roles allow beyond the approved project policies. Must be empty."
   value       = sort(tolist(setsubtract(local.github_custom_actions, local.approved_actions)))
 }
 

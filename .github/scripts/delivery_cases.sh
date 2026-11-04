@@ -124,4 +124,18 @@ check "empty input is refused" refuses_empty_input
 check "a deployment id that is not an ECS one is refused" refuses_a_malformed_deployment_id
 check "the deploy workflow resolves the revision, then verifies the rollout with the script" deploy_workflow_verifies_the_rollout
 
+# --- GitHub plans, the owner applies (owner decision D18) ------------------------------------------------------------------------------
+# The deploy workflow only describes a task definition and updates a service. A workflow that registers one, or that applies Terraform, would
+# need a role that can do it, and no such role exists.
+workflows=(.github/workflows/*.yml)
+no_workflow_applies_terraform() { ! grep -Eq '^[[:space:]]*(quiet )?terraform( -chdir=[^ ]+)? apply|terraform-apply|TERRAFORM_APPLY|gh_terraform_apply' "${workflows[@]}"; }
+no_apply_workflow_file() { [[ ! -e .github/workflows/terraform_apply.yml ]]; }
+deploy_workflow_registers_no_task_definition() { ! grep -Eq 'register-task-definition|RegisterTaskDefinition' "$deploy"; }
+plan_workflow_assumes_only_the_plan_role() { grep -q 'AWS_ROLE_TERRAFORM_PLAN' .github/workflows/terraform_plan.yml && ! grep -h 'role-to-assume' "${workflows[@]}" | grep -Eq 'APPLY'; }
+
+check "no workflow applies Terraform or names an apply environment or role" no_workflow_applies_terraform
+check "there is no apply workflow file" no_apply_workflow_file
+check "the deploy workflow registers no task definition" deploy_workflow_registers_no_task_definition
+check "the plan workflow assumes the plan role and no workflow assumes an apply role" plan_workflow_assumes_only_the_plan_role
+
 [[ $failures -eq 0 ]]

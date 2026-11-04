@@ -183,26 +183,13 @@
       ]
     },
     {
-      "Sid": "ProjectTerraformState",
+      "Sid": "ReadProjectTerraformState",
       "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
+      "Action": "s3:GetObject",
       "Resource": [
         "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/platform/terraform.tfstate*",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/services/terraform.tfstate*",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/jobs/terraform.tfstate*"
-      ]
-    },
-    {
-      "Sid": "ReleaseProjectTerraformLocks",
-      "Effect": "Allow",
-      "Action": "s3:DeleteObject",
-      "Resource": [
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/platform/terraform.tfstate.tflock",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/services/terraform.tfstate.tflock",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/terraform_state/jobs/terraform.tfstate.tflock"
       ]
     },
     {

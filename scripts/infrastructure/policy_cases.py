@@ -1508,10 +1508,10 @@ def boundary_scope_cases(case: Callable[..., Case]) -> Iterator[Case]:
     yield case("wide role registers a project instance with another Name", register, INSTANCE, False, extra={**host, "ssm:resourceTag/Name": f"{P}_other_{E}"})
 
 
-# The four GitHub delivery roles (infra/iam/github_oidc.tf) hold the delivery boundary, a second managed policy beside the role boundary:
+# The three GitHub delivery roles (infra/iam/github_oidc.tf) hold the delivery boundary, a second managed policy beside the role boundary:
 # the role boundary has no room for them (it has no room for the delivery grants in the 6,144 characters IAM allows).
 DELIVERY_BOUNDARY = "delivery_boundary"
-DELIVERY_ROLES = ("image_push", "deploy", "terraform_plan", "terraform_apply")
+DELIVERY_ROLES = ("image_push", "deploy", "terraform_plan")
 DELIVERY_WIDE = "delivery_wide"
 STATE_PREFIX = "terraform_state"
 STATE_STACKS = ("platform", "services", "jobs")
@@ -1540,7 +1540,7 @@ DELIVERY_WIDE_POLICY = {
 def delivery_cases() -> Iterator[Case]:
     """The deploy role's work with the requests AWS sends for it, and what stays refused for every delivery role under the delivery boundary.
 
-    The image push, plan and apply requests come from their policies in ``coverage_cases``; the deploy role's policy names ``*`` for actions that
+    The image push and plan requests come from their policies in ``coverage_cases``; the deploy role's policy names ``*`` for actions that
     AWS authorizes on one service, task or cluster, so its requests are written out.
     """
 
@@ -1607,7 +1607,14 @@ def delivery_cases() -> Iterator[Case]:
         ("a service of another environment", arn("ecs", f"service/{P}_cluster_prod/{P}_prod_model_api")),
     ):
         yield wide(f"ecs:UpdateService on {label}", "ecs:UpdateService", resource)
-    for role in (f"{P}_ecs_host_{E}", f"{P}_job_write_bronze_task_{E}", f"{P}_gh_terraform_apply_{E}", "administrator", f"{P}_model_api_task_prod"):
+    for role in (
+        f"{P}_ecs_host_{E}",
+        f"{P}_job_write_bronze_task_{E}",
+        f"{P}_gh_terraform_plan_{E}",
+        f"{P}_gh_deploy_{E}",
+        "administrator",
+        f"{P}_model_api_task_prod",
+    ):
         yield wide(f"passes {role} to ECS tasks", "iam:PassRole", f"arn:aws:iam::{A}:role/{role}", {"iam:PassedToService": ECS_TASKS})
     for service in ("ec2.amazonaws.com", "lambda.amazonaws.com"):
         yield wide(f"passes a task role to {service}", "iam:PassRole", DEPLOY_TASK_ROLES[0], {"iam:PassedToService": service})
@@ -1616,14 +1623,14 @@ def delivery_cases() -> Iterator[Case]:
         yield wide(action, action, f"arn:aws:iam::{A}:role/{P}_x_{E}", sid="DenyIam")
     yield wide("budgets:ModifyBudget", "budgets:ModifyBudget", BUDGET, sid="DenyOrganizationsAccountAndBudgets")
     yield wide("organizations:LeaveOrganization", "organizations:LeaveOrganization", "*", sid="DenyOrganizationsAccountAndBudgets")
-    for name in (f"{P}_gh_terraform_apply_{E}", "administrator"):
+    for name in (f"{P}_gh_terraform_plan_{E}", f"{P}_gh_image_push_{E}", "administrator"):
         yield wide(f"assumes {name}", "sts:AssumeRole", f"arn:aws:iam::{A}:role/{name}")
     yield wide("assumes a role of another project", "sts:AssumeRole", f"arn:aws:iam::{A}:role/other_project_x", sid="DenyAssumeRoleOutsideProject")
     states = f"{BUCKET}/{STATE_PREFIX}"
     for label, resource in (
         ("the IAM stack state", f"{states}/iam/terraform.tfstate"),
         ("the storage stack state", f"{states}/storage/terraform.tfstate"),
-        ("the state of a stack the delivery roles do not apply", f"{states}/network/terraform.tfstate"),
+        ("the state of a stack the delivery roles do not plan", f"{states}/network/terraform.tfstate"),
         ("a lakehouse object", f"{BUCKET}/lakehouse/silver/x"),
         ("a source object", f"{BUCKET}/census/x"),
         ("another bucket's state", f"arn:aws:s3:::other-bucket/{STATE_PREFIX}/platform/terraform.tfstate"),
@@ -1641,6 +1648,14 @@ def delivery_cases() -> Iterator[Case]:
         ("a lakehouse object", f"{BUCKET}/lakehouse/silver/x"),
     ):
         yield wide(f"deletes {label}", "s3:DeleteObject", resource)
+    for label, resource in (
+        ("a platform state key", STATE_KEYS[0]),
+        ("a services state key", STATE_KEYS[1]),
+        ("a state backup", f"{states}/platform/terraform.tfstate.backup"),
+    ):
+        yield wide(f"writes {label}", "s3:PutObject", resource)
+    yield wide("holds a state lock", "s3:PutObject", LOCK_KEYS[0])
+    yield wide("deletes a state lock", "s3:DeleteObject", LOCK_KEYS[0])
     yield wide("lists another bucket", "s3:ListBucket", "arn:aws:s3:::other-bucket")
     yield wide("reads a state version", "s3:GetObjectVersion", STATE_KEYS[0])
     yield wide("reads a parameter", "ssm:GetParameters", arn("ssm", f"parameter/{P}/x"))
@@ -1687,10 +1702,13 @@ def coverage_cases(documents: dict[str, dict[str, Any]]) -> Iterator[Case]:
     """
     held_by = principals(documents)
     for role in (name for name in DELIVERY_ROLES if name != "deploy"):
-        for statement in documents[f"delivery/{role}/access"]["Statement"]:
-            if statement["Effect"] == "Allow":
-                for item in coverage_requests(statement, {}):
-                    yield Case(f"delivery allowed: {role} {statement.get('Sid')} {item.action} {item.resource}", item, True, None, f"delivery_{role}")
+        # Every document the role holds, the inline policy and any attached policy: a policy the boundary caps would otherwise pass unnoticed.
+        for key in sorted(key for key in documents if key.startswith(f"delivery/{role}/")):
+            for statement in documents[key]["Statement"]:
+                if statement["Effect"] == "Allow":
+                    for item in coverage_requests(statement, {}):
+                        label = f"delivery allowed: {role} {key.rsplit('/', 1)[-1]} {statement.get('Sid')} {item.action} {item.resource}"
+                        yield Case(label, item, True, None, f"delivery_{role}")
     for name in ROLES:
         allows = [statement for document in held_by[name] for statement in document["Statement"] if statement["Effect"] == "Allow"]
         for statement in allows:
@@ -2011,7 +2029,7 @@ def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str,
     every role of the IAM stack and the wide test role."""
     user = [document for name, document in documents.items() if name.startswith("healthcare_hai_prediction_")]
     roles = {name: [document for key, document in documents.items() if key.startswith(f"role/{name}/")] for name in ROLES}
-    # A delivery role holds its inline policy and, for the apply role, the project service policies it attaches by ARN.
+    # A delivery role holds its inline policy and every policy attached to it. None is attached today; ``check_delivery_roles`` fails when one is.
     delivery = {f"delivery_{name}": [document for key, document in documents.items() if key.startswith(f"delivery/{name}/")] for name in DELIVERY_ROLES}
     return {
         **roles,
@@ -2572,7 +2590,7 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             delivery_resource("PushAndReadProjectImages", arn("ecr", f"repository/{P}_*")),
         ),
         "delivery defect: the boundary lacks ecr:PutImage": (
-            "delivery allowed: image_push PushProjectImages ecr:PutImage",
+            "delivery allowed: image_push access PushProjectImages ecr:PutImage",
             delivery_without_action("PushAndReadProjectImages", "ecr:PutImage"),
         ),
         "delivery defect: UpdateService reaches every service of the cluster": (
@@ -2597,22 +2615,18 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         ),
         "delivery defect: state access covers the whole bucket": (
             "delivery refused: reads a lakehouse object",
-            delivery_resource("ProjectTerraformState", f"{BUCKET}/*"),
+            delivery_resource("ReadProjectTerraformState", f"{BUCKET}/*"),
         ),
         "delivery defect: state access covers every stack": (
             "delivery refused: reads the IAM stack state",
-            delivery_resource("ProjectTerraformState", f"{state}/*"),
+            delivery_resource("ReadProjectTerraformState", f"{state}/*"),
         ),
         "delivery defect: lock release deletes state objects": (
             "delivery refused: deletes a state object",
             delivery_extra_statement("DeleteStateAgain", "s3:DeleteObject", f"{state}/*"),
         ),
-        "delivery defect: the boundary lacks lock release": (
-            "delivery allowed: terraform_apply HoldStateLocks s3:DeleteObject",
-            delivery_without_action("ReleaseProjectTerraformLocks", "s3:DeleteObject"),
-        ),
         "delivery defect: the boundary lacks a plan read": (
-            "delivery allowed: terraform_plan Readec2DescribeProjectInfrastructure ec2:DescribeVpcs",
+            "delivery allowed: terraform_plan access Readec2DescribeProjectInfrastructure ec2:DescribeVpcs",
             delivery_without_action("RegionalReads", "ec2:DescribeVpcs"),
         ),
     }

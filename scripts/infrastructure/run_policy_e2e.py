@@ -33,6 +33,7 @@ BOUNDARY_DIRECTORY = REPO_ROOT / "infra" / "iam" / "boundary"
 BOUNDARY_FILE = "healthcare_hai_prediction_role_boundary_policy.json"
 DELIVERY_BOUNDARY_FILE = "healthcare_hai_prediction_delivery_boundary_policy.json"
 VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
+GITHUB_OIDC = REPO_ROOT / "infra" / "iam" / "github_oidc.tf"
 IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
 BRONZE_TABLES = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 # The longest values the real deployment can use, to check the managed policy size limit with them.
@@ -182,15 +183,6 @@ PLAN_UNREADABLE = frozenset(
 PLAN_READ_ACTION = re.compile(r"^[a-z0-9]+:(Describe|List|Get|BatchGet)")
 
 
-def variable_list_default(name: str) -> list[str]:
-    """The list default of one Terraform variable of the IAM stack, written in one line."""
-    found = [match for path in sorted(IAM_DIRECTORY.glob("*variables.tf")) for match in re.findall(
-        rf'variable "{name}" \{{[^}}]*?default\s*=\s*(\[[^\]\n]*\])', path.read_text(encoding="utf-8"), re.DOTALL)]  # fmt: skip
-    if len(found) != 1:
-        raise RuntimeError(f"the default of {name} must be written once as a one-line list")
-    return [str(item) for item in json.loads(found[0])]
-
-
 def plan_read_statements(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """The statements of the plan role's reads, built the way ``github_plan_read_statements`` in infra/iam/github_oidc.tf builds them.
 
@@ -219,10 +211,10 @@ def plan_read_statements(documents: dict[str, dict[str, Any]]) -> list[dict[str,
 
 
 def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The policies of the four GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
+    """The policies of the three GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
 
     The statements follow ``github_statements`` in infra/iam/github_oidc.tf. The deploy role's service and task role names are the test inputs
-    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_STREAMLIT``. The apply role also holds the project service policies it attaches by ARN.
+    ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_STREAMLIT``. No delivery role applies Terraform or holds an attached policy.
     """
     state_read = [
         {"Sid": "ReadStateObjects", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": list(policy_cases.STATE_KEYS)},
@@ -250,16 +242,8 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
             *plan_read_statements(documents),
             *state_read,
         ],
-        "terraform_apply": [
-            *state_read,
-            {"Sid": "WriteStateObjects", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": list(policy_cases.STATE_KEYS)},
-            {"Sid": "HoldStateLocks", "Effect": "Allow", "Resource": list(policy_cases.LOCK_KEYS),
-             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]},
-        ],
     }  # fmt: skip
     loaded = {f"delivery/{role}/access": {"Version": "2012-10-17", "Statement": items} for role, items in statements.items()}
-    for service in variable_list_default("github_oidc_apply_policy_services"):
-        loaded[f"delivery/terraform_apply/attached_{service}"] = documents[f"healthcare_hai_prediction_{service}_policy"]
     return loaded
 
 
@@ -295,6 +279,30 @@ def evaluate_cases(documents: dict[str, dict[str, Any]], cases: list[policy_case
             failures.append({"label": case.label, "action": case.request.action, "resource": case.request.resource, "expected_allowed": case.allowed,
                              "expected_statement": case.sid, "effect": decision.effect, "statements": list(decision.statements)})  # fmt: skip
     return failures
+
+
+# Owner decision D18: GitHub plans and the owner applies, so the roles are these three. A role that applies, or a policy attached beside the inline
+# policy, would hold permissions the coverage cases never see, and the boundary could cap them without anyone noticing.
+DELIVERY_ROLES = frozenset({"image_push", "deploy", "terraform_plan"})
+ATTACHMENT_RESOURCE = re.compile(r'^resource "(aws_iam_(?:role_policy_attachments?_exclusive|role_policy_attachment|policy_attachment))" "(\w+)"', re.MULTILINE)
+
+
+def check_delivery_roles(path: Path = GITHUB_OIDC) -> list[str]:
+    """The delivery roles are exactly the plan, push and deploy roles, and no policy is attached to any of them."""
+    text = path.read_text(encoding="utf-8")
+    block = re.search(r"^  github_roles = var\.github_oidc_enabled \? \{\n(.*?)^  \} : \{\}", text, re.MULTILINE | re.DOTALL)
+    if block is None:
+        return [f"{path.name}: the github_roles map is not found"]
+    roles = set(re.findall(r"^    (\w+) = \{$", block.group(1), re.MULTILINE))
+    problems = []
+    if roles != DELIVERY_ROLES:
+        problems.append(f"{path.name}: delivery roles {sorted(roles)} differ from {sorted(DELIVERY_ROLES)}: GitHub plans and the owner applies")
+    parts = re.split(r"^(?=resource |output |locals )", text, flags=re.MULTILINE)
+    for part in parts:
+        match = ATTACHMENT_RESOURCE.match(part)
+        if match and "aws_iam_role.github" in part:
+            problems.append(f"{path.name}: {match.group(1)}.{match.group(2)} attaches a policy to a delivery role; load it into the coverage cases first")
+    return problems
 
 
 def check_inventory(documents: dict[str, dict[str, Any]], operations: dict[str, list[Request]]) -> list[str]:
@@ -682,6 +690,23 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         text = writer.read_text(encoding="utf-8")
         writer.write_text(plant(text, '"s3:ListMultipartUploadParts"', '"s3:ListMultipartUploadParts",\n        "s3:PutObjectAcl"'), encoding="utf-8")
         record("a lakehouse role holds an S3 action that the project user's s3 policy lacks", check_roles(directory=widened))
+        oidc = root / "github_oidc.tf"
+        original_oidc = GITHUB_OIDC.read_text(encoding="utf-8")
+        oidc.write_text(
+            plant(
+                original_oidc,
+                "    terraform_plan = {\n      subjects",
+                '    terraform_apply = {\n      subjects    = []\n      description = "x"\n    }\n    terraform_plan = {\n      subjects',
+            ),
+            encoding="utf-8",
+        )
+        record("a Terraform apply role is back among the delivery roles", check_delivery_roles(oidc))
+        oidc.write_text(
+            original_oidc
+            + '\nresource "aws_iam_role_policy_attachment" "github_extra" {\n  role       = aws_iam_role.github["deploy"].name\n  policy_arn = "x"\n}\n',
+            encoding="utf-8",
+        )
+        record("a policy is attached to a delivery role", check_delivery_roles(oidc))
     return results
 
 
@@ -708,7 +733,7 @@ def run_suite(output: Path) -> dict[str, Any]:
         {"label": label, "passed": dict(item.context) == expected, "expected": expected, "observed": dict(item.context)}
         for label, item, expected in policy_cases.request_context_cases()
     ]
-    problems = check_inventory(documents, operations) + check_sizes() + check_names(documents) + check_name_source() + check_roles()
+    problems = check_inventory(documents, operations) + check_sizes() + check_names(documents) + check_name_source() + check_roles() + check_delivery_roles()
     name_checks = name_defects(documents)
     defects = []
     for description, (label_prefix, mutation) in policy_cases.planted_defects().items():

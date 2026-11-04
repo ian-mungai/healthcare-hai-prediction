@@ -96,9 +96,8 @@ check "verify fails when the digest command fails, whatever was approved" nonzer
 check "verify refuses an empty plan" nonzero "$(printf '' | status bash "$script" verify "$good")"
 check "verify refuses a plan that is not JSON" nonzero "$(printf 'not json' | status bash "$script" verify "$good")"
 
-# The workflows must use verify, never compare a command substitution of the digest.
-check "the apply workflow compares with verify" zero "$(grep -q 'plan_digest.sh verify' .github/workflows/terraform_apply.yml && echo 0 || echo 1)"
+# No workflow may compare a command substitution of the digest.
 check "no workflow compares a digest inside a test" zero "$(grep -n 'plan_digest.sh digest' .github/workflows/*.yml | grep -q '\[\[' && echo 1 || echo 0)"
-check "the Terraform steps stop on the first error" zero "$(grep -c 'set -uo pipefail' .github/workflows/terraform_plan.yml .github/workflows/terraform_apply.yml | grep -vq ':0$' && echo 1 || echo 0)"
+check "the Terraform steps stop on the first error" zero "$(grep -c 'set -uo pipefail' .github/workflows/terraform_plan.yml | grep -vq ':0$' && echo 1 || echo 0)"
 
 [[ $failures -eq 0 ]]
