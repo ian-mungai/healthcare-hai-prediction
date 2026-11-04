@@ -2803,6 +2803,28 @@ def feature_count_drifts(workflow: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
+# The shard counts of the feature suites come from feature_shards in config/quality/ci_groups.json. A runner or script that writes a count as a literal
+# next to the suite name drifts from the configuration the next time the count changes. The patterns are put together from parts so that this file does not
+# match them itself.
+COUNT_LITERALS = (
+    re.compile(r"features_combine (?:sources|columns)" + r"/\d+"),
+    re.compile(r"\(\"(?:sources|columns)\"" + r", \d+\)"),
+)
+# The workflow cannot read the configuration; feature_workflow_counts_equal_the_configuration compares its counts with it.
+COUNT_LITERAL_FILES = ("scripts/run_ci.sh", "scripts/quality/*.py", "scripts/ci/**/*.sh", "scripts/lakehouse/feature_shards.py")
+
+
+def feature_count_literal_case() -> dict[str, Any]:
+    """No runner, script or workflow writes a feature suite's shard count as a literal: the count is read from feature_shards in the configuration."""
+    found: list[str] = []
+    for pattern in COUNT_LITERAL_FILES:
+        for path in sorted(ROOT.glob(pattern)):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if any(literal.search(line) for literal in COUNT_LITERALS):
+                    found.append(f"{path.relative_to(ROOT)}:{number}")
+    return {"case": "feature_shard_counts_are_not_literals", "passed": not found, "literals": found}
+
+
 def feature_count_cases() -> list[dict[str, Any]]:
     """The hosted feature jobs pass the configured shard count in the shard argument and to the combiner (a count left at 8 skipped half the cases)."""
     real = feature_count_drifts(workflow_document())
@@ -2817,6 +2839,7 @@ def feature_count_cases() -> list[dict[str, Any]]:
                 entry["run"] = str(entry["run"]).replace(f"--suite sources --count {FEATURE_COUNTS['sources']}", "--suite sources --count 8")
     planted = {"shard_argument": feature_count_drifts(argument), "combine_count": feature_count_drifts(combiner)}
     return [
+        feature_count_literal_case(),
         {"case": "feature_workflow_counts_equal_the_configuration", "passed": not any(real.values()), "differences": real},
         {
             "case": "feature_workflow_count_drift_is_reported",
