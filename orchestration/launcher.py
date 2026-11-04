@@ -554,9 +554,12 @@ def demultiplex(buffer: bytes) -> tuple[list[tuple[int, bytes]], bytes]:
 class EventStream:
     """The Docker events response: lines of JSON until the daemon or this side closes it."""
 
-    def __init__(self, connection: UnixConnection, response: http.client.HTTPResponse) -> None:
+    def __init__(self, connection: UnixConnection, response: http.client.HTTPResponse, sock: socket.socket | None) -> None:
         self.connection = connection
         self.response = response
+        # http.client drops ``connection.sock`` when the response closes the connection, but the response keeps reading from the socket: this is the one to
+        # set the time limit of and to shut down.
+        self.sock = sock
 
     def readline(self) -> bytes:
         """The next line; an empty result means the stream ended."""
@@ -565,8 +568,8 @@ class EventStream:
     def close(self) -> None:
         """Close the connection, which ends a blocked ``readline`` in another thread."""
         with contextlib.suppress(OSError):
-            if self.connection.sock is not None:
-                self.connection.sock.shutdown(socket.SHUT_RDWR)
+            if self.sock is not None:
+                self.sock.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self.connection.close()
 
@@ -770,6 +773,7 @@ class DockerApi:
         query = "filters=" + _quote(self.filters(label=[label], type=["container"]))
         try:
             connection.request("GET", f"{self.prefix}/events?{query}")
+            sock = connection.sock
             response = connection.getresponse()
         except (OSError, http.client.HTTPException) as error:
             connection.close()
@@ -777,9 +781,9 @@ class DockerApi:
         if response.status != 200:
             connection.close()
             raise DockerError(response.status, "events refused")
-        if connection.sock is not None:
-            connection.sock.settimeout(None)
-        return EventStream(connection, response)
+        if sock is not None:
+            sock.settimeout(None)
+        return EventStream(connection, response, sock)
 
     def attach(self, container_id: str, detach_keys: str) -> socket.socket:
         """Attach to a container with the hijacked connection; returns the raw socket after the upgrade."""
