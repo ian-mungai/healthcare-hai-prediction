@@ -17,8 +17,8 @@ variable "openmetadata_task_role_arn" {
 
   validation {
     condition = !var.openmetadata_persistent_enabled || (
-      var.openmetadata_task_role_arn != var.control_plane_task_role_arn && var.openmetadata_task_role_arn != var.polaris_task_role_arn
-      && var.openmetadata_task_role_arn != var.mlflow_task_role_arn && var.openmetadata_task_role_arn != var.broker_task_role_arn
+      var.openmetadata_task_role_arn != var.control_plane_task_role_arn && var.openmetadata_task_role_arn != var.polaris_task_role_arn &&
+      var.openmetadata_task_role_arn != var.mlflow_task_role_arn && var.openmetadata_task_role_arn != var.broker_task_role_arn
     )
     error_message = "The OpenMetadata bootstrap must have its own task role, so the control plane, Polaris, MLflow and the broker hold no permission to write the bot tokens."
   }
@@ -58,11 +58,11 @@ variable "openmetadata_bot_token_names" {
 
   validation {
     condition = (
-      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion", "comparison"])
-      && alltrue([for name in values(var.openmetadata_bot_token_names) : length(name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", name)) && !can(regex("^/(?i:aws|ssm)", name))])
-      && length(distinct(values(var.openmetadata_bot_token_names))) == 3
-      && !contains(values(var.openmetadata_bot_token_names), var.openmetadata_admin_password_name)
-      && !contains(values(var.openmetadata_bot_token_names), var.openmetadata_db_password_name)
+      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion", "comparison"]) &&
+      alltrue([for name in values(var.openmetadata_bot_token_names) : length(name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", name)) && !can(regex("^/(?i:aws|ssm)", name))]) &&
+      length(distinct(values(var.openmetadata_bot_token_names))) == 3 &&
+      !contains(values(var.openmetadata_bot_token_names), var.openmetadata_admin_password_name) &&
+      !contains(values(var.openmetadata_bot_token_names), var.openmetadata_db_password_name)
     )
     error_message = "Name exactly the callers lineage, ingestion and comparison, each with its own parameter path of letters, digits and underscores (no dashes, wildcards, spaces or the prefixes aws and ssm), none equal to another or to the administrator or database password."
   }
@@ -86,13 +86,13 @@ variable "openmetadata_memory_mib" {
 
   validation {
     condition = (
-      var.openmetadata_memory_mib.server.reservation >= 1 && var.openmetadata_memory_mib.server.reservation <= var.openmetadata_memory_mib.server.limit
-      && var.openmetadata_memory_mib.search.reservation >= 1 && var.openmetadata_memory_mib.search.reservation <= var.openmetadata_memory_mib.search.limit
-      && var.openmetadata_memory_mib.migrate.reservation >= 1 && var.openmetadata_memory_mib.migrate.reservation <= var.openmetadata_memory_mib.migrate.limit
-      && var.openmetadata_memory_mib.bootstrap.reservation >= 1 && var.openmetadata_memory_mib.bootstrap.reservation <= var.openmetadata_memory_mib.bootstrap.limit
-      && var.openmetadata_memory_mib.bootstrap.limit >= 128 && var.openmetadata_memory_mib.migrate.limit >= 512
-      && var.openmetadata_memory_mib.server.heap_mib >= 512 && var.openmetadata_memory_mib.server.heap_mib * 100 <= var.openmetadata_memory_mib.server.limit * 60
-      && var.openmetadata_memory_mib.search.heap_mib >= 512 && var.openmetadata_memory_mib.search.heap_mib * 2 <= var.openmetadata_memory_mib.search.limit
+      var.openmetadata_memory_mib.server.reservation >= 1 && var.openmetadata_memory_mib.server.reservation <= var.openmetadata_memory_mib.server.limit &&
+      var.openmetadata_memory_mib.search.reservation >= 1 && var.openmetadata_memory_mib.search.reservation <= var.openmetadata_memory_mib.search.limit &&
+      var.openmetadata_memory_mib.migrate.reservation >= 1 && var.openmetadata_memory_mib.migrate.reservation <= var.openmetadata_memory_mib.migrate.limit &&
+      var.openmetadata_memory_mib.bootstrap.reservation >= 1 && var.openmetadata_memory_mib.bootstrap.reservation <= var.openmetadata_memory_mib.bootstrap.limit &&
+      var.openmetadata_memory_mib.bootstrap.limit >= 128 && var.openmetadata_memory_mib.migrate.limit >= 512 &&
+      var.openmetadata_memory_mib.server.heap_mib >= 512 && var.openmetadata_memory_mib.server.heap_mib * 100 <= var.openmetadata_memory_mib.server.limit * 60 &&
+      var.openmetadata_memory_mib.search.heap_mib >= 512 && var.openmetadata_memory_mib.search.heap_mib * 2 <= var.openmetadata_memory_mib.search.limit
     )
     error_message = "Each reservation needs 1 MiB or more and at most its limit. The server and OpenSearch heaps need 512 MiB or more. The OpenSearch heap is at most half its limit and the server heap at most 60 percent of its limit. The migration needs 512 MiB and the bootstrap 128 MiB or more."
   }
