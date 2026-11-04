@@ -1598,9 +1598,9 @@ def delivery_cases() -> Iterator[Case]:
     # services. Each link is checked for the role itself and under the boundary alone.
     deploy_role = f"delivery_{DELIVERY_ROLES[1]}"
 
-    def chain(label: str, action: str, resource: str, extra: dict[str, str] | None = None) -> Iterator[Case]:
+    def chain(label: str, action: str, resource: str, extra: dict[str, str] | None = None, tags: dict[str, str] | None = None) -> Iterator[Case]:
         for principal in (deploy_role, DEPLOY_WIDE):
-            yield Case(f"delivery refused: crafted task definition chain: {label}", request(action, resource, extra=extra), False, None, principal)
+            yield Case(f"delivery refused: crafted task definition chain: {label}", request(action, resource, extra=extra, tags=tags), False, None, principal)
 
     def allowed_link(label: str, action: str, resource: str, extra: dict[str, str] | None = None, tags: dict[str, str] | None = None) -> Iterator[Case]:
         for principal in (deploy_role, DEPLOY_WIDE):
@@ -1612,52 +1612,28 @@ def delivery_cases() -> Iterator[Case]:
         yield from allowed_link(f"tags {family} while registering", "ecs:TagResource", revision, {"ecs:CreateAction": "RegisterTaskDefinition"})
     for name in ("airflow", "postgres", "polaris", "mlflow", "model_api_extra", "streamlit_extra", "control_plane"):
         yield from chain(f"registers the family {name}", "ecs:RegisterTaskDefinition", arn("ecs", f"task-definition/{P}_{E}_{name}:7"), None)
-        yield Case(
-            f"delivery refused: crafted task definition chain: registers the family {name} with the Project tag",
-            request("ecs:RegisterTaskDefinition", arn("ecs", f"task-definition/{P}_{E}_{name}:7"), tags=TAG),
-            False,
-            None,
-            deploy_role,
+        yield from chain(
+            f"registers the family {name} with the Project tag", "ecs:RegisterTaskDefinition", arn("ecs", f"task-definition/{P}_{E}_{name}:7"), tags=TAG
         )
     for label, revision in (
         ("a family of another environment", arn("ecs", f"task-definition/{P}_prod_model_api:7")),
         ("a family of another project", arn("ecs", f"task-definition/other_project_{E}_model_api:7")),
         ("a family in another account", SERVING_REVISIONS[0].replace(A, "222222222222")),
     ):
-        yield Case(
-            f"delivery refused: crafted task definition chain: registers {label}",
-            request("ecs:RegisterTaskDefinition", revision, tags=TAG),
-            False,
-            None,
-            deploy_role,
-        )
-    yield Case(
-        "delivery refused: crafted task definition chain: registers a serving family without the Project tag",
-        request("ecs:RegisterTaskDefinition", SERVING_REVISIONS[0]),
-        False,
-        None,
-        deploy_role,
+        yield from chain(f"registers {label}", "ecs:RegisterTaskDefinition", revision, tags=TAG)
+    # The boundary keeps the tag conditions of the inline policy, so a role whose policy grows cannot register without the Project tag or re-tag a revision.
+    yield from chain("registers a serving family without the Project tag", "ecs:RegisterTaskDefinition", SERVING_REVISIONS[0])
+    yield from chain(
+        "registers a serving family with another project's tag", "ecs:RegisterTaskDefinition", SERVING_REVISIONS[0], tags={"Project": "other_project"}
     )
-    yield Case(
-        "delivery refused: crafted task definition chain: registers a serving family with another project's tag",
-        request("ecs:RegisterTaskDefinition", SERVING_REVISIONS[0], tags={"Project": "other_project"}),
-        False,
-        None,
-        deploy_role,
-    )
-    yield Case(
-        "delivery refused: crafted task definition chain: re-tags a serving revision",
-        request("ecs:TagResource", SERVING_REVISIONS[0]),
-        False,
-        None,
-        deploy_role,
-    )
-    yield Case(
-        "delivery refused: crafted task definition chain: tags another family while registering",
-        request("ecs:TagResource", arn("ecs", f"task-definition/{P}_{E}_airflow:7"), extra={"ecs:CreateAction": "RegisterTaskDefinition"}),
-        False,
-        None,
-        deploy_role,
+    yield from chain("registers a serving family with a lowercase project key", "ecs:RegisterTaskDefinition", SERVING_REVISIONS[0], tags={"project": P})
+    yield from chain("re-tags a serving revision", "ecs:TagResource", SERVING_REVISIONS[0])
+    yield from chain("tags a serving revision for another create action", "ecs:TagResource", SERVING_REVISIONS[0], {"ecs:CreateAction": "CreateService"})
+    yield from chain(
+        "tags another family while registering",
+        "ecs:TagResource",
+        arn("ecs", f"task-definition/{P}_{E}_airflow:7"),
+        {"ecs:CreateAction": "RegisterTaskDefinition"},
     )
     for action in ("ecs:DeregisterTaskDefinition", "ecs:RunTask", "ecs:CreateService"):
         yield from chain(f"{action} on a serving family", action, SERVING_REVISIONS[0])
@@ -2805,7 +2781,7 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
 
         return mutation
 
-    def deploy_policy_extra_statement(sid: str, action: str, resource: str) -> Mutation:
+    def deploy_policy_extra_statement(sid: str, action: str, resource: str | list[str]) -> Mutation:
         def mutation(documents: dict[str, dict[str, Any]]) -> None:
             documents[f"delivery/{DELIVERY_ROLES[1]}/access"]["Statement"].append({"Sid": sid, "Effect": "Allow", "Action": action, "Resource": resource})
             documents[DEPLOY_BOUNDARY]["Statement"].insert(0, {"Sid": sid, "Effect": "Allow", "Action": action, "Resource": resource})
@@ -2863,20 +2839,6 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
 
         return mutation
 
-    def deploy_with_action(sid: str, action: str) -> Mutation:
-        def mutation(documents: dict[str, dict[str, Any]]) -> None:
-            statement = deploy_statement(documents, sid)
-            statement["Action"] = [*as_list(statement["Action"]), action]
-
-        return mutation
-
-    def boundary_with_action(sid: str, action: str) -> Mutation:
-        def mutation(documents: dict[str, dict[str, Any]]) -> None:
-            statement = delivery_statement(documents, sid, DEPLOY_BOUNDARY)
-            statement["Action"] = [*as_list(statement["Action"]), action]
-
-        return mutation
-
     def boundary_iam_deny_without_condition(documents: dict[str, dict[str, Any]]) -> None:
         statement = delivery_statement(documents, "DenyIam", DEPLOY_BOUNDARY)
         statement.pop("Condition", None)
@@ -2893,9 +2855,34 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         boundary_iam_deny_without_condition(documents)
         delivery_statement(documents, "PassServingRoles", DEPLOY_BOUNDARY).pop("Condition", None)
 
+    def boundary_condition(sid: str, change: Callable[[dict[str, Any]], None]) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            change(delivery_statement(documents, sid, DEPLOY_BOUNDARY))
+
+        return mutation
+
+    def condition_gone(statement: dict[str, Any]) -> None:
+        del statement["Condition"]
+
+    def project_tag_any_value(statement: dict[str, Any]) -> None:
+        statement["Condition"] = {"StringLike": {"aws:RequestTag/Project": "*"}, "ForAnyValue:StringEquals": statement["Condition"]["ForAnyValue:StringEquals"]}
+
+    def tag_keys_unchecked(statement: dict[str, Any]) -> None:
+        del statement["Condition"]["ForAnyValue:StringEquals"]
+
+    def any_create_action(statement: dict[str, Any]) -> None:
+        statement["Condition"] = {"StringLike": {"ecs:CreateAction": "*"}}
+
+    def one_unconditional_statement(documents: dict[str, dict[str, Any]]) -> None:
+        statements = documents[DEPLOY_BOUNDARY]["Statement"]
+        documents[DEPLOY_BOUNDARY]["Statement"] = [item for item in statements if item["Sid"] != "TagRegisteredTaskDefinitions"]
+        joined = delivery_statement(documents, "RegisterServingTaskDefinitions", DEPLOY_BOUNDARY)
+        joined["Action"] = ["ecs:RegisterTaskDefinition", "ecs:TagResource"]
+        del joined["Condition"]
+
     def deregister_too(documents: dict[str, dict[str, Any]]) -> None:
-        deploy_with_action("RegisterServingTaskDefinitions", "ecs:DeregisterTaskDefinition")(documents)
-        boundary_with_action("RegisterServingTaskDefinitions", "ecs:DeregisterTaskDefinition")(documents)
+        families = [arn("ecs", f"task-definition/{P}_{E}_{name}:*") for name in SERVING_SERVICES]
+        deploy_policy_extra_statement("DeregisterServingTaskDefinitions", "ecs:DeregisterTaskDefinition", families)(documents)
 
     serving_families = [arn("ecs", f"task-definition/{P}_{E}_*:*")]
     pass_wildcard = [f"arn:aws:iam::{A}:role/{P}_*_task_{E}", SERVING_ROLES[2]]
@@ -2926,6 +2913,34 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "serving release: tagging without the registration condition": (
             "delivery refused: crafted task definition chain: re-tags a serving revision",
             deploy_without_condition("TagRegisteredTaskDefinitions"),
+        ),
+        "serving release: the boundary registers without the Project tag condition": (
+            "delivery refused: crafted task definition chain: registers a serving family without the Project tag",
+            boundary_condition("RegisterServingTaskDefinitions", condition_gone),
+        ),
+        "serving release: the boundary accepts any Project tag value": (
+            "delivery refused: crafted task definition chain: registers a serving family with another project's tag",
+            boundary_condition("RegisterServingTaskDefinitions", project_tag_any_value),
+        ),
+        "serving release: the boundary accepts a lowercase project key": (
+            "delivery refused: crafted task definition chain: registers a serving family with a lowercase project key",
+            boundary_condition("RegisterServingTaskDefinitions", tag_keys_unchecked),
+        ),
+        "serving release: the boundary tags without the registration condition": (
+            "delivery refused: crafted task definition chain: re-tags a serving revision",
+            boundary_condition("TagRegisteredTaskDefinitions", condition_gone),
+        ),
+        "serving release: the boundary tags for any create action": (
+            "delivery refused: crafted task definition chain: tags a serving revision for another create action",
+            boundary_condition("TagRegisteredTaskDefinitions", any_create_action),
+        ),
+        "serving release: the boundary tags every family": (
+            "delivery refused: crafted task definition chain: tags another family while registering",
+            delivery_resource("TagRegisteredTaskDefinitions", serving_families, DEPLOY_BOUNDARY),
+        ),
+        "serving release: the boundary joins registration and tagging in one unconditional statement": (
+            "delivery refused: crafted task definition chain: re-tags a serving revision",
+            one_unconditional_statement,
         ),
         "serving release: the deploy role tags every family": (
             "delivery refused: crafted task definition chain: tags another family while registering",
