@@ -4,6 +4,10 @@ The role belongs to the Airflow scheduler. It may start, stop and describe the h
 families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
 instances, and write each launch record once, list and read them under its own prefix. It holds nothing else.
 
+The first check is closed: the permitted (action, resource, required conditions) triples of the role are written below as data, and every Allow statement
+of the three policies must be inside them. An action outside the set, a wildcard, a NotAction, a resource outside its triple or a missing required
+condition fails whatever the action is, so an unknown dangerous action fails by construction. The behavior cases and the fixed matrix below are extra checks.
+
 The three policies are one role, so every request is decided against all of them together. Each grant is checked against requests written here, apart from
 the rendered policies. The refusals do not depend on the policy under inspection: a fixed list of actions is tried against a fixed list of resource
 classes, and only the intended pairs may be allowed. Every realistic widening of a policy (a dangerous action on a valid resource, a wider resource, a
@@ -38,7 +42,7 @@ from scripts.infrastructure.broker_policy_cases import (
     tagged,
     task,
 )
-from scripts.infrastructure.policy_evaluator import Request, decide
+from scripts.infrastructure.policy_evaluator import Request, UnsupportedPolicyElement, decide
 
 ROOT = Path(__file__).resolve().parents[2]
 JOBS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_jobs.json"
@@ -318,6 +322,8 @@ PERMISSIVE: Context = {
     "s3:prefix": (RECORD_PREFIX,),
     **ONCE,
 }
+KMS_KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/00000000-1111-2222-3333-444444444444"
+KMS_OTHER_KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/99999999-8888-7777-6666-555555555555"
 STREAM = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
 SIGNED_ARN = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}"
 LAKEHOUSE_FILE = f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet"
@@ -348,6 +354,8 @@ RESOURCES = (
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
     Resource("signed publish record", SIGNED_ARN, frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
+    Resource("a KMS key", KMS_KEY, NONE, NONE),
+    Resource("another KMS key", KMS_OTHER_KEY, NONE, NONE),
 )
 # The actions tried against every class. The list is fixed here: it never reads the policy under inspection.
 ACTIONS = (
@@ -393,6 +401,15 @@ ACTIONS = (
     "s3:ListBucket",
     "s3:ListBucketMultipartUploads",
     "s3:ListBucketVersions",
+    "s3:PutObjectVersionAcl",
+    "s3:PutObjectVersionTagging",
+    "s3:DeleteObjectTagging",
+    "s3:PutBucketPolicy",
+    "s3:DeleteBucketPolicy",
+    "s3:PutBucketAcl",
+    "ssm:DeleteParameters",
+    "kms:CreateGrant",
+    "kms:GenerateDataKey",
     "logs:GetLogEvents",
     "logs:FilterLogEvents",
     "logs:PutLogEvents",
@@ -573,9 +590,129 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ),
         ("records", "ReadLaunchRecords_the_lakehouse", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/lakehouse/*")),
         ("records", "ReadLaunchRecords_the_whole_bucket", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/*")),
+        ("jobs", "regression_ssm_DeleteParameters", replaced(jobs, "ReadSignedPublishRecord", Action=["ssm:GetParameter", "ssm:DeleteParameters"])),
+        (
+            "jobs",
+            "regression_kms_CreateGrant",
+            replaced(jobs, "ReadSignedPublishRecord", Action=["ssm:GetParameter", "kms:CreateGrant"], Resource=[f"{ssm}{SIGNED}", KMS_KEY]),
+        ),
+        ("jobs", "regression_s3_PutObjectVersionAcl", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:PutObjectVersionAcl"])),
+        ("jobs", "regression_s3_DeleteObjectTagging", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObjectTagging"])),
+        ("jobs", "regression_s3_PutBucketPolicy", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutBucketPolicy", "Resource": bucket})),
+        ("jobs", "regression_s3_PutBucketAcl", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutBucketAcl", "Resource": bucket})),
+        (
+            "jobs",
+            "regression_kms_Decrypt_on_another_key",
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "kms:Decrypt", "Resource": KMS_OTHER_KEY}),
+        ),
+        ("jobs", "regression_kms_Decrypt_on_every_key", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*"})),
+        (
+            "jobs",
+            "regression_ssm_PutParameter",
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:PutParameter", "Resource": f"{ssm}{SIGNED}"}),
+        ),
+        ("jobs", "regression_NotAction_statement", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "NotAction": "iam:*", "Resource": "*"})),
+        ("jobs", "regression_action_wildcard", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:Delete*", "Resource": f"{ssm}{SIGNED}"})),
         ("requests", "ReadStagedRequests_every_input", replaced(requests, "ReadStagedRequests", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("requests", "ReadStagedRequests_any_object", replaced(requests, "ReadStagedRequests", Resource=[*request_resource, f"{bucket}/*"])),
     ]
+
+
+Conditions = dict[str, dict[str, list[str]]]
+STATEMENT_KEYS = {"Sid", "Effect", "Action", "Resource", "Condition"}
+
+
+class Grant(NamedTuple):
+    """One permitted triple: an action, the exact resource patterns it may name and the conditions every statement that grants it must hold."""
+
+    action: str
+    resources: tuple[str, ...]
+    conditions: Conditions
+
+
+def allowed_grants(families: list[str]) -> list[Grant]:
+    """The complete set of grants of the role for the named families, written here and read from no policy."""
+    cluster: Conditions = {"ArnEquals": {"ecs:cluster": [CLUSTER_ARN]}}
+    tasks = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/*"
+    named = sorted(families)
+    definitions = tuple(f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{PROJECT}_{ENVIRONMENT}_job_{family}_host:*" for family in named)
+    roles = tuple(sorted({role("job_execution"), *(role(FAMILY_ROLES[family]) for family in named)}))
+    stage = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs"
+    staged = (f"{stage}/code.sha256", f"{stage}/promotion_approval.json", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
+    tagged_tasks: Conditions = {"StringEquals": {"aws:ResourceTag/HaiJob": named}}
+    return [
+        Grant(
+            "ecs:RunTask",
+            definitions,
+            {
+                **cluster,
+                "StringEquals": {"aws:RequestTag/Project": [PROJECT], "aws:RequestTag/HaiJob": named},
+                "ForAllValues:StringEquals": {"aws:TagKeys": ["HaiJob", "Project"]},
+            },
+        ),
+        Grant("ecs:TagResource", (tasks,), {"StringEquals": {"ecs:CreateAction": ["RunTask"]}}),
+        Grant("ecs:StopTask", (tasks,), tagged_tasks),
+        Grant("ecs:DescribeTasks", (tasks,), tagged_tasks),
+        Grant("ecs:ListTasks", ("*",), cluster),
+        Grant("ecs:ListContainerInstances", ("*",), cluster),
+        Grant("ecs:DescribeContainerInstances", (f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/*",), cluster),
+        Grant("iam:PassRole", roles, {"StringEquals": {"iam:PassedToService": [ECS_TASKS]}}),
+        Grant("s3:GetObject", (*staged, f"{RECORDS}*"), {}),
+        Grant("s3:PutObject", (f"{RECORDS}*",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
+        Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": [f"{RECORD_PREFIX}*"]}}),
+        Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
+        Grant("ssm:GetParameter", (f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}",), {}),
+    ]
+
+
+def held_conditions(statement: dict[str, Any]) -> dict[tuple[str, str], list[str]]:
+    """The conditions a statement holds, by operator and key, with the values sorted."""
+    return {(operator, key): sorted(map(str, as_list(value))) for operator, keys in statement.get("Condition", {}).items() for key, value in keys.items()}
+
+
+def allowlist_problems(documents: Role, families: list[str]) -> list[str]:
+    """Every way the policies of a role leave the allowed set: an unknown element, action or resource, a wildcard, a missing condition or a missing grant."""
+    grants = allowed_grants(families)
+    found: list[str] = []
+    granted: set[tuple[str, str]] = set()
+    for name, document in documents.items():
+        if set(document) != {"Version", "Statement"} or document["Version"] != "2012-10-17":
+            found.append(f"{name}: the document holds more than Version 2012-10-17 and Statement")
+        for statement in document["Statement"]:
+            label = f"{name}/{statement.get('Sid')}"
+            unknown = sorted(set(statement) - STATEMENT_KEYS)
+            if unknown:
+                found.append(f"{label}: holds an element outside Sid, Effect, Action, Resource and Condition ({', '.join(unknown)})")
+                continue
+            if statement.get("Effect") == "Deny":
+                continue
+            if statement.get("Effect") != "Allow" or "Action" not in statement or "Resource" not in statement:
+                found.append(f"{label}: is not an Allow statement with an Action and a Resource")
+                continue
+            held = held_conditions(statement)
+            for action in as_list(statement["Action"]):
+                entries = [grant for grant in grants if grant.action == action]
+                if not entries:
+                    found.append(f"{label}: the action {action} is not in the allowed set")
+                    continue
+                for resource in as_list(statement["Resource"]):
+                    matching = [grant for grant in entries if resource in grant.resources]
+                    if not matching:
+                        found.append(f"{label}: {action} on {resource} is outside the allowed resources")
+                    elif not any(
+                        all(held.get((operator, key)) == sorted(values) for operator, keys in grant.conditions.items() for key, values in keys.items())
+                        for grant in matching
+                    ):
+                        found.append(f"{label}: {action} on {resource} lacks a required condition")
+                    else:
+                        granted.add((action, resource))
+    found += [
+        f"the allowed grant {grant.action} on {resource} is not given by any statement"
+        for grant in grants
+        for resource in grant.resources
+        if (grant.action, resource) not in granted
+    ]
+    return found
 
 
 def role_documents(directory: Path, families: list[str]) -> Role:
@@ -611,22 +748,39 @@ def size_checks(label: str, documents: Role) -> list[dict[str, Any]]:
     ]
 
 
+def allowlist_checks(label: str, documents: Role, families: list[str]) -> list[dict[str, Any]]:
+    """The closed check as report rows: one passing row when the role is inside the allowed set, else one failing row per problem."""
+    problems = allowlist_problems(documents, families)
+    if not problems:
+        return [{"case": f"allowlist: the {label} role holds exactly the allowed grants", "expected": True, "observed": True, "passed": True}]
+    return [{"case": f"allowlist: {problem}", "expected": True, "observed": False, "passed": False} for problem in problems]
+
+
 def verify(output: Path, directory: Path = JOBS_TEMPLATE.parent) -> int:
     documents = role_documents(directory, FAMILIES)
+    train_only = role_documents(directory, ["train"])
     rows = with_empty_context(job_cases() + record_cases() + request_cases()) + matrix_cases()
-    checks = evaluate_role(documents, rows)
-    checks += evaluate_role(role_documents(directory, ["train"]), train_only_cases())
+    checks = allowlist_checks("six family", documents, FAMILIES) + allowlist_checks("train only", train_only, ["train"])
+    checks += evaluate_role(documents, rows)
+    checks += evaluate_role(train_only, train_only_cases())
     checks += size_checks("six family", documents) + size_checks("nine family", role_documents(directory, ALL_FAMILIES))
     defects = []
     for name, label, changed in widenings(documents) + planted(documents):
         if changed == documents[name]:
             defects.append({"defect": f"{name}_{label}", "caught": False, "failed_cases": ["the planted change left the policy as it was"]})
             continue
-        failures = [item["case"] for item in evaluate_role({**documents, name: changed}, rows) if not item["passed"]]
-        defects.append({"defect": f"{name}_{label}", "caught": bool(failures), "failed_cases": failures[:3]})
+        widened = {**documents, name: changed}
+        outside = allowlist_problems(widened, FAMILIES)
+        try:
+            failures = [item["case"] for item in evaluate_role(widened, rows) if not item["passed"]]
+        except UnsupportedPolicyElement as error:
+            failures = [f"the evaluator refuses the policy: {error}"]
+        defects.append({"defect": f"{name}_{label}", "caught": bool(failures) and bool(outside), "allowlist": outside[:2], "failed_cases": failures[:3]})
     output.mkdir(parents=True, exist_ok=False)
     (output / "report.json").write_text(json.dumps({"checks": checks, "defects": defects}, indent=2) + "\n")
-    failed = [item["case"] for item in checks if not item["passed"]] + [f"defect not caught: {item['defect']}" for item in defects if not item["caught"]]
+    failed = [item["case"] for item in checks if not item["passed"]] + [
+        f"defect not caught by both the allowlist and the cases: {item['defect']}" for item in defects if not item["caught"]
+    ]
     sys.stdout.write(f"{len(checks)} cases, {len(defects)} planted defects, {len(failed)} problems\n")
     for line in failed:
         sys.stdout.write(f"FAIL {line}\n")
