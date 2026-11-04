@@ -171,7 +171,7 @@
       "^\\.env\\.example$",
       "^dbt/(dbt_project|profiles)\\.yml$",
       "^dbt/models/silver/intermediate/_intermediate__models\\.yml$",
-      "^(README\\.md|docs/quality_checks\\.md)$",
+      "^README\\.md$",
       "^\\.(privacy|writing|cleanup)_allowlist$",
       "^\\.markdownlint-cli2\\.jsonc$",
       "^\\.sqlfluff$",
