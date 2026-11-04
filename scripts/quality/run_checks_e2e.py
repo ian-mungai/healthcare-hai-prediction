@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from scripts.process import clear_git_environment, run_command
+from scripts.quality import scratch_marker
 from scripts.quality.hook_stage import hook_stage
 from scripts.quality.repo_checks import load_yaml
 
@@ -860,6 +861,12 @@ def git(repo: Path, *args: str) -> str:
     return run_command("git", args, cwd=repo, check=True).stdout
 
 
+def reset_hard(repo: Path, target: str) -> None:
+    """Reset a scratch repository that this runner made to ``target``; any other folder is refused and left as it is."""
+    scratch_marker.require(repo, "reset")
+    git(repo, "reset", "-q", "--hard", target)
+
+
 def write(repo: Path, files: dict[str, str | bytes] | dict[str, str]) -> None:
     """Write files into the scratch repository, creating folders as needed."""
     for relative, content in files.items():
@@ -876,6 +883,7 @@ def scratch_repo(root: Path, case: Case) -> Path:
     repo = root / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
+    scratch_marker.mark(repo, "scripts.quality.run_checks_e2e")
     git(repo, "config", "user.name", "check test")
     git(repo, "config", "user.email", "test@example.invalid")
     # No background garbage collection or maintenance: a detached run can still be writing into .git when the scratch
@@ -956,7 +964,7 @@ def run_range_case() -> tuple[bool, str]:
         git(repo, "commit", "--allow-empty", "-qm", f"fix: bad credit\n\n{SCISSORS}\n{CREDIT}: Claude <{VENDOR_ADDRESS}>")
         bad = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         invalid = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", "missing-ref", "HEAD"], cwd=repo)
-        git(repo, "reset", "-q", "--hard", "HEAD~1")
+        reset_hard(repo, "HEAD~1")
         git(repo, "commit", "--allow-empty", "-qm", "fix: handle retries\n\nAccepted at recheck 2 of lane A.")
         plan = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         ok = good.returncode == 0 and bad.returncode == 1 and "AI attribution in commit message" in bad.stderr and invalid.returncode != 0
@@ -1133,7 +1141,7 @@ def run_workflow_range_case() -> tuple[bool, str]:
         git(repo, "commit", "-qm", "refactor: remove a branch function")
         deleted = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "pull_request", base, deleted, ancestor, 1, f"{removed} was removed"))
-        git(repo, "reset", "--hard", head)
+        reset_hard(repo, head)
         git(repo, "commit", "--allow-empty", "-qm", "Invalid subject")
         invalid = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "branch_commit_message_is_rejected", "pull_request", base, invalid, ancestor, 1, "not a Conventional Commit"))

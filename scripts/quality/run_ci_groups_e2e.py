@@ -57,7 +57,7 @@ from unittest import mock
 
 from scripts.lakehouse import feature_shards
 from scripts.process import clear_git_environment, find_program, run_command
-from scripts.quality import ci_groups, ci_hooks, core_commands
+from scripts.quality import ci_groups, ci_hooks, core_commands, scratch_marker
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
@@ -288,41 +288,84 @@ def install_copies(work: Path) -> None:
 
 
 def restore(work: Path) -> None:
+    scratch_marker.require(work, "restore")
     git(work, "reset", "--quiet", "--hard", "HEAD")
     install_copies(work)
 
 
-def restore_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
-    """restore() resets the scratch worktree that this run made and refuses any other folder: a folder it refuses keeps its uncommitted edit."""
-    foreign = scratch / "foreign_repository"
-    foreign.mkdir()
-    git(foreign, "init", "--quiet")
-    git(foreign, "config", "user.name", "foreign owner")
-    git(foreign, "config", "user.email", "foreign@example.invalid")
-    (foreign / "notes.txt").write_text("committed\n", encoding="utf-8")
-    git(foreign, "add", "notes.txt")
-    git(foreign, "commit", "--quiet", "--message", "chore: foreign notes")
+def foreign_repository(scratch: Path, name: str) -> tuple[Path, str]:
+    """A repository that no runner made, created apart from the run, with a committed file and an uncommitted edit of it; the edit's text comes back too."""
+    folder = scratch / name
+    folder.mkdir()
+    git(folder, "init", "--quiet")
+    git(folder, "config", "user.name", "foreign owner")
+    git(folder, "config", "user.email", "foreign@example.invalid")
+    (folder / "notes.txt").write_text("committed\n", encoding="utf-8")
+    git(folder, "add", "notes.txt")
+    git(folder, "commit", "--quiet", "--message", "chore: foreign notes")
     edit = "an edit that its owner has not committed\n"
-    (foreign / "notes.txt").write_text(edit, encoding="utf-8")
+    (folder / "notes.txt").write_text(edit, encoding="utf-8")
+    return folder, edit
+
+
+def refusal_of(action: Callable[[], object], folder: Path, edit: str) -> dict[str, Any]:
+    """Run ``action`` on a foreign folder: whether it was refused with the folder named, and whether the folder's edit survived."""
     refusal: Exception | None = None
     try:
-        restore(foreign)
+        action()
     except Exception as failure:
         refusal = failure
-    kept = (foreign / "notes.txt").read_text(encoding="utf-8") == edit
+    kept = (folder / "notes.txt").read_text(encoding="utf-8") == edit
+    return {"refused": refusal is not None and str(folder) in str(refusal), "edit_kept": kept, "error": str(refusal)[-300:]}
+
+
+def restore_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
+    """restore() resets the scratch worktree that this run made and refuses any other folder: a folder it refuses keeps its uncommitted edit.
+
+    The scratch worktree of the run carries the marker, a marker copied from it into another folder does not make that folder the run's, and the same
+    refusal holds for the reset helpers of the checks and lint tools runners. Two planted defects (the check removed, a marker written into every folder)
+    must each make the refusal case fail."""
+    from scripts.quality import run_checks_e2e, run_lint_tools_e2e
+
+    foreign, edit = foreign_repository(scratch, "foreign_repository")
+    refused = refusal_of(lambda: restore(foreign), foreign, edit)
     tracked = work / "pyproject.toml"
     original = tracked.read_text(encoding="utf-8")
     tracked.write_text(original + "\n# an edit of this run\n", encoding="utf-8")
     restore(work)
+    copied, copied_edit = foreign_repository(scratch, "foreign_with_copied_marker")
+    shutil.copy2(
+        Path(git(work, "rev-parse", "--absolute-git-dir").strip()) / scratch_marker.MARKER, Path(git(copied, "rev-parse", "--absolute-git-dir").strip())
+    )
+    copied_result = refusal_of(lambda: restore(copied), copied, copied_edit)
+    checks_runner, checks_edit = foreign_repository(scratch, "foreign_for_the_checks_runner")
+    checks_result = refusal_of(lambda: run_checks_e2e.reset_hard(checks_runner, "HEAD"), checks_runner, checks_edit)
+    lint_runner, lint_edit = foreign_repository(scratch, "foreign_for_the_lint_tools_runner")
+    lint_result = refusal_of(lambda: run_lint_tools_e2e.restore(lint_runner), lint_runner, lint_edit)
+    unchecked, unchecked_edit = foreign_repository(scratch, "planted_check_removed")
+    with mock.patch.object(scratch_marker, "require", lambda folder, action: None):
+        check_removed = refusal_of(lambda: restore(unchecked), unchecked, unchecked_edit)
+    marked, marked_edit = foreign_repository(scratch, "planted_marker_everywhere")
+    scratch_marker.mark(marked, "planted defect")
+    marker_everywhere = refusal_of(lambda: restore(marked), marked, marked_edit)
     return [
-        {
-            "case": "restore_refuses_a_folder_the_runner_did_not_create",
-            "passed": refusal is not None and kept and str(foreign) in str(refusal),
-            "edit_kept": kept,
-            "refused": refusal is not None,
-            "error": str(refusal)[-300:],
-        },
+        {"case": "restore_refuses_a_folder_the_runner_did_not_create", "passed": refused["refused"] and refused["edit_kept"], **refused},
         {"case": "restore_resets_the_scratch_worktree_of_the_run", "passed": tracked.read_text(encoding="utf-8") == original},
+        {"case": "restore_refuses_a_folder_with_a_copied_marker", "passed": copied_result["refused"] and copied_result["edit_kept"], **copied_result},
+        {"case": "checks_runner_reset_refuses_a_foreign_folder", "passed": checks_result["refused"] and checks_result["edit_kept"], **checks_result},
+        {"case": "lint_tools_runner_restore_refuses_a_foreign_folder", "passed": lint_result["refused"] and lint_result["edit_kept"], **lint_result},
+        {
+            "case": "planted_check_removed_is_reported",
+            "passed": not (check_removed["refused"] and check_removed["edit_kept"]),
+            "refused": check_removed["refused"],
+            "edit_kept": check_removed["edit_kept"],
+        },
+        {
+            "case": "planted_marker_everywhere_is_reported",
+            "passed": not (marker_everywhere["refused"] and marker_everywhere["edit_kept"]),
+            "refused": marker_everywhere["refused"],
+            "edit_kept": marker_everywhere["edit_kept"],
+        },
     ]
 
 
