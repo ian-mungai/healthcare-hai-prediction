@@ -71,7 +71,8 @@ class LaunchGuarantees:
         if outcome.logs:
             self.log.info("last log lines of the failed job:\n%s", outcome.logs)
         if not outcome.ok:
-            raise JobFailed(f"{self.job.job} attempt {self.job.attempt} ended {outcome.outcome} (exit {outcome.exit_code}): {outcome.reason}")
+            earlier = " in an earlier attempt, nothing was launched, start a new run to try again" if outcome.adopted else ""
+            raise JobFailed(f"{self.job.job} attempt {self.job.attempt} ended {outcome.outcome} (exit {outcome.exit_code}){earlier}: {outcome.reason}")
 
     def on_kill(self) -> None:
         if not self.stop_on_kill:

@@ -14,7 +14,8 @@ the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from botocore.exceptions import ClientError, ReadTimeoutError
@@ -24,6 +25,7 @@ CLUSTER = "stand-in-cluster"
 REGION = "stand-in-region"
 FINISH_AFTER = 3
 HOST_SUFFIX = "_host"
+STOPPED = "STOPPED"
 FARGATE_PROVIDERS = frozenset({"FARGATE", "FARGATE_SPOT"})
 CLUSTER_DEFAULT_PROVIDER = "FARGATE_SPOT"
 
@@ -48,6 +50,9 @@ class FakeEcs:
         self.finish_after = FINISH_AFTER
         self.host_provider = "stand-in_host"  # the registered EC2 capacity provider of the cluster
         self.host_full = False
+        self.clock: Callable[[], float] | None = None  # when set, a new task carries createdAt from it
+        self.forget_stopped_tokens = False  # worst case for a repeated client token after the task stopped, which the service documentation leaves open
+        self.list_page = 100  # tasks per ListTasks page
         self.instance_free = {"CPU": 4096, "MEMORY": 31000}  # what the host's container instance reports as remaining
         self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
 
@@ -84,13 +89,13 @@ class FakeEcs:
         if arguments.get("count") != 1 or not 1 <= len(token) <= 64 or len(started_by) > 128 or not all(33 <= ord(c) <= 126 for c in token):
             raise client_error("InvalidParameterException", "RunTask")
         on_host = self._check_shape(arguments)
-        if token in self.tokens:
+        if token in self.tokens and not (self.forget_stopped_tokens and self.tasks[self.tokens[token]]["lastStatus"] == STOPPED):
             return {"tasks": [self.tasks[self.tokens[token]]], "failures": []}
         if on_host and self.host_full:
             return {"tasks": [], "failures": [{"arn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in", "reason": "RESOURCE:CPU"}]}
         names = [item["name"] for item in arguments.get("overrides", {}).get("containerOverrides", [])]
         names = ["init", *names] if str(arguments["taskDefinition"]).removesuffix(HOST_SUFFIX).endswith("_train") else names
-        digest = hashlib.sha256(token.encode()).hexdigest()[:32]
+        digest = hashlib.sha256(token.encode() + (b"again%d" % len(self.tasks) if token in self.tokens else b"")).hexdigest()[:32]
         arn = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{digest}"
         task = {
             "taskArn": arn,
@@ -102,6 +107,8 @@ class FakeEcs:
             "polls": 0,
             "request": dict(arguments),
         }
+        if self.clock is not None:
+            task["createdAt"] = datetime.fromtimestamp(self.clock(), UTC)
         if on_host:
             task.update(
                 launchType="EC2",
@@ -121,8 +128,17 @@ class FakeEcs:
         self._enter("list_tasks", arguments)
         if "startedBy" in arguments and "desiredStatus" in arguments:
             raise client_error("InvalidParameterException", "ListTasks")
-        found = [arn for arn, task in self.tasks.items() if task["startedBy"] == arguments.get("startedBy") and task["desiredStatus"] == "RUNNING"]
-        return {"taskArns": found}
+        wanted = arguments.get("desiredStatus", "RUNNING")
+        found = [
+            arn
+            for arn, task in self.tasks.items()
+            if ("startedBy" not in arguments or task["startedBy"] == arguments["startedBy"]) and task["desiredStatus"] == wanted
+        ]
+        start = int(arguments.get("nextToken", "0"))
+        reply: dict[str, Any] = {"taskArns": found[start : start + self.list_page]}
+        if start + self.list_page < len(found):
+            reply["nextToken"] = str(start + self.list_page)
+        return reply
 
     def describe_tasks(self, **arguments: Any) -> dict[str, Any]:
         self._enter("describe_tasks", arguments)

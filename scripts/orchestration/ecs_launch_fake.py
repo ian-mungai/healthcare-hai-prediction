@@ -2,9 +2,10 @@
 
 ``FakeLaunchBucket`` has the call surface of the boto3 S3 client that ``orchestration.ecs_launch.S3LaunchStore`` uses: ``put_object`` and ``get_object``. It
 models the launch role: a write needs ``IfNoneMatch="*"`` and an existing key answers ``PreconditionFailed``; any key outside the allowed prefix answers
-``AccessDenied``; the role cannot list, so it has no list call and S3 answers a read of an absent key with ``AccessDenied``, not ``NoSuchKey``. It has no
-delete call.
-``deny_reads`` models a role that lost its read grant. ``FakeClock`` moves time only when a case sleeps, so ten minutes of waiting take no real time.
+``AccessDenied``; an absent key answers ``NoSuchKey``, as it does when the role may list the prefix. It has no list call and no delete call, because the
+library never lists or deletes. Three switches model faults: ``absent_reads_denied`` is a role that cannot list (an absent key answers ``AccessDenied``),
+``deny_reads`` is a role that lost its read grant, and ``deny_keys`` denies the read of single records while writes stay allowed. ``FakeClock`` moves time
+only when a case sleeps, so ten minutes of waiting take no real time.
 """
 
 from __future__ import annotations
@@ -58,6 +59,8 @@ class FakeLaunchBucket:
         self.put_faults: dict[str, list[Exception]] = {}  # queued errors for a write whose key ends with the name, before anything is stored
         self.lose_reply_once = False
         self.deny_reads = False
+        self.absent_reads_denied = False
+        self.deny_keys: set[str] = set()
 
     def _enter(self, operation: str, arguments: dict[str, Any], key: str) -> None:
         self.calls.append((operation, dict(arguments)))
@@ -88,6 +91,8 @@ class FakeLaunchBucket:
 
     def get_object(self, **arguments: Any) -> dict[str, Any]:
         self._enter("get_object", arguments, arguments["Key"])
-        if self.deny_reads or arguments["Key"] not in self.objects:
+        if self.deny_reads or arguments["Key"] in self.deny_keys:
             raise client_error("AccessDenied", "get_object")
+        if arguments["Key"] not in self.objects:
+            raise client_error("AccessDenied" if self.absent_reads_denied else "NoSuchKey", "get_object")
         return {"Body": _Body(self.objects[arguments["Key"]])}

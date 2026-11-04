@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from orchestration.ecs_launch_operator import JobFailed, LaunchGuarantees
-from scripts.orchestration.ecs_launch_cases import CLUSTER, RUN, Rig, refuses, require, spec
+from scripts.orchestration.ecs_launch_cases import CLUSTER, RUN, Interrupted, Rig, refuses, require, spec
 from scripts.orchestration.ecs_launch_standin import MIRRORED_PROVIDER_VERSION, StandInEcsRunTaskOperator
 
 CONSTRAINTS = Path(__file__).resolve().parents[2] / "services" / "orchestration" / "constraints-3.12.txt"
@@ -21,10 +21,6 @@ CONSTRAINTS = Path(__file__).resolve().parents[2] / "services" / "orchestration"
 
 class StandInLaunchOperator(LaunchGuarantees, StandInEcsRunTaskOperator):
     """The launch operator over the stand-in base: the same bases order as the provider subclass."""
-
-
-class Interrupted(BaseException):
-    """The scheduler process ends while the operator waits."""
 
 
 def operator(rig: Rig, attempt: int = 1, stop_on_kill: bool = False, **changes: Any) -> StandInLaunchOperator:
@@ -54,6 +50,15 @@ def failure_raises() -> None:
     rig.ecs.omit = {"verify"}
     error = refuses(JobFailed, lambda: operator(rig).execute(context()))
     require("acceptance_check_missing:verify" in str(error), f"a missing acceptance container fails the task: {error}")
+
+
+def retry_reports_earlier_failure() -> None:
+    rig = Rig()
+    rig.ecs.plan = {"gold": 3}
+    refuses(JobFailed, lambda: operator(rig).execute(context()))
+    error = refuses(JobFailed, lambda: operator(rig, 2).execute(context(2)))
+    require("earlier attempt" in str(error) and "new run" in str(error) and "3" in str(error), f"the retry names the earlier failure: {error}")
+    require(rig.ecs.count("run_task") == 1 and rig.events(2) == [], "the retry launched nothing")
 
 
 def refuses_deferrable_and_no_wait() -> None:
@@ -122,6 +127,7 @@ def provider_pin() -> None:
 CASES: dict[str, Callable[[], None]] = {
     "operator_success": success,
     "operator_failure_raises": failure_raises,
+    "operator_retry_reports_earlier_failure": retry_reports_earlier_failure,
     "operator_refuses_deferrable_and_no_wait": refuses_deferrable_and_no_wait,
     "operator_reattaches_after_interrupt": reattaches_after_interrupt,
     "operator_stop_on_kill": stop_on_kill,

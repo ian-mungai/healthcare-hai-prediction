@@ -1,18 +1,28 @@
 """Launch one batch job as one ECS task on the host and keep the guarantees the job broker gave.
 
-A job attempt is named ``<run>:<job>:<attempt>``. The launcher writes the facts of an attempt as write-once records (``LaunchStore``): ``intent`` before the
-RunTask call, ``started`` with the task ARN after it, ``end`` with the outcome. A record is never replaced, so a restart, a retry or a second caller reads the
-same story. The calls are split so that an Airflow operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) and ``run`` chains them.
+A job attempt is named ``<run>:<job>:<attempt>``. A run and job have one launch. The launcher writes the facts as write-once records (``LaunchStore``): a
+``claim`` (created with a conditional write) says which attempt may start the task, and the attempt's ``intent``, ``started`` (the task ARN) and ``end`` (the
+outcome) records follow. A record is never replaced, so a restart, a retry or a second caller reads the same story. The calls are split so that an Airflow
+operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) and ``run`` chains them.
 
-1. Adoption: an attempt with an intent and no ``started`` finds its task by identity (the adapter's ``startedBy`` tag) instead of launching again.
-2. Reattach: a new attempt of the same run and job joins the live task of an earlier attempt and keeps its start time and deadline, only when the bound inputs
-   (code digest, request hash and input run) equal those of the first attempt. Different bound inputs are refused. Nothing launches beside a live task, and a
-   task whose state cannot be read blocks the launch. An earlier attempt that succeeded is adopted and never launched again.
-3. The deadline counts from the recorded start of the task and is the recorded one, so it holds across restarts.
-4. A task ends in success only when every acceptance container exited 0. The adapter already leaves out the guard container.
-5. A stop is confirmed (the task reports STOPPED within 120 seconds) before anything is recorded; otherwise ``StopFailed`` leaves the stop repeatable.
-6. A job that does not fit waits at most 10 minutes (the host's free CPU, memory and scratch, and RunTask capacity answers), then ends ``failed_closed`` with a
-   fit report. There is no fallback to another capacity provider.
+1. The claim is the authority of the run and job, written before any ECS action. History that cannot be read blocks the launch: a record is missing only
+   when S3 answers NoSuchKey, and a denied read (403) refuses with a clear message and starts nothing.
+2. One launch: only the attempt that wins the conditional create of the claim starts a task. Every other caller settles the claim it finds instead: it joins
+   the live task, reports the recorded outcome, or completes an unresolved launch under that launch's own identity. The claim that stands is checked against
+   the caller's bound inputs before anything else happens.
+3. An ended launch is terminal. A success is adopted. A failure, timeout, closed launch or cancel is reported by every later attempt, which launches nothing:
+   trying again needs a new run.
+4. Unresolved launches: a claim with no task record is resolved by asking ECS for the task of its identity (the ``startedBy`` tag), running or stopped, and, if
+   none is listed, by repeating the RunTask call with the same identity and client token, which returns the task if one was accepted. A RunTask reply that is
+   lost or timed out is unknown, never a refusal: the launch stays unresolved until a lookup answers.
+5. Reattach: a new attempt joins the live task of the launch and keeps its start time and deadline, only when the bound inputs (code digest, request hash and
+   input run) equal those of the launch. Different bound inputs are refused.
+6. The deadline counts from the recorded start of the task and is the recorded one, so it holds across restarts. A recovered task starts when ECS created it,
+   else when the claim was written, never when the recovery ran.
+7. A task ends in success only when every acceptance container exited 0. The adapter already leaves out the guard container.
+8. A stop is confirmed (the task reports STOPPED within 120 seconds) before anything is recorded; otherwise ``StopFailed`` leaves the stop repeatable.
+9. A job that does not fit waits at most 10 minutes counted from its claim (the host's free CPU, memory and scratch, and RunTask capacity answers), asking for
+   a task of its identity after every wait, then ends ``failed_closed`` with a fit report. There is no fallback to another capacity provider.
 
 Every wait has a deadline. The library calls no process and starts no thread.
 """
@@ -30,12 +40,12 @@ from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from orchestration.ecs_adapter import HOST, EcsAdapter, TaskRefused, TaskReport, TaskUnavailable, classify, scrub
+from orchestration.ecs_adapter import HOST, CapacityUnavailable, EcsAdapter, TaskFound, TaskRefused, TaskReport, TaskUnavailable, classify, scrub
 
 BOUND_FIELDS = ("code_digest", "request_hash", "input_run")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 JOB = re.compile(r"[a-z][a-z0-9_]{1,40}")
-EVENTS = ("intent", "started", "end")
+EVENTS = ("claim", "intent", "started", "end")
 OUTCOMES = frozenset({"succeeded", "failed", "timeout", "cancelled", "failed_closed"})
 TIMEOUT_EXIT = 124
 NO_CHECK_EXIT = 125
@@ -47,7 +57,8 @@ FIT_WAIT_SECONDS = 600.0
 FIT_POLL_SECONDS = 15.0
 POLL_SECONDS = 6.0
 POLL_FAILURES = 5
-ABSENT_CODES = frozenset({"NoSuchKey", "AccessDenied"})
+ABSENT_CODE = "NoSuchKey"
+DENIED_CODES = frozenset({"AccessDenied", "Forbidden", "403"})
 CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "orchestration" / "ecs_launch.json"
 PREFIX_PATTERN = re.compile(r"[a-z0-9_]+(/[a-z0-9_]+)*")
 REPORT_LIMIT = 300
@@ -108,8 +119,8 @@ class JobSpec:
 
 @dataclass(frozen=True)
 class Outcome:
-    """How a job attempt ended. ``adopted`` is True when the result is an earlier attempt's recorded success. ``logs`` and ``cleanup_note`` come from the
-    call that concluded the attempt and are not part of the recorded outcome."""
+    """How a job attempt ended. ``adopted`` is True when the result is an earlier attempt's recorded outcome, which this attempt reports without
+    launching. ``logs`` and ``cleanup_note`` come from the call that concluded the attempt and are not part of the recorded outcome."""
 
     outcome: str
     exit_code: int
@@ -141,7 +152,12 @@ class LaunchStore(Protocol):
         ...
 
     def records(self, run_id: str, job: str, attempts: Sequence[int]) -> list[dict[str, Any]]:
-        """The records of the given attempts of the run and job, by attempt and then by event order. The store never lists: it reads known keys."""
+        """The intent, started and end records of the given attempts of the run and job, by attempt and then by event order. The store never lists: it reads
+        known keys."""
+        ...
+
+    def claim(self, run_id: str, job: str) -> dict[str, Any] | None:
+        """The claim of the run and job: the one launch the run and job may have. None while nobody holds it."""
         ...
 
 
@@ -162,7 +178,8 @@ class Launch:
     report: TaskReport | None = None
     timed_out: bool = False
     outcome: Outcome | None = None
-    recovered_intent: bool = False
+    claim: dict[str, Any] | None = None
+    owner: int | None = None
 
 
 def launch_record_prefix() -> str:
@@ -193,7 +210,7 @@ def parse_record(raw: bytes, where: str) -> dict[str, Any]:
         raise LaunchError(f"launch record {where} is not JSON") from None
     event = record.get("event") if isinstance(record, dict) else None
     needed: dict[str, type | tuple[type, ...]] = {"schema_version": int, "event": str, "run_id": str, "job": str, "attempt": int, "at": str}
-    if event == "intent":
+    if event in ("claim", "intent"):
         needed |= {"bound": dict, "deadline_seconds": int, "acceptance": list, "need": dict}
     elif event == "started":
         needed |= {"task_arn": str, "job_started_at": str}
@@ -206,29 +223,59 @@ def parse_record(raw: bytes, where: str) -> dict[str, Any]:
 
 
 class S3LaunchStore:
-    """Launch records as write-once S3 objects: ``<prefix>/<run>/<job>/<attempt>/<event>.json``, with ``prefix`` from ``launch_record_prefix``.
+    """Launch records as write-once S3 objects: ``<prefix>/<run>/<job>/claim.json`` (the authority of the run and job) and
+    ``<prefix>/<run>/<job>/<attempt>/<event>.json``, with ``prefix`` from ``launch_record_prefix``.
 
-    The writer's role grants put and get on that prefix and no listing. So every write sends ``IfNoneMatch="*"`` (a 412 means the record exists), nothing is
-    deleted or overwritten, and only known keys are read. S3 answers a read of an absent key with AccessDenied when the caller cannot list, so a denied
-    read counts as a missing record. A write that cannot be read back right after it succeeds means the read grant is missing, and it fails loudly, because
-    every other absent record would then look missing too.
+    Every write sends ``IfNoneMatch="*"`` (a 412 means the record exists), nothing is deleted or overwritten, and only known keys are read. The code never
+    lists. A record is missing only when S3 answers NoSuchKey. A denied read (403) is never read as missing: it means the history cannot be read, so it
+    refuses. S3 answers NoSuchKey instead of AccessDenied for an absent key only when the role may list the prefix, so the store checks that once with a key
+    that cannot exist, and refuses to work with a role that cannot tell the two apart.
     """
 
     def __init__(self, client: Any, bucket: str, prefix: str) -> None:
         self.client = client
         self.bucket = bucket
         self.prefix = prefix.strip("/")
+        self.distinguishes = False
 
     def key_of(self, run_id: str, job: str, attempt: int, event: str) -> str:
         return f"{self.prefix}/{run_id}/{job}/{attempt:02d}/{event}.json"
 
+    def claim_key(self, run_id: str, job: str) -> str:
+        return f"{self.prefix}/{run_id}/{job}/claim.json"
+
+    def require_distinguishable(self) -> None:
+        """Read a key that cannot exist. The answer must be NoSuchKey: with AccessDenied a missing record and a denied record look the same."""
+        if self.distinguishes:
+            return
+        try:
+            self.client.get_object(Bucket=self.bucket, Key=f"{self.prefix}/absent-probe.json")
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code == ABSENT_CODE:
+                self.distinguishes = True
+                return
+            if code in DENIED_CODES:
+                raise LaunchRefused(
+                    "launch records cannot be read safely: a read of a record that does not exist answered AccessDenied, so a missing record and a denied "
+                    "record look the same. The role needs s3:ListBucket on the launch record prefix, so that a missing record answers 404 "
+                    "(the code never lists)."
+                ) from None
+            raise self.refusal(code) from None
+        except BotoCoreError as error:
+            raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
+        raise LaunchError("a record that cannot exist was read")
+
     def get(self, key: str) -> dict[str, Any] | None:
+        self.require_distinguishable()
         try:
             body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
         except ClientError as error:
             code = str(error.response.get("Error", {}).get("Code", ""))
-            if code in ABSENT_CODES:
+            if code == ABSENT_CODE:
                 return None
+            if code in DENIED_CODES:
+                raise LaunchRefused(f"launch history cannot be read ({key} answered AccessDenied): a launch never starts on history it cannot read") from None
             raise self.refusal(code) from None
         except BotoCoreError as error:
             raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
@@ -241,7 +288,10 @@ class S3LaunchStore:
         return LaunchRefused(f"launch record store refused the call: {code or 'ClientError'}")
 
     def put_once(self, record: Mapping[str, Any]) -> dict[str, Any]:
-        key = self.key_of(record["run_id"], record["job"], record["attempt"], record["event"])
+        if record["event"] == "claim":
+            key = self.claim_key(record["run_id"], record["job"])
+        else:
+            key = self.key_of(record["run_id"], record["job"], record["attempt"], record["event"])
         try:
             self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(record, sort_keys=True).encode(), IfNoneMatch="*")
         except ClientError as error:
@@ -250,7 +300,7 @@ class S3LaunchStore:
                 raise self.refusal(code) from None
             stored = self.get(key)
             if stored is None:
-                raise LaunchRefused("a launch record exists but cannot be read: check that the role can read the launch record prefix") from None
+                raise LaunchUnavailable("a launch record exists but is not readable yet: call again") from None
             return stored
         except BotoCoreError:
             stored = self.get(key)
@@ -258,17 +308,15 @@ class S3LaunchStore:
                 raise LaunchUnavailable("launch record store: the write is not confirmed") from None
             return stored
         if self.get(key) is None:
-            raise LaunchRefused("a launch record was written but cannot be read back: check that the role can read the launch record prefix")
+            raise LaunchUnavailable("a launch record was written but is not readable yet: call again")
         return dict(record)
 
+    def claim(self, run_id: str, job: str) -> dict[str, Any] | None:
+        return self.get(self.claim_key(run_id, job))
+
     def records(self, run_id: str, job: str, attempts: Sequence[int]) -> list[dict[str, Any]]:
-        found: list[dict[str, Any]] = []
-        for attempt in attempts:
-            intent = self.get(self.key_of(run_id, job, attempt, "intent"))
-            if intent is not None:
-                found.append(intent)
-                found += [record for event in ("started", "end") if (record := self.get(self.key_of(run_id, job, attempt, event))) is not None]
-        return found
+        keys = [self.key_of(run_id, job, attempt, event) for attempt in attempts for event in ("intent", "started", "end")]
+        return [record for key in keys if (record := self.get(key)) is not None]
 
 
 class EcsFitProbe:
@@ -344,15 +392,16 @@ class Launcher:
         if problems:
             raise LaunchRefused(f"request refused: {', '.join(problems)}")
 
-    def require_bound(self, spec: JobSpec, records: list[dict[str, Any]]) -> None:
-        """Every attempt of a run and job uses the bound inputs of its first attempt. A changed input needs a new run."""
-        first = next((record for record in records if record["event"] == "intent"), None)
-        if first is None:
-            return
+    def events(self, run_id: str, job: str, attempt: int) -> dict[str, dict[str, Any]]:
+        """The intent, started and end records of one attempt, by event."""
+        return {record["event"]: record for record in self.store.records(run_id, job, [attempt])}
+
+    def check_bound(self, spec: JobSpec, first: Mapping[str, Any]) -> None:
+        """The request uses the bound inputs of the first launch of its run and job. A changed input needs a new run."""
         for name in BOUND_FIELDS:
             if first["bound"].get(name) != spec.bound[name]:
                 raise LaunchRefused(
-                    f"run {spec.run_id} job {spec.job} is bound to the {name} of its first attempt ({str(first['bound'].get(name, ''))[:12]}), "
+                    f"run {spec.run_id} job {spec.job} is bound to the {name} of its first launch ({str(first['bound'].get(name, ''))[:12]}), "
                     f"but this request has {spec.bound[name][:12]}: start a new run for a changed {name}"
                 )
 
@@ -366,13 +415,19 @@ class Launcher:
         except TaskUnavailable as error:
             raise LaunchUnavailable(f"the task cannot be read now ({error})") from None
 
-    def find(self, run_id: str, job: str, attempt: int) -> str | None:
+    def lookup(self, claim: Mapping[str, Any]) -> TaskFound | None:
+        """The task started under the identity of the claim's attempt, running or stopped. None only when ECS lists no such task."""
         try:
-            return self.adapter.find(f"{run_id}:{job}:{attempt}")
+            return self.adapter.lookup(f"{claim['run_id']}:{claim['job']}:{claim['attempt']}")
         except TaskUnavailable as error:
-            raise LaunchUnavailable(f"the task of attempt {attempt} cannot be looked up now ({error})") from None
+            raise LaunchUnavailable(f"the task of attempt {claim['attempt']} cannot be looked up now ({error})") from None
 
-    def judge(self, report: TaskReport, acceptance: list[str] | tuple[str, ...]) -> tuple[str, int, str]:
+    @staticmethod
+    def began_of(found: TaskFound, claim: Mapping[str, Any]) -> str:
+        """When the task began: the time ECS created it, else the time of the durable claim. Never the time of a recovery."""
+        return iso(found.created_at) if found.created_at is not None else str(claim["at"])
+
+    def judge(self, report: TaskReport, acceptance: Sequence[str]) -> tuple[str, int, str]:
         """The recorded outcome of a task that has ended: outcome, exit code and reason."""
         if report.state == "gone":
             return "failed_closed", CLOSED_EXIT, "task_not_found"
@@ -385,121 +440,211 @@ class Launcher:
         return "failed", int(report.exit_code or CLOSED_EXIT), report.reason
 
     def attach(self, spec: JobSpec) -> Launch:
-        """Validate the request and reconcile it with the records and the cloud: an ended attempt, an earlier attempt's success, the live task of this or an
-        earlier attempt, or nothing yet. Nothing is launched here."""
+        """Validate the request and reconcile it with the records and the cloud: an ended attempt, the recorded outcome of the run and job's one launch, the
+        live task of that launch, an unresolved launch, or nothing yet. Nothing is launched here."""
         self.validate(spec)
-        records = self.store.records(spec.run_id, spec.job, range(1, spec.attempt + 1))
-        self.require_bound(spec, records)
+        claim = self.store.claim(spec.run_id, spec.job)
+        mine = self.events(spec.run_id, spec.job, spec.attempt)
+        first = claim or mine.get("intent")
+        if first is not None:
+            self.check_bound(spec, first)
         launch = Launch(spec)
-        mine = {record["event"]: record for record in records if record["attempt"] == spec.attempt}
         if "end" in mine:
             launch.outcome = outcome_of(mine["end"])
-            return launch
-        if "started" in mine:
+        elif "started" in mine:
             launch.arn, launch.started_at = mine["started"]["task_arn"], stamp(mine["started"]["job_started_at"])
             launch.deadline_seconds = mine["intent"]["deadline_seconds"]
-            return launch
-        for attempt in sorted({record["attempt"] for record in records if record["attempt"] != spec.attempt}):
-            self.consider_earlier(launch, {record["event"]: record for record in records if record["attempt"] == attempt})
-            if launch.outcome is not None or launch.arn is not None:
-                return launch
-        launch.recovered_intent = "intent" in mine
+            launch.owner = mine["intent"].get("reattached_from")
+        else:
+            self.settle(launch, claim, mine)
         return launch
 
-    def consider_earlier(self, launch: Launch, theirs: dict[str, dict[str, Any]]) -> None:
-        """Join the live task of an earlier attempt, adopt its recorded or recovered success, or leave it when it failed or never started a task."""
-        origin = theirs["intent"]
-        attempt = origin["attempt"]
-        if "end" in theirs:
-            if theirs["end"]["outcome"] == "succeeded":
-                launch.outcome = outcome_of(theirs["end"], adopted=True)
+    def settle(self, launch: Launch, claim: dict[str, Any] | None, mine: dict[str, dict[str, Any]]) -> None:
+        """Settle the one launch of the run and job. An ended launch is terminal: a success is adopted, and a failure, timeout or cancel is reported, never
+        launched again, because trying again needs a new run. A live task is joined. A launch with no task record is looked up by its identity, stopped tasks
+        too, and one that cannot be found stays unresolved in ``launch.claim``: nothing else may launch until it is resolved."""
+        spec = launch.spec
+        launch.claim = None
+        if claim is None:
             return
-        arn = theirs["started"]["task_arn"] if "started" in theirs else self.find(origin["run_id"], origin["job"], attempt)
-        if arn is None:
+        attempt = claim["attempt"]
+        theirs = mine if attempt == spec.attempt else self.events(spec.run_id, spec.job, attempt)
+        if "end" in theirs:
+            launch.outcome = outcome_of(theirs["end"], adopted=attempt != spec.attempt)
+            return
+        if "started" in theirs:
+            arn, began = theirs["started"]["task_arn"], theirs["started"]["job_started_at"]
+        else:
+            found = self.lookup(claim)
+            if found is None:
+                launch.claim = claim
+                return
+            self.record_intent(claim)
+            stored = self.record_started(claim, found.arn, self.began_of(found, claim))
+            arn, began = stored["task_arn"], stored["job_started_at"]
+        if attempt == spec.attempt:
+            launch.arn, launch.started_at, launch.deadline_seconds = arn, stamp(began), claim["deadline_seconds"]
             return
         report = self.poll(arn)
         if report.state in LIVE:
-            began = theirs["started"]["job_started_at"] if "started" in theirs else origin["at"]
-            self.join(launch, origin, arn, began)
+            self.join(launch, claim, arn, began)
             return
-        outcome, code, reason = self.judge(report, origin["acceptance"])
-        end = self.put("end", attempt, origin, outcome=outcome, exit_code=code, reason=reason[:REPORT_LIMIT], task_arn=arn)
-        if end["outcome"] == "succeeded":
-            launch.outcome = outcome_of(end, adopted=True)
+        outcome, code, reason = self.judge(report, claim["acceptance"])
+        end = self.put("end", attempt, claim, outcome=outcome, exit_code=code, reason=reason[:REPORT_LIMIT], task_arn=arn)
+        launch.outcome = outcome_of(end, adopted=True)
 
-    def join(self, launch: Launch, origin: Mapping[str, Any], arn: str, began: str) -> None:
-        """Record this attempt as a reattachment to the live task of an earlier attempt, with that attempt's start time and deadline."""
+    def record_intent(self, claim: Mapping[str, Any]) -> dict[str, Any]:
+        return self.put(
+            "intent",
+            claim["attempt"],
+            claim,
+            bound=claim["bound"],
+            deadline_seconds=claim["deadline_seconds"],
+            acceptance=claim["acceptance"],
+            need=claim["need"],
+        )
+
+    def record_started(self, claim: Mapping[str, Any], arn: str, began: str) -> dict[str, Any]:
+        started = self.put("started", claim["attempt"], claim, task_arn=arn, job_started_at=began)
+        if started["task_arn"] != arn:
+            raise LaunchRefused("another task is already recorded for this launch")
+        return started
+
+    def join(self, launch: Launch, claim: Mapping[str, Any], arn: str, began: str) -> None:
+        """Record this attempt as a reattachment to the task of another launch, with that launch's start time and deadline."""
         spec = launch.spec
         intent = self.put(
             "intent",
             spec.attempt,
-            origin,
+            claim,
             bound=dict(spec.bound),
-            deadline_seconds=origin["deadline_seconds"],
+            deadline_seconds=claim["deadline_seconds"],
             acceptance=list(spec.acceptance),
             need=asdict(spec.need),
-            reattached_from=origin["attempt"],
+            reattached_from=claim["attempt"],
         )
-        started = self.put("started", spec.attempt, origin, task_arn=arn, job_started_at=began)
+        started = self.put("started", spec.attempt, claim, task_arn=arn, job_started_at=began)
         launch.arn, launch.started_at, launch.deadline_seconds = started["task_arn"], stamp(started["job_started_at"]), intent["deadline_seconds"]
+        launch.owner = claim["attempt"]
+
+    def admit(self, launch: Launch) -> bool:
+        """Claim the one launch of the run and job with a conditional create, the single step that lets a caller start a task. Returns False when another
+        caller holds the claim. The claim that stands is checked against this request before anything else happens."""
+        spec = launch.spec
+        body = {
+            "schema_version": 1,
+            "event": "claim",
+            "run_id": spec.run_id,
+            "job": spec.job,
+            "attempt": spec.attempt,
+            "at": iso(self.clock.wall()),
+            "bound": dict(spec.bound),
+            "deadline_seconds": spec.deadline_seconds,
+            "acceptance": list(spec.acceptance),
+            "need": asdict(spec.need),
+        }
+        stored = self.store.put_once(body)
+        self.check_bound(spec, stored)
+        if stored["attempt"] != spec.attempt:
+            return False
+        launch.claim = stored
+        return True
 
     def start(self, launch: Launch) -> None:
-        """Record the intent, check that the job fits, run the task once and record it. Does nothing when the attempt already has a task or an outcome."""
+        """Claim the launch, record the intent, check that the job fits, run the task once and record it. When another caller holds the claim, its launch is
+        settled instead: the task of an unresolved launch is looked up by its identity and, if none exists, started under that identity, so a second task
+        never starts."""
+        spec = launch.spec
         if launch.outcome is not None or launch.arn is not None:
             return
-        spec = launch.spec
-        intent = self.put(
-            "intent",
-            spec.attempt,
-            {"run_id": spec.run_id, "job": spec.job},
-            bound=dict(spec.bound),
-            deadline_seconds=spec.deadline_seconds,
-            acceptance=list(spec.acceptance),
-            need=asdict(spec.need),
-        )
-        launch.deadline_seconds = intent["deadline_seconds"]
-        arn = self.find(spec.run_id, spec.job, spec.attempt) if launch.recovered_intent else None
-        if arn is None:
-            arn = self.run_when_it_fits(launch)
-        if arn is not None:
-            started = self.put("started", spec.attempt, intent, task_arn=arn, job_started_at=iso(self.clock.wall()))
-            if started["task_arn"] != arn:
-                raise LaunchRefused("another task is already recorded for this attempt")
-            launch.arn, launch.started_at = arn, stamp(started["job_started_at"])
+        fresh = launch.claim is None
+        if fresh and not self.admit(launch):
+            self.settle(launch, self.store.claim(spec.run_id, spec.job), self.events(spec.run_id, spec.job, spec.attempt))
+            if launch.outcome is not None or launch.arn is not None:
+                return
+            fresh = False
+        claim = launch.claim
+        if claim is None:
+            raise LaunchError("the claim is missing")
+        self.check_bound(spec, claim)
+        self.record_intent(claim)
+        launch.deadline_seconds = claim["deadline_seconds"]
+        found = self.run_when_it_fits(launch, claim, fresh)
+        if found is None:
+            return
+        stored = self.record_started(claim, *found)
+        if claim["attempt"] == spec.attempt:
+            launch.arn, launch.started_at = stored["task_arn"], stamp(stored["job_started_at"])
+        else:
+            self.join(launch, claim, stored["task_arn"], stored["job_started_at"])
 
-    def run_when_it_fits(self, launch: Launch) -> str | None:
-        """Run the task once the host has room, waiting at most ``FIT_WAIT_SECONDS``. Ends the attempt ``failed_closed`` with the fit report otherwise."""
+    def run_when_it_fits(self, launch: Launch, claim: dict[str, Any], fresh: bool) -> tuple[str, str] | None:
+        """Return the ARN and start time of the task under the claim, started now or found by identity, waiting for room at most ``FIT_WAIT_SECONDS`` counted
+        from the claim. After any wait, or when the claim is not new, the identity is asked first, stopped tasks too. Returns None when the launch was closed.
+        A RunTask reply that is lost or timed out is never read as a refusal: past the deadline it leaves the launch unresolved."""
         spec = launch.spec
-        end = self.clock.monotonic() + FIT_WAIT_SECONDS
+        owner = claim["attempt"] == spec.attempt
+        key = f"{claim['run_id']}:{claim['job']}:{claim['attempt']}"
+        end = stamp(claim["at"]) + FIT_WAIT_SECONDS
+        ask = unknown = not fresh
         last = ""
         while True:
-            try:
-                free = self.probe.free()
-            except TaskUnavailable as error:
-                free, last = None, f"host capacity unreadable ({error})"
-            except TaskRefused as error:
-                self.close(launch, "failed_closed", CLOSED_EXIT, f"fit_probe_refused:{error}")
-                return None
-            short = shortfalls(spec.need, free) if free is not None else []
-            if free is not None and short:
-                last = "; ".join(short)
-            elif free is not None:
+            if ask:
                 try:
-                    return self.adapter.start(spec.job, spec.key, spec.environment, "", HOST)
+                    found = self.lookup(claim)
+                except LaunchUnavailable as error:
+                    unknown, last = True, str(error)
+                else:
+                    if found is not None:
+                        return found.arn, self.began_of(found, claim)
+                    unknown = False
+            fits = True
+            if owner:
+                try:
+                    free = self.probe.free()
                 except TaskUnavailable as error:
-                    last = f"RunTask answered {error}"
+                    fits, last = False, f"host capacity unreadable ({error})"
                 except TaskRefused as error:
-                    self.close(launch, "failed_closed", CLOSED_EXIT, f"launch_refused:{error}")
+                    self.end_claim(launch, claim, f"fit_probe_refused:{error}")
                     return None
-            if self.clock.monotonic() >= end:
-                self.close(launch, "failed_closed", CLOSED_EXIT, f"does_not_fit after {FIT_WAIT_SECONDS:g} s: {last}"[:REPORT_LIMIT])
+                else:
+                    short = shortfalls(spec.need, free)
+                    fits, last = (False, "; ".join(short)) if short else (True, last)
+            if fits:
+                try:
+                    return self.adapter.start(spec.job, key, spec.environment, "", HOST), iso(self.clock.wall())
+                except CapacityUnavailable as error:
+                    last = f"RunTask answered {error}"
+                except TaskUnavailable as error:
+                    unknown, last = True, f"the RunTask reply is unknown ({error})"
+                except TaskRefused as error:
+                    self.end_claim(launch, claim, f"launch_refused:{error}")
+                    return None
+                if not owner:
+                    raise LaunchUnavailable(f"the launch of attempt {claim['attempt']} could not be completed now ({last})")
+            if self.clock.wall() >= end:
+                if unknown:
+                    raise LaunchUnavailable(f"a task may exist under this launch ({last}). It stays unresolved: call again to find it")
+                self.end_claim(launch, claim, f"does_not_fit after {FIT_WAIT_SECONDS:g} s: {last}"[:REPORT_LIMIT])
                 return None
+            ask = True
             self.clock.sleep(FIT_POLL_SECONDS)
 
+    def end_claim(self, launch: Launch, claim: Mapping[str, Any], reason: str) -> None:
+        """End a launch that definitely started no task. The run and job's one launch is over, so this attempt's outcome is that failure."""
+        end = self.put("end", claim["attempt"], claim, outcome="failed_closed", exit_code=CLOSED_EXIT, reason=reason[:REPORT_LIMIT], task_arn="")
+        launch.outcome = outcome_of(end, adopted=claim["attempt"] != launch.spec.attempt)
+
     def close(self, launch: Launch, outcome: str, code: int, reason: str) -> None:
+        """Record how this attempt ended. An attempt that joined another's task also records the end on the attempt that holds the claim, so a later attempt
+        reports the same outcome."""
         spec = launch.spec
-        end = self.put("end", spec.attempt, {"run_id": spec.run_id, "job": spec.job}, outcome=outcome, exit_code=code, reason=reason, task_arn=launch.arn or "")
+        base = {"run_id": spec.run_id, "job": spec.job}
+        arn = launch.arn or ""
+        end = self.put("end", spec.attempt, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn)
         launch.outcome = outcome_of(end)
+        if launch.owner is not None and launch.owner != spec.attempt:
+            self.put("end", launch.owner, base, outcome=end["outcome"], exit_code=end["exit_code"], reason=end["reason"], task_arn=arn)
 
     def wait(self, launch: Launch) -> None:
         """Poll the task until it ends or its recorded deadline passes. Past the deadline the task is stopped, with the stop confirmed."""
@@ -514,7 +659,7 @@ class Launcher:
                 failures += 1
                 if failures > POLL_FAILURES:
                     raise LaunchUnavailable(
-                        f"the task could not be read {failures} times in a row ({error}). It keeps running, call again to reattach"
+                        f"the task could not be read {failures} times in a row ({error}); it keeps running, call again to reattach"
                     ) from None
             else:
                 failures = 0
@@ -582,14 +727,19 @@ class Launcher:
 
     def cancel(self, run_id: str, job: str, attempt: int, reason: str = "cancel") -> Outcome:
         """Stop the attempt's task with the stop confirmed, then record ``cancelled``. An ended attempt returns its record."""
-        records = self.store.records(run_id, job, [attempt])
-        mine = {record["event"]: record for record in records}
+        mine = self.events(run_id, job, attempt)
         if "end" in mine:
             return outcome_of(mine["end"])
-        if "intent" not in mine:
+        claim = self.store.claim(run_id, job)
+        base = claim if claim is not None and claim["attempt"] == attempt else mine.get("intent")
+        if base is None:
             raise LaunchRefused(f"no launch record for attempt {attempt} of {job} in run {run_id}")
-        arn = mine["started"]["task_arn"] if "started" in mine else self.find(run_id, job, attempt)
+        if "started" in mine:
+            arn: str | None = mine["started"]["task_arn"]
+        else:
+            found = self.lookup(base)
+            arn = found.arn if found is not None else None
         if arn is not None:
             self.confirm_stop(arn, reason)
-        end = self.put("end", attempt, mine["intent"], outcome="cancelled", exit_code=CANCEL_EXIT, reason=reason[:REPORT_LIMIT], task_arn=arn or "")
+        end = self.put("end", attempt, base, outcome="cancelled", exit_code=CANCEL_EXIT, reason=reason[:REPORT_LIMIT], task_arn=arn or "")
         return outcome_of(end)
