@@ -7,11 +7,13 @@ the real API, the real Streamlit server or a browser.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import pickle
 import re
 import socket
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -163,6 +165,27 @@ def case_deadlines(c: Checker) -> None:
     c.check("a closed port answers at once", time.monotonic() - started < 3.0)
     if isinstance(out, client.Failure):
         c.check("the unreachable notice is visible", view.notice(out).level == "error")
+
+
+def case_timeout_not_masked(c: Checker) -> None:
+    """At the deadline the caller reports a timeout, even when the abandoned worker records a socket error before the caller reads its result."""
+    error_set = threading.Event()
+
+    def late_exchange(connection: http.client.HTTPConnection, payload: bytes, headers: dict[str, str], abandoned: threading.Event, box: dict[str, Any]) -> None:
+        abandoned.wait(5)
+        box["error"] = ConnectionResetError("closed at the deadline")
+        error_set.set()
+
+    original_close = http.client.HTTPConnection.close
+
+    def close_after_error(self: http.client.HTTPConnection) -> None:
+        error_set.wait(5)
+        original_close(self)
+
+    settings = client.load_settings({"MODEL_API_URL": "http://127.0.0.1:9", "MODEL_API_KEY": KEY, "MODEL_API_DEADLINE_SECONDS": "0.6"})
+    with mock.patch.object(client, "exchange", late_exchange), mock.patch.object(http.client.HTTPConnection, "close", close_after_error):
+        out = client.predict(settings, "HAI_1", CCN, YEAR)
+    c.check("a socket error after the deadline still reports a timeout", isinstance(out, client.Failure) and out.kind == "timeout")
 
 
 def case_bad_answers(c: Checker) -> None:
@@ -439,6 +462,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "client_statuses": (case_statuses, "api rate-limit unavailable"),
     "client_retry_after": (case_retry_after, "api rate-limit"),
     "client_deadlines": (case_deadlines, "timeout network"),
+    "client_timeout_not_masked": (case_timeout_not_masked, "timeout network"),
     "client_bad_answers": (case_bad_answers, "api malformed"),
     "client_key_stays_private": (case_key_stays_private, "secret logging"),
     "client_key_echo": (case_key_echo, "secret malformed"),
