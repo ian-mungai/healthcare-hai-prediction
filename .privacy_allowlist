@@ -63,3 +63,4 @@ aws-account infra/iam/tests/silver_first_run.tftest.hcl -- synthetic all-ones ac
 aws-account infra/iam/tests/features_image.tftest.hcl -- synthetic all-ones account IDs in mocked features image grant tests; not the project account
 aws-account infra/jobs/tests/guard.tftest.hcl -- synthetic all-ones account IDs in the mocked guard task definition tests; not the project account
 aws-account infra/jobs/tests/host.tftest.hcl -- synthetic all-ones account IDs in the mocked host task definition plans and refusal cases; not the project account
+aws-account infra/iam/tests/serving_execution.tftest.hcl -- synthetic all-ones account IDs in mocked serving execution role tests; not the project account
