@@ -10,7 +10,8 @@ import re
 from pathlib import Path
 
 from scripts.acquisition import hud_xlsx_contract as download_metadata
-from scripts.acquisition.bls_api_contract import code_hashes, digest
+from scripts.acquisition.bls_api_contract import digest
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.history_routes import lineage_bindings
 from scripts.acquisition.legacy_versions import plan_matches
@@ -19,15 +20,21 @@ from scripts.acquisition.transport import CaptureError
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/reference_downloads_plan.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/reference_download_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.store_reference_download"
 ROLES = {"dictionary", "methodology", "layout"}
 REQUIRED = {"source_id", "role", "title", "publisher", "origin_url", "file_name", "media_type"}
 OPTIONAL = {"release_binding"}
 MAX_BYTES = 64 * 1024**2
 
 
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
 def require_code(hashes: dict | None = None) -> dict:
     """Accept only an explicitly reviewed implementation version."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes() if hashes is None else hashes
     require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed reference download code version")
     return actual
 

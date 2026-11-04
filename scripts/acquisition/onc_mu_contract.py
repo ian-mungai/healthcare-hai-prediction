@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from scripts.acquisition.bls_api_contract import code_hashes
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import fingerprint
@@ -20,6 +20,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/onc_mu_hospital_plan.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/onc_mu_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.store_onc_mu"
 SOURCE_ID = "ONC_PI"
 TERMS_URL = "https://healthit.gov/data/datasets/ehr-products-used-meaningful-use-attestation/"
 HOSPITAL = "Hospital"
@@ -30,9 +31,14 @@ MAX_BYTES = 600 * 1024**2
 MAX_SECONDS = 3600
 
 
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
 def require_code(hashes: dict | None = None) -> dict:
     """Require explicit review of new captures and retain trusted historical implementations."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes() if hashes is None else hashes
     require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed ONC meaningful-use code version")
     return actual
 

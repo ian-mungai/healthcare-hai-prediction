@@ -136,7 +136,7 @@ class World:
 
     @staticmethod
     def write_code_root(root: Path) -> None:
-        for name in contract.CURRENT_CODE_FILES:
+        for name in contract.current_code_hashes():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO_ROOT / name, root / name)
 

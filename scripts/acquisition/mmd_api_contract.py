@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.registry_additions import ADDITIONS_LOCK_PATH, load_registry_additions
@@ -23,14 +24,18 @@ PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
 FIELDS = {"agecat", "condition", "dencat", "dual", "eligcat", "fips", "fltr", "geography", "measure", "racecat", "rate", "sexcat", "year"}
 ENDPOINT = "https://data.cms.gov/data-api/v1/mmd-tool/"
 PAGE_SIZE = 500000
+CODE_ENTRY = "scripts.acquisition.collect_mmd_api"
+# Two earlier versions bound a fixed list of files, and their captures stay valid. New work binds the exact closure of the entry module.
 CODE_FILES = (
     "scripts/acquisition/collect_mmd_api.py",
     "scripts/acquisition/mmd_api_contract.py",
     "scripts/acquisition/compare_mmd_api.py",
     "scripts/acquisition/storage_controls.py",
 )
-CURRENT_CODE_FILES = (*CODE_FILES, "scripts/acquisition/code_versions.py")
-# Kept outside CODE_FILES: a file cannot pin the hash of the code that reads it.
+PRIOR_CODE_FILES = (*CODE_FILES, "scripts/acquisition/code_versions.py")
+# A closure version holds at least the files that judge the evidence.
+CLOSURE_CORE_FILES = frozenset({"scripts/acquisition/collect_mmd_api.py", "scripts/acquisition/mmd_api_contract.py", "scripts/acquisition/code_versions.py"})
+# Kept outside the bound files: a file cannot pin the hash of the code that reads it.
 CODE_VERSIONS_PATH = Path("config/acquisition/mmd_api_code_versions.json")
 
 
@@ -40,18 +45,15 @@ def digest(raw: bytes) -> str:
 
 
 def current_code_hashes() -> dict[str, str]:
-    """Fingerprint the collector implementation that would produce new evidence."""
-    return {name: digest(Path(name).read_bytes()) for name in CURRENT_CODE_FILES}
+    """Fingerprint the collector implementation that would produce new evidence: the entry module and every repository module it can run."""
+    return closure_hashes(CODE_ENTRY)
 
 
 def reviewed_code_versions() -> list[dict[str, str]]:
     """Return every user-approved collector version whose captures remain reusable."""
     document = read_code_versions(CODE_VERSIONS_PATH)
     versions = [entry.get("code_sha256") for entry in document.get("versions", [])]
-    require(
-        bool(versions) and all(isinstance(v, dict) and set(v) in (set(CODE_FILES), set(CURRENT_CODE_FILES)) for v in versions),
-        "Reviewed MMD code versions are incomplete",
-    )
+    require(bool(versions) and all(isinstance(v, dict) and code_binding_complete(v) for v in versions), "Reviewed MMD code versions are incomplete")
     return versions
 
 
@@ -240,8 +242,8 @@ def reconstruct(plan: dict, condition: dict, year: int, rows: list[dict]) -> tup
 
 
 def code_binding_complete(code_sha256: dict) -> bool:
-    """Historical captures bind CODE_FILES; captures made since code_versions.py joined the fingerprint bind CURRENT_CODE_FILES."""
-    return set(code_sha256) in (set(CODE_FILES), set(CURRENT_CODE_FILES))
+    """Historical captures bind CODE_FILES or PRIOR_CODE_FILES. Captures made since the closure was bound hold the closure, which includes the core files."""
+    return set(code_sha256) in (set(CODE_FILES), set(PRIOR_CODE_FILES)) or set(code_sha256) >= CLOSURE_CORE_FILES
 
 
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:

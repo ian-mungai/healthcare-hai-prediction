@@ -228,7 +228,7 @@ def exercise(root: Path) -> list[dict]:
     """Use production orchestration with synthetic workbooks and versioned fake storage."""
     plan, plan_path, bodies = synthetic_plan(root)
     versions = root / "versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -320,7 +320,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("plan_tampering_rejected", tampered_plan, "plan lock differs")
 
         def unreviewed_current() -> None:
-            with patch.object(contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, first, root / "unreviewed", True, True, client, OUTPUTS, web, LIMITS)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed HCAI utilization")
@@ -534,7 +534,7 @@ def main() -> None:
         "feature": "HCAI utilization workbooks: original kept locally, abstracted sheet CSVs through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_hcai_util_e2e --output {args.output}",
         "boundary": "Synthetic three-hospital workbooks served by a fake opener through the real downloader (no signed redirect); fake versioned S3.",

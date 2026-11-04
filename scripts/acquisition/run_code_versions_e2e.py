@@ -596,7 +596,7 @@ def admission_cases(tree: Path) -> list[dict]:
         versions.write_text('{"versions": [{"code_sha256": ' + json.dumps(inventory) + "}]}")
         with patch.object(contract, "VERSIONS_PATH", versions):
             cases.append({"name": f"{name}_older_inventory_version_stays_admissible_for_history", "passed": contract.require_code(inventory) == inventory})
-    shapes = [dict.fromkeys(mmd_api_contract.CODE_FILES, "2" * 64), dict.fromkeys(mmd_api_contract.CURRENT_CODE_FILES, "3" * 64)]
+    shapes = [dict.fromkeys(mmd_api_contract.CODE_FILES, "2" * 64), dict.fromkeys(mmd_api_contract.PRIOR_CODE_FILES, "3" * 64)]
     with patch.object(code_closure, "REPO_ROOT", tree):
         shapes.append(code_closure.closure_hashes("scripts.acquisition.collect_mmd_api", tree))
     versions = tree / "mmd_api_shapes.json"

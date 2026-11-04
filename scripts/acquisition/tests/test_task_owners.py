@@ -21,7 +21,6 @@ from scripts.acquisition import onc_mu_contract as onc_contract
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import store_cms_owners as collector
 from scripts.acquisition import store_onc_mu as onc_collector
-from scripts.acquisition.bls_api_contract import code_hashes
 from scripts.acquisition.run_cms_owners_e2e import LIMITS, PEOPLE, Web, synthetic_plan
 from scripts.acquisition.run_onc_mu_e2e import CLINICIAN_NPIS, locked
 from scripts.acquisition.run_onc_mu_e2e import body as onc_body
@@ -124,7 +123,7 @@ def opener(web: Web) -> transport.ReviewedTransport:
 def owners(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     plan, plan_path, bodies = synthetic_plan(tmp_path)
     versions = tmp_path / "versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     monkeypatch.setattr(contract, "PLAN_PATH", plan_path)
     monkeypatch.setattr(contract, "VERSIONS_PATH", versions)
     return plan, bodies
@@ -273,7 +272,7 @@ def onc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     data = onc_body()
     plan, plan_path = locked(tmp_path, data)
     versions = tmp_path / "onc_versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": onc_contract.collector_code_hashes()}]}))
     monkeypatch.setattr(onc_contract, "PLAN_PATH", plan_path)
     monkeypatch.setattr(onc_contract, "VERSIONS_PATH", versions)
     return plan, data

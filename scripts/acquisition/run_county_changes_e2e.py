@@ -683,7 +683,7 @@ def fingerprint_scenarios(recorder: Recorder) -> None:
     """The page contract the history route executes sits in a top-level acquisition module, so the collector code fingerprints cover it."""
 
     def covered() -> None:
-        hashes = bls_api_contract.code_hashes()
+        hashes = bls_api_contract.collector_code_hashes()
         path = Path(grammar.__file__).resolve().relative_to(bls_api_contract.REPO_ROOT).as_posix()
         require(path in hashes and path.count("/") == 2, f"{path} is not a top-level acquisition module in the fingerprint: {sorted(hashes)[:3]}")
         require(history_routes.page_problem is grammar.page_problem and tool.bytes_problem is grammar.bytes_problem, "a copy of the page contract is in use")

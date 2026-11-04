@@ -13,13 +13,15 @@ import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 
-from scripts.acquisition.bls_api_contract import code_hashes, digest
+from scripts.acquisition.bls_api_contract import digest
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.legacy_versions import bound_record, plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/hcai_util_2018_2025_plan.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/hcai_util_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.store_hcai_util"
 RELEASE_PATH = "config/acquisition/access_releases_20260929.json"
 SOURCE_ID = "HCAI_UTIL"
 TERMS_URL = "https://data.chhs.ca.gov/pages/terms"
@@ -39,9 +41,14 @@ MAX_BYTES = 64 * 1024**2
 MAX_MEMBERS = 100
 
 
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
 def require_code(hashes: dict | None = None) -> dict:
     """Require explicit review of new captures and retain trusted historical implementations."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes() if hashes is None else hashes
     require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed HCAI utilization code version")
     return actual
 

@@ -12,7 +12,8 @@ import re
 import urllib.parse
 from pathlib import Path
 
-from scripts.acquisition.bls_api_contract import code_hashes, digest
+from scripts.acquisition.bls_api_contract import digest
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.legacy_versions import plan_matches
@@ -20,6 +21,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/wonder_export_plan.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/wonder_export_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.store_wonder_export"
 ORIGIN = "https://wonder.cdc.gov/controller/datarequest/"
 DATABASES = {
     "D76": {"title": "Underlying Cause of Death, 1999-2020", "form_url": "https://wonder.cdc.gov/ucd-icd10.html", "years": [1999, 2020]},
@@ -57,9 +59,14 @@ RATE_COLUMNS = HEADER[7:]
 DIVIDER = '"---"'
 
 
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
 def require_code(hashes: dict | None = None) -> dict:
     """Require explicit review of new captures and retain trusted historical implementations."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes() if hashes is None else hashes
     require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed WONDER code version")
     return actual
 

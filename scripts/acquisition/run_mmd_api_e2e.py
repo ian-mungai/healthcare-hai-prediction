@@ -12,15 +12,7 @@ from unittest.mock import patch
 
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.data_paths import current
-from scripts.acquisition.mmd_api_contract import (
-    CURRENT_CODE_FILES,
-    PLAN_PATH,
-    condition_for,
-    current_code_hashes,
-    load_plan,
-    reconstruct,
-    reviewed_code_versions,
-)
+from scripts.acquisition.mmd_api_contract import PLAN_PATH, PRIOR_CODE_FILES, condition_for, current_code_hashes, load_plan, reconstruct, reviewed_code_versions
 from scripts.acquisition.run_mmd_api_collection import ATTEMPTS, with_retries
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import RegistryError, read_json, require
@@ -124,7 +116,7 @@ def negative_copy(source: Path, kind: str, directory: Path) -> Path:
     elif kind == "extra_code_file":
         lineage["code_sha256"] = dict(lineage["code_sha256"], **{"scripts/acquisition/unlisted.py": "0" * 64})
     elif kind == "current_file_set_unreviewed":
-        lineage["code_sha256"] = dict.fromkeys(CURRENT_CODE_FILES, "0" * 64)
+        lineage["code_sha256"] = dict.fromkeys(PRIOR_CODE_FILES, "0" * 64)
     elif kind == "derived_bytes":
         item = next(a for a in receipt["artifacts"] if a["role"] == "data")
         path = target / item["storage_path"]
@@ -179,8 +171,8 @@ def fresh_capture_case(source: Path, directory: Path) -> dict:
         observed = "valid"
         passed = (
             bool(calls)
-            and all(set(call) == set(CURRENT_CODE_FILES) for call in calls)
-            and set(fresh["code_sha256"]) == set(CURRENT_CODE_FILES)
+            and all(set(call) == set(current_code_hashes()) for call in calls)
+            and set(fresh["code_sha256"]) == set(current_code_hashes())
             and fresh["expected_sha256"] == lineage["expected_sha256"]
         )
     except (RegistryError, StorageError, OSError, KeyError, ValueError) as error:

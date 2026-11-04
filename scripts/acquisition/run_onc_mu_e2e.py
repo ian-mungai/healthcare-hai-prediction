@@ -111,7 +111,7 @@ def exercise(root: Path) -> list[dict]:
     data = body()
     plan, plan_path = locked(root, data)
     versions = root / "versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -182,7 +182,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("plan_tampering_rejected", tampered_plan, "plan lock differs")
 
         def unreviewed_current() -> None:
-            with patch.object(contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, root / "unreviewed", True, True, client, OUTPUTS, web, LIMITS)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed ONC meaningful-use")
@@ -329,7 +329,7 @@ def main() -> None:
         "feature": "ONC meaningful-use attestations: original kept locally, hospital rows only through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_onc_mu_e2e --output {args.output}",
         "boundary": "Synthetic 12-row file served by a fake opener through the real downloader; fake versioned S3; no live healthit.gov or AWS.",

@@ -95,7 +95,7 @@ def exercise(root: Path) -> list[dict]:
     plan_path, versions = root / "plan.json", root / "versions.json"
     write_once(plan_path, encoded_json(plan))
     write_once(plan_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -179,7 +179,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("plan_tampering_rejected", tampered_plan, "plan lock differs")
 
         def unreviewed_current() -> None:
-            with patch.object(contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, batches["pilot_d76.xls"], root / "unreviewed", downloads, True, client, OUTPUTS)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed WONDER")
@@ -385,7 +385,7 @@ def main() -> None:
         "feature": "CDC WONDER county-year export capture (browser exports) through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_wonder_export_e2e --output {args.output}",
         "boundary": "Synthetic exports (102 counties a year, floor 100, not 3,100) with real macOS origins; fake versioned S3; no live WONDER or AWS access.",

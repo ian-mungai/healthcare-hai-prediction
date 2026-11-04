@@ -75,7 +75,7 @@ def exercise(root: Path) -> list[dict]:
     downloads = root / "downloads"
     downloads_for(downloads)
     plan_path, versions = root / "plan.json", root / "versions.json"
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -167,7 +167,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("plan_tampering_rejected", tampered_plan, "plan lock differs")
 
         def unreviewed_current() -> None:
-            with patch.object(contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, entries["SVI2020Documentation_08.05.22.pdf"], root / "unreviewed", downloads, True, client, OUTPUTS)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed reference download")
@@ -292,7 +292,7 @@ def main() -> None:
         "feature": "Reference documents saved in a browser (origin, hash and plan bound) through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_reference_download_e2e --output {args.output}",
         "boundary": "Synthetic documents with real macOS origins; the real registry and terms record; fake versioned S3; no live publisher or AWS access.",

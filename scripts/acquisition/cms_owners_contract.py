@@ -13,13 +13,15 @@ import re
 import unicodedata
 from pathlib import Path
 
-from scripts.acquisition.bls_api_contract import code_hashes, digest
+from scripts.acquisition.bls_api_contract import digest
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/cms_owners_plan.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/cms_owners_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.store_cms_owners"
 SOURCE_ID = "CMS_OWNERS"
 TERMS_URL = "https://www.usa.gov/government-works"
 _COMMON = [
@@ -77,9 +79,14 @@ TEXT_COLUMNS = {"OTHER TYPE TEXT - OWNER"}
 REPLACEMENT = "[REDACTED]"
 
 
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
 def require_code(hashes: dict | None = None) -> dict:
     """Require explicit review of new captures and retain trusted historical implementations."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes() if hashes is None else hashes
     require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed CMS owners code version")
     return actual
 

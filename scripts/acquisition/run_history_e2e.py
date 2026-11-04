@@ -19,6 +19,7 @@ from unittest.mock import patch
 from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import history_redirects, history_routes, s3_store, transport
 from scripts.acquisition.capture import capture
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import LOCK_PATH, REPO_ROOT, load_registry, read_json, require
 from scripts.acquisition.tests.test_s3_store import OUTPUTS, SETTINGS, FakeS3
@@ -381,7 +382,7 @@ def main() -> None:
         "feature": "Historical collectors: exact redirect review, held-source planning and capture-to-S3 with completion evidence",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": closure_hashes("scripts.acquisition.history_routes"),
         "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_history_e2e --output {args.output}",
         "boundary": (

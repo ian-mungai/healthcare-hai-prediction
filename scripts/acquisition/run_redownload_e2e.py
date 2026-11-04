@@ -1043,7 +1043,7 @@ def real_wonder_adapter(scenario: Any, root: Path) -> None:
     plan_path, versions = base / "plan.json", base / "versions.json"
     write_once(plan_path, encoded_json(plan))
     write_once(plan_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
-    write_once(versions, encoded_json({"versions": [{"code_sha256": bls_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": wonder_contract.collector_code_hashes()}]}))
     batch = next(item for item in plan["batches"] if item["file_name"] == "pilot_d158.xls")
     stored_body = (downloads / batch["file_name"]).read_bytes()
     with patch.object(wonder_contract, "PLAN_PATH", plan_path), patch.object(wonder_contract, "VERSIONS_PATH", versions):
@@ -1112,7 +1112,7 @@ def main() -> None:
         "feature": "Bounded redownload harness: locked queue, fresh state root, no storage, comparison with stored captures",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": bls_contract.code_hashes(),
+        "code_sha256": {"scripts/acquisition/redownload.py": bls_contract.digest(Path("scripts/acquisition/redownload.py").read_bytes())},
         "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_redownload_e2e --output {args.output}",
         "boundary": (

@@ -24,13 +24,6 @@ def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
-def code_hashes() -> dict[str, str]:
-    """Bind every acquisition module and the configuration loader, excluding test-only runners; the collectors not yet pinned to their own code use it."""
-    paths = sorted((REPO_ROOT / "scripts/acquisition").glob("*.py"))
-    paths += [REPO_ROOT / "scripts/infrastructure/render_project_config.py"]
-    return {str(p.relative_to(REPO_ROOT)): digest(p.read_bytes()) for p in paths if "e2e" not in p.name}
-
-
 def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
     """Bind the entry module of the collector and every repository module it can run, and no other file."""
     return closure_hashes(entry)
