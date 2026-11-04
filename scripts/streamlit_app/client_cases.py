@@ -176,6 +176,7 @@ def case_timeout_not_masked(c: Checker) -> None:
         if not abandoned.wait(5):
             stalls.append("the caller never abandoned the worker")
             return
+        box["error_at"] = time.monotonic()
         box["error"] = ConnectionResetError("closed at the deadline")
         error_set.set()
 
@@ -196,17 +197,21 @@ def case_timeout_not_masked(c: Checker) -> None:
 def case_early_error_kept(c: Checker) -> None:
     """A failure the worker recorded before the deadline keeps its own kind, even when the worker is still alive at the deadline."""
     released = threading.Event()
+    stalls: list[str] = []
 
     def refused_then_stalled(
         connection: http.client.HTTPConnection, payload: bytes, headers: dict[str, str], abandoned: threading.Event, box: dict[str, Any]
     ) -> None:
+        box["error_at"] = time.monotonic()
         box["error"] = ConnectionRefusedError("refused before the deadline")
-        released.wait(5)
+        if not released.wait(5):
+            stalls.append("the worker was not held past the deadline")
 
     settings = client.load_settings({"MODEL_API_URL": "http://127.0.0.1:9", "MODEL_API_KEY": KEY, "MODEL_API_DEADLINE_SECONDS": "0.6"})
     with mock.patch.object(client, "exchange", refused_then_stalled):
         out = client.predict(settings, "HAI_1", CCN, YEAR)
     released.set()
+    c.check(f"the worker was held past the deadline ({'; '.join(stalls) or 'yes'})", not stalls)
     c.check("an error recorded before the deadline stays unreachable", isinstance(out, client.Failure) and out.kind == "unreachable")
 
 
