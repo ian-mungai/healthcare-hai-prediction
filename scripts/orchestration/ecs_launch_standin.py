@@ -12,6 +12,13 @@ from typing import Any
 from uuid import NAMESPACE_OID, UUID, uuid5
 
 MIRRORED_PROVIDER_VERSION = "9.36.0"
+# operators/ecs.py line 466: ``deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False)``. The real default is read from
+# the Airflow configuration when the class is defined. The stand-in reads this setting when an operator is built, so a case can switch it.
+OPERATORS_CONFIG = {"default_deferrable": False}
+
+
+class Deferred(Exception):
+    """operators/ecs.py lines 548-568: ``self.defer`` raises a special exception that hands the wait to a trigger, so ``execute`` stops there."""
 
 
 def generate_uuid(*values: str | None) -> str:
@@ -33,7 +40,7 @@ class StandInEcsRunTaskOperator:
         overrides: dict[str, Any],
         reattach: bool = False,
         wait_for_completion: bool = True,
-        deferrable: bool = False,
+        deferrable: bool | None = None,
         do_xcom_push: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -43,7 +50,7 @@ class StandInEcsRunTaskOperator:
         self.overrides = overrides
         self.reattach = reattach
         self.wait_for_completion = wait_for_completion
-        self.deferrable = deferrable
+        self.deferrable = OPERATORS_CONFIG["default_deferrable"] if deferrable is None else deferrable
         self.do_xcom_push = do_xcom_push
         self.arn: str | None = None
         self._started_by: str | None = None
@@ -51,7 +58,7 @@ class StandInEcsRunTaskOperator:
         self.client: Any = None
 
     def execute(self, context: dict[str, Any]) -> None:
-        # operators/ecs.py lines 519-590. Left out: the deferrable branch (548-568, refused by the launch operator), the CloudWatch log fetcher
+        # operators/ecs.py lines 519-590. Left out: the defer call's trigger arguments (550-567), the CloudWatch log fetcher
         # thread (573-582, only with awslogs_group) and the WaiterError clean-up (591-612, the launch operator's wait raises no WaiterError).
         if self.reattach:
             ti = context["ti"]  # lines 535-538: the started-by value is a UUID of the task instance key, and the hook gets it
@@ -61,6 +68,8 @@ class StandInEcsRunTaskOperator:
             self._start_task()
         if self.do_xcom_push:  # lines 545-546
             context["ti"].xcom_push(key="ecs_task_arn", value=self.arn)
+        if self.deferrable:  # lines 548-568: the task is handed to a trigger, with no deadline, stop or record of ours
+            raise Deferred("TaskDoneTrigger")
         if not self.wait_for_completion:  # lines 570-571
             return
         self._wait_for_task_ended()  # line 584
