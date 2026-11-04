@@ -81,6 +81,8 @@ PLATFORM_ADDED_REPOSITORIES = [
 ]
 PLATFORM_REPOSITORIES = sorted([*PLATFORM_DEFAULT_REPOSITORIES, *PLATFORM_ADDED_REPOSITORIES])
 PLATFORM_LOG_GROUPS = sorted([*PLATFORM_DEFAULT_LOG_GROUPS, "mlflow"])
+# The nine job families of the host_jobs default in infra/jobs/host.tf.
+HOST_FAMILIES = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
 
 
 class Row(NamedTuple):
@@ -193,6 +195,7 @@ ROWS: list[Row] = [
         "promote_enabled",
         "serve_enabled",
         "openmetadata_enabled",
+        "host_jobs_enabled",
     ),
     Row("jobs", "layer_jobs", ["silver", "gold"], "silver"),
     Row("jobs", "images", {name: IMAGE % name for name in ("analytics", "quality", "spark")}, {"spark": "latest"}),
@@ -227,6 +230,84 @@ ROWS: list[Row] = [
     Row("jobs", "openmetadata_cpu_architecture", "ARM64", "POWER"),
     Row("jobs", "openmetadata_marquez_url", "http://10.0.1.20:5000", 5),
     Row("jobs", "openmetadata_server_url", "http://10.0.1.20:8585", 5),
+    Row(
+        "jobs",
+        "host_jobs",
+        ["metadata", "silver"],
+        "metadata",
+        HOST_FAMILIES,
+        (["unreviewed_family"], ["silver", "Metadata"], ["fargate"]),
+    ),
+    Row("jobs", "host_job_threads", 2, "2", 3, (0, 4, -1, 2.5)),
+    Row(
+        "jobs",
+        "host_scratch_root",
+        "/data/scratch_a",
+        5,
+        "/data/job_scratch",
+        ("data/job_scratch", "/data/job_scratch/", "/data/../etc", "/data/a..b", "/data//job_scratch", "/", "/a", "/data/job scratch", "/data/job_scratch."),
+    ),
+    Row(
+        "jobs",
+        "host_metadata_resources",
+        {"cpu": 256, "memory": 4096},
+        {"cpu": "256", "memory": 4096},
+        {"cpu": 1024, "memory": 2048},
+        (
+            {"cpu": 255, "memory": 2048},
+            {"cpu": 2049, "memory": 2048},
+            {"cpu": 1024, "memory": 511},
+            {"cpu": 1024, "memory": 4097},
+            {"cpu": 1024.5, "memory": 2048},
+            {"cpu": 1024, "memory": 2048.5},
+            {"cpu": 1024},
+            {"memory": 2048},
+        ),
+    ),
+    Row(
+        "jobs",
+        "host_openmetadata_api",
+        "http://172.31.0.7:8585/api",
+        5,
+        None,
+        (
+            "http://127.0.0.1:8585/api",
+            "http://8.8.8.8:8585/api",
+            "http://172.15.0.1:8585/api",
+            "http://172.32.0.1:8585/api",
+            "http://192.169.0.1:8585/api",
+            "http://10.0.1.256:8585/api",
+            "http://10.0.01.20:8585/api",
+            "http://10.0.1.20:8586/api",
+            "http://10.0.1.20:8585",
+            "http://10.0.1.20:8585/api/",
+            "https://10.0.1.20:8585/api",
+            "http://catalog.internal:8585/api",
+            "10.0.1.20:8585/api",
+        ),
+    ),
+    Row(
+        "jobs",
+        "host_repo_path",
+        "/opt/hai/repo",
+        5,
+        None,
+        ("opt/hai/repo", "/opt/hai/repo/", "/opt/../repo", "/opt/hai..repo", "/opt//hai", "/", "/opt/hai repo"),
+    ),
+    Row(
+        "jobs",
+        "openmetadata_ingestion_token_name",
+        "/example_project/openmetadata_bot_ingestion",
+        5,
+        "/healthcare_hai_prediction/openmetadata_bot_ingestion",
+        (
+            "openmetadata_bot_ingestion",
+            "/example_project/openmetadata_bot_other",
+            "/example_project/nested/openmetadata_bot_ingestion",
+            "/Example_Project/openmetadata_bot_ingestion",
+            "/example_project/openmetadata_bot_ingestion/",
+        ),
+    ),
 ]
 # Inputs that no row needs, with the reason. The storage retention flags have their own wrapper options and cases in run_e2e.
 EXEMPT = {
