@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "purpose": "What a serving task definition revision that GitHub registers may name (owner decision D18). The release check refuses any other role, secret or image repository.",
+  "services": {
+    "model_api": {
+      "task_role": "model_api_task",
+      "image_repository": "model_api",
+      "parameters": [
+        "/healthcare_hai_prediction/model_api_key_hashes",
+        "/healthcare_hai_prediction/aws_polaris_serving_client_id",
+        "/healthcare_hai_prediction/aws_polaris_serving_client_secret",
+        "/healthcare_hai_prediction/model_api_mlflow_user",
+        "/healthcare_hai_prediction/model_api_mlflow_credential"
+      ]
+    },
+    "streamlit": {
+      "task_role": "streamlit_task",
+      "image_repository": "streamlit",
+      "parameters": [
+        "/healthcare_hai_prediction/streamlit_model_api_key"
+      ]
+    }
+  },
+  "execution_role": "serving_execution"
+}
