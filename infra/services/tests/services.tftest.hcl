@@ -1190,7 +1190,7 @@ run "container_definitions_match_the_approved_versions" {
       "airflow_dag_processor/airflow_dag_processor" = "123d1308431f66be7702f9566547fce86b14e4b533ce77bd85afe16e7bb7dd3e"
       "airflow_scheduler/airflow_scheduler"         = "4a529d0ac5414d00b74ea4fbc7655906ae30bcd37cb4ad44d873699a932d1715"
       "airflow_triggerer/airflow_triggerer"         = "b3530c6e55c47f3ac37ee820db80901303c4fa23439f7c5dae5b4b165afe412d"
-      "host_prepare/host_prepare"                   = "c8d9a035f5588b9b5cb65f649058842ec6a980b6a3a8880abe6b306d8c953e1e"
+      "host_prepare/host_prepare"                   = "be053a1bb4edef4fd2889f838f96d6fe6b78db7ed2d4cf43df033dc5e8736207"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
       "polaris/polaris"                             = "4091249731a1ee59e36999c93cacc38ad67f1c8be37c13308b5b65f3d673e487"
@@ -1326,7 +1326,7 @@ run "every_field_of_every_container_and_referenced_volume_is_bound_unless_exclud
   }
 
   assert {
-    condition     = toset(output.excluded_fields_exercised) == toset(["memory", "memoryReservation"])
+    condition     = toset(output.excluded_fields_exercised) == toset(["cpu", "memory", "memoryReservation"])
     error_message = "Every excluded field needs a mutation that leaves the digest unchanged, so the exclusion list holds no unused or misspelled name. Exercised: ${jsonencode(output.excluded_fields_exercised)}"
   }
 

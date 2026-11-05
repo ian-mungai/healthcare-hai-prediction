@@ -121,6 +121,7 @@ locals {
   excluded_container_fields = {
     memory            = "Hard memory limit. Sizing only: the memory tests bound it against the host and the reservation, and it changes no command, file, variable, secret or network setting."
     memoryReservation = "Soft memory reservation. Sizing only, bounded by the same tests."
+    cpu               = "CPU units a service container reserves. Sizing only: the host capacity test bounds the sum against the host and the largest job, and it changes no command, file, variable, secret or network setting."
   }
 
   # Task settings: every attribute the root module reports (see task_definition_settings) except container_definitions, which the
