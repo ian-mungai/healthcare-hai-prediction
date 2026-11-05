@@ -17,7 +17,7 @@ locals {
     pw=$${pw//\"/\\\"}
     mp=$${MODEL_API_REDIS_PASSWORD//\\/\\\\}
     mp=$${mp//\"/\\\"}
-    rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setinfo +client|setname +select|1 +select|2'
+    rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2'
     exec redis-server - < <(
       printf '%s\n' 'bind 0.0.0.0' 'port 6379' 'dir /data' 'save 900 1' 'save 300 100' 'maxmemory 640mb' 'maxmemory-policy noeviction'
       printf 'requirepass "%s"\n' "$pw"

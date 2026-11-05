@@ -2679,7 +2679,7 @@ run "redis_creates_a_read_only_user_for_the_model_api" {
   assert {
     condition = alltrue([
       for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
-      contains(split("\n", container.command[0]), "rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setinfo +client|setname +select|1 +select|2'")
+      contains(split("\n", container.command[0]), "rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2'")
     ])
     error_message = "The model API user is read-only: only the listed read commands, and select for the two databases the client uses."
   }
@@ -2831,7 +2831,7 @@ run "serving_container_definitions_match_the_approved_versions" {
     condition = alltrue([
       for pin in [
         { id = "model_api/model_api", digest = "f87f0f24695ce2d0d9e7a0f9306ccbf81fdc5e6ff2dfd680764e07516c884704" },
-        { id = "redis/redis", digest = "58f37afc634efb30e092015385c8d84c4576ebb66aff343d2567d3a75baa87d3" },
+        { id = "redis/redis", digest = "8fa7ba5084d86c6a1c3a3d674bcbd83236481f739b79e83bf448c09639d13382" },
         { id = "streamlit/streamlit", digest = "f8e2c6e9514fc5a6205c06cbfed1d52950ddcce9fe60e33034de38c25a0438af" },
       ] : output.execution_digests[pin.id] == pin.digest
     ])

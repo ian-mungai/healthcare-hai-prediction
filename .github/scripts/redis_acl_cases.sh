@@ -112,7 +112,10 @@ check "it reads one field in database 1" test "$(as_model -n 1 hget entity field
 check "it reads a whole hash in database 1" test "$(as_model -n 1 hgetall entity | tr '\n' ' ')" = "field value "
 check "it reads the marker in database 2" test "$(as_model -n 2 hgetall hai:fs:marker | tr '\n' ' ')" = "state ready "
 check "it checks that a key exists" test "$(as_model -n 1 exists entity)" = "1"
-check "it sends its client information" test "$(as_model client setinfo lib-name feast)" = "OK"
+# redis-py sends CLIENT SETINFO when it connects and ignores the error, so the user does not need it. Redis 7.0 does not know the subcommand
+# (ERR) and Redis 7.2 refuses it (NOPERM).
+setinfo_reply="$(as_model client setinfo lib-name feast)"
+check "it is refused its client information, which the client ignores" test "${setinfo_reply:0:6}" = "NOPERM" -o "${setinfo_reply:0:3}" = "ERR"
 check "it names its connection" test "$(as_model client setname model_api)" = "OK"
 
 # --- and nothing else ---------------------------------------------------------------------------------------------------------------------------
