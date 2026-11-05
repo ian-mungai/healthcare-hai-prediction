@@ -42,7 +42,8 @@ class FakeEcs:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.tasks: dict[str, dict[str, Any]] = {}
         self.tokens: dict[str, str] = {}
-        self.faults: dict[str, list[Exception]] = {}
+        self.token_made: dict[str, float] = {}
+        self.faults: dict[str, list[Exception | None]] = {}
         self.lose_reply_once = False
         self.hold = False
         self.plan: dict[str, int | None] = {}
@@ -51,6 +52,9 @@ class FakeEcs:
         self.host_provider = "stand-in_host"  # the registered EC2 capacity provider of the cluster
         self.host_full = False
         self.clock: Callable[[], float] | None = None  # when set, a new task carries createdAt from it
+        self.run_task_hook: Callable[[str], None] | None = None  # called with "before" and "after" around the creation of a task, to interleave other callers
+        self.token_ttl: float | None = None  # seconds a client token is honored, from the creation of its task
+        self.purge_after: float | None = None  # seconds after which ECS no longer lists a stopped task
         self.forget_stopped_tokens = False  # worst case for a repeated client token after the task stopped, which the service documentation leaves open
         self.list_page = 100  # tasks per ListTasks page
         self.instance_free = {"CPU": 4096, "MEMORY": 31000}  # what the host's container instance reports as remaining
@@ -65,7 +69,9 @@ class FakeEcs:
             raise client_error("ClusterNotFoundException", operation)
         queue = self.faults.get(operation)
         if queue:
-            raise queue.pop(0)
+            fault = queue.pop(0)
+            if fault is not None:  # None lets this call through, to interleave failing and working calls
+                raise fault
 
     def _check_shape(self, arguments: Mapping[str, Any]) -> bool:
         """Refuse what ECS refuses for the task definition's shape and return True when the task runs on the host."""
@@ -89,10 +95,13 @@ class FakeEcs:
         if arguments.get("count") != 1 or not 1 <= len(token) <= 64 or len(started_by) > 128 or not all(33 <= ord(c) <= 126 for c in token):
             raise client_error("InvalidParameterException", "RunTask")
         on_host = self._check_shape(arguments)
-        if token in self.tokens and not (self.forget_stopped_tokens and self.tasks[self.tokens[token]]["lastStatus"] == STOPPED):
+        expired = self.token_ttl is not None and self.clock is not None and token in self.tokens and self.clock() - self.token_made[token] > self.token_ttl
+        if token in self.tokens and not expired and not (self.forget_stopped_tokens and self.tasks[self.tokens[token]]["lastStatus"] == STOPPED):
             return {"tasks": [self.tasks[self.tokens[token]]], "failures": []}
         if on_host and self.host_full:
             return {"tasks": [], "failures": [{"arn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in", "reason": "RESOURCE:CPU"}]}
+        if self.run_task_hook is not None:
+            self.run_task_hook("before")
         names = [item["name"] for item in arguments.get("overrides", {}).get("containerOverrides", [])]
         names = ["init", *names] if str(arguments["taskDefinition"]).removesuffix(HOST_SUFFIX).endswith("_train") else names
         digest = hashlib.sha256(token.encode() + (b"again%d" % len(self.tasks) if token in self.tokens else b"")).hexdigest()[:32]
@@ -119,6 +128,10 @@ class FakeEcs:
             task.update(launchType="FARGATE", attachments=[{"type": "ElasticNetworkInterface", "status": "PRECREATED"}])
         self.tasks[arn] = task
         self.tokens[token] = arn
+        if self.clock is not None:
+            self.token_made[token] = self.clock()
+        if self.run_task_hook is not None:
+            self.run_task_hook("after")
         if self.lose_reply_once:
             self.lose_reply_once = False
             raise ReadTimeoutError(endpoint_url="https://ecs.invalid")
@@ -132,7 +145,7 @@ class FakeEcs:
         found = [
             arn
             for arn, task in self.tasks.items()
-            if ("startedBy" not in arguments or task["startedBy"] == arguments["startedBy"]) and task["desiredStatus"] == wanted
+            if ("startedBy" not in arguments or task["startedBy"] == arguments["startedBy"]) and task["desiredStatus"] == wanted and self._listed(task)
         ]
         start = int(arguments.get("nextToken", "0"))
         reply: dict[str, Any] = {"taskArns": found[start : start + self.list_page]}
@@ -145,7 +158,7 @@ class FakeEcs:
         tasks, failures = [], []
         for arn in arguments["tasks"]:
             task = self.tasks.get(arn)
-            if task is None:
+            if task is None or not self._listed(task):
                 failures.append({"arn": arn, "reason": "MISSING"})
                 continue
             task["polls"] += 1
@@ -192,9 +205,16 @@ class FakeEcs:
             self._finish(task, {item["name"]: 137 for item in task["containers"]}, f"Task stopped by user: {arguments.get('reason', '')}", "UserInitiated")
         return {"task": self._view(task)}
 
-    @staticmethod
-    def _finish(task: dict[str, Any], exits: Mapping[str, int | None], reason: str, code: str = "EssentialContainerExited") -> None:
+    def _listed(self, task: Mapping[str, Any]) -> bool:
+        """ECS stops listing a stopped task after a while."""
+        if self.purge_after is None or self.clock is None or task.get("lastStatus") != STOPPED or "stoppedClock" not in task:
+            return True
+        return bool(self.clock() - task["stoppedClock"] <= self.purge_after)
+
+    def _finish(self, task: dict[str, Any], exits: Mapping[str, int | None], reason: str, code: str = "EssentialContainerExited") -> None:
         task.update(lastStatus="STOPPED", desiredStatus="STOPPED", stoppedReason=reason, stopCode=code)
+        if self.clock is not None:
+            task["stoppedClock"] = self.clock()
         for container in task["containers"]:
             code_of = exits.get(container["name"], 0)
             container["lastStatus"] = "STOPPED"
@@ -203,7 +223,7 @@ class FakeEcs:
 
     @staticmethod
     def _view(task: Mapping[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in task.items() if key not in ("polls", "request", "stopping")}
+        return {key: value for key, value in task.items() if key not in ("polls", "request", "stopping", "stoppedClock")}
 
 
 class FakeLogs:

@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from orchestration.ecs_launch import JobSpec, Launch, Launcher
+from orchestration.ecs_launch import JobSpec, Launch, Launcher, LaunchUnavailable
 
 
 class JobFailed(Exception):
@@ -80,4 +80,7 @@ class LaunchGuarantees:
             self.log.warning("kill requested: the task keeps running so that the next attempt can reattach; it ends at its deadline")
             return
         if self._launch is not None and self._launch.outcome is None:
-            self.launcher().cancel(self.job.run_id, self.job.job, self.job.attempt, "killed")
+            try:
+                self.launcher().cancel(self.job.run_id, self.job.job, self.job.attempt, "killed")
+            except LaunchUnavailable as error:
+                self.log.warning("the cancel is recorded but the launch is not resolved yet: %s", error)
