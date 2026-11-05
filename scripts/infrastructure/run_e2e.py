@@ -169,11 +169,14 @@ BOOT_VALUES = {
     "region": "eu-west-1",
     "cluster_name": "example_project_cluster_dev",
     "data_volume_name": "example_project_host_data_dev",
+    "scratch_volume_name": "example_project_host_scratch_dev",
     "address_name": "example_project_host_dev",
     "project_tag": "example_project",
 }
+# The host's job firewall is a tracked file that Terraform writes into the boot script as it is.
+JOB_FIREWALL_FILE = "infra/iam/host_job_firewall.nft"
 # The host finds its data volume and Elastic IP by their Name and Project tags; the aws stand-in answers the two describe calls with these IDs.
-BOOT_IDS = {"volume": "vol-0123456789abcdef0", "allocation": "eipalloc-0123456789abcdef0"}
+BOOT_IDS = {"volume": "vol-0123456789abcdef0", "scratch": "vol-0123456789abcdef1", "allocation": "eipalloc-0123456789abcdef0"}
 # The metadata stand-in returns this value for the token request; it must reach neither the log nor the console.
 BOOT_METADATA_SENTINEL = "example_metadata_token_do_not_print"
 # Each console line starts with this prefix; the console is a file in the temporary root, so the runner can read what the script copied.
@@ -183,9 +186,13 @@ BOOT_STUBS = {
     "dnf": "exit 0",
     "rpm": "exit 0",
     "mkfs.xfs": "exit 0",
-    "mount": "exit 0",
-    "mountpoint": "exit 1",
-    "blkid": 'case "$1" in -p) exit 2 ;; *) echo 00000000-0000-0000-0000-000000000000 ;; esac',
+    "mount": 'echo "$1" >>"$BOOT_STATE/mounts"',
+    "mountpoint": 'grep -qxF "$2" "$BOOT_STATE/mounts" 2>/dev/null',
+    "xfs_growfs": 'echo "$1" >>"$BOOT_STATE/grown"',
+    "blkid": (
+        'case "$1" in -p) exit 2 ;; *) for device; do :; done; '
+        'printf "00000000-0000-0000-0000-%012d\\n" "$(printf %s "$device" | cksum | cut -d" " -f1)" ;; esac'
+    ),
 }
 # The longest a boot may take to end when the console never accepts a write: the script's own wait for the copy plus the other steps.
 CONSOLE_FLUSH_LIMIT = 10
@@ -210,15 +217,21 @@ filters = {argument for argument in arguments if argument.startswith("Name=")}
 if os.environ.get("BOOT_AWS_FAIL", "\\0") in " ".join(arguments):
     sys.exit("aws stand-in: simulated failure")
 if arguments[:2] == ["ec2", "describe-volumes"]:
-    wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_DATA_VOLUME_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
-    print(os.environ.get("BOOT_VOLUME_RESULT", ids["volume"]) if filters == wanted else "", end="")
+    project = "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]
+    wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_DATA_VOLUME_NAME"], project}
+    scratch = {"Name=tag:Name,Values=" + os.environ["BOOT_SCRATCH_VOLUME_NAME"], project}
+    if filters == wanted:
+        print(os.environ.get("BOOT_VOLUME_RESULT", ids["volume"]), end="")
+    elif filters == scratch:
+        print(os.environ.get("BOOT_SCRATCH_RESULT", ids["scratch"]), end="")
 elif arguments[:2] == ["ec2", "describe-addresses"]:
     wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_ADDRESS_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
     print(os.environ.get("BOOT_ALLOCATION_RESULT", ids["allocation"]) if filters == wanted else "", end="")
 elif arguments[:2] == ["ec2", "associate-address"]:
     print(json.dumps({"AssociationId": "eipassoc-0123456789abcdef0"}))
 elif arguments[:2] == ["ec2", "attach-volume"]:
-    print(json.dumps({"State": "attaching", "VolumeId": ids["volume"], "InstanceId": "i-0123456789abcdef0", "Device": "/dev/xvdf"}))
+    volume = arguments[arguments.index("--volume-id") + 1]
+    print(json.dumps({"State": "attaching", "VolumeId": volume, "InstanceId": "i-0123456789abcdef0", "Device": arguments[arguments.index("--device") + 1]}))
 else:
     sys.exit(f"aws stand-in: unsupported arguments {arguments}")
 """,
@@ -1545,7 +1558,13 @@ def string_values(value: Any) -> list[str]:
 def render_host_boot(template: str, root: Path) -> str:
     """Fill the boot template as Terraform does and move its host paths under a temporary root."""
     script = template
-    for name, value in {**BOOT_VALUES, "mount_path": str(root / "data")}.items():
+    rules = (REPO_ROOT / JOB_FIREWALL_FILE).read_text(encoding="utf-8")
+    for name, value in {
+        **BOOT_VALUES,
+        "mount_path": str(root / "data"),
+        "scratch_path": str(root / "data" / "job_scratch"),
+        "job_firewall_rules": rules,
+    }.items():
         script = script.replace("${" + name + "}", value)
     if "${" in script or "%{" in script:
         raise CheckFailed("The boot template holds an expression the runner does not fill")
@@ -1602,7 +1621,8 @@ def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str],
         tool.chmod(0o700)
     for key, value in BOOT_KERNEL_DEFAULTS.items():
         (root / "state" / "sysctl" / key).write_text(value, encoding="utf-8")
-    (root / "devices" / f"nvme-Amazon_Elastic_Block_Store_{BOOT_IDS['volume'].replace('-', '')}").touch()
+    for volume in ("volume", "scratch"):
+        (root / "devices" / f"nvme-Amazon_Elastic_Block_Store_{BOOT_IDS[volume].replace('-', '')}").touch()
     (root / "fstab").touch()
     if console == "file":
         (root / BOOT_PATHS["console_device"]).touch()
@@ -1819,6 +1839,7 @@ def boot_host(
         "BOOT_IDS": json.dumps(BOOT_IDS),
         "BOOT_TOKEN": BOOT_METADATA_SENTINEL,
         "BOOT_DATA_VOLUME_NAME": BOOT_VALUES["data_volume_name"],
+        "BOOT_SCRATCH_VOLUME_NAME": BOOT_VALUES["scratch_volume_name"],
         "BOOT_ADDRESS_NAME": BOOT_VALUES["address_name"],
         "BOOT_PROJECT_TAG": BOOT_VALUES["project_tag"],
         "BOOT_NFTABLES_CONFIG": str(root / BOOT_PATHS["nftables_config"]),
@@ -2086,6 +2107,21 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_elastic_ip_malformed": ({}, {"BOOT_ALLOCATION_RESULT": "not-an-id"}, "Exactly one Elastic IP must carry the project tags"),
         "boot_elastic_ip_search_fails": ({}, {"BOOT_AWS_FAIL": "describe-addresses"}, "The Elastic IP could not be listed."),
         "boot_with_the_step_lost_in_a_substitution": ({}, {"BOOT_AWS_FAIL": "describe-volumes"}, "The data volume could not be listed."),
+        "boot_scratch_volume_not_found": ({}, {"BOOT_SCRATCH_RESULT": ""}, "Exactly one scratch volume must carry the project tags"),
+        "boot_scratch_volume_duplicated": (
+            {},
+            {"BOOT_SCRATCH_RESULT": "vol-0123456789abcdef1\tvol-0fedcba987654321"},
+            "Exactly one scratch volume must carry the project tags",
+        ),
+        "boot_scratch_volume_malformed": ({}, {"BOOT_SCRATCH_RESULT": "not-an-id"}, "Exactly one scratch volume must carry the project tags"),
+        "boot_scratch_search_fails": ({}, {"BOOT_AWS_FAIL": "host_scratch"}, "The scratch volume could not be listed."),
+        "boot_scratch_not_mounted": (
+            {"mount": "exit 0", "mountpoint": "exit 1"},
+            {},
+            "The scratch volume is not mounted, so the host does not join the cluster.",
+        ),
+        "boot_stalled_grow": ({"xfs_growfs": STALL}, {}, "Growing the data volume file system did not finish within 120 seconds."),
+        "boot_grow_fails": ({"xfs_growfs": "exit 1"}, {}, "FAILED: exit status 1"),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -2095,6 +2131,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_data_volume_search_fails": "Finding the data volume",
         "boot_with_the_step_lost_in_a_substitution": "Finding the data volume",
         "boot_elastic_ip_search_fails": "Finding the Elastic IP",
+        "boot_scratch_search_fails": "Finding the scratch volume",
+        "boot_grow_fails": "Growing the data volume file system",
     }
     planted_privilege = {
         "boot_with_privileged_containers_allowed": "false",
@@ -2161,6 +2199,35 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
                 and any("attach-volume" in line and BOOT_IDS["volume"] in line for line in calls),
             )
             evidence.check(step, "data_volume_in_fstab", f"{root / 'data'} xfs defaults,nofail 0 2" in (root / "fstab").read_text(encoding="utf-8"))
+            scratch_path = root / "data" / "job_scratch"
+            fstab_lines = (root / "fstab").read_text(encoding="utf-8").splitlines()
+            evidence.check(
+                step,
+                "scratch_volume_in_fstab_beside_the_data_volume",
+                len(fstab_lines) == 2 and fstab_lines[1].endswith(f"{scratch_path} xfs defaults,nofail 0 2"),
+            )
+            evidence.check(
+                step,
+                "scratch_volume_attached_as_its_own_device",
+                any("attach-volume" in line and BOOT_IDS["scratch"] in line and "--device /dev/xvdg" in line for line in calls),
+            )
+            evidence.check(
+                step,
+                "scratch_volume_found_by_tag_under_a_deadline",
+                sum(line.startswith("--kill-after=10 60 aws ec2 describe-volumes") for line in deadlines) == 2,
+            )
+            evidence.check(
+                step,
+                "both_file_systems_grown_after_mounting",
+                read_lines(root / "state" / "mounts") == [str(root / "data"), str(scratch_path)]
+                and read_lines(root / "state" / "grown") == [str(root / "data"), str(scratch_path)],
+            )
+            evidence.check(step, "scratch_folder_created_under_the_data_mount", scratch_path.is_dir())
+            evidence.check(
+                step,
+                "job_firewall_table_loaded_with_the_metadata_table",
+                "table inet platform_jobs {" in (root / "state" / "nft_table").read_text(encoding="utf-8"),
+            )
             evidence.check(
                 step,
                 "plain_core_dumps_without_set_user_id",
@@ -2183,6 +2250,30 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
             evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
     run_console_copy_cases(evidence, bash, template, gnu_timeout)
+
+
+def run_job_firewall_syntax_cases(evidence: Evidence) -> None:
+    """Check the job firewall file with the real nft where one exists, and record the check as pending where it does not."""
+    nft = shutil.which("nft")
+    if nft is None:
+        evidence.report.setdefault("pending", []).append(
+            {
+                "name": "job_firewall_syntax",
+                "reason": "nft is not installed on this machine, and Docker calls go only through the project launcher.",
+                "runs_where": "any Linux machine with nft: the case checks the tracked rules file with nft -c -f and then a planted typo",
+            }
+        )
+        return
+    unshare = shutil.which("unshare")
+    prefix = [unshare, "--user", "--map-root-user", "--net"] if unshare and os.geteuid() != 0 else []
+    rules = REPO_ROOT / JOB_FIREWALL_FILE
+    step, result = evidence.run("job_firewall_syntax_accepted", [*prefix, nft, "-c", "-f", str(rules)], evidence.temporary)
+    evidence.check(step, "the_tracked_rules_file_passes_nft_check", result.returncode == 0)
+    planted = evidence.temporary / "job_firewall_planted.nft"
+    text = rules.read_text(encoding="utf-8")
+    planted.write_text(replace_once(text, "tcp dport 443 accept", "tcp dprot 443 accept"), encoding="utf-8")
+    step, result = evidence.run("job_firewall_syntax_planted_typo", [*prefix, nft, "-c", "-f", str(planted)], evidence.temporary)
+    evidence.check(step, "a_planted_typo_fails_nft_check", result.returncode != 0 and "dprot" in result.stderr)
 
 
 def run_suite(evidence: Evidence) -> None:
@@ -2222,6 +2313,7 @@ def run_suite(evidence: Evidence) -> None:
     run_storage_retention_cases(evidence, sources)
     run_services_cases(evidence, sources, bash)
     run_host_boot_cases(evidence, bash)
+    run_job_firewall_syntax_cases(evidence)
 
     alternate = copied_workspace(
         evidence.temporary,

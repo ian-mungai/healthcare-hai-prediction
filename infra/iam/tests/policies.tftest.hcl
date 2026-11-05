@@ -354,9 +354,9 @@ run "host_launch_template" {
       one(aws_launch_template.host.metadata_options).http_put_response_hop_limit == 1 &&
       one(aws_launch_template.host.metadata_options).http_protocol_ipv6 == "disabled" &&
       one(aws_launch_template.host.metadata_options).instance_metadata_tags == "disabled" &&
-      alltrue([for device in aws_launch_template.host.block_device_mappings : one(device.ebs).encrypted == "true" && one(device.ebs).volume_size == 30])
+      alltrue([for device in aws_launch_template.host.block_device_mappings : one(device.ebs).encrypted == "true" && one(device.ebs).volume_size == 80])
     )
-    error_message = "The host requires metadata tokens, keeps containers off the metadata service, does not serve instance tags (boot finds its volume and address by tag through the EC2 API) and encrypts its 30 GB root volume."
+    error_message = "The host requires metadata tokens, keeps containers off the metadata service, does not serve instance tags (boot finds its volume and address by tag through the EC2 API) and encrypts its 80 GB root volume."
   }
 
   assert {
@@ -591,7 +591,7 @@ run "platform_roles" {
         for statement in jsondecode(aws_iam_role_policy.ecs_host.policy).Statement :
         statement.Condition.StringEquals == (
           anytrue([for resource in flatten([statement.Resource]) : strcontains(resource, ":volume/")]) ?
-          { "aws:ResourceTag/Name" = "example_project_host_data_dev", "aws:ResourceTag/Project" = "example_project" } :
+          { "aws:ResourceTag/Name" = statement.Sid == "AttachScratchVolume" ? "example_project_host_scratch_dev" : "example_project_host_data_dev", "aws:ResourceTag/Project" = "example_project" } :
           { "aws:ResourceTag/Name" = "example_project_host_dev", "aws:ResourceTag/Project" = "example_project" }
         ) if anytrue([for action in flatten([statement.Action]) : startswith(action, "ec2:")]) && statement.Sid != "FindOwnDataVolumeAndAddress"
       ]) &&
@@ -603,7 +603,7 @@ run "platform_roles" {
         Condition = { StringEquals = { "aws:RequestedRegion" = "eu-west-1" } }
       }
     )
-    error_message = "Session Manager registration and the boot-time calls reach only the project host, its Elastic IP and its data volume, by Name and Project tag."
+    error_message = "Session Manager registration and the boot-time calls reach only the project host, its Elastic IP, its data volume and its scratch volume, by Name and Project tag."
   }
 
   assert {
