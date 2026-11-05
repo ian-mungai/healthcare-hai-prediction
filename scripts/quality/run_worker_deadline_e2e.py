@@ -59,15 +59,26 @@ GRACE_SECONDS = 1
 RUN_TIMEOUT_SECONDS = 20
 # The stand-in Python launcher: the plan lists the groups of STUB_GROUPS, every other module succeeds, and -c code (the dispatcher's JSON reads) runs for real.
 STUB_PYTHON = f"""#!/bin/bash
-# The first worker besides the exclusive SDK runtime item starts late in a wall-clock second (STUB_ALIGN_FRACTION), whatever that item took.
+# The first worker besides the exclusive SDK runtime item starts late in a wall-clock second (STUB_ALIGN_FRACTION), whatever that item took. It waits only
+# inside the second in which it was launched and records the fraction of that second. A wait into the next second would start it a whole second after the
+# dispatcher noted its start, and the dispatcher counts a worker's age in whole seconds from that note.
 if [ -n "${{STUB_ALIGN_FRACTION:-}}" ] && [ "$1" = -I ] && [ "$2" = -c ] && [[ "$3" == *os.setsid* ]]; then
   if [[ "$*" != *orchestration_checks_sdk_runtime* ]] && [ ! -e "$STUB_DIR/aligned" ]; then
     touch "$STUB_DIR/aligned"
-    {PYTHON} -c "import time; time.sleep(($STUB_ALIGN_FRACTION - time.time() % 1) % 1)"
+    {PYTHON} -c "import sys, time
+now = time.time()
+open(sys.argv[1] + '/launch.json', 'w').write(str(now % 1))
+time.sleep(max(0.0, float(sys.argv[2]) - now % 1))" "$STUB_DIR" "$STUB_ALIGN_FRACTION"
   fi
 fi
 if [ "$1" = -m ]; then
   if [ "$2" = scripts.quality.ci_groups ]; then
+    # The dispatcher launches its workers shortly after this plan. Holding the plan until STUB_PLAN_FRACTION of a wall-clock second puts that launch in the
+    # middle of a second, away from its edges, where a worker that ends just before its limit could be counted a second too old.
+    if [ -n "${{STUB_PLAN_FRACTION:-}}" ] && [ ! -e "$STUB_DIR/planned" ]; then
+      touch "$STUB_DIR/planned"
+      {PYTHON} -c "import sys, time; time.sleep((float(sys.argv[1]) - time.time() % 1) % 1)" "$STUB_PLAN_FRACTION"
+    fi
     for group in $STUB_GROUPS; do echo "run $group"; done
   fi
   exit 0
@@ -112,18 +123,18 @@ HIDING_LAUNCHER = LAUNCHER.replace(
     'for path in [path for path in os.environ.get("PROCESS_GROUP_REGISTRIES", "").split(":") if path]:\n'
     "    os.path.exists(path) and os.unlink(path)\n",
 )
-# A worker that never ends and records, when TERM arrives, how long after its own start (monotonic) and at which wall-clock fraction it started.
-TERM_TIME = f"""#!/bin/bash
+# A worker that never ends and records every 0.05 s how long it has run (monotonic) and at which wall-clock fraction it started. The dispatcher stops a worker's
+# session by freezing its members and killing them, with no TERM, so the last record shows how long the worker lived: it was frozen within 0.05 s of it.
+ALIVE_TIME = f"""#!/bin/bash
 exec {PYTHON} -B -c '
-import json, os, signal, sys, time
+import json, os, sys, time
 started, fraction = time.monotonic(), time.time() % 1
-def stop(_number, _frame):
-    open(sys.argv[1] + "/term.json", "w").write(json.dumps({{"elapsed": time.monotonic() - started, "start_fraction": fraction}}))
-    os._exit(0)
-signal.signal(signal.SIGTERM, stop)
+path = sys.argv[1] + "/alive.json"
 open(sys.argv[1] + "/worker.pid", "w").write(str(os.getpid()))
 while True:
-    time.sleep(1)
+    open(path + ".new", "w").write(json.dumps({{"elapsed": time.monotonic() - started, "start_fraction": fraction}}))
+    os.replace(path + ".new", path)
+    time.sleep(0.05)
 ' "$STUB_DIR"
 """
 # A worker that leaves a descendant in its session with closed output and ends at once with success (the review reproduction).
@@ -242,7 +253,7 @@ class Sandbox:
             ("stub/near.sh", NEAR),
             ("stub/launcher.sh", LAUNCHER),
             ("stub/hiding_launcher.sh", HIDING_LAUNCHER),
-            ("stub/term_time.sh", TERM_TIME),
+            ("stub/alive_time.sh", ALIVE_TIME),
             ("stub/background.sh", BACKGROUND),
             ("stub/lingering.sh", LINGERING),
             ("bin/ps", STALLED_PS),
@@ -737,21 +748,34 @@ def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
 
 def not_before_the_limit(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
-        run = sandbox.run(STUB_PYTHON_LINT="term_time", STUB_ORCHESTRATION="near", STUB_ALIGN_FRACTION="0.75", CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS))
-        term = sandbox.stub / "term.json"
-        record = json.loads(term.read_text()) if term.exists() else {}
+        run = sandbox.run(
+            STUB_PYTHON_LINT="alive_time",
+            STUB_ORCHESTRATION="near",
+            STUB_ALIGN_FRACTION="0.75",
+            STUB_PLAN_FRACTION="0.32",
+            CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS),
+        )
+        alive_file = sandbox.stub / "alive.json"
+        record = json.loads(alive_file.read_text()) if alive_file.exists() else {}
         elapsed = float(record.get("elapsed", 0.0))
+        launch_file = sandbox.stub / "launch.json"
+        launch = float(launch_file.read_text()) if launch_file.exists() else -1.0
         return {
             "run_did_not_hang": not run["timed_out"],
             "only_the_endless_worker_failed": f"Local CI failed in: python_lint (deadline {LIMIT_SECONDS} s)\n" in run["text"],
             "worker_ending_before_the_limit_passed": (sandbox.stub / "orchestration_checks.done").exists(),
-            "term_reached_the_endless_worker": term.exists(),
+            "endless_worker_was_running": alive_file.exists(),
             # The worker measures from its own start, a little after the dispatcher's, so 0.2 s is allowed for that start.
-            "term_not_before_the_limit": term.exists() and elapsed >= LIMIT_SECONDS - 0.2,
+            "worker_alive_until_the_limit": alive_file.exists() and elapsed >= LIMIT_SECONDS - 0.2,
+            # The dispatcher counts a worker's age in whole seconds and looks every 0.5 s. A launch about a quarter of a second into a second keeps a worker
+            # that ends just before its limit from being counted a second too old. It also puts the flip of the count in the middle of a look, so an early
+            # stop shows by 0.3 s.
+            "launch_in_the_middle_of_a_second": 0.1 <= launch <= 0.65,
             # Whole-second timestamps fire early only for a start late in a second; a start that drifted past the next second tests nothing.
             "start_late_in_a_wall_clock_second": 0.6 <= float(record.get("start_fraction", -1.0)) < 1.0,
-            "term_seconds_after_worker_start": round(elapsed, 3),
+            "alive_seconds_after_worker_start": round(elapsed, 3),
             "worker_start_wall_fraction": round(float(record.get("start_fraction", -1.0)), 3),
+            "launch_wall_fraction": round(launch, 3),
             "seconds": run["seconds"],
         }
 
@@ -795,7 +819,7 @@ PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
     ),
     "deadline_one_second_early": (
         (("worker_overdue() { ((SECONDS - $1 > $2)); }", "worker_overdue() { ((SECONDS - $1 >= $2)); }"),),
-        {"worker_is_not_stopped_before_its_limit": "term_not_before_the_limit"},
+        {"worker_is_not_stopped_before_its_limit": "worker_alive_until_the_limit"},
     ),
     # Fix round 6: the worker's leader exits with the worker without stopping the rest of its session (accepted limit A1 before).
     "leader_exits_at_once": (
