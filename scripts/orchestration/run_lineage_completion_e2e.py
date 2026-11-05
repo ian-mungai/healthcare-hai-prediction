@@ -274,6 +274,52 @@ def sql_deadline() -> None:
         require(box.connection.execute("SELECT 1").fetchone()[0] == 1, "SQL deadline leaked into the next operation")
 
 
+def concurrent_open() -> None:
+    """Open one fresh outbox from separate connections at the same instant, as the supervisor worker and a reader do."""
+    openers, rounds, pause = 4, 10, 0.05
+    failures: list[str] = []
+    real_connect = sqlite3.connect
+
+    class SlowSchemaRead(sqlite3.Connection):
+        """Hold every opener between its column read and its next statement so a racing upgrade always overlaps."""
+
+        def execute(self, sql: str, *args: Any) -> Any:
+            cursor = super().execute(sql, *args)
+            if sql.startswith("PRAGMA table_info"):
+                rows = cursor.fetchall()
+                time.sleep(pause)
+                return rows
+            return cursor
+
+    def slow_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        return real_connect(*args, factory=SlowSchemaRead, **kwargs)
+
+    with tempfile.TemporaryDirectory() as folder, patch.object(lineage.sqlite3, "connect", slow_connect):
+        for round_number in range(rounds):
+            database = Path(folder) / f"outbox_{round_number}.sqlite"
+            barrier = threading.Barrier(openers, timeout=5)
+
+            def open_outbox(path: Path = database, gate: threading.Barrier = barrier) -> None:
+                gate.wait()
+                try:
+                    with lineage.Outbox(path) as box:
+                        box.pending(1)
+                except (sqlite3.Error, LookupError) as error:
+                    failures.append(f"{type(error).__name__}: {error}")
+
+            threads = [threading.Thread(target=open_outbox, name=f"outbox-opener-{index}") for index in range(openers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            require(not any(thread.is_alive() for thread in threads), "a concurrent outbox opener did not finish within its bound")
+            with lineage.Outbox(database) as box:
+                columns = {row[1] for row in box.connection.execute("PRAGMA table_info(events)")}
+            require({"om_state", "om_result"} <= columns, "concurrent openers left the outbox without its delivery columns")
+    OBSERVED["concurrent_open"] = {"openers": openers, "rounds": rounds, "failures": len(failures)}
+    require(not failures, f"concurrent outbox openers failed: {failures[:3]}")
+
+
 def automatic_collection() -> None:
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder).resolve()
@@ -755,6 +801,7 @@ CASES = {
     "event_ordering": event_ordering,
     "declared_retention": declared_retention,
     "sql_deadline": sql_deadline,
+    "concurrent_open": concurrent_open,
     "automatic_collection": automatic_collection,
     "independent_delivery": independent_delivery,
     "spool_permissions": spool_permissions,
