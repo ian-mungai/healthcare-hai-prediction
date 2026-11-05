@@ -61,6 +61,17 @@ variable "data_volume_gb" {
   }
 }
 
+variable "scratch_volume_gb" {
+  description = "Size of the host's gp3 scratch volume for job work folders, mounted below the data mount and never snapshotted. Set it after the peak of a complete dry run."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.scratch_volume_gb >= 1 && var.scratch_volume_gb <= 1024
+    error_message = "Use a scratch volume size from 1 to 1024 GB."
+  }
+}
+
 variable "snapshot_retain_count" {
   description = "Number of daily data-volume snapshots kept."
   type        = number
