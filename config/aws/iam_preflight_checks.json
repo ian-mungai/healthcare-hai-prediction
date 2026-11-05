@@ -685,6 +685,14 @@
     },
     {
       "role": "airflow_launch",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/train/decision.json",
+      "context": {
+        "s3:if-match": "\"example_version\""
+      }
+    },
+    {
+      "role": "airflow_launch",
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/train/0/intent.json"
     },

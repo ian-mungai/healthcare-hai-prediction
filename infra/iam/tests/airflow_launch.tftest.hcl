@@ -388,6 +388,13 @@ run "launch_records_are_written_once_under_their_prefix" {
         Condition = { StringEquals = { "s3:if-none-match" = "*" } }
       },
       {
+        Sid       = "ReplaceDecisionRecords"
+        Effect    = "Allow"
+        Action    = "s3:PutObject"
+        Resource  = "arn:aws:s3:::example-project-ci-bucket/lakehouse/launch_records/*/decision.json"
+        Condition = { Null = { "s3:if-match" = "false" } }
+      },
+      {
         Sid      = "ReadLaunchRecords"
         Effect   = "Allow"
         Action   = "s3:GetObject"
@@ -401,7 +408,7 @@ run "launch_records_are_written_once_under_their_prefix" {
         Condition = { StringLike = { "s3:prefix" = ["lakehouse/launch_records/*"] } }
       },
     ]
-    error_message = "A launch record is created with a conditional write that fails when the object exists, is read back, is listed under the record prefix only and is never replaced or deleted."
+    error_message = "A launch record is created with a conditional write that fails when the object exists, is read back, is listed under the record prefix only, is replaced only for the decision record of a run and only with a version check, and is never deleted."
   }
 }
 
@@ -415,8 +422,9 @@ run "the_record_prefix_follows_the_variable" {
   assert {
     condition = (
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement : statement.Resource][0] == "arn:aws:s3:::example-project-ci-bucket/example/records/*" &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement : statement.Resource][1] == "arn:aws:s3:::example-project-ci-bucket/example/records/*" &&
-      jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement[2].Condition.StringLike["s3:prefix"] == ["example/records/*"] &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement : statement.Resource][2] == "arn:aws:s3:::example-project-ci-bucket/example/records/*" &&
+      jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement[3].Condition.StringLike["s3:prefix"] == ["example/records/*"] &&
+      jsondecode(aws_iam_role_policy.airflow_launch_records[0].policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/example/records/*/decision.json" &&
       output.airflow_launch_roles["airflow_launch_task"].record_prefix == "example/records/"
     )
     error_message = "The record grants, the list condition and the output follow the record prefix variable."

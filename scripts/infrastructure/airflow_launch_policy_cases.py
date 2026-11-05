@@ -2,7 +2,8 @@
 
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
 families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
-instances, and write each launch record once, list and read them under its own prefix. It holds nothing else.
+instances, and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
+prefix. It holds nothing else.
 
 The first check is closed: the permitted (action, resource, required conditions) triples of the role are written below as data, and every Allow statement
 of the three policies must be inside them. An action outside the set, a wildcard, a NotAction, a resource outside its triple or a missing required
@@ -56,6 +57,7 @@ ECS_TASKS = "ecs-tasks.amazonaws.com"
 Context = dict[str, tuple[str, ...]]
 Role = dict[str, dict[str, Any]]
 ONCE: Context = {"s3:if-none-match": ("*",)}
+VERSION_CHECKED: Context = {"s3:if-match": ('"9b2cf535f27731c974343645a3985328"',)}
 REQUEST_FILES = {"bronze": "bronze_request.json", "serve": "serving_request.json"}
 FAMILY_ROLES = {
     "promote": "job_train_task",
@@ -236,10 +238,44 @@ def job_cases() -> list[Case]:
 def record_cases() -> list[tuple[Any, ...]]:
     """The launch records: created once under their prefix, read back, never replaced or removed."""
     key = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
+    decision = f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json"
     bucket = f"arn:aws:s3:::{BUCKET}"
     other = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/intent.json"
     return [
         ("create a launch record", "s3:PutObject", key, True, ONCE),
+        ("replace the decision record with a version check", "s3:PutObject", decision, True, VERSION_CHECKED),
+        (
+            "replace the decision record of another run with a version check",
+            "s3:PutObject",
+            f"{RECORDS}20261031T100000Z-01234567/gold/decision.json",
+            True,
+            VERSION_CHECKED,
+        ),
+        ("create the decision record", "s3:PutObject", decision, True, ONCE),
+        ("replace the decision record with neither condition", "s3:PutObject", decision, False),
+        ("replace the decision record with a version check on the wrong key", "s3:PutObject", decision, False, {"s3:if-none-match-version": ("x",)}),
+        ("replace the claim record with a version check", "s3:PutObject", f"{RECORDS}20261030T100000Z-abcdef01/train/claim.json", False, VERSION_CHECKED),
+        ("replace the cancel record with a version check", "s3:PutObject", f"{RECORDS}20261030T100000Z-abcdef01/train/cancel.json", False, VERSION_CHECKED),
+        ("replace an attempt record with a version check", "s3:PutObject", key, False, VERSION_CHECKED),
+        ("replace a started record with a version check", "s3:PutObject", f"{RECORDS}20261030T100000Z-abcdef01/train/0/started.json", False, VERSION_CHECKED),
+        ("replace a record named like the decision with a version check", "s3:PutObject", f"{decision}.bak", False, VERSION_CHECKED),
+        ("replace a record with the decision name in the key text with a version check", "s3:PutObject", f"{RECORDS}decision.json", False, VERSION_CHECKED),
+        (
+            "replace a decision record outside the prefix with a version check",
+            "s3:PutObject",
+            f"{bucket}/lakehouse/run_stage/20261030T100000Z-abcdef01/decision.json",
+            False,
+            VERSION_CHECKED,
+        ),
+        (
+            "replace a decision record in another bucket with a version check",
+            "s3:PutObject",
+            f"arn:aws:s3:::another-bucket/{RECORD_PREFIX}run/job/decision.json",
+            False,
+            VERSION_CHECKED,
+        ),
+        ("replace the decision record and set its access list", "s3:PutObjectAcl", decision, False, VERSION_CHECKED),
+        ("delete the decision record", "s3:DeleteObject", decision, False, VERSION_CHECKED),
         ("create a record of another run", "s3:PutObject", f"{RECORDS}20261031T100000Z-01234567/gold/1/started.json", True, ONCE),
         ("replace a launch record", "s3:PutObject", key, False),
         ("replace a launch record with an empty precondition", "s3:PutObject", key, False, {"s3:if-none-match": ()}),
@@ -303,12 +339,13 @@ def with_empty_context(rows: list[tuple[Any, ...]]) -> list[Case]:
 
 
 class Resource(NamedTuple):
-    """A class of resource: one concrete name, the actions the role may use on it with every condition met, and those it may use with no condition."""
+    """A class of resource: one concrete name, the actions the role may use on it with every condition met, with none and with only a version check."""
 
     name: str
     resource: str
     allowed: frozenset[str]
     bare: frozenset[str]
+    replace: frozenset[str] = frozenset()
 
 
 GET = frozenset({"s3:GetObject"})
@@ -328,6 +365,7 @@ STREAM = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:trai
 SIGNED_ARN = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}"
 LAKEHOUSE_FILE = f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet"
 RECORD = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
+DECISION = f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json"
 NONE: frozenset[str] = frozenset()
 RESOURCES = (
     Resource("host definition of a named family", definition("train"), frozenset({"ecs:RunTask"}), NONE),
@@ -348,6 +386,10 @@ RESOURCES = (
     Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
     Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
     Resource("launch record", RECORD, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("claim record of a run", f"{RECORDS}20261030T100000Z-abcdef01/train/claim.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("decision record of a run", DECISION, frozenset({"s3:GetObject", "s3:PutObject"}), GET, frozenset({"s3:PutObject"})),
+    Resource("record named like the decision", f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json.bak", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("decision file directly under the prefix", f"{RECORDS}decision.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("lakehouse table file", LAKEHOUSE_FILE, NONE, NONE),
     Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", frozenset({"s3:ListBucket"}), NONE),
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
@@ -437,6 +479,7 @@ def matrix_cases() -> list[Case]:
                 continue
             rows.append((f"{item.name}: {action} with every condition met", action, item.resource, action in item.allowed, PERMISSIVE))
             rows.append((f"{item.name}: {action} with no condition", action, item.resource, action in item.bare, {}))
+            rows.append((f"{item.name}: {action} with only a version check", action, item.resource, action in item.replace | item.bare, VERSION_CHECKED))
     return rows
 
 
@@ -479,6 +522,7 @@ WIDENING_ACTIONS = {
     "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
     "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
     "ReadSignedPublishRecord": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
+    "ReplaceDecisionRecords": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
     "ListLaunchRecords": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
@@ -588,6 +632,44 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
             "ListLaunchRecords_a_prefix_condition_on_the_wrong_key",
             replaced(records, "ListLaunchRecords", Condition={"StringLike": {"s3:delimiter": ["*"]}}),
         ),
+        (
+            "records",
+            "ReplaceDecisionRecords_widened_to_every_record",
+            replaced(records, "ReplaceDecisionRecords", Resource=f"{RECORDS}*"),
+        ),
+        (
+            "records",
+            "ReplaceDecisionRecords_widened_to_the_whole_bucket",
+            replaced(records, "ReplaceDecisionRecords", Resource=f"{bucket}/*"),
+        ),
+        (
+            "records",
+            "ReplaceDecisionRecords_widened_to_any_object_named_decision",
+            replaced(records, "ReplaceDecisionRecords", Resource=f"{bucket}/*/decision.json"),
+        ),
+        (
+            "records",
+            "ReplaceDecisionRecords_widened_to_the_decision_prefix",
+            replaced(records, "ReplaceDecisionRecords", Resource=f"{RECORDS}*/decision*"),
+        ),
+        (
+            "records",
+            "ReplaceDecisionRecords_allowed_without_the_version_check",
+            replaced(records, "ReplaceDecisionRecords", Condition={"Null": {"s3:if-match": "true"}}),
+        ),
+        (
+            "records",
+            "an_extra_statement_replaces_any_record_with_a_version_check",
+            appended(
+                records,
+                {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutObject", "Resource": f"{RECORDS}*", "Condition": {"Null": {"s3:if-match": "false"}}},
+            ),
+        ),
+        (
+            "records",
+            "an_extra_statement_replaces_the_decision_without_a_condition",
+            appended(records, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutObject", "Resource": f"{RECORDS}*/decision.json"}),
+        ),
         ("records", "ReadLaunchRecords_the_lakehouse", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/lakehouse/*")),
         ("records", "ReadLaunchRecords_the_whole_bucket", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/*")),
         ("jobs", "regression_ssm_DeleteParameters", replaced(jobs, "ReadSignedPublishRecord", Action=["ssm:GetParameter", "ssm:DeleteParameters"])),
@@ -659,6 +741,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("iam:PassRole", roles, {"StringEquals": {"iam:PassedToService": [ECS_TASKS]}}),
         Grant("s3:GetObject", (*staged, f"{RECORDS}*"), {}),
         Grant("s3:PutObject", (f"{RECORDS}*",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
+        Grant("s3:PutObject", (f"{RECORDS}*/decision.json",), {"Null": {"s3:if-match": ["false"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": [f"{RECORD_PREFIX}*"]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
         Grant("ssm:GetParameter", (f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}",), {}),

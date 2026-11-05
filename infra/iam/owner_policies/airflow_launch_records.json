@@ -9,6 +9,13 @@
       "Condition": { "StringEquals": { "s3:if-none-match": "*" } }
     },
     {
+      "Sid": "ReplaceDecisionRecords",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${RECORD_PREFIX}*/decision.json",
+      "Condition": { "Null": { "s3:if-match": "false" } }
+    },
+    {
       "Sid": "ReadLaunchRecords",
       "Effect": "Allow",
       "Action": "s3:GetObject",
