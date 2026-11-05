@@ -189,14 +189,26 @@ locals {
       }
     }
   }]
+  # A host folder keeps what the last job left, so the init step of each job first deletes the contents of its two folders. Root can
+  # delete the job user's files only with DAC_OVERRIDE and FOWNER, which the Fargate init step drops, so the host init step keeps
+  # those two and drops the rest of the Fargate list.
+  host_init_wipe = "find /workspace /tmp -mindepth 1 -delete && "
+  host_init_drop = ["FSETID", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]
   host_containers = {
     for family in keys(local.host_selected) : family => [
-      for container in lookup(local.host_source_containers, family, []) : merge(container, {
-        environment = [
-          for item in container.environment :
-          contains(local.host_thread_variables, item.name) && item.value == local.host_thread_default ? { name = item.name, value = tostring(var.host_job_threads) } : item
-        ]
-      })
+      for container in lookup(local.host_source_containers, family, []) : merge(
+        container,
+        {
+          environment = [
+            for item in container.environment :
+            contains(local.host_thread_variables, item.name) && item.value == local.host_thread_default ? { name = item.name, value = tostring(var.host_job_threads) } : item
+          ]
+        },
+        { for key, value in {
+          command         = [format("%s%s", local.host_init_wipe, container.command[0])]
+          linuxParameters = merge(container.linuxParameters, { capabilities = { add = [], drop = local.host_init_drop } })
+        } : key => value if container.name == "init" }
+      )
     ]
   }
   host_volumes = {
