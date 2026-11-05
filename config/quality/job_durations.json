@@ -40,9 +40,9 @@
     },
     {
       "job": "Local CI Core",
-      "measured_minutes": 26,
-      "timeout_minutes": 45,
-      "basis": "hosted, measured Oct 31 2026"
+      "measured_minutes": 38,
+      "timeout_minutes": 60,
+      "basis": "hosted, the longest recent passing run (38.2 min, Nov 4 2026); PR 76 ran past 45 twice on Nov 5 2026; temporary until the configuration checks move to their own job"
     },
     {
       "job": "CI Reuse and Gate E2E",
