@@ -298,14 +298,15 @@ class EcsAdapter:
     def poll(self, task_arn: str) -> TaskReport:
         """The task's state now. A task counts as passed only when every one of its containers exited 0, except the guard of a layer task: ECS stops the guard
         when the last phase ends, so its exit code says nothing about the job, and a failed phase fails the job with the phase's own code. A reply that
-        describes no task is ``gone``: ECS documents no guarantee that it describes a task it created, so ``gone`` says nothing about how the task ended."""
+        describes no task, or has no task list, raises ``TaskUnavailable``: ECS documents no guarantee that it describes a task it created, so such a reply
+        says nothing about how the task is doing, and every caller keeps the task unresolved."""
         try:
             reply = self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=[task_arn])
         except (ClientError, BotoCoreError) as error:
             raise classify(error) from None
         tasks = reply.get("tasks") or []
         if not tasks:
-            return TaskReport("gone", None, "not_found")
+            raise TaskUnavailable("task_not_described")
         task = tasks[0]
         status = task.get("lastStatus", "")
         if status != STOPPED:

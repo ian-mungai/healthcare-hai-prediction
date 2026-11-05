@@ -507,7 +507,7 @@ def suspended_sender_never_cancelled_while_the_send_may_land() -> None:
     stopping = outcome_or_error(partial(rig.launcher().run, spec()))
     require("unresolved" in seen.get("error", ""), f"the cancel cannot close while the send may land: {seen}")
     require("end" not in seen["events"] and b'"send"' in seen["decision"], f"nothing was recorded as cancelled at that moment: {seen}")
-    require(isinstance(stopping, StopFailed) and rig.ecs.count("stop_task") == 1, f"the sender stops the task it started: {stopping!r}")
+    require(isinstance(stopping, LaunchUnavailable) and rig.ecs.count("stop_task") == 1, f"the sender stops the task it started: {stopping!r}")
     require("end" not in rig.events(1), "ECS does not describe the task yet, so the stop is not confirmed and nothing is recorded")
     rig.time.now += 720
     done = rig.launcher().cancel(RUN, "gold", 1)
@@ -1233,22 +1233,19 @@ def empty_description_is_never_an_outcome() -> None:
     require(rig.ecs.tasks[arn]["lastStatus"] != "STOPPED" and rig.ecs.count("run_task") == 1, "the task keeps running and nothing else starts")
     rig.ecs.hold = False
     require(rig.launcher().run(spec(2)).ok, "once the task is described it is joined and settled")
-    rig = Rig()
-    rig.ecs.hold = True
-    rig.ecs.stop_lag = 3
-    arn = die_while_running(rig, spec())
-    rig.ecs.describe_overrides = [EMPTY_DESCRIPTION]
-    cancelled = rig.launcher().cancel(RUN, "gold", 1)
-    require(
-        cancelled.outcome == "cancelled" and rig.ecs.tasks[arn]["lastStatus"] == "STOPPED",
-        f"cancelled is recorded only after the task is shown STOPPED: {cancelled}, {rig.ecs.tasks[arn]['lastStatus']}",
-    )
-    rig = Rig()
-    rig.ecs.hold = True
-    arn = die_while_running(rig, spec())
-    rig.ecs.describe_overrides = [EMPTY_DESCRIPTION] * 200
-    refuses(StopFailed, partial(rig.launcher().cancel, RUN, "gold", 1))
-    require("end" not in rig.events(1), f"a stop never shown STOPPED records nothing: {rig.events(1)}")
+    for reply in (EMPTY_DESCRIPTION, {}):
+        rig = Rig()
+        rig.ecs.hold = True
+        rig.ecs.stop_lag = 3
+        arn = die_while_running(rig, spec())
+        rig.ecs.describe_overrides = [reply]
+        refuses(LaunchUnavailable, partial(rig.launcher().cancel, RUN, "gold", 1))
+        require("end" not in rig.events(1) and rig.ecs.tasks[arn]["lastStatus"] != "STOPPED", f"{reply}: a stop that is not shown STOPPED records nothing")
+        cancelled = rig.launcher().cancel(RUN, "gold", 1)
+        require(
+            cancelled.outcome == "cancelled" and rig.ecs.tasks[arn]["lastStatus"] == "STOPPED",
+            f"cancelled is recorded only after the task is shown STOPPED: {cancelled}, {rig.ecs.tasks[arn]['lastStatus']}",
+        )
     rig = Rig()
     rig.ecs.hold = True
     rig.ecs.stop_lag = 3
@@ -1256,7 +1253,9 @@ def empty_description_is_never_an_outcome() -> None:
     launch = launcher.attach(spec(deadline_seconds=60))
     launcher.start(launch)
     rig.time.now += 120
-    rig.ecs.describe_overrides = [None, EMPTY_DESCRIPTION]
+    rig.ecs.describe_overrides = [None, {}]
+    refuses(LaunchUnavailable, partial(launcher.wait, launch))
+    require(not launch.timed_out and "end" not in rig.events(1), "a deadline stop that is not shown STOPPED records nothing")
     launcher.wait(launch)
     require(rig.ecs.tasks[str(launch.arn)]["lastStatus"] == "STOPPED", "a timeout is recorded only after the stopped task is shown STOPPED")
     require(launcher.conclude(launch).outcome == "timeout", "and then it is a timeout")

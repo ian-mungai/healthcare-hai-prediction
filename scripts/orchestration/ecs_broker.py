@@ -641,8 +641,6 @@ class EcsBroker:
                     return last
                 self.stop(last["task_arn"], "deadline")
                 return self.append({"event": "finished", **identity, "exit_code": TIMEOUT_EXIT, "outcome": "timeout", "reason": "deadline"})
-            if report.state == "gone":
-                return self.append({"event": "failed_closed", **identity, "reason": "task_not_found"})
             missing = [name for name in self.jobs[job].get("acceptance", []) if dict(report.containers).get(name) != 0] if report.state == "succeeded" else []
             if missing:
                 reason = f"acceptance_check_missing:{','.join(missing)}"
