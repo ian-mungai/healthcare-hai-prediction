@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import json
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -24,6 +25,7 @@ from orchestration.ecs_launch import (
     CleanupFailed,
     EcsFitProbe,
     JobSpec,
+    Launch,
     Launcher,
     LaunchError,
     LaunchRefused,
@@ -83,6 +85,9 @@ class Rig:
 
     def claim_key(self, job: str = "gold") -> str:
         return f"{PREFIX}/{RUN}/{job}/claim.json"
+
+    def decision_key(self, job: str = "gold") -> str:
+        return f"{PREFIX}/{RUN}/{job}/decision.json"
 
     def events(self, attempt: int) -> list[str]:
         return [event for event in EVENT_ORDER if self.key(attempt, event) in self.bucket.objects]
@@ -211,13 +216,13 @@ def aged_recovery_never_replays_runtask() -> None:
     rig.time.on_sleep = None
     rig.time.now += 7200
     runs = rig.ecs.count("run_task")
-    error = refuses(LaunchRefused, partial(rig.launcher().run, spec(2)))
-    require("owner must resolve" in str(error), f"the refusal says who resolves it: {error}")
+    error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec(2)))
+    require("Manual owner path" in str(error) and "start a new run" in str(error), f"the message names the manual owner path: {error}")
     require(rig.ecs.count("run_task") == runs and len(gold_tasks(rig)) == 1, "no RunTask is repeated after the window, the token life and what ECS remembers")
-    require("end" not in rig.events(1), "the unresolved launch is not closed")
+    require("end" not in rig.events(1), "the unresolved launch is not closed, however old it is")
 
 
-def claim_without_send_an_hour_later() -> None:
+def claim_that_sent_nothing_an_hour_later() -> None:
     rig = Rig()
     rig.bucket.put_faults["intent.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
     refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
@@ -314,6 +319,196 @@ def joined_attempts_report_the_owners_outcome() -> None:
         verdict.outcome == "succeeded" and rig.record(2, "end")["outcome"] == "succeeded",
         f"a joined attempt that decided on a timeout too late reports the owner's success: {verdict}",
     )
+
+
+def concurrent_recoverers_one_sends_one_closes() -> None:
+    """The owner waits for room with its own view of the claim while a second caller sends. A gate pauses the owner at 585 seconds. It runs again while
+    the sender's RunTask call is in flight and the window has ended, and must neither close nor send. Gates last at most 10 seconds and the thread is joined."""
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.ecs.instance_free = {"CPU": 1024, "MEMORY": 31000}
+    paused, resume = threading.Event(), threading.Event()
+    result: dict[str, Any] = {}
+
+    def pause_owner(now: float) -> None:
+        if now - START_TIME >= 585 and not paused.is_set():
+            paused.set()
+            if not resume.wait(10):
+                raise AssertionError("the owner was never resumed")
+
+    def owner() -> None:
+        try:
+            result["owner"] = rig.launcher().run(spec(1))
+        except BaseException as error:
+            result["owner"] = error
+
+    rig.time.on_sleep = pause_owner
+    thread = threading.Thread(target=owner)
+    thread.start()
+    require(paused.wait(10), "the owner never reached 585 seconds")
+    rig.time.on_sleep = None
+    rig.ecs.instance_free = {"CPU": 4096, "MEMORY": 31000}
+
+    def owner_runs_during_the_send(phase: str) -> None:
+        if phase == "before":
+            rig.ecs.run_task_hook = None
+            rig.time.now += 40
+            resume.set()
+            thread.join(10)
+            result["events_during"] = rig.events(1)
+
+    rig.ecs.run_task_hook = owner_runs_during_the_send
+    sender = rig.launcher()
+    joined = sender.attach(spec(2))
+    sender.start(joined)
+    require(not thread.is_alive(), "the owner did not finish")
+    require(isinstance(result["owner"], LaunchUnavailable), f"the owner must leave the launch unresolved while a send is in flight: {result['owner']}")
+    require("end" not in result["events_during"], f"and record nothing: {result['events_during']}")
+    require(len(gold_tasks(rig)) == 1 and joined.arn == gold_tasks(rig)[0], "the sender's task lands and is the only one")
+    require("end" not in rig.events(1), "no terminal outcome exists while the task is live")
+
+
+def race_of_a_closer(moment: str) -> None:
+    rig = Rig()
+    rig.bucket.put_faults["intent.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
+    rig.time.now += 700
+    claim = json.loads(rig.bucket.objects[rig.claim_key()])
+    sender = Launch(spec(2))
+
+    def sender_wins(key: str) -> None:
+        rig.bucket.read_hook = rig.bucket.write_hook = None
+        require(rig.launcher().win_send(sender, claim), "the sender takes the send token")
+
+    if moment == "after_the_decision_read":
+        rig.bucket.read_hook = lambda key: sender_wins(key) if key.endswith("/cancel.json") else None
+    else:
+        rig.bucket.write_hook = lambda key: sender_wins(key) if key.endswith("/decision.json") else None
+    error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
+    require("unresolved" in str(error), f"{moment}: a closer that lost the race leaves the launch unresolved: {error}")
+    stands = json.loads(rig.bucket.objects[rig.decision_key()])["decision"] == "send"
+    require(rig.events(1) in ([], ["intent"]) and stands, f"{moment}: the send token stands and nothing is closed")
+
+
+def closer_loses_to_a_sender_that_wins_in_between() -> None:
+    race_of_a_closer("after_the_decision_read")
+    race_of_a_closer("at_the_close_write")
+
+
+def stale_listing_blocks_recovery_and_cancel() -> None:
+    for action in ("recover", "cancel"):
+        rig = Rig()
+        rig.ecs.hold = True
+        rig.ecs.visible_delay = 720.0
+        rig.bucket.put_faults["started.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+        refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
+        require(len(gold_tasks(rig)) == 1, f"{action}: the first call sent one task")
+        rig.time.now += 700
+        if action == "recover":
+            error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec(2)))
+        else:
+            error = refuses(LaunchUnavailable, partial(rig.launcher().cancel, RUN, "gold", 1))
+        require("unresolved" in str(error), f"{action}: an empty listing proves nothing: {error}")
+        require("end" not in rig.events(1) and len(gold_tasks(rig)) == 1, f"{action}: no terminal outcome while the task provisions: {rig.events(1)}")
+        require(rig.ecs.count("run_task") == 1, f"{action}: and no second task")
+        rig.time.now += 100
+        if action == "recover":
+            rig.ecs.hold = False
+            done = rig.launcher().run(spec(2))
+            require(done.ok and len(gold_tasks(rig)) == 1, f"{action}: once the task is listed it is joined: {done}")
+        else:
+            done = rig.launcher().cancel(RUN, "gold", 1)
+            require(
+                done.outcome == "cancelled" and rig.ecs.tasks[gold_tasks(rig)[0]]["lastStatus"] == "STOPPED", f"{action}: found, stopped, then recorded: {done}"
+            )
+
+
+def send_is_withheld_after_the_reads() -> None:
+    def run_with(operation: str, nth: int, interfere: Callable[[Rig], None], low_room: bool = False) -> tuple[Rig, Any]:
+        rig = Rig()
+        if low_room:
+            rig.ecs.instance_free = {"CPU": 4096, "MEMORY": 31000}
+        seen = {"count": 0}
+
+        def hook(name: str) -> None:
+            if name == operation:
+                seen["count"] += 1
+                if seen["count"] == nth:
+                    rig.ecs.call_hook = None
+                    interfere(rig)
+
+        rig.ecs.call_hook = hook
+        return rig, rig.launcher().run(spec())
+
+    def cancel_now(rig: Rig) -> None:
+        with contextlib.suppress(LaunchUnavailable):
+            rig.launcher().cancel(RUN, "gold", 1)
+
+    def window_over(rig: Rig) -> None:
+        rig.time.now += 700
+
+    rig, done = run_with("describe_container_instances", 1, cancel_now)
+    require(rig.ecs.count("run_task") == 0 and done.outcome == "cancelled", f"a cancel during the capacity read withholds the send: {done}")
+    rig, done = run_with("list_tasks", 1, cancel_now)
+    require(rig.ecs.count("run_task") == 0 and done.outcome == "cancelled", f"a cancel during the discovery read withholds the send: {done}")
+    rig, done = run_with("list_tasks", 1, window_over)
+    require(rig.ecs.count("run_task") == 0 and done.outcome == "failed_closed", f"the window ending during the discovery read withholds the send: {done}")
+    rig, done = run_with("describe_container_instances", 1, window_over)
+    require(rig.ecs.count("run_task") == 0 and done.outcome == "failed_closed", f"the window ending during the capacity read withholds the send: {done}")
+    rig = Rig()
+    rig.ecs.host_full = True
+    reads = {"room": 0}
+
+    def cancel_on_second_room_read(name: str) -> None:
+        if name == "describe_container_instances":
+            reads["room"] += 1
+            if reads["room"] == 2:
+                rig.ecs.call_hook = None
+                cancel_now(rig)
+
+    rig.ecs.call_hook = cancel_on_second_room_read
+    done = rig.launcher().run(spec())
+    require(done.outcome == "cancelled" and rig.ecs.count("run_task") == 1, f"a repeat after a capacity answer is guarded after the capacity read: {done}")
+    rig = Rig()
+    rig.ecs.host_full = True
+    calls = {"list": 0}
+
+    def cancel_on_repeat(name: str) -> None:
+        if name == "list_tasks":
+            calls["list"] += 1
+            if calls["list"] == 2:
+                rig.ecs.call_hook = None
+                cancel_now(rig)
+
+    rig.ecs.call_hook = cancel_on_repeat
+    done = rig.launcher().run(spec())
+    require(
+        done.outcome == "cancelled" and rig.ecs.count("run_task") == 1, f"a repeat after a capacity answer is guarded too: {done}, {rig.ecs.count('run_task')}"
+    )
+
+
+def suspended_sender_never_cancelled_while_the_send_may_land() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.ecs.visible_delay = 720.0
+    seen: dict[str, Any] = {}
+
+    def cancel_while_suspended(phase: str) -> None:
+        if phase == "before":
+            rig.ecs.run_task_hook = None
+            try:
+                rig.launcher().cancel(RUN, "gold", 1)
+            except LaunchUnavailable as error:
+                seen["error"] = str(error)
+            seen["events"] = rig.events(1)
+            seen["decision"] = rig.bucket.objects.get(f"{PREFIX}/{RUN}/gold/decision.json", b"")
+
+    rig.ecs.run_task_hook = cancel_while_suspended
+    done = rig.launcher().run(spec())
+    require("unresolved" in seen.get("error", ""), f"the cancel cannot close while the send may land: {seen}")
+    require("end" not in seen["events"] and b'"send"' in seen["decision"], f"nothing was recorded as cancelled at that moment: {seen}")
+    require(done.outcome == "cancelled" and rig.ecs.tasks[gold_tasks(rig)[0]]["lastStatus"] == "STOPPED", f"the sender stops the task it started: {done}")
+    require(rig.record(1, "end")["task_arn"] == gold_tasks(rig)[0], "and cancelled is recorded with the ARN of that task")
 
 
 def launch_failure() -> None:
@@ -836,9 +1031,12 @@ def store_scope() -> None:
     require(operations <= {"put_object", "get_object"}, f"no delete, list or other call: {operations}")
     for name, arguments in rig.bucket.calls:
         key = arguments["Key"]
-        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim|send|cancel)|absent-probe)\.json"
+        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim|decision|cancel)|absent-probe)\.json"
         require(re.fullmatch(pattern, key) is not None, f"{name} {key} is not a launch record key")
-        require(name != "put_object" or arguments.get("IfNoneMatch") == "*", "every write is conditional")
+        require(
+            name != "put_object" or arguments.get("IfNoneMatch") == "*" or ("IfMatch" in arguments and key.endswith("/decision.json")),
+            "every write is conditional",
+        )
 
 
 def read_denied_is_loud() -> None:
@@ -916,10 +1114,15 @@ def poll_errors() -> None:
 CASES: dict[str, Callable[[], None]] = {
     "no_terminal_outcome_while_a_launch_may_be_live": no_terminal_outcome_while_a_launch_may_be_live,
     "aged_recovery_never_replays_runtask": aged_recovery_never_replays_runtask,
-    "claim_without_send_an_hour_later": claim_without_send_an_hour_later,
+    "claim_that_sent_nothing_an_hour_later": claim_that_sent_nothing_an_hour_later,
     "cancel_before_runtask_is_accepted": cancel_before_runtask_is_accepted,
     "recovery_enforces_the_claim_needs": recovery_enforces_the_claim_needs,
     "joined_attempts_report_the_owners_outcome": joined_attempts_report_the_owners_outcome,
+    "concurrent_recoverers_one_sends_one_closes": concurrent_recoverers_one_sends_one_closes,
+    "closer_loses_to_a_sender_that_wins_in_between": closer_loses_to_a_sender_that_wins_in_between,
+    "stale_listing_blocks_recovery_and_cancel": stale_listing_blocks_recovery_and_cancel,
+    "send_is_withheld_after_the_reads": send_is_withheld_after_the_reads,
+    "suspended_sender_never_cancelled_while_the_send_may_land": suspended_sender_never_cancelled_while_the_send_may_land,
     "launch_failure": launch_failure,
     "failed_attempt_is_terminal": failed_attempt_is_terminal,
     "lost_reply": lost_reply,

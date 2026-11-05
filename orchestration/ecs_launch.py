@@ -12,11 +12,11 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    the caller's bound inputs before anything else happens.
 3. An ended launch is terminal. A success is adopted. A failure, timeout, closed launch or cancel is reported by every later attempt, which launches nothing:
    trying again needs a new run.
-4. Unresolved launches: a claim whose task is not recorded is resolved by asking ECS for the task of its identity (the ``startedBy`` tag), running or
-   stopped. A ``send`` marker is written before the first RunTask call, so a claim without one never sent anything and can be closed. A claim with one stays
-   unresolved while a task may be outstanding: no later capacity, permission or cancel outcome closes it. Inside the 10 minute window the same RunTask call
-   (same identity and client token) may be repeated; after it, nothing is sent and the launch is only looked up. A launch that cannot be found is cleared
-   only after the settle time and while ECS still remembers stopped tasks, and past that only an owner can resolve it.
+4. One decision record, created with a conditional write, is the authority over sending a RunTask call and closing without a task, and the two exclude
+   each other durably. A caller sends only while it holds the send token and closes only by winning the close token (or by handing back its own send token when
+   every call it sent was answered, with a version-checked replacement). Once a RunTask call may have been sent, the claim stays unresolved until positive
+   evidence: the task found by identity and settled. No timer and no empty listing proves that nothing started. The call raises LaunchUnavailable and names the
+   manual owner path. RunTask is sent only inside the 10 minute window and never after a cancel request, both checked immediately before every call.
 5. Reattach: a new attempt joins the live task of the launch and keeps its start time and deadline, only when the bound inputs (code digest, request hash and
    input run) equal those of the launch. Different bound inputs are refused.
 6. The deadline counts from the recorded start of the task and is the recorded one, so it holds across restarts. A recovered task starts when ECS created it,
@@ -38,21 +38,35 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from orchestration.ecs_adapter import HOST, CapacityUnavailable, EcsAdapter, TaskFound, TaskRefused, TaskReport, TaskUnavailable, classify, scrub
+from orchestration.ecs_adapter import (
+    HOST,
+    CapacityUnavailable,
+    EcsAdapter,
+    SendUnknown,
+    SendWithheld,
+    TaskFound,
+    TaskRefused,
+    TaskReport,
+    TaskUnavailable,
+    classify,
+    scrub,
+)
 
 BOUND_FIELDS = ("code_digest", "request_hash", "input_run")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 JOB = re.compile(r"[a-z][a-z0-9_]{1,40}")
-EVENTS = ("claim", "send", "cancel", "intent", "started", "end")
-RUN_EVENTS = ("claim", "send", "cancel")
+EVENTS = ("claim", "decision", "cancel", "intent", "started", "end")
+RUN_EVENTS = ("claim", "decision", "cancel")
 OUTCOMES = frozenset({"succeeded", "failed", "timeout", "cancelled", "failed_closed"})
 TIMEOUT_EXIT = 124
 NO_CHECK_EXIT = 125
@@ -62,8 +76,6 @@ STOP_WAIT_SECONDS = 120.0
 STOP_POLL_SECONDS = 2.0
 FIT_WAIT_SECONDS = 600.0
 FIT_POLL_SECONDS = 15.0
-SETTLE_SECONDS = 60.0
-RETENTION_SECONDS = 3300.0
 POLL_SECONDS = 6.0
 POLL_FAILURES = 5
 ABSENT_CODE = "NoSuchKey"
@@ -166,8 +178,16 @@ class LaunchStore(Protocol):
         ...
 
     def run_record(self, run_id: str, job: str, event: str) -> dict[str, Any] | None:
-        """A record of the whole run and job: the ``claim`` (the one launch it may have), the ``send`` marker (written before the first RunTask call) or a
-        ``cancel`` request. None while nobody has written it."""
+        """A record of the whole run and job: the ``claim`` (the one launch it may have), the ``decision`` (the one authority over sending a RunTask call and
+        closing without a task) or a ``cancel`` request. None while nobody has written it."""
+        ...
+
+    def decision(self, run_id: str, job: str) -> tuple[dict[str, Any], str] | None:
+        """The decision record with the version it was read at, or None."""
+        ...
+
+    def replace_decision(self, record: Mapping[str, Any], version: str) -> bool:
+        """Replace the decision record if it still has the given version. False when it changed."""
         ...
 
 
@@ -190,7 +210,8 @@ class Launch:
     outcome: Outcome | None = None
     claim: dict[str, Any] | None = None
     owner: int | None = None
-    last_send: float | None = None
+    holder: str = field(default_factory=lambda: uuid.uuid4().hex)
+    ambiguous: bool = False
 
 
 def launch_record_prefix() -> str:
@@ -225,12 +246,17 @@ def parse_record(raw: bytes, where: str) -> dict[str, Any]:
         needed |= {"bound": dict, "deadline_seconds": int, "acceptance": list, "need": dict}
     elif event == "cancel":
         needed |= {"reason": str}
+    elif event == "decision":
+        kind = record.get("decision") if isinstance(record, dict) else None
+        needed |= {"decision": str}
+        needed |= {"holder": str} if kind == "send" else {"outcome": str, "exit_code": int, "reason": str}
     elif event == "started":
         needed |= {"task_arn": str, "job_started_at": str}
     elif event == "end":
         needed |= {"outcome": str, "exit_code": int, "reason": str}
     problem = next((name for name, kind in needed.items() if not isinstance(record.get(name) if isinstance(record, dict) else None, kind)), None)
-    if event not in EVENTS or problem is not None or (event == "end" and record["outcome"] not in OUTCOMES) or record["schema_version"] != 1:
+    closing = event == "end" or (event == "decision" and record.get("decision") == "close")
+    if event not in EVENTS or problem is not None or (closing and record["outcome"] not in OUTCOMES) or record["schema_version"] != 1:
         raise LaunchError(f"launch record {where} is invalid ({problem or 'event or outcome'})")
     return dict(record)
 
@@ -239,7 +265,8 @@ class S3LaunchStore:
     """Launch records as write-once S3 objects: ``<prefix>/<run>/<job>/claim.json`` (the authority of the run and job) and
     ``<prefix>/<run>/<job>/<attempt>/<event>.json``, with ``prefix`` from ``launch_record_prefix``.
 
-    Every write sends ``IfNoneMatch="*"`` (a 412 means the record exists), nothing is deleted or overwritten, and only known keys are read. The code never
+    Every write sends ``IfNoneMatch="*"`` (a 412 means the record exists), nothing is deleted, the decision record is the only one ever replaced (with
+    ``IfMatch`` on the version it was read at), and only known keys are read. The code never
     lists. A record is missing only when S3 answers NoSuchKey. A denied read (403) is never read as missing: it means the history cannot be read, so it
     refuses. S3 answers NoSuchKey instead of AccessDenied for an absent key only when the role may list the prefix, so the store checks that once with a key
     that cannot exist, and refuses to work with a role that cannot tell the two apart.
@@ -279,10 +306,11 @@ class S3LaunchStore:
             raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
         raise LaunchError("a record that cannot exist was read")
 
-    def get(self, key: str) -> dict[str, Any] | None:
+    def get_with_etag(self, key: str) -> tuple[dict[str, Any], str] | None:
         self.require_distinguishable()
         try:
-            body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+            reply = self.client.get_object(Bucket=self.bucket, Key=key)
+            body = reply["Body"].read()
         except ClientError as error:
             code = str(error.response.get("Error", {}).get("Code", ""))
             if code == ABSENT_CODE:
@@ -292,7 +320,11 @@ class S3LaunchStore:
             raise self.refusal(code) from None
         except BotoCoreError as error:
             raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
-        return parse_record(body, key)
+        return parse_record(body, key), str(reply.get("ETag", ""))
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        found = self.get_with_etag(key)
+        return found[0] if found else None
 
     @staticmethod
     def refusal(code: str) -> LaunchError:
@@ -326,6 +358,24 @@ class S3LaunchStore:
 
     def run_record(self, run_id: str, job: str, event: str) -> dict[str, Any] | None:
         return self.get(self.run_key(run_id, job, event))
+
+    def decision(self, run_id: str, job: str) -> tuple[dict[str, Any], str] | None:
+        return self.get_with_etag(self.run_key(run_id, job, "decision"))
+
+    def replace_decision(self, record: Mapping[str, Any], version: str) -> bool:
+        """The one overwrite: a version-checked replacement of the decision record, by the holder of the send token, to close without a task."""
+        key = self.run_key(record["run_id"], record["job"], "decision")
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(record, sort_keys=True).encode(), IfMatch=version)
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code == "PreconditionFailed":
+                return False
+            raise self.refusal(code) from None
+        except BotoCoreError:
+            stored = self.get(key)
+            return stored is not None and stored == dict(record)
+        return True
 
     def records(self, run_id: str, job: str, attempts: Sequence[int]) -> list[dict[str, Any]]:
         keys = [self.key_of(run_id, job, attempt, event) for attempt in attempts for event in ("intent", "started", "end")]
@@ -485,6 +535,10 @@ class Launcher:
         if "end" in theirs:
             launch.outcome = outcome_of(theirs["end"], adopted=attempt != spec.attempt)
             return
+        decision = self.store.run_record(spec.run_id, spec.job, "decision")
+        if decision is not None and decision["decision"] == "close":
+            self.adopt_closure(launch, claim, decision)
+            return
         if "started" in theirs:
             arn, began = theirs["started"]["task_arn"], theirs["started"]["job_started_at"]
         else:
@@ -570,19 +624,17 @@ class Launcher:
         spec = launch.spec
         if launch.outcome is not None or launch.arn is not None:
             return
-        fresh = launch.claim is None
-        if fresh and not self.admit(launch):
+        if launch.claim is None and not self.admit(launch):
             self.settle(launch, self.store.run_record(spec.run_id, spec.job, "claim"), self.events(spec.run_id, spec.job, spec.attempt))
             if launch.outcome is not None or launch.arn is not None:
                 return
-            fresh = False
         claim = launch.claim
         if claim is None:
             raise LaunchError("the claim is missing")
         self.check_bound(spec, claim)
         self.record_intent(claim)
         launch.deadline_seconds = claim["deadline_seconds"]
-        found = self.run_when_it_fits(launch, claim, fresh)
+        found = self.run_when_it_fits(launch, claim)
         if found is None:
             return
         stored = self.record_started(claim, *found)
@@ -598,26 +650,33 @@ class Launcher:
     def cancel_requested(self, run_id: str, job: str) -> bool:
         return self.store.run_record(run_id, job, "cancel") is not None
 
-    def run_when_it_fits(self, launch: Launch, claim: dict[str, Any], fresh: bool) -> tuple[str, str] | None:
+    def run_when_it_fits(self, launch: Launch, claim: dict[str, Any]) -> tuple[str, str] | None:
         """Return the ARN and start time of the task under the claim, started now or found by identity. Returns None when the launch was closed.
 
-        A launch that may be outstanding stays unresolved until its task is found: ``launch.last_send`` is the latest time a RunTask call may have been sent
-        whose answer is unknown, and nothing closes the launch while it is set. A claim that is not new has a ``send`` marker when any caller reached RunTask,
-        and only then is a send unknown. RunTask is sent only before the end of the window (``FIT_WAIT_SECONDS`` after the claim) and never after a cancel
-        request. The host's room is checked against the claim's needs for every caller. After any wait, or when a send is unknown, the identity is asked
-        first.
-        """
+        One decision record, created with a conditional write, is the authority over two things that exclude each other: sending a RunTask call (the send
+        token) and closing without a task (the close token). A caller sends only after it holds the send token, and closes only by winning the close token or by
+        handing back its own send token when every call it sent was answered. When another caller holds the send token, a RunTask call may have been sent, and
+        only positive evidence settles it: the task of the launch's identity found and settled. No timer and no empty listing proves that nothing started.
+
+        RunTask is sent only before the end of the window (``FIT_WAIT_SECONDS`` after the claim) and never after a cancel request, and both are checked
+        immediately before every call, after the capacity and discovery reads. The host's room is checked against the claim's needs for every caller."""
         spec = launch.spec
         run_id, job = claim["run_id"], claim["job"]
         key = f"{run_id}:{job}:{claim['attempt']}"
         need = Resources(**claim["need"])
         end = stamp(claim["at"]) + FIT_WAIT_SECONDS
-        marked = False if fresh else self.store.run_record(run_id, job, "send") is not None
-        launch.last_send = end if marked else None
-        ask = marked
         last = ""
         while True:
-            if ask:
+            decision = self.store.run_record(run_id, job, "decision")
+            if decision is not None and decision["decision"] == "close":
+                self.adopt_closure(launch, claim, decision)
+                return None
+            if decision is not None and decision["holder"] != launch.holder:
+                found = self.lookup(claim)
+                if found is not None:
+                    return found.arn, self.began_of(found, claim)
+                raise self.unresolved(claim)
+            if decision is not None and launch.ambiguous:
                 try:
                     found = self.lookup(claim)
                 except LaunchUnavailable as error:
@@ -625,10 +684,9 @@ class Launcher:
                 else:
                     if found is not None:
                         return found.arn, self.began_of(found, claim)
-                    self.clear_if_proven(launch, claim)
             cancelled = self.cancel_requested(run_id, job)
             if cancelled or self.clock.wall() >= end:
-                self.stop_sending(launch, claim, cancelled, last)
+                self.give_up(launch, claim, cancelled, last)
                 return None
             fits = True
             try:
@@ -636,70 +694,107 @@ class Launcher:
             except TaskUnavailable as error:
                 fits, last = False, f"host capacity unreadable ({error})"
             except TaskRefused as error:
-                self.fail(launch, claim, f"fit_probe_refused:{error}")
+                self.give_up(launch, claim, False, "", f"fit_probe_refused:{error}")
                 return None
             else:
                 short = shortfalls(need, free)
                 if short:
                     fits, last = False, "; ".join(short)
             if fits:
-                if not marked:
-                    self.put("send", spec.attempt, claim)
-                    marked = True
-                    if self.cancel_requested(run_id, job) or self.clock.wall() >= end:
-                        continue
-                sent = self.clock.wall()
+                if decision is None and not self.win_send(launch, claim):
+                    continue
                 try:
-                    return self.adapter.start(spec.job, key, spec.environment, "", HOST), iso(sent)
+                    arn = self.adapter.start(spec.job, key, spec.environment, "", HOST, guard=partial(self.guard, run_id, job, end))
+                    return arn, iso(self.clock.wall())
+                except SendWithheld:
+                    continue
                 except CapacityUnavailable as error:
                     last = f"RunTask answered {error}"
+                except SendUnknown as error:
+                    launch.ambiguous, last = True, f"the RunTask reply is unknown ({error})"
                 except TaskUnavailable as error:
-                    launch.last_send, last = sent, f"the RunTask reply is unknown ({error})"
+                    last = f"RunTask was not sent ({error})"
                 except TaskRefused as error:
-                    self.fail(launch, claim, f"launch_refused:{error}")
+                    self.give_up(launch, claim, False, "", f"launch_refused:{error}")
                     return None
-            ask = True
             self.clock.sleep(FIT_POLL_SECONDS)
 
-    def clear_if_proven(self, launch: Launch, claim: Mapping[str, Any]) -> None:
-        """Call right after a lookup that found no task. A send is known to have produced no task once the settle time has passed since it and ECS still lists
-        the stopped tasks of that time, so a task that existed would have been found."""
-        if launch.last_send is not None and launch.last_send + SETTLE_SECONDS <= self.clock.wall() <= stamp(claim["at"]) + RETENTION_SECONDS:
-            launch.last_send = None
+    def guard(self, run_id: str, job: str, end: float) -> None:
+        """Called immediately before every RunTask call. A cancel request or the end of the window withholds the call."""
+        if self.cancel_requested(run_id, job) or self.clock.wall() >= end:
+            raise SendWithheld
 
-    def stop_sending(self, launch: Launch, claim: Mapping[str, Any], cancelled: bool, last: str) -> None:
-        """The window is over or a cancel was requested: no RunTask is sent from here on. A launch with nothing outstanding is closed. One that may be
-        outstanding stays unresolved, and past what ECS remembers only an owner can resolve it."""
-        if launch.last_send is None:
-            if cancelled:
-                self.end_claim(launch, claim, "cancelled before the task started", "cancelled", CANCEL_EXIT)
-            else:
-                self.end_claim(launch, claim, f"does_not_fit after {FIT_WAIT_SECONDS:g} s: {last}" if last else "no task was started within the launch window")
-            return
-        if self.clock.wall() - stamp(claim["at"]) > RETENTION_SECONDS:
-            raise LaunchRefused(
-                f"the launch of attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']} was claimed more than {RETENTION_SECONDS / 60:g} minutes "
-                "ago and may have started a task that ECS no longer lists. Nothing was launched and nothing was recorded. An owner must resolve it: check ECS "
-                "and the job's evidence, then start a new run to try again."
-            )
-        raise LaunchUnavailable(
-            f"a task may be outstanding under the launch of attempt {claim['attempt']}: a RunTask call was sent and no task has been found. "
-            f"The launch stays unresolved; call again after {SETTLE_SECONDS:g} seconds."
+    def unresolved(self, claim: Mapping[str, Any], prefix: str = "") -> LaunchUnavailable:
+        """The launch may have a task that has not been found. Nothing closes it and nothing else starts. The owner resolves it by hand."""
+        key = f"{claim['run_id']}:{claim['job']}:{claim['attempt']}"
+        return LaunchUnavailable(
+            f"{prefix}A RunTask call may have been sent for attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']} and no task has been "
+            f"found, so the launch stays unresolved and nothing else will start. Manual owner path: stop every sender of this launch, inspect ECS for "
+            f"the tasks started by {self.adapter.identity(key)} (the client token is the SHA-256 of {key}), check the job's evidence in the bucket, then "
+            "start a new run."
         )
 
-    def fail(self, launch: Launch, claim: Mapping[str, Any], reason: str) -> None:
-        """A definite failure of this call. It closes the launch only when no task may be outstanding."""
-        if launch.last_send is not None:
-            raise LaunchUnavailable(f"{reason}. A task may exist under this launch, so it stays unresolved: call again")
-        self.end_claim(launch, claim, reason)
+    def win_send(self, launch: Launch, claim: Mapping[str, Any]) -> bool:
+        """Win the send token: the conditional create of the decision record. False when another caller holds the send token or closed the launch."""
+        spec = launch.spec
+        record = {
+            "schema_version": 1,
+            "event": "decision",
+            "run_id": claim["run_id"],
+            "job": claim["job"],
+            "attempt": spec.attempt,
+            "at": iso(self.clock.wall()),
+            "decision": "send",
+            "holder": launch.holder,
+        }
+        stored = self.store.put_once(record)
+        return bool(stored["decision"] == "send" and stored["holder"] == launch.holder)
 
-    def end_claim(self, launch: Launch, claim: Mapping[str, Any], reason: str, outcome: str = "failed_closed", code: int = CLOSED_EXIT) -> None:
-        """End a launch that started no task. The run and job's one launch is over, so this attempt's outcome is that one. Refuses while a task may be
-        outstanding, the rule that no terminal outcome is recorded for a launch that may be live."""
-        if launch.last_send is not None:
-            raise LaunchError("a launch that may be outstanding cannot be closed")
-        end = self.finalize(claim, claim["attempt"], launch.spec.attempt, outcome, code, reason[:REPORT_LIMIT], "")
-        launch.outcome = outcome_of(end, adopted=claim["attempt"] != launch.spec.attempt)
+    def give_up(self, launch: Launch, claim: Mapping[str, Any], cancelled: bool, last: str, reason: str = "") -> None:
+        """The launch will not send: a cancel was requested, the window is over or the call failed for good. It closes without a task."""
+        if cancelled:
+            self.close_without_task(launch, claim, "cancelled", CANCEL_EXIT, "cancelled before the task started")
+        elif reason:
+            self.close_without_task(launch, claim, "failed_closed", CLOSED_EXIT, reason)
+        else:
+            why = f"does_not_fit after {FIT_WAIT_SECONDS:g} s: {last}" if last else "no task was started within the launch window"
+            self.close_without_task(launch, claim, "failed_closed", CLOSED_EXIT, why)
+
+    def close_without_task(self, launch: Launch, claim: Mapping[str, Any], outcome: str, code: int, reason: str) -> None:
+        """Close the launch without a task, which only the close token allows. A caller without the send token wins the close token with a conditional create.
+        The holder of the send token may hand it back with a version-checked replacement, only when every call it sent was answered. In every other case a
+        RunTask call may have been sent, so the launch stays unresolved."""
+        spec = launch.spec
+        record = {
+            "schema_version": 1,
+            "event": "decision",
+            "run_id": claim["run_id"],
+            "job": claim["job"],
+            "attempt": spec.attempt,
+            "at": iso(self.clock.wall()),
+            "decision": "close",
+            "outcome": outcome,
+            "exit_code": code,
+            "reason": reason[:REPORT_LIMIT],
+        }
+        current = self.store.decision(claim["run_id"], claim["job"])
+        if current is None:
+            stored = self.store.put_once(record)
+            if stored["decision"] != "close":
+                raise self.unresolved(claim)
+        elif current[0]["decision"] == "close":
+            stored = current[0]
+        elif current[0]["holder"] == launch.holder and not launch.ambiguous and self.store.replace_decision(record, current[1]):
+            stored = record
+        else:
+            raise self.unresolved(claim)
+        self.adopt_closure(launch, claim, stored)
+
+    def adopt_closure(self, launch: Launch, claim: Mapping[str, Any], decision: Mapping[str, Any]) -> None:
+        """The launch was closed without a task. The decision is the one outcome: it becomes the end record of the attempt that holds the claim."""
+        owner = claim["attempt"]
+        end = self.finalize(claim, owner, launch.spec.attempt, decision["outcome"], decision["exit_code"], decision["reason"], "")
+        launch.outcome = outcome_of(end, adopted=owner != launch.spec.attempt)
 
     def finalize(self, base: Mapping[str, Any], owner: int, mine: int, outcome: str, code: int, reason: str, arn: str) -> dict[str, Any]:
         """Record how the launch ended. The end record of the attempt that holds the claim is written first and is the one outcome: an attempt that joined it
@@ -799,9 +894,10 @@ class Launcher:
         return self.conclude(launch)
 
     def cancel(self, run_id: str, job: str, attempt: int, reason: str = "cancel") -> Outcome:
-        """Cancel the run and job's launch. A durable cancel request comes first, so a launch call that is still starting its task sees it and stops that
-        task. The task of the claim is then found and its stop confirmed before ``cancelled`` is recorded, through the end record of the attempt that holds the
-        claim. While a task may be outstanding and none is found, the launch stays unresolved and this raises ``LaunchUnavailable``: call it again."""
+        """Cancel the run and job's launch. A durable cancel request comes first, so a sender that holds the send token sees it before every RunTask call and
+        stops a task it has started. Without a send token the cancel wins the close token and records ``cancelled`` with no task. With one, a RunTask call may
+        have been sent, so ``cancelled`` is recorded only after the task is found by identity and its stop is confirmed; until then this raises
+        ``LaunchUnavailable`` and the launch stays unresolved. The end record of the attempt that holds the claim is the one outcome."""
         claim = self.store.run_record(run_id, job, "claim")
         if claim is None:
             raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to cancel")
@@ -823,22 +919,31 @@ class Launcher:
             return outcome_of(stored, adopted=attempt != owner)
         self.put("cancel", attempt, claim, reason=reason[:REPORT_LIMIT])
         if "started" in theirs:
-            arn: str | None = theirs["started"]["task_arn"]
+            arn = theirs["started"]["task_arn"]
         else:
+            decision = self.store.run_record(run_id, job, "decision")
+            if decision is None:
+                closing = {
+                    "schema_version": 1,
+                    "event": "decision",
+                    "run_id": run_id,
+                    "job": job,
+                    "attempt": attempt,
+                    "at": iso(self.clock.wall()),
+                    "decision": "close",
+                    "outcome": "cancelled",
+                    "exit_code": CANCEL_EXIT,
+                    "reason": reason[:REPORT_LIMIT],
+                }
+                decision = self.store.put_once(closing)
+            if decision["decision"] == "close":
+                end = self.finalize(claim, owner, attempt, decision["outcome"], decision["exit_code"], decision["reason"], "")
+                return outcome_of(end, adopted=attempt != owner)
             found = self.lookup(claim)
-            arn = None
-            if found is not None:
-                self.record_intent(claim)
-                arn = self.record_started(claim, found.arn, self.began_of(found, claim))["task_arn"]
-        if arn is None:
-            sent = self.store.run_record(run_id, job, "send") is not None
-            opened, now = stamp(claim["at"]), self.clock.wall()
-            if sent and not (opened + FIT_WAIT_SECONDS + SETTLE_SECONDS <= now <= opened + RETENTION_SECONDS):
-                raise LaunchUnavailable(
-                    "the cancel is recorded, but a task may be outstanding under the launch and none is found yet. The launch stays unresolved: "
-                    "the launching call stops its task, or call cancel again."
-                )
-        else:
-            self.confirm_stop(arn, reason)
-        end = self.finalize(claim, owner, attempt, "cancelled", CANCEL_EXIT, reason[:REPORT_LIMIT], arn or "")
+            if found is None:
+                raise self.unresolved(claim, "The cancel is recorded, and the launch is unresolved. ")
+            self.record_intent(claim)
+            arn = self.record_started(claim, found.arn, self.began_of(found, claim))["task_arn"]
+        self.confirm_stop(arn, reason)
+        end = self.finalize(claim, owner, attempt, "cancelled", CANCEL_EXIT, reason[:REPORT_LIMIT], arn)
         return outcome_of(end, adopted=attempt != owner)

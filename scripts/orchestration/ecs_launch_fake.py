@@ -1,15 +1,17 @@
 """Stand-ins for the S3 client calls and the clock of the direct ECS launch core, for offline end-to-end cases.
 
 ``FakeLaunchBucket`` has the call surface of the boto3 S3 client that ``orchestration.ecs_launch.S3LaunchStore`` uses: ``put_object`` and ``get_object``. It
-models the launch role: a write needs ``IfNoneMatch="*"`` and an existing key answers ``PreconditionFailed``; any key outside the allowed prefix answers
-``AccessDenied``; an absent key answers ``NoSuchKey``, as it does when the role may list the prefix. It has no list call and no delete call, because the
-library never lists or deletes. Three switches model faults: ``absent_reads_denied`` is a role that cannot list (an absent key answers ``AccessDenied``),
-``deny_reads`` is a role that lost its read grant, and ``deny_keys`` denies the read of single records while writes stay allowed. ``FakeClock`` moves time
-only when a case sleeps, so ten minutes of waiting take no real time.
+models the launch role. A write needs ``IfNoneMatch="*"`` and an existing key answers ``PreconditionFailed``. The decision record alone may be replaced, by a
+write with ``IfMatch`` on the ETag it was read with. Any key outside the allowed prefix answers ``AccessDenied``. An absent key answers ``NoSuchKey``, as it
+does when the role may list the prefix. There is no list call and no delete call, because the library never lists or deletes. Switches model faults:
+``absent_reads_denied`` is a role that cannot list (an absent key answers ``AccessDenied``), ``deny_reads`` is a role that lost its read grant, ``deny_keys``
+denies the read of single records while writes stay allowed, and ``read_hook`` and ``write_hook`` run another caller at the start of a read or a write.
+``FakeClock`` moves time only when a case sleeps, so ten minutes of waiting take no real time.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from typing import Any
 
@@ -58,6 +60,8 @@ class FakeLaunchBucket:
         self.faults: dict[str, list[Exception]] = {}
         self.put_faults: dict[str, list[Exception]] = {}  # queued errors for a write whose key ends with the name, before anything is stored
         self.lose_reply_once = False
+        self.read_hook: Callable[[str], None] | None = None  # called with the key at the start of every read
+        self.write_hook: Callable[[str], None] | None = None  # called with the key at the start of every write
         self.deny_reads = False
         self.absent_reads_denied = False
         self.deny_keys: set[str] = set()
@@ -73,13 +77,27 @@ class FakeLaunchBucket:
     def count(self, operation: str) -> int:
         return sum(1 for name, _ in self.calls if name == operation)
 
+    @staticmethod
+    def etag(body: bytes) -> str:
+        return '"' + hashlib.sha256(body).hexdigest() + '"'
+
     def put_object(self, **arguments: Any) -> dict[str, Any]:
         self._enter("put_object", arguments, arguments["Key"])
-        if arguments.get("IfNoneMatch") != "*":
-            raise client_error("AccessDenied", "put_object", "an unconditional write is not allowed under the launch prefix")
+        if self.write_hook is not None:
+            self.write_hook(arguments["Key"])
         for suffix, queue in self.put_faults.items():
             if arguments["Key"].endswith(suffix) and queue:
                 raise queue.pop(0)
+        if "IfMatch" in arguments:
+            if not arguments["Key"].endswith("/decision.json") or "IfNoneMatch" in arguments:
+                raise client_error("AccessDenied", "put_object", "only the decision record may be replaced, and only by a version-checked write")
+            current = self.objects.get(arguments["Key"])
+            if current is None or self.etag(current) != arguments["IfMatch"]:
+                raise client_error("PreconditionFailed", "put_object")
+            self.objects[arguments["Key"]] = arguments["Body"] if isinstance(arguments["Body"], bytes) else str(arguments["Body"]).encode()
+            return {"ETag": self.etag(self.objects[arguments["Key"]])}
+        if arguments.get("IfNoneMatch") != "*":
+            raise client_error("AccessDenied", "put_object", "an unconditional write is not allowed under the launch prefix")
         if arguments["Key"] in self.objects:
             raise client_error("PreconditionFailed", "put_object")
         body = arguments["Body"]
@@ -91,8 +109,10 @@ class FakeLaunchBucket:
 
     def get_object(self, **arguments: Any) -> dict[str, Any]:
         self._enter("get_object", arguments, arguments["Key"])
+        if self.read_hook is not None:
+            self.read_hook(arguments["Key"])
         if self.deny_reads or arguments["Key"] in self.deny_keys:
             raise client_error("AccessDenied", "get_object")
         if arguments["Key"] not in self.objects:
             raise client_error("AccessDenied" if self.absent_reads_denied else "NoSuchKey", "get_object")
-        return {"Body": _Body(self.objects[arguments["Key"]])}
+        return {"Body": _Body(self.objects[arguments["Key"]]), "ETag": self.etag(self.objects[arguments["Key"]])}

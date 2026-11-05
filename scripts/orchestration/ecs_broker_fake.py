@@ -54,6 +54,8 @@ class FakeEcs:
         self.clock: Callable[[], float] | None = None  # when set, a new task carries createdAt from it
         self.run_task_hook: Callable[[str], None] | None = None  # called with "before" and "after" around the creation of a task, to interleave other callers
         self.token_ttl: float | None = None  # seconds a client token is honored, from the creation of its task
+        self.call_hook: Callable[[str], None] | None = None  # called with the operation name at the start of every call, to interleave other callers
+        self.visible_delay: float | None = None  # seconds before ECS lists a new task: the service documents no listing guarantee
         self.purge_after: float | None = None  # seconds after which ECS no longer lists a stopped task
         self.forget_stopped_tokens = False  # worst case for a repeated client token after the task stopped, which the service documentation leaves open
         self.list_page = 100  # tasks per ListTasks page
@@ -67,6 +69,8 @@ class FakeEcs:
         self.calls.append((operation, dict(arguments)))
         if arguments.get("cluster") != CLUSTER:
             raise client_error("ClusterNotFoundException", operation)
+        if self.call_hook is not None:
+            self.call_hook(operation)
         queue = self.faults.get(operation)
         if queue:
             fault = queue.pop(0)
@@ -118,6 +122,7 @@ class FakeEcs:
         }
         if self.clock is not None:
             task["createdAt"] = datetime.fromtimestamp(self.clock(), UTC)
+            task["createdClock"] = self.clock()
         if on_host:
             task.update(
                 launchType="EC2",
@@ -206,7 +211,9 @@ class FakeEcs:
         return {"task": self._view(task)}
 
     def _listed(self, task: Mapping[str, Any]) -> bool:
-        """ECS stops listing a stopped task after a while."""
+        """ECS lists a new task only after a delay and stops listing a stopped task after a while."""
+        if self.clock is not None and self.visible_delay is not None and self.clock() - task.get("createdClock", 0.0) < self.visible_delay:
+            return False
         if self.purge_after is None or self.clock is None or task.get("lastStatus") != STOPPED or "stoppedClock" not in task:
             return True
         return bool(self.clock() - task["stoppedClock"] <= self.purge_after)
@@ -223,7 +230,7 @@ class FakeEcs:
 
     @staticmethod
     def _view(task: Mapping[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in task.items() if key not in ("polls", "request", "stopping", "stoppedClock")}
+        return {key: value for key, value in task.items() if key not in ("polls", "request", "stopping", "stoppedClock", "createdClock")}
 
 
 class FakeLogs:
