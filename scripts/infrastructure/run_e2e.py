@@ -277,6 +277,18 @@ elif arguments == ["list", "table", "inet", "platform_imds"]:
     if not table.exists():
         sys.exit("Error: No such file or directory")
     print(table.read_text(encoding="utf-8"), end="")
+elif arguments == ["list", "table", "inet", "platform_jobs"]:
+    # The job table is the part of the stored text after the metadata table; it exists only while its definition is there.
+    text = table.read_text(encoding="utf-8") if table.exists() else ""
+    if "table inet platform_jobs {" not in text:
+        sys.exit("Error: No such file or directory")
+    print(text[text.index("table inet platform_jobs {"):], end="")
+elif arguments == ["delete", "table", "inet", "platform_jobs"]:
+    # Deletes the job table alone and leaves the metadata table, as nft does with one of two tables.
+    text = table.read_text(encoding="utf-8") if table.exists() else ""
+    if "table inet platform_jobs {" not in text:
+        sys.exit("Error: No such file or directory")
+    table.write_text(text[: text.index("table inet platform_jobs")], encoding="utf-8")
 elif arguments in (["flush", "ruleset"], ["delete", "table", "inet", "platform_imds"]):
     remove()
 else:
@@ -1699,14 +1711,21 @@ def check_unit_sections(evidence: Evidence, root: Path) -> None:
         and unit_values(root, firewall, "Service", "RemainAfterExit") == ["yes"]
         and unit_values(root, firewall, "Service", "ExecStart") == [f"{guard} apply"],
     )
+    scratch = str(root / "data" / "job_scratch")
     for name in ("docker.service", "ecs.service"):
         evidence.check(
             step,
             f"{name.removesuffix('.service')}_requires_the_guard",
             unit_values(root, name, "Unit", "Requires") == [firewall]
             and unit_values(root, name, "Unit", "After") == [firewall]
-            and unit_values(root, name, "Service", "ExecStartPre") == [f"{guard} apply"]
+            and unit_values(root, name, "Service", "ExecStartPre")[:1] == [f"{guard} apply"]
             and not unit_values(root, name, "Service", "Requires"),
+        )
+        evidence.check(
+            step,
+            f"{name.removesuffix('.service')}_requires_the_scratch_mount",
+            unit_values(root, name, "Unit", "RequiresMountsFor") == [scratch]
+            and unit_values(root, name, "Service", "ExecStartPre")[1:] == [f"{root / 'tools' / 'mountpoint'} -q {scratch}"],
         )
     evidence.check(
         step,
@@ -1791,6 +1810,54 @@ def run_firewall_cases(evidence: Evidence, root: Path, environment: dict[str, st
     step, result = evidence.run("timer_check_cannot_restore_rule", watch, root, failing)
     evidence.check(step, "timer_failed", result.returncode != 0 and "stopping the ECS agent and Docker" in result.stderr)
     evidence.check(step, "containers_stopped", read_lines(state / "systemctl.log")[-1].split()[:3] == ["stop", "ecs.service", "docker.service"])
+
+
+def run_job_table_loss_case(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
+    """Delete the job firewall table alone: the timer check must notice it although the metadata table remains, and load both again."""
+    tools = root / "tools"
+    nft = str(tools / "nft")
+    watch = unit_command(root, "platform_imds_watch.service", "ExecStart=")
+    # The firewall cases end with both tables gone, so the timer check loads them first.
+    step, result = evidence.run("both_tables_loaded_before_job_table_loss", watch, root, environment)
+    evidence.check(step, "both_tables_loaded", result.returncode == 0)
+    step, result = evidence.run("job_table_deleted_alone", [nft, "delete", "table", "inet", "platform_jobs"], root, environment)
+    evidence.check(step, "job_table_deleted", result.returncode == 0)
+    step, result = evidence.run("job_table_absent", [nft, "list", "table", "inet", "platform_jobs"], root, environment)
+    evidence.check(step, "job_table_listed_as_missing", result.returncode != 0)
+    step, result = evidence.run("metadata_table_remains", [nft, "list", "table", "inet", "platform_imds"], root, environment)
+    evidence.check(step, "metadata_table_still_listed", result.returncode == 0)
+    step, result = evidence.run("timer_check_after_job_table_loss", watch, root, environment)
+    evidence.check(step, "timer_noticed_the_missing_job_table", result.returncode == 0 and "loading the rule again" in result.stderr)
+    step, result = evidence.run("job_table_restored", [nft, "list", "table", "inet", "platform_jobs"], root, environment)
+    evidence.check(step, "job_table_listed_again", result.returncode == 0 and "table inet platform_jobs {" in result.stdout)
+    check_metadata_isolation(evidence, root, environment, "after_job_table_restored")
+
+
+def run_later_start_cases(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
+    """A later boot where the scratch volume did not mount (its fstab line is nofail): neither Docker nor the ECS agent may start."""
+    tools = root / "tools"
+    state = root / "state"
+    mounts = state / "mounts"
+    scratch = str(root / "data" / "job_scratch")
+    step, result = evidence.run("later_start_stop_containers", [str(tools / "systemctl"), "stop", "ecs.service", "docker.service"], root, environment)
+    evidence.check(
+        step, "containers_stopped", result.returncode == 0 and not {"docker.service", "ecs.service"} & set(json.loads((state / "active.json").read_text()))
+    )
+    mounts.write_text("".join(line + "\n" for line in read_lines(mounts) if line != scratch), encoding="utf-8")
+    for unit in ("docker.service", "ecs.service"):
+        step, result = evidence.run(
+            f"later_start_{unit.removesuffix('.service')}_without_scratch", [str(tools / "systemctl"), "start", unit], root, environment
+        )
+        active = set(json.loads((state / "active.json").read_text()))
+        evidence.check(step, "start_refused", result.returncode != 0 and scratch in result.stderr)
+        evidence.check(step, "docker_and_agent_not_running", not {"docker.service", "ecs.service"} & active)
+    mounts.write_text(mounts.read_text(encoding="utf-8") + scratch + "\n", encoding="utf-8")
+    step, result = evidence.run("later_start_with_scratch", [str(tools / "systemctl"), "start", "ecs.service"], root, environment)
+    evidence.check(
+        step,
+        "docker_and_agent_start_once_scratch_is_mounted",
+        result.returncode == 0 and {"docker.service", "ecs.service"} <= set(json.loads((state / "active.json").read_text())),
+    )
 
 
 def run_planted_dependency_defect(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
@@ -2238,6 +2305,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
                 run_planted_dependency_defect(evidence, root, environment)
             elif name not in planted_privilege:
                 run_firewall_cases(evidence, root, environment)
+                run_job_table_loss_case(evidence, root, environment)
+                run_later_start_cases(evidence, root, environment)
         else:
             evidence.check(step, "boot_failed", result.returncode not in (0, None))
             evidence.check(step, "failure_reported", message in log)

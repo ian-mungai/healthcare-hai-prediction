@@ -129,8 +129,12 @@ fi
 # firewall configuration and every reload load both tables together. The rule has its own nftables table, which Docker, firewalld
 # and reloads of the xtables rule sets leave alone. The nftables configuration includes it, so a reload of that service loads it again in the
 # same transaction, and the guard unit is part of that service, so stopping or restarting it stops or restarts Docker
-# and the ECS agent too. Both require the guard and load and check the rule before every start. A timer checks it every
-# 10 seconds, loads it again when it is missing and stops both when it cannot.
+# and the ECS agent too. Both require the guard and load and check the rule before every start. A timer checks both tables
+# every 10 seconds, loads them again when either is missing and stops both services when it cannot.
+# Docker and the ECS agent also require the scratch mount at every start, not only during this first boot: its fstab line
+# is nofail, so on a later boot without it the job folders would land on the snapshotted data volume underneath.
+# RequiresMountsFor makes each service require the mount unit, and ExecStartPre checks the mount itself, so a start fails
+# while the scratch volume is not mounted.
 step "Writing the metadata firewall files"
 command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y -q nftables
 mkdir -p "$(dirname "$nft_rules_file")" "$(dirname "$guard_script")" "$systemd_directory/docker.service.d" "$systemd_directory/ecs.service.d"
@@ -150,16 +154,18 @@ grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line"
   echo '#!/bin/bash'
   printf 'rules_file=%q\n' "$nft_rules_file"
   cat <<'GUARD'
-# apply loads the rule in one transaction and checks it. check confirms that the table exists and that user 65534
-# cannot connect to the metadata service (curl status 7 or 28). enforce loads a missing rule again and stops the ECS
-# agent and Docker when it cannot.
+# apply loads both tables in one transaction and checks them. check confirms that the metadata table and the job table
+# both exist and that user 65534 cannot connect to the metadata service (curl status 7 or 28). enforce loads both tables
+# again when either is missing and stops the ECS agent and Docker when it cannot.
 probe_blocked() {
   local status=0
   timeout --kill-after=5 10 setpriv --reuid=65534 --regid=65534 --clear-groups -- curl -s -o /dev/null --max-time 3 http://169.254.169.254/latest/meta-data/ || status=$?
   [ "$status" -eq 7 ] || [ "$status" -eq 28 ]
 }
 check() {
-  timeout --kill-after=5 30 nft list table inet platform_imds >/dev/null && probe_blocked
+  timeout --kill-after=5 30 nft list table inet platform_imds >/dev/null \
+    && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \
+    && probe_blocked
 }
 apply() {
   timeout --kill-after=5 30 nft -f "$rules_file" || { echo "Could not load the metadata firewall rule." >&2; return 1; }
@@ -208,6 +214,16 @@ After=platform_imds_guard.service
 
 [Service]
 ExecStartPre=$guard_script apply
+UNIT
+done
+mountpoint_command=$(command -v mountpoint)
+for unit in docker.service ecs.service; do
+  cat >"$systemd_directory/$unit.d/platform_scratch_mount.conf" <<UNIT
+[Unit]
+RequiresMountsFor=$scratch_path
+
+[Service]
+ExecStartPre=$mountpoint_command -q $scratch_path
 UNIT
 done
 cat >"$systemd_directory/platform_imds_watch.service" <<UNIT
@@ -336,6 +352,8 @@ run_within 30 "Checking the scratch mount" mountpoint -q "$scratch_path" || {
   echo "The scratch volume is not mounted, so the host does not join the cluster."
   exit 1
 }
+# systemd reads the new fstab lines, so the mount units that RequiresMountsFor names exist before Docker or the ECS agent starts.
+run_within 60 "Reloading systemd units for the new mounts" systemctl daemon-reload
 step "Writing the ECS agent configuration"
 cat >>"$ecs_config_file" <<CONFIG
 ECS_ENABLE_TASK_IAM_ROLE=true
