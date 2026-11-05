@@ -2,7 +2,9 @@
 
 The adapter holds no state. A job key names one task: the key gives both the ``clientToken`` and the ``startedBy`` tag of ``RunTask``, so a repeated
 start returns the task that already runs (``list_tasks`` finds it by tag) or the one the first call created. Only the named job families start. Every call
-has a 5 second connect and 10 second read limit with two retries, and the caller owns the job deadline. A job runs in one of two places. ``fargate`` is the
+has a 5 second connect and 10 second read limit, and the caller owns the job deadline. Reads have two SDK retries. RunTask has none: it goes through a client
+of its own that makes one attempt per call (``send_config``), so every request that may reach ECS passes the caller's guard, and a retry can never answer
+for a request whose reply was lost (a task may exist). The adapter refuses a RunTask client with retries. A job runs in one of two places. ``fargate`` is the
 awsvpc task of the family's own definition. ``host`` is the bridge task of its ``_host`` definition on the host's EC2 capacity provider: it carries no awsvpc
 network, and the capacity provider strategy is always sent, because the cluster default strategy would place the task on Fargate. A failure that a later call
 can cure raises ``TaskUnavailable``, the rest raise ``TaskRefused``. Reasons shown to callers carry no ARN and no account number.
@@ -112,6 +114,20 @@ def client_config() -> Config:
     return Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"})
 
 
+def send_config() -> Config:
+    """The RunTask client: the same limits and one attempt per call, with no SDK retry (``total_max_attempts`` 1, which botocore takes over a
+    ``max_attempts`` from the environment or the config file). The caller owns every repeat, each behind its own guard."""
+    return Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 1, "mode": "standard"})
+
+
+def sends_once(client: Any) -> bool:
+    """True when a botocore client makes one attempt per call. A stand-in without the SDK's client metadata has no retry handler."""
+    config = getattr(getattr(client, "meta", None), "config", None)
+    if config is None:
+        return True
+    return bool((getattr(config, "retries", None) or {}).get("total_max_attempts") == 1)
+
+
 def scrub(text: str) -> str:
     """A reason without ARNs or account numbers, at most 200 characters."""
     return ACCOUNT.sub("[account]", ARN.sub("[arn]", text))[:REASON_LIMIT]
@@ -128,12 +144,29 @@ def classify(error: Exception) -> Exception:
 
 
 class EcsAdapter:
-    """One ECS cluster's task calls for the broker."""
+    """One ECS cluster's task calls for the broker and the launcher. ``sender`` is the client RunTask goes through, ``ecs`` when not given. It must make one
+    attempt per call, else the adapter refuses to be built."""
 
-    def __init__(self, ecs: EcsClient, logs: LogsClient, settings: EcsSettings) -> None:
+    def __init__(self, ecs: EcsClient, logs: LogsClient, settings: EcsSettings, sender: EcsClient | None = None) -> None:
         self.ecs = ecs
         self.logs = logs
         self.settings = settings
+        self.sender = ecs if sender is None else sender
+        if not sends_once(self.sender):
+            raise ValueError(
+                "the RunTask client must make one attempt per call (build it with send_config): an SDK retry would send again after the caller's guard "
+                "and could hide the lost reply of a request that created a task"
+            )
+
+    @classmethod
+    def from_session(cls, session: Any, settings: EcsSettings) -> EcsAdapter:
+        """The adapter over a boto3 session: reads with ``client_config`` and RunTask through its own client with ``send_config``."""
+        return cls(
+            session.client("ecs", config=client_config()),
+            session.client("logs", config=client_config()),
+            settings,
+            sender=session.client("ecs", config=send_config()),
+        )
 
     @staticmethod
     def identity(key: str) -> str:
@@ -155,14 +188,14 @@ class EcsAdapter:
         try:
             running = self.ecs.list_tasks(cluster=self.settings.cluster, startedBy=started_by)["taskArns"]
             if running:
-                found = self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=[str(running[0])])["tasks"]
+                found = self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=[str(running[0])]).get("tasks") or []
                 return TaskFound(str(running[0]), self.created_at(found[0]) if found else None)
             token: str | None = None
             for _ in range(STOPPED_PAGES):
                 page = self.ecs.list_tasks(cluster=self.settings.cluster, desiredStatus=STOPPED, **({"nextToken": token} if token else {}))
                 arns = [str(arn) for arn in page["taskArns"]]
                 for start in range(0, len(arns), DESCRIBE_BATCH):
-                    for task in self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=arns[start : start + DESCRIBE_BATCH])["tasks"]:
+                    for task in self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=arns[start : start + DESCRIBE_BATCH]).get("tasks") or []:
                         if task.get("startedBy") == started_by:
                             return TaskFound(str(task["taskArn"]), self.created_at(task))
                 token = page.get("nextToken")
@@ -218,7 +251,7 @@ class EcsAdapter:
         """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives. ``network`` names the
         class whose security groups a Fargate task gets: each family runs only in the network its job table row approves. A host task has no security group,
         the host firewall bounds it. ``guard`` runs immediately before the RunTask call, after the discovery of a running task, and raises ``SendWithheld`` to
-        stop the call. A RunTask call that may have been sent and has no answer raises ``SendUnknown``."""
+        stop the call. The call is one request with no SDK retry. A RunTask call that may have been sent and has no answer raises ``SendUnknown``."""
         if family not in self.settings.families:
             raise TaskRefused("family_not_named")
         where = self.placement(placement, network)
@@ -233,7 +266,7 @@ class EcsAdapter:
         if guard is not None:
             guard()
         try:
-            reply = self.ecs.run_task(
+            reply = self.sender.run_task(
                 cluster=self.settings.cluster,
                 taskDefinition=self.definition(family, placement),
                 count=1,
@@ -264,14 +297,16 @@ class EcsAdapter:
 
     def poll(self, task_arn: str) -> TaskReport:
         """The task's state now. A task counts as passed only when every one of its containers exited 0, except the guard of a layer task: ECS stops the guard
-        when the last phase ends, so its exit code says nothing about the job, and a failed phase fails the job with the phase's own code."""
+        when the last phase ends, so its exit code says nothing about the job, and a failed phase fails the job with the phase's own code. A reply that
+        describes no task is ``gone``: ECS documents no guarantee that it describes a task it created, so ``gone`` says nothing about how the task ended."""
         try:
             reply = self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=[task_arn])
         except (ClientError, BotoCoreError) as error:
             raise classify(error) from None
-        if not reply["tasks"]:
+        tasks = reply.get("tasks") or []
+        if not tasks:
             return TaskReport("gone", None, "not_found")
-        task = reply["tasks"][0]
+        task = tasks[0]
         status = task.get("lastStatus", "")
         if status != STOPPED:
             return TaskReport("pending" if status in PENDING_STATUSES else "running", None, "")

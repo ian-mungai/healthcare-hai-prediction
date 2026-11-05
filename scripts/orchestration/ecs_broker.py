@@ -921,7 +921,7 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     check_networks(settings, jobs)
     config = client_config()
     session = boto3.session.Session(region_name=region)
-    adapter = EcsAdapter(session.client("ecs", config=config), session.client("logs", config=config), settings)
+    adapter = EcsAdapter.from_session(session, settings)
     digest = s3_digest_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
     signed = ssm_signed_reader(session.client("ssm", config=config), required(env, "BROKER_SIGNED_PARAMETER"))
     approvals = s3_object_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), "promotion_approval.json")

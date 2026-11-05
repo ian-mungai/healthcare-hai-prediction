@@ -36,7 +36,7 @@ from orchestration.ecs_launch import (
     iso,
     launch_record_prefix,
 )
-from scripts.orchestration.ecs_broker_fake import CLUSTER, FakeEcs, FakeLogs, client_error
+from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
 from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -504,10 +504,14 @@ def suspended_sender_never_cancelled_while_the_send_may_land() -> None:
             seen["decision"] = rig.bucket.objects.get(f"{PREFIX}/{RUN}/gold/decision.json", b"")
 
     rig.ecs.run_task_hook = cancel_while_suspended
-    done = rig.launcher().run(spec())
+    stopping = outcome_or_error(partial(rig.launcher().run, spec()))
     require("unresolved" in seen.get("error", ""), f"the cancel cannot close while the send may land: {seen}")
     require("end" not in seen["events"] and b'"send"' in seen["decision"], f"nothing was recorded as cancelled at that moment: {seen}")
-    require(done.outcome == "cancelled" and rig.ecs.tasks[gold_tasks(rig)[0]]["lastStatus"] == "STOPPED", f"the sender stops the task it started: {done}")
+    require(isinstance(stopping, StopFailed) and rig.ecs.count("stop_task") == 1, f"the sender stops the task it started: {stopping!r}")
+    require("end" not in rig.events(1), "ECS does not describe the task yet, so the stop is not confirmed and nothing is recorded")
+    rig.time.now += 720
+    done = rig.launcher().cancel(RUN, "gold", 1)
+    require(done.outcome == "cancelled" and rig.ecs.tasks[gold_tasks(rig)[0]]["lastStatus"] == "STOPPED", f"once the task is described STOPPED: {done}")
     require(rig.record(1, "end")["task_arn"] == gold_tasks(rig)[0], "and cancelled is recorded with the ARN of that task")
 
 
@@ -1111,6 +1115,153 @@ def poll_errors() -> None:
     require(rig.launcher().run(spec()).ok, "a later call reattaches")
 
 
+def sdk_launcher(rig: Rig, stub: SdkStub) -> tuple[Launcher, list[str]]:
+    """A launcher whose ECS adapter is built as production builds it, over real botocore clients with scripted HTTP answers. The host room still comes
+    from the fake cluster. ``order`` lists every guard call and every RunTask request that reached the HTTP layer, in order."""
+    probe = EcsFitProbe(rig.ecs, CLUSTER, lambda: rig.scratch_free)
+    order: list[str] = []
+    launcher = GuardCounting(EcsAdapter.from_session(stub, SETTINGS), S3LaunchStore(rig.bucket, BUCKET, PREFIX), probe, rig.time.clock())
+    launcher.order = order
+    stub.on_send = lambda operation: order.append(operation) if operation == "RunTask" else None
+    return launcher, order
+
+
+class GuardCounting(Launcher):
+    """The real launcher that also notes each guard call in ``order``."""
+
+    order: list[str]
+
+    def guard(self, run_id: str, job: str, end: float) -> None:
+        self.order.append("guard")
+        super().guard(run_id, job, end)
+
+
+def outcome_or_error(action: Callable[[], Any]) -> Any:
+    try:
+        return action()
+    except Exception as error:
+        return error
+
+
+def every_send_guarded(order: list[str]) -> bool:
+    return all(index > 0 and order[index - 1] == "guard" for index, item in enumerate(order) if item == "RunTask")
+
+
+SDK_TASK = {"taskArn": f"arn:aws:ecs:us-east-1:{ACCOUNT}:task/{CLUSTER}/{'c' * 32}", "lastStatus": "PROVISIONING", "containers": []}
+SDK_NOT_LISTED = {"ListTasks": [{"taskArns": []}]}  # ECS documents no listing guarantee: the accepted task is not listed yet
+
+
+def sdk_retries_never_hide_an_accepted_send() -> None:
+    """The review's probe on the real SDK: the first RunTask request creates the task and its reply is lost (ReadTimeoutError). An SDK retry would send again
+    and could answer AccessDeniedException, which reads as a definite refusal and closes the claim with no ARN while the task provisions."""
+    rig = Rig()
+    stub = SdkStub({**SDK_NOT_LISTED, "RunTask": [ReadTimeoutError(endpoint_url="https://ecs.stand-in.invalid"), ("AccessDeniedException", 400)]})
+    launcher, order = sdk_launcher(rig, stub)
+    result = outcome_or_error(partial(launcher.run, spec()))
+    require(isinstance(result, LaunchUnavailable) and "unresolved" in str(result), f"a send that may have reached ECS keeps the launch unresolved: {result!r}")
+    require("end" not in rig.events(1), f"no terminal outcome while the accepted task provisions: {rig.events(1)}")
+    require(json.loads(rig.bucket.objects[rig.decision_key()])["decision"] == "send", "the send token is never handed back after an unknown reply")
+    require(every_send_guarded(order), f"each RunTask request is preceded by its own guard call: {order}")
+    again = outcome_or_error(partial(sdk_launcher(rig, stub)[0].run, spec(2)))
+    require(isinstance(again, LaunchUnavailable) and "end" not in rig.events(1), f"a later caller keeps the uncertainty too: {again!r}")
+
+
+def sdk_sends_only_through_the_guard() -> None:
+    """Each request that reaches ECS is preceded by a guard call: no SDK retry resends after a durable cancel or after the end of the window."""
+    rig = Rig()
+    stub = SdkStub({**SDK_NOT_LISTED, "RunTask": [ReadTimeoutError(endpoint_url="https://ecs.stand-in.invalid"), {"tasks": [SDK_TASK], "failures": []}]})
+    launcher, order = sdk_launcher(rig, stub)
+    after_cancel: list[str] = []
+
+    def cancel_during_the_first_send(operation: str) -> None:
+        if operation != "RunTask":
+            return
+        order.append(operation)
+        if rig.bucket.objects.get(f"{PREFIX}/{RUN}/gold/cancel.json") is not None:
+            after_cancel.append(operation)
+            return
+        with contextlib.suppress(LaunchUnavailable):
+            rig.launcher().cancel(RUN, "gold", 1)
+
+    stub.on_send = cancel_during_the_first_send
+    result = outcome_or_error(partial(launcher.run, spec()))
+    require(after_cancel == [], f"no RunTask request after a durable cancel: {after_cancel}, order {order}")
+    require(isinstance(result, LaunchUnavailable) and "end" not in rig.events(1), f"the cancel cannot close a launch whose send may have landed: {result!r}")
+    require(every_send_guarded(order), f"each RunTask request is preceded by its own guard call: {order}")
+    rig = Rig()
+    rig.ecs.instance_free = {"CPU": 1024, "MEMORY": 31000}
+    stub = SdkStub({**SDK_NOT_LISTED, "RunTask": [ReadTimeoutError(endpoint_url="https://ecs.stand-in.invalid"), ("AccessDeniedException", 400)]})
+    launcher, order = sdk_launcher(rig, stub)
+    ages: list[float] = []
+
+    def room_at_599(now: float) -> None:
+        if now - START_TIME >= 585:
+            rig.time.on_sleep = None
+            rig.time.now = START_TIME + 599
+            rig.ecs.instance_free = {"CPU": 4096, "MEMORY": 31000}
+
+    def two_seconds_per_send(operation: str) -> None:
+        if operation == "RunTask":
+            order.append(operation)
+            ages.append(rig.time.now - START_TIME)
+            rig.time.now += 2
+
+    rig.time.on_sleep = room_at_599
+    stub.on_send = two_seconds_per_send
+    result = outcome_or_error(partial(launcher.run, spec()))
+    require(ages == [599.0], f"one request at claim age 599 s and none after the 600 s window: {ages}")
+    require(isinstance(result, LaunchUnavailable) and "end" not in rig.events(1), f"the unknown reply keeps the launch unresolved: {result!r}")
+    require(order.count("guard") >= order.count("RunTask") and every_send_guarded(order), f"each request is preceded by a guard call: {order}")
+
+
+EMPTY_DESCRIPTION: dict[str, Any] = {"tasks": [], "failures": [{"arn": "stand-in", "reason": "MISSING"}]}
+
+
+def empty_description_is_never_an_outcome() -> None:
+    """ECS documents no guarantee that a task it created is described. A reply that names no task, or has no task list at all, is no evidence: the launch
+    stays unresolved, and a failed, timed-out or cancelled outcome needs the task shown STOPPED."""
+    rig = Rig()
+    rig.ecs.describe_overrides = [EMPTY_DESCRIPTION, {}]
+    done = rig.launcher().run(spec())
+    require(done.ok and rig.record(1, "end")["outcome"] == "succeeded", f"a running task with an empty description is watched until it ends: {done}")
+    rig = Rig()
+    rig.ecs.hold = True
+    arn = die_while_running(rig, spec())
+    rig.ecs.describe_overrides = [EMPTY_DESCRIPTION]
+    error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec(2)))
+    require("end" not in rig.events(1) and rig.events(2) == [], f"another attempt records no outcome for an undescribed task: {rig.events(1)}, {error}")
+    require(rig.ecs.tasks[arn]["lastStatus"] != "STOPPED" and rig.ecs.count("run_task") == 1, "the task keeps running and nothing else starts")
+    rig.ecs.hold = False
+    require(rig.launcher().run(spec(2)).ok, "once the task is described it is joined and settled")
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.ecs.stop_lag = 3
+    arn = die_while_running(rig, spec())
+    rig.ecs.describe_overrides = [EMPTY_DESCRIPTION]
+    cancelled = rig.launcher().cancel(RUN, "gold", 1)
+    require(
+        cancelled.outcome == "cancelled" and rig.ecs.tasks[arn]["lastStatus"] == "STOPPED",
+        f"cancelled is recorded only after the task is shown STOPPED: {cancelled}, {rig.ecs.tasks[arn]['lastStatus']}",
+    )
+    rig = Rig()
+    rig.ecs.hold = True
+    arn = die_while_running(rig, spec())
+    rig.ecs.describe_overrides = [EMPTY_DESCRIPTION] * 200
+    refuses(StopFailed, partial(rig.launcher().cancel, RUN, "gold", 1))
+    require("end" not in rig.events(1), f"a stop never shown STOPPED records nothing: {rig.events(1)}")
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.ecs.stop_lag = 3
+    launcher = rig.launcher()
+    launch = launcher.attach(spec(deadline_seconds=60))
+    launcher.start(launch)
+    rig.time.now += 120
+    rig.ecs.describe_overrides = [None, EMPTY_DESCRIPTION]
+    launcher.wait(launch)
+    require(rig.ecs.tasks[str(launch.arn)]["lastStatus"] == "STOPPED", "a timeout is recorded only after the stopped task is shown STOPPED")
+    require(launcher.conclude(launch).outcome == "timeout", "and then it is a timeout")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "no_terminal_outcome_while_a_launch_may_be_live": no_terminal_outcome_while_a_launch_may_be_live,
     "aged_recovery_never_replays_runtask": aged_recovery_never_replays_runtask,
@@ -1165,4 +1316,7 @@ CASES: dict[str, Callable[[], None]] = {
     "authority_unreadable_refuses": authority_unreadable_refuses,
     "record_prefix_from_configuration": record_prefix_from_configuration,
     "poll_errors": poll_errors,
+    "sdk_retries_never_hide_an_accepted_send": sdk_retries_never_hide_an_accepted_send,
+    "sdk_sends_only_through_the_guard": sdk_sends_only_through_the_guard,
+    "empty_description_is_never_an_outcome": empty_description_is_never_an_outcome,
 }

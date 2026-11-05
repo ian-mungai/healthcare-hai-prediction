@@ -16,13 +16,17 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    each other durably. A caller sends only while it holds the send token and closes only by winning the close token (or by handing back its own send token when
    every call it sent was answered, with a version-checked replacement). Once a RunTask call may have been sent, the claim stays unresolved until positive
    evidence: the task found by identity and settled. No timer and no empty listing proves that nothing started. The call raises LaunchUnavailable and names the
-   manual owner path. RunTask is sent only inside the 10 minute window and never after a cancel request, both checked immediately before every call.
+   manual owner path. RunTask is sent only inside the 10 minute window and never after a cancel request, both checked immediately before every call. The
+   adapter's RunTask client has no SDK retry, so every request that may reach ECS passes that check, and once one request had no answer the uncertainty
+   stays for the life of the launch: a later refusal, capacity answer or end of the window does not clear it.
 5. Reattach: a new attempt joins the live task of the launch and keeps its start time and deadline, only when the bound inputs (code digest, request hash and
    input run) equal those of the launch. Different bound inputs are refused.
 6. The deadline counts from the recorded start of the task and is the recorded one, so it holds across restarts. A recovered task starts when ECS created it,
    else when the claim was written, never when the recovery ran.
 7. A task ends in success only when every acceptance container exited 0. The adapter already leaves out the guard container.
-8. A stop is confirmed (the task reports STOPPED within 120 seconds) before anything is recorded; otherwise ``StopFailed`` leaves the stop repeatable.
+8. A stop is confirmed (the task reports STOPPED within 120 seconds) before anything is recorded; otherwise ``StopFailed`` leaves the stop repeatable. A
+   DescribeTasks reply that describes no task is never evidence: ECS documents no guarantee that it describes a task it created. Such a reply keeps the
+   launch unresolved, and a failed, timed-out or cancelled outcome is recorded only for a task shown STOPPED.
 9. A job that does not fit waits at most 10 minutes counted from its claim (the host's free CPU, memory and scratch, and RunTask capacity answers), asking for
    a task of its identity after every wait, then ends ``failed_closed`` with a fit report. There is no fallback to another capacity provider. The needs
    are the claim's, so every caller that may create a task is held to them.
@@ -85,6 +89,7 @@ PREFIX_PATTERN = re.compile(r"[a-z0-9_]+(/[a-z0-9_]+)*")
 REPORT_LIMIT = 300
 RETRYABLE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout", "ConditionalRequestConflict", "ThrottlingException"})
 LIVE = ("pending", "running")
+ENDED = ("succeeded", "failed")  # the states of a task shown STOPPED; "gone" (no description) is neither live nor ended
 
 
 class LaunchError(Exception):
@@ -491,9 +496,9 @@ class Launcher:
         return iso(found.created_at) if found.created_at is not None else str(claim["at"])
 
     def judge(self, report: TaskReport, acceptance: Sequence[str]) -> tuple[str, int, str]:
-        """The recorded outcome of a task that has ended: outcome, exit code and reason."""
-        if report.state == "gone":
-            return "failed_closed", CLOSED_EXIT, "task_not_found"
+        """The recorded outcome of a task shown STOPPED: outcome, exit code and reason."""
+        if report.state not in ENDED:
+            raise LaunchError(f"a task in state {report.state} has no outcome")
         if report.state == "succeeded":
             seen = dict(report.containers)
             missing = [name for name in acceptance if seen.get(name) != 0]
@@ -556,6 +561,8 @@ class Launcher:
         if report.state in LIVE:
             self.join(launch, claim, arn, began)
             return
+        if report.state not in ENDED:
+            raise self.undescribed(claim)
         outcome, code, reason = self.judge(report, claim["acceptance"])
         end = self.put("end", attempt, claim, outcome=outcome, exit_code=code, reason=reason[:REPORT_LIMIT], task_arn=arn)
         launch.outcome = outcome_of(end, adopted=True)
@@ -734,6 +741,15 @@ class Launcher:
             "start a new run."
         )
 
+    def undescribed(self, claim: Mapping[str, Any]) -> LaunchUnavailable:
+        """ECS described no task for the recorded task of the launch. That is no evidence of how it ended, so nothing is recorded and nothing else starts."""
+        key = f"{claim['run_id']}:{claim['job']}:{claim['attempt']}"
+        return LaunchUnavailable(
+            f"ECS returned no description of the recorded task of attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']}, so its outcome is "
+            "unknown and the launch stays unresolved: call again. If ECS no longer describes the task, manual owner path: stop every sender of this launch, "
+            f"inspect ECS for the tasks started by {self.adapter.identity(key)}, check the job's evidence in the bucket, then start a new run."
+        )
+
     def win_send(self, launch: Launch, claim: Mapping[str, Any]) -> bool:
         """Win the send token: the conditional create of the decision record. False when another caller holds the send token or closed the launch."""
         spec = launch.spec
@@ -812,7 +828,8 @@ class Launcher:
         launch.outcome = outcome_of(end)
 
     def wait(self, launch: Launch) -> None:
-        """Poll the task until it ends or its recorded deadline passes. Past the deadline the task is stopped, with the stop confirmed."""
+        """Poll the task until it is shown STOPPED or its recorded deadline passes. Past the deadline the task is stopped, with the stop confirmed. A reply
+        that describes no task counts as a failed read: it says nothing about how the task ended."""
         if launch.outcome is not None or launch.arn is None or launch.started_at is None:
             return
         due = launch.started_at + launch.deadline_seconds
@@ -820,15 +837,17 @@ class Launcher:
         while True:
             try:
                 report = self.adapter.poll(launch.arn)
+                if report.state not in LIVE and report.state not in ENDED:
+                    raise TaskUnavailable("no task described")
             except TaskUnavailable as error:
                 failures += 1
                 if failures > POLL_FAILURES:
                     raise LaunchUnavailable(
-                        f"the task could not be read {failures} times in a row ({error}); it keeps running, call again to reattach"
+                        f"the task could not be read {failures} times in a row ({error}); it may keep running, call again to reattach"
                     ) from None
             else:
                 failures = 0
-                if report.state not in LIVE:
+                if report.state in ENDED:
                     launch.report = report
                     return
             if self.clock.wall() > due:
@@ -838,6 +857,7 @@ class Launcher:
             self.clock.sleep(POLL_SECONDS)
 
     def confirm_stop(self, arn: str, reason: str) -> None:
+        """Send the stop and wait until the task is shown STOPPED. A reply that describes no task is no confirmation."""
         try:
             self.adapter.stop(arn, reason)
         except TaskUnavailable as error:
@@ -845,7 +865,7 @@ class Launcher:
         except TaskRefused as error:
             raise StopFailed(f"the cloud refused to stop the task ({error}). Nothing was recorded, so the stop can be repeated") from None
         end = self.clock.monotonic() + STOP_WAIT_SECONDS
-        while self.poll(arn).state in LIVE:
+        while self.poll(arn).state not in ENDED:
             if self.clock.monotonic() >= end:
                 raise StopFailed(f"the task is still stopping after {STOP_WAIT_SECONDS:g} seconds. Nothing was recorded, so the stop can be repeated")
             self.clock.sleep(STOP_POLL_SECONDS)

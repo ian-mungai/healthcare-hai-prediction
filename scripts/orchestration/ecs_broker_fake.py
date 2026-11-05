@@ -8,16 +8,25 @@ on each ``describe_tasks``: provisioning, then running, then stopped with the ex
 It knows the two task shapes of the cluster. A definition whose name ends in ``_host`` is a bridge task for the EC2 capacity provider ``host_provider``: ECS
 refuses an awsvpc network for it, refuses a strategy that names another provider and, when the strategy is omitted, places it by the cluster default
 (``FARGATE_SPOT``), which cannot run it. Every other definition is an awsvpc Fargate task: it needs the network and a Fargate provider. ``host_full`` makes
-the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room.
+the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room. ``describe_overrides`` replaces the next DescribeTasks replies, for example
+with one that names no task while the task runs.
+
+``SdkStub`` is a different kind of stand-in: a real botocore client whose HTTP layer alone is replaced by scripted answers, so the SDK's own retry handling
+runs as it does against AWS. It sends nothing over the network: every request is answered by the ``before-send`` event, and the endpoint is a reserved
+``.invalid`` host.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+import botocore.session
+from botocore.awsrequest import AWSResponse
+from botocore.config import Config
 from botocore.exceptions import ClientError, ReadTimeoutError
 
 ACCOUNT = "000000000000"
@@ -28,6 +37,7 @@ HOST_SUFFIX = "_host"
 STOPPED = "STOPPED"
 FARGATE_PROVIDERS = frozenset({"FARGATE", "FARGATE_SPOT"})
 CLUSTER_DEFAULT_PROVIDER = "FARGATE_SPOT"
+STAND_IN_CREDENTIAL = "stand-in"  # signs the requests of SdkStub, which never leave the process
 
 
 def client_error(code: str, operation: str, message: str = "stand-in refusal") -> ClientError:
@@ -61,6 +71,7 @@ class FakeEcs:
         self.list_page = 100  # tasks per ListTasks page
         self.instance_free = {"CPU": 4096, "MEMORY": 31000}  # what the host's container instance reports as remaining
         self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
+        self.describe_overrides: list[dict[str, Any] | None] = []  # replies for the next describe_tasks calls, in order (None lets a call through)
 
     def count(self, operation: str) -> int:
         return sum(1 for name, _ in self.calls if name == operation)
@@ -160,6 +171,10 @@ class FakeEcs:
 
     def describe_tasks(self, **arguments: Any) -> dict[str, Any]:
         self._enter("describe_tasks", arguments)
+        if self.describe_overrides:
+            override = self.describe_overrides.pop(0)
+            if override is not None:  # ECS documents no guarantee that a task it created is described, so a reply may name no task at all
+                return override
         tasks, failures = [], []
         for arn in arguments["tasks"]:
             task = self.tasks.get(arn)
@@ -272,3 +287,56 @@ class _Body:
 
     def read(self, limit: int | None = None) -> bytes:
         return self.data if limit is None else self.data[:limit]
+
+
+class _Raw:
+    """The raw body of a scripted HTTP reply, as botocore reads it."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def stream(self, **_: Any) -> Any:
+        yield self.data
+
+
+class SdkStub:
+    """A boto3-like session whose clients are real botocore clients with scripted HTTP answers, so the SDK's retry handler runs offline.
+
+    ``answers`` maps an operation name (``RunTask``) to the answers of its successive HTTP requests; the last one repeats. An answer is a dict (a 200 reply
+    body), an exception (raised as the transport failure, for example ``ReadTimeoutError`` after the request reached the service) or a ``(code, status)``
+    pair (an error reply). ``sent`` lists every operation that reached the HTTP layer, and ``on_send`` runs with the operation name before it is answered.
+    An operation without an answer fails the case loudly.
+    """
+
+    def __init__(self, answers: Mapping[str, list[Any]]) -> None:
+        self.answers = {name: list(items) for name, items in answers.items()}
+        self.sent: list[str] = []
+        self.on_send: Callable[[str], None] | None = None
+
+    def client(self, service: str, config: Config | None = None) -> Any:
+        session = botocore.session.Session()
+        client = session.create_client(
+            service,
+            region_name="us-east-1",
+            endpoint_url=f"https://{service}.stand-in.invalid",
+            aws_access_key_id=STAND_IN_CREDENTIAL,
+            aws_secret_access_key=STAND_IN_CREDENTIAL,
+            config=config,
+        )
+        client.meta.events.register(f"before-send.{client.meta.service_model.service_id.hyphenize()}", self._answer)
+        return client
+
+    def _answer(self, request: Any, event_name: str, **_: Any) -> AWSResponse:
+        operation = event_name.rsplit(".", 1)[-1]
+        self.sent.append(operation)
+        if self.on_send is not None:
+            self.on_send(operation)
+        queue = self.answers.get(operation)
+        if not queue:
+            raise AssertionError(f"the SDK stub has no answer for {operation}")
+        answer = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(answer, BaseException):
+            raise answer
+        status, body = (200, answer) if isinstance(answer, dict) else (answer[1], {"__type": answer[0], "message": "stand-in refusal"})
+        headers = {"Content-Type": "application/x-amz-json-1.1", "x-amzn-RequestId": "stand-in"}
+        return AWSResponse(request.url, status, headers, _Raw(json.dumps(body, default=str).encode()))
