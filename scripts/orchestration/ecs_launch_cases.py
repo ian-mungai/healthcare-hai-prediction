@@ -7,6 +7,7 @@ Each case builds its own rig, so cases run in any order.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -154,6 +155,165 @@ def stopped_decoys(rig: Rig, count: int) -> None:
     for number in range(count):
         arn = rig.adapter.start("drift", f"2026110{number + 1}T090000Z-1111111{number}:drift:1", {"drift": {"RUN_ID": "x"}}, "", HOST)
         rig.ecs.finish(arn)
+
+
+def blind_and_broken(rig: Rig, how: str) -> None:
+    """Make the cloud fail the way the reviewer's probes did, right after a RunTask whose reply was lost. The lookups are throttled in every variant."""
+    task = gold_tasks(rig)[0]
+    rig.ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")] * 500
+    if how == "probe_denied":
+        rig.ecs.faults["list_container_instances"] = [client_error("AccessDeniedException", "ListContainerInstances")] * 500
+    elif how == "runtask_denied":
+        rig.ecs.finish(task)
+        rig.ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
+        rig.ecs.faults["run_task"] = [client_error("AccessDeniedException", "RunTask")] * 500
+    elif how == "no_room":
+        rig.ecs.finish(task)
+        rig.ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks"), None] * 300
+        rig.ecs.host_full = True
+        rig.ecs.forget_stopped_tokens = True
+    elif how == "cancel_requested":
+        with contextlib.suppress(LaunchUnavailable):
+            rig.launcher().cancel(RUN, "gold", 1)
+
+
+def no_terminal_outcome_while_a_launch_may_be_live() -> None:
+    for how in ("probe_denied", "runtask_denied", "no_room", "cancel_requested"):
+        rig = Rig()
+        rig.ecs.hold = True
+        rig.ecs.lose_reply_once = True
+
+        def inject(now: float, rig: Rig = rig, how: str = how) -> None:
+            rig.time.on_sleep = None
+            blind_and_broken(rig, how)
+
+        rig.time.on_sleep = inject
+        error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
+        require("end" not in rig.events(1), f"{how}: a terminal outcome was recorded while a task may be live: {rig.events(1)}")
+        require(len(gold_tasks(rig)) == 1, f"{how}: {len(gold_tasks(rig))} tasks, error: {error}")
+        rig.ecs.faults.clear()
+        rig.ecs.host_full = False
+        rig.ecs.forget_stopped_tokens = False
+        rig.ecs.hold = False
+        rig.time.on_sleep = None
+        done = rig.launcher().run(spec())
+        require(len(gold_tasks(rig)) == 1 and "end" in rig.events(1), f"{how}: the next call finds the task and settles the launch: {done}")
+
+
+def aged_recovery_never_replays_runtask() -> None:
+    rig = Rig()
+    rig.ecs.token_ttl, rig.ecs.purge_after = 900.0, 3600.0
+    rig.ecs.lose_reply_once = True
+    rig.time.on_sleep = lambda now: (_ for _ in ()).throw(Interrupted())
+    refuses(Interrupted, partial(rig.launcher().run, spec()))
+    arn = gold_tasks(rig)[0]
+    rig.ecs.finish(arn)
+    rig.time.on_sleep = None
+    rig.time.now += 7200
+    runs = rig.ecs.count("run_task")
+    error = refuses(LaunchRefused, partial(rig.launcher().run, spec(2)))
+    require("owner must resolve" in str(error), f"the refusal says who resolves it: {error}")
+    require(rig.ecs.count("run_task") == runs and len(gold_tasks(rig)) == 1, "no RunTask is repeated after the window, the token life and what ECS remembers")
+    require("end" not in rig.events(1), "the unresolved launch is not closed")
+
+
+def claim_without_send_an_hour_later() -> None:
+    rig = Rig()
+    rig.bucket.put_faults["intent.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
+    require(rig.ecs.count("run_task") == 0, "the first call claimed and sent nothing")
+    rig.time.now += 3600
+    done = rig.launcher().run(spec())
+    require(done.outcome == "failed_closed" and "no task was started" in done.reason, f"a claim that never sent anything is closed: {done}")
+    require(rig.ecs.count("run_task") == 0, "and nothing is launched an hour later")
+    retry = rig.launcher().run(spec(2))
+    require(retry.outcome == "failed_closed" and retry.adopted and rig.ecs.count("run_task") == 0, f"a retry reports it: {retry}")
+
+
+def cancel_before_runtask_is_accepted() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    seen: dict[str, str] = {}
+
+    def cancel_midway(phase: str) -> None:
+        if phase == "before":
+            rig.ecs.run_task_hook = None
+            try:
+                rig.launcher().cancel(RUN, "gold", 1)
+            except LaunchUnavailable as error:
+                seen["cancel"] = str(error)
+
+    rig.ecs.run_task_hook = cancel_midway
+    done = rig.launcher().run(spec())
+    require("unresolved" in seen.get("cancel", ""), f"a cancel with a RunTask outstanding stays unresolved: {seen}")
+    require(done.outcome == "cancelled" and len(gold_tasks(rig)) == 1, f"the launching call sees the cancel: {done}")
+    require(rig.ecs.tasks[gold_tasks(rig)[0]]["lastStatus"] == "STOPPED", "and stops the task it just started")
+    require(rig.record(1, "end")["outcome"] == "cancelled" and rig.record(1, "end")["task_arn"] == gold_tasks(rig)[0], "cancelled is recorded with the ARN")
+    rig = Rig()
+    rig.ecs.instance_free = {"CPU": 1024, "MEMORY": 31000}
+    outcome: dict[str, Any] = {}
+
+    def cancel_while_waiting(now: float) -> None:
+        rig.time.on_sleep = None
+        outcome["cancel"] = rig.launcher().cancel(RUN, "gold", 1)
+        rig.ecs.instance_free = {"CPU": 4096, "MEMORY": 31000}
+
+    rig.time.on_sleep = cancel_while_waiting
+    done = rig.launcher().run(spec())
+    require(done.outcome == "cancelled" and outcome["cancel"].outcome == "cancelled", f"a cancel during the wait for room: {done}")
+    require(rig.ecs.count("run_task") == 0, "stops the launch before it sends anything")
+
+
+def recovery_enforces_the_claim_needs() -> None:
+    rig = Rig()
+    rig.bucket.put_faults["intent.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(LaunchUnavailable, partial(rig.launcher().run, spec()))
+    rig.scratch_free = 10
+    done = rig.launcher().run(spec(2))
+    require(rig.ecs.count("run_task") == 0, "a recovering attempt must not launch 100 GiB of scratch into 10 bytes")
+    require(done.outcome == "failed_closed" and "scratch_bytes" in done.reason, f"it reports the fit failure: {done}")
+
+
+def joined_attempts_report_the_owners_outcome() -> None:
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    second = rig.launcher()
+    joined = second.attach(spec(2))
+    second.start(joined)
+    cancelled = rig.launcher().cancel(RUN, "gold", 2)
+    require(cancelled.outcome == "cancelled", f"cancel by the joined attempt: {cancelled}")
+    require(rig.record(1, "end")["outcome"] == "cancelled" and rig.record(2, "end")["outcome"] == "cancelled", "the owner's end record is finalized with it")
+    later = rig.launcher().run(spec(3))
+    require(later.outcome == "cancelled" and later.adopted and rig.ecs.count("run_task") == 1, f"every later attempt reports the same outcome: {later}")
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    second = rig.launcher()
+    second.start(second.attach(spec(2)))
+    rig.ecs.hold = False
+    require(rig.launcher().run(spec(1)).ok, "the owner finishes first")
+    stops = rig.ecs.count("stop_task")
+    late = rig.launcher().cancel(RUN, "gold", 2)
+    require(
+        late.outcome == "succeeded" and late.adopted and rig.ecs.count("stop_task") == stops,
+        f"a late cancel reports the owner's outcome and stops nothing: {late}",
+    )
+    require(rig.record(2, "end")["outcome"] == "succeeded", "and records it")
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    second = rig.launcher()
+    joined = second.attach(spec(2))
+    second.start(joined)
+    rig.ecs.hold = False
+    require(rig.launcher().run(spec(1)).ok, "the owner finishes and records success")
+    joined.timed_out = True
+    verdict = second.conclude(joined)
+    require(
+        verdict.outcome == "succeeded" and rig.record(2, "end")["outcome"] == "succeeded",
+        f"a joined attempt that decided on a timeout too late reports the owner's success: {verdict}",
+    )
 
 
 def launch_failure() -> None:
@@ -676,7 +836,7 @@ def store_scope() -> None:
     require(operations <= {"put_object", "get_object"}, f"no delete, list or other call: {operations}")
     for name, arguments in rig.bucket.calls:
         key = arguments["Key"]
-        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim)|absent-probe)\.json"
+        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim|send|cancel)|absent-probe)\.json"
         require(re.fullmatch(pattern, key) is not None, f"{name} {key} is not a launch record key")
         require(name != "put_object" or arguments.get("IfNoneMatch") == "*", "every write is conditional")
 
@@ -754,6 +914,12 @@ def poll_errors() -> None:
 
 
 CASES: dict[str, Callable[[], None]] = {
+    "no_terminal_outcome_while_a_launch_may_be_live": no_terminal_outcome_while_a_launch_may_be_live,
+    "aged_recovery_never_replays_runtask": aged_recovery_never_replays_runtask,
+    "claim_without_send_an_hour_later": claim_without_send_an_hour_later,
+    "cancel_before_runtask_is_accepted": cancel_before_runtask_is_accepted,
+    "recovery_enforces_the_claim_needs": recovery_enforces_the_claim_needs,
+    "joined_attempts_report_the_owners_outcome": joined_attempts_report_the_owners_outcome,
     "launch_failure": launch_failure,
     "failed_attempt_is_terminal": failed_attempt_is_terminal,
     "lost_reply": lost_reply,
