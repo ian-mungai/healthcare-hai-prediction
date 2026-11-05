@@ -26,6 +26,7 @@ from typing import Any
 
 import botocore.session
 from botocore.awsrequest import AWSResponse
+from botocore.compat import HTTPHeaders
 from botocore.config import Config
 from botocore.exceptions import ClientError, ReadTimeoutError
 
@@ -326,7 +327,8 @@ class SdkStub:
         client.meta.events.register(f"before-send.{client.meta.service_model.service_id.hyphenize()}", self._answer)
         return client
 
-    def _answer(self, request: Any, event_name: str, **_: Any) -> AWSResponse:
+    def _answer(self, request: Any, event_name: str, **_: Any) -> Any:
+        """Answer one send; botocore's event hooks are typed as returning None, but a before-send hook returns the response."""
         operation = event_name.rsplit(".", 1)[-1]
         self.sent.append(operation)
         if self.on_send is not None:
@@ -338,5 +340,7 @@ class SdkStub:
         if isinstance(answer, BaseException):
             raise answer
         status, body = (200, answer) if isinstance(answer, dict) else (answer[1], {"__type": answer[0], "message": "stand-in refusal"})
-        headers = {"Content-Type": "application/x-amz-json-1.1", "x-amzn-RequestId": "stand-in"}
+        headers = HTTPHeaders()
+        headers["Content-Type"] = "application/x-amz-json-1.1"
+        headers["x-amzn-RequestId"] = "stand-in"
         return AWSResponse(request.url, status, headers, _Raw(json.dumps(body, default=str).encode()))
