@@ -364,6 +364,39 @@ def capacity_answer_is_definite() -> None:
     require(len(ecs.tasks) == 1, "the lost reply case did not create the task")
 
 
+def guard_runs_just_before_the_send() -> None:
+    adapter, ecs, _ = host_build()
+    order: list[str] = []
+    ecs.call_hook = order.append
+
+    def refuse() -> None:
+        order.append("guard")
+        raise ecs_adapter.SendWithheld
+
+    raises(ecs_adapter.SendWithheld, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=refuse))
+    require(order == ["list_tasks", "guard"] and not ecs.tasks, f"the guard comes after the discovery and before RunTask, and a refusal sends nothing: {order}")
+    seen: list[str] = []
+    ecs.call_hook = None
+    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=lambda: seen.append("guard"))
+    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=lambda: seen.append("guard"))
+    require(seen == ["guard"], "a task that already runs is returned without the guard or a send")
+
+
+def unknown_reply_is_told_from_an_unsent_call() -> None:
+    adapter, ecs, _ = host_build()
+    ecs.lose_reply_once = True
+    raises(ecs_adapter.SendUnknown, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
+    adapter2, ecs2, _ = host_build()
+    ecs2.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
+    try:
+        adapter2.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    except ecs_adapter.SendUnknown:
+        raise AssertionError("a throttled discovery sent nothing and must not read as an unknown send") from None
+    except TaskUnavailable:
+        pass
+    require(ecs2.count("run_task") == 0, "and no RunTask call was made")
+
+
 def lookup_finds_running_and_stopped_tasks() -> None:
     adapter, ecs, _ = host_build()
     require(adapter.lookup(KEY) is None, "a task was found where none was started")
@@ -451,5 +484,7 @@ CASES: dict[str, Callable[[], None]] = {
     "host_capacity_exhausted_is_transient": host_capacity_exhausted_is_transient,
     "fake_refuses_a_wrong_shape": fake_refuses_a_wrong_shape,
     "capacity_answer_is_definite": capacity_answer_is_definite,
+    "guard_runs_just_before_the_send": guard_runs_just_before_the_send,
+    "unknown_reply_is_told_from_an_unsent_call": unknown_reply_is_told_from_an_unsent_call,
     "lookup_finds_running_and_stopped_tasks": lookup_finds_running_and_stopped_tasks,
 }

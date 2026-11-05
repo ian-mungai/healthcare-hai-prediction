@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -42,6 +42,14 @@ class TaskRefused(Exception):
 
 class TaskUnavailable(Exception):
     """The call failed in a way a later identical call can cure: throttling, a timeout, no capacity. After a timeout or a lost reply a task may exist."""
+
+
+class SendUnknown(TaskUnavailable):
+    """The RunTask call may have reached ECS and its answer is unknown (a timeout, a lost reply, a server error). A task may exist."""
+
+
+class SendWithheld(Exception):
+    """The caller's guard refused the RunTask call just before it was made. Nothing was sent."""
 
 
 class CapacityUnavailable(TaskUnavailable):
@@ -198,10 +206,19 @@ class EcsAdapter:
             return {"capacityProviderStrategy": [{"capacityProvider": self.settings.host_capacity_provider, "weight": 1}]}
         raise TaskRefused("placement_unknown")
 
-    def start(self, family: str, key: str, environment: Mapping[str, Mapping[str, str]], network: str, placement: str = FARGATE) -> str:
+    def start(
+        self,
+        family: str,
+        key: str,
+        environment: Mapping[str, Mapping[str, str]],
+        network: str,
+        placement: str = FARGATE,
+        guard: Callable[[], None] | None = None,
+    ) -> str:
         """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives. ``network`` names the
         class whose security groups a Fargate task gets: each family runs only in the network its job table row approves. A host task has no security group,
-        the host firewall bounds it."""
+        the host firewall bounds it. ``guard`` runs immediately before the RunTask call, after the discovery of a running task, and raises ``SendWithheld`` to
+        stop the call. A RunTask call that may have been sent and has no answer raises ``SendUnknown``."""
         if family not in self.settings.families:
             raise TaskRefused("family_not_named")
         where = self.placement(placement, network)
@@ -209,8 +226,13 @@ class EcsAdapter:
         started_by = self.identity(key)
         try:
             running = self.ecs.list_tasks(cluster=self.settings.cluster, startedBy=started_by)["taskArns"]
-            if running:
-                return str(running[0])
+        except (ClientError, BotoCoreError) as error:
+            raise classify(error) from None
+        if running:
+            return str(running[0])
+        if guard is not None:
+            guard()
+        try:
             reply = self.ecs.run_task(
                 cluster=self.settings.cluster,
                 taskDefinition=self.definition(family, placement),
@@ -229,7 +251,10 @@ class EcsAdapter:
                 clientToken=digest,
             )
         except (ClientError, BotoCoreError) as error:
-            raise classify(error) from None
+            failure = classify(error)
+            if isinstance(failure, TaskUnavailable):
+                raise SendUnknown(str(failure)) from None
+            raise failure from None
         if reply["tasks"]:
             return str(reply["tasks"][0]["taskArn"])
         reasons = " ".join(str(item.get("reason", "")) for item in reply["failures"])
