@@ -191,14 +191,14 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
       promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
       } : (
-      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" }] ==
-      [for container in fargate : { for key, value in container : key => value if key != "environment" }] &&
+      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" && !(container.name == "init" && contains(["command", "linuxParameters"], key)) }] ==
+      [for container in fargate : { for key, value in container : key => value if key != "environment" && !(container.name == "init" && contains(["command", "linuxParameters"], key)) }] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.name]] ==
       [for container in fargate : [for item in container.environment : item.name]] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]] ==
       [for container in fargate : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]]
     )])
-    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts."
+    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts. The init step differs by its wipe and capabilities, which the scratch cases pin."
   }
 
   assert {
