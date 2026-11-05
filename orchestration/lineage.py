@@ -259,21 +259,40 @@ class Outbox:
         self.query_deadline: float | None = None
         os.chmod(path, 0o600)
         self.connection.execute("PRAGMA synchronous=FULL")
-        self.connection.execute(
-            "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, sequence INTEGER NOT NULL, acked INTEGER NOT NULL DEFAULT 0)"
-        )
-        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
-        if "om_state" not in columns:
-            self.connection.execute("ALTER TABLE events ADD COLUMN om_state INTEGER NOT NULL DEFAULT 0")
-        if "om_result" not in columns:
-            self.connection.execute("ALTER TABLE events ADD COLUMN om_result TEXT")
-        self.connection.commit()
+        try:
+            self._upgrade_events()
+        except BaseException:
+            self.connection.close()
+            raise
         self.connection.execute("CREATE TABLE IF NOT EXISTS sweep_cursors (root TEXT PRIMARY KEY, cursor TEXT)")
         self.connection.execute("CREATE TABLE IF NOT EXISTS provider_runs (caller TEXT PRIMARY KEY, link TEXT NOT NULL)")
         self.connection.execute(
             "CREATE TABLE IF NOT EXISTS provider_events "
             "(id TEXT PRIMARY KEY, envelope TEXT NOT NULL, seen_cycle INTEGER NOT NULL, flushed INTEGER NOT NULL DEFAULT 0)"
         )
+
+    def _upgrade_events(self) -> None:
+        """Create and upgrade the events table under one write lock so concurrent openers never add a column twice.
+
+        BEGIN IMMEDIATE takes the write lock before the column read; a second opener waits for it up to the
+        connection timeout (1 s, far above the few milliseconds the upgrade holds it) and then sees the columns.
+        """
+        self.connection.execute("BEGIN IMMEDIATE")
+        if not self.connection.in_transaction:
+            raise LineageError("outbox schema upgrade did not open its transaction")
+        try:
+            self.connection.execute(
+                "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, sequence INTEGER NOT NULL, acked INTEGER NOT NULL DEFAULT 0)"
+            )
+            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
+            if "om_state" not in columns:
+                self.connection.execute("ALTER TABLE events ADD COLUMN om_state INTEGER NOT NULL DEFAULT 0")
+            if "om_result" not in columns:
+                self.connection.execute("ALTER TABLE events ADD COLUMN om_result TEXT")
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
 
     def _set_query_deadline(self, deadline: float | None) -> None:
         """Install or clear the VM progress fence for this connection."""
