@@ -272,3 +272,21 @@ run "the_host_role_attaches_the_scratch_volume_by_its_own_name_and_project_tag" 
     error_message = "The data volume statement keeps its exact condition."
   }
 }
+
+# The scratch fstab line is nofail, so a later boot without the scratch volume must not start Docker or the ECS agent, and
+# the watchdog must notice the job table missing although the metadata table remains. The E2E starts both services with
+# the scratch volume absent and deletes the job table alone through stand-ins; this pins the text the host receives.
+run "docker_and_the_agent_require_the_scratch_mount_and_the_watchdog_checks_both_tables" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for text in [
+        "mountpoint_command=$(command -v mountpoint)\nfor unit in docker.service ecs.service; do\n  cat >\"$systemd_directory/$unit.d/platform_scratch_mount.conf\" <<UNIT\n[Unit]\nRequiresMountsFor=$scratch_path\n\n[Service]\nExecStartPre=$mountpoint_command -q $scratch_path\nUNIT\ndone\n",
+        "run_within 60 \"Reloading systemd units for the new mounts\" systemctl daemon-reload",
+        "nft list table inet platform_imds >/dev/null \\\n    && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \\\n    && probe_blocked\n"
+      ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+    ])
+    error_message = "Docker and the ECS agent require the scratch mount at every start, systemd reloads the new fstab lines and the watchdog checks the job table beside the metadata table."
+  }
+}

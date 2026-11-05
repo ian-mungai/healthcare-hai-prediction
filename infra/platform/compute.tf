@@ -42,7 +42,14 @@ resource "aws_ebs_volume" "data" {
 # The scratch volume holds the job work folders, mounted under the data mount. Its Name differs from the data volume's, so the
 # snapshot schedule below (which targets only the data volume's Name) never takes it and boot finds each volume by its own tag.
 # It carries intermediate job files that a job wipes at start and after success, so nothing here needs a backup. Its size follows
-# the peak a complete dry run measures.
+# the peak a complete dry run measures. A size change replaces the volume with a new, empty one instead of growing it in
+# place: the size is held in terraform_data below, and replace_triggered_by fires when that value changes. It does not fire
+# when terraform_data is first created, so adding it replaces nothing. The host attaches the volume at boot, so an apply that
+# replaces it needs the host stopped first, because AWS does not delete an attached volume.
+resource "terraform_data" "scratch_size" {
+  input = var.scratch_volume_gb
+}
+
 #trivy:ignore:AWS-0027
 resource "aws_ebs_volume" "scratch" {
   #checkov:skip=CKV_AWS_189:Encrypted with the AWS-managed EBS key; a customer-managed key adds cost the budget does not cover.
@@ -55,6 +62,10 @@ resource "aws_ebs_volume" "scratch" {
   tags = merge(local.tags, local.data_classification, {
     Name = format(local.name, "host_scratch")
   })
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.scratch_size.output]
+  }
 }
 
 resource "aws_ecs_capacity_provider" "host" {
