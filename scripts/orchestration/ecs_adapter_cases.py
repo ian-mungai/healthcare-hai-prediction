@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 from orchestration import ecs_adapter
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, client_error
+from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
 
 JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"
 SETTINGS = EcsSettings(
@@ -246,6 +246,50 @@ def client_timeouts() -> None:
         options["connect_timeout"] == 5 and options["read_timeout"] == 10 and options["retries"] == {"max_attempts": 2, "mode": "standard"},
         "calls have no deadline",
     )
+    sending = vars(ecs_adapter.send_config())
+    require(
+        sending["connect_timeout"] == 5 and sending["read_timeout"] == 10 and sending["retries"] == {"total_max_attempts": 1, "mode": "standard"},
+        f"RunTask has the same deadline and makes one attempt: {sending['retries']}",
+    )
+
+
+LOST = ReadTimeoutError(endpoint_url="https://ecs.stand-in.invalid")
+
+
+def runtask_sends_once_through_the_sdk() -> None:
+    """Real botocore with scripted HTTP answers: the first RunTask request reaches ECS and its reply is lost, a second one would be refused. The adapter
+    built as production builds it sends one request and reports the unknown answer, never the refusal of a retry it did not make."""
+    stub = SdkStub({"ListTasks": [{"taskArns": []}], "RunTask": [LOST, ("AccessDeniedException", 400)]})
+    adapter = EcsAdapter.from_session(stub, replace(SETTINGS, host_capacity_provider="stand-in_host"))
+    guards: list[str] = []
+    try:
+        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=lambda: guards.append("guard"))
+    except ecs_adapter.SendUnknown:
+        pass
+    except TaskRefused as error:
+        raise AssertionError(f"an SDK retry hid the lost reply of an accepted request behind its refusal: {error}, sent {stub.sent}") from None
+    else:
+        raise AssertionError("expected SendUnknown")
+    require(stub.sent.count("RunTask") == 1 and guards == ["guard"], f"one request per guard call: {stub.sent}, {guards}")
+    stub = SdkStub({"ListTasks": [{"taskArns": []}], "RunTask": [("ThrottlingException", 400), ("AccessDeniedException", 400)]})
+    adapter = EcsAdapter.from_session(stub, replace(SETTINGS, host_capacity_provider="stand-in_host"))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
+    require(stub.sent.count("RunTask") == 1, f"a throttled RunTask is not resent by the SDK either: {stub.sent}")
+    reads = SdkStub({"ListTasks": [("ThrottlingException", 400), {"taskArns": []}]})
+    require(EcsAdapter.from_session(reads, SETTINGS).find(KEY) is None and reads.sent == ["ListTasks", "ListTasks"], f"reads keep their retries: {reads.sent}")
+
+
+def retrying_runtask_client_refused() -> None:
+    """A RunTask client with SDK retries could resend after the caller's guard and hide a lost reply, so the adapter refuses it when it is built."""
+    stub = SdkStub({})
+    for config in (ecs_adapter.client_config(), None):
+        try:
+            EcsAdapter(stub.client("ecs", config=config), FakeLogs(), SETTINGS)
+        except ValueError as error:
+            require("one attempt" in str(error), f"the refusal names the rule: {error}")
+        else:
+            raise AssertionError(f"a RunTask client with retries {config and vars(config)['retries']} was accepted")
+    EcsAdapter(stub.client("ecs", config=ecs_adapter.client_config()), FakeLogs(), SETTINGS, sender=stub.client("ecs", config=ecs_adapter.send_config()))
 
 
 NINE_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote", "serve", "metadata", "bronze"})
@@ -487,4 +531,6 @@ CASES: dict[str, Callable[[], None]] = {
     "guard_runs_just_before_the_send": guard_runs_just_before_the_send,
     "unknown_reply_is_told_from_an_unsent_call": unknown_reply_is_told_from_an_unsent_call,
     "lookup_finds_running_and_stopped_tasks": lookup_finds_running_and_stopped_tasks,
+    "runtask_sends_once_through_the_sdk": runtask_sends_once_through_the_sdk,
+    "retrying_runtask_client_refused": retrying_runtask_client_refused,
 }
