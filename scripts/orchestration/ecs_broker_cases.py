@@ -1126,6 +1126,48 @@ def serve_later_attempts_are_bound_to_the_first_request() -> None:
         require(wait_for(current, current.client.submit(serve_request(2))).state == State.SUCCEEDED, "the unchanged request must start attempt 2")
 
 
+NO_TASK_LIST: dict[str, Any] = {}  # a DescribeTasks reply without a task list: no evidence of how the task is doing
+
+
+def missing_task_list_during_status() -> None:
+    """A DescribeTasks reply without a task list is no evidence: status leaves the record unfinished."""
+    with rig() as current:
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.ecs.describe_overrides = [NO_TASK_LIST]
+        raises(BrokerUnavailable, partial(current.client.status, handle))
+        require(current.client.status(handle).state in (State.PENDING, State.RUNNING), "status ended a running submission on a reply without a task list")
+
+
+def missing_task_list_during_stop_confirmation() -> None:
+    """A reply without a task list does not confirm the stop of a cancel: nothing is recorded, and a retry starts no second task."""
+    with rig() as current:
+        current.ecs.hold = True
+        handle = current.client.submit(request("fit"))
+        current.ecs.stop_lag = 10**9
+        current.ecs.describe_overrides = [NO_TASK_LIST]
+        raises(BrokerUnavailable, partial(current.client.cancel, handle))
+        task = next(iter(current.ecs.tasks.values()))
+        require(task["lastStatus"] != "STOPPED", f"the stand-in task is still stopping: {task['lastStatus']}")
+        require(current.client.status(handle).state in (State.PENDING, State.RUNNING), "a stop confirmed by a reply without a task list ended the submission")
+        current.ecs.describe_overrides = [NO_TASK_LIST]
+        tasks = len(current.ecs.tasks)
+        raises(BrokerUnavailable, partial(current.client.submit, request("fit", attempt=2)))
+        require(len(current.ecs.tasks) == tasks, "a retry started a second task beside the one that was still stopping")
+
+
+def missing_task_list_before_a_retry() -> None:
+    """The overlap check before a retry reads a reply without a task list as unknown and starts no second task."""
+    with rig() as current:
+        current.ecs.hold = True
+        current.client.submit(request("fit"))
+        current.ecs.describe_overrides = [NO_TASK_LIST]
+        raises(BrokerUnavailable, partial(current.client.submit, request("fit", attempt=2)))
+        require(len(current.ecs.tasks) == 1 and current.ecs.count("run_task") == 1, "a retry started a second task beside a running one")
+        raises(SubmissionRefused, partial(current.client.submit, request("fit", attempt=2)))
+        require(len(current.ecs.tasks) == 1, "once the task is described the retry is refused and still starts nothing")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "task_runs_through_the_broker": task_runs_through_the_broker,
     "repeated_submit_one_task": repeated_submit_one_task,
@@ -1189,4 +1231,7 @@ CASES: dict[str, Callable[[], None]] = {
     "serve_job_is_off_unless_enabled": serve_job_is_off_unless_enabled,
     "serve_refuses_a_bad_or_missing_request": serve_refuses_a_bad_or_missing_request,
     "serve_later_attempts_are_bound_to_the_first_request": serve_later_attempts_are_bound_to_the_first_request,
+    "missing_task_list_during_status": missing_task_list_during_status,
+    "missing_task_list_during_stop_confirmation": missing_task_list_during_stop_confirmation,
+    "missing_task_list_before_a_retry": missing_task_list_before_a_retry,
 }

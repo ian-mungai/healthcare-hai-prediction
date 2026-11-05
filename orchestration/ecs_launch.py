@@ -25,8 +25,9 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    else when the claim was written, never when the recovery ran.
 7. A task ends in success only when every acceptance container exited 0. The adapter already leaves out the guard container.
 8. A stop is confirmed (the task reports STOPPED within 120 seconds) before anything is recorded; otherwise ``StopFailed`` leaves the stop repeatable. A
-   DescribeTasks reply that describes no task is never evidence: ECS documents no guarantee that it describes a task it created. Such a reply keeps the
-   launch unresolved, and a failed, timed-out or cancelled outcome is recorded only for a task shown STOPPED.
+   DescribeTasks reply that describes no task, or has no task list, is never evidence: ECS documents no guarantee that it describes a task it created.
+   The adapter reports it as unavailable, so the launch stays unresolved, and a failed, timed-out or cancelled outcome is recorded only for a task shown
+   STOPPED.
 9. A job that does not fit waits at most 10 minutes counted from its claim (the host's free CPU, memory and scratch, and RunTask capacity answers), asking for
    a task of its identity after every wait, then ends ``failed_closed`` with a fit report. There is no fallback to another capacity provider. The needs
    are the claim's, so every caller that may create a task is held to them.
@@ -89,7 +90,7 @@ PREFIX_PATTERN = re.compile(r"[a-z0-9_]+(/[a-z0-9_]+)*")
 REPORT_LIMIT = 300
 RETRYABLE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout", "ConditionalRequestConflict", "ThrottlingException"})
 LIVE = ("pending", "running")
-ENDED = ("succeeded", "failed")  # the states of a task shown STOPPED; "gone" (no description) is neither live nor ended
+ENDED = ("succeeded", "failed")  # the states of a task shown STOPPED
 
 
 class LaunchError(Exception):
@@ -561,8 +562,6 @@ class Launcher:
         if report.state in LIVE:
             self.join(launch, claim, arn, began)
             return
-        if report.state not in ENDED:
-            raise self.undescribed(claim)
         outcome, code, reason = self.judge(report, claim["acceptance"])
         end = self.put("end", attempt, claim, outcome=outcome, exit_code=code, reason=reason[:REPORT_LIMIT], task_arn=arn)
         launch.outcome = outcome_of(end, adopted=True)
@@ -741,15 +740,6 @@ class Launcher:
             "start a new run."
         )
 
-    def undescribed(self, claim: Mapping[str, Any]) -> LaunchUnavailable:
-        """ECS described no task for the recorded task of the launch. That is no evidence of how it ended, so nothing is recorded and nothing else starts."""
-        key = f"{claim['run_id']}:{claim['job']}:{claim['attempt']}"
-        return LaunchUnavailable(
-            f"ECS returned no description of the recorded task of attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']}, so its outcome is "
-            "unknown and the launch stays unresolved: call again. If ECS no longer describes the task, manual owner path: stop every sender of this launch, "
-            f"inspect ECS for the tasks started by {self.adapter.identity(key)}, check the job's evidence in the bucket, then start a new run."
-        )
-
     def win_send(self, launch: Launch, claim: Mapping[str, Any]) -> bool:
         """Win the send token: the conditional create of the decision record. False when another caller holds the send token or closed the launch."""
         spec = launch.spec
@@ -837,8 +827,6 @@ class Launcher:
         while True:
             try:
                 report = self.adapter.poll(launch.arn)
-                if report.state not in LIVE and report.state not in ENDED:
-                    raise TaskUnavailable("no task described")
             except TaskUnavailable as error:
                 failures += 1
                 if failures > POLL_FAILURES:
@@ -857,7 +845,7 @@ class Launcher:
             self.clock.sleep(POLL_SECONDS)
 
     def confirm_stop(self, arn: str, reason: str) -> None:
-        """Send the stop and wait until the task is shown STOPPED. A reply that describes no task is no confirmation."""
+        """Send the stop and wait until the task is shown STOPPED. A read that fails, including a reply that describes no task, records nothing."""
         try:
             self.adapter.stop(arn, reason)
         except TaskUnavailable as error:

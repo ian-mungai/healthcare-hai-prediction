@@ -183,9 +183,19 @@ def layer_tasks_with_a_guard() -> None:
         require(report.state == "failed" and report.exit_code == 137, f"{layer}: a task stopped by the owner did not fail with the stop code: {report}")
 
 
-def unknown_task_is_gone() -> None:
+def undescribed_task_is_unavailable() -> None:
+    """A DescribeTasks reply that describes no task, or has no task list, says nothing about the task: the read is unavailable, never an end."""
     adapter, _, _ = build()
-    require(adapter.poll(f"arn:aws:ecs:stand-in:{ACCOUNT}:task/stand-in-cluster/missing").state == "gone", "a missing task was not reported gone")
+    raises(TaskUnavailable, lambda: adapter.poll(f"arn:aws:ecs:stand-in:{ACCOUNT}:task/stand-in-cluster/missing"))
+    stub = SdkStub({"DescribeTasks": [{}, {"tasks": [], "failures": []}]})
+    adapter = EcsAdapter.from_session(stub, SETTINGS)
+    for shape in ("no task list", "an empty task list"):
+        try:
+            report = adapter.poll(f"arn:aws:ecs:us-east-1:{ACCOUNT}:task/{CLUSTER}/{'d' * 32}")
+        except TaskUnavailable:
+            continue
+        raise AssertionError(f"real botocore, a reply with {shape} was read as {report}")
+    require(stub.sent == ["DescribeTasks", "DescribeTasks"], f"one request each: {stub.sent}")
 
 
 def stop_is_repeatable() -> None:
@@ -510,7 +520,7 @@ CASES: dict[str, Callable[[], None]] = {
     "one_container_nonzero_fails": one_container_nonzero_fails,
     "early_failure_names_first_nonzero": early_failure_names_first_nonzero,
     "stopped_without_exit_codes_fails": stopped_without_exit_codes_fails,
-    "unknown_task_is_gone": unknown_task_is_gone,
+    "undescribed_task_is_unavailable": undescribed_task_is_unavailable,
     "stop_is_repeatable": stop_is_repeatable,
     "throttled_start_is_transient": throttled_start_is_transient,
     "denied_start_is_permanent": denied_start_is_permanent,
