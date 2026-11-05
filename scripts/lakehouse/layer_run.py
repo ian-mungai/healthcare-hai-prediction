@@ -91,6 +91,12 @@ DRY_MARKER = "dry_run"  # in the run folder: once a task has a dry phase, every 
 PLAN_FILE = "publish/dry_run_plan.json"
 PLAN_PREFIX = "DRY_RUN_PLAN "  # the printed plan line, so the owner can find it in the task log
 SUITES = "data_contracts/great_expectations"
+FEATURE_FILES = [
+    "--schema",
+    "data_contracts/features/feature_schema.json",
+    "--contract",
+    "data_contracts/lakehouse/features_publish.json",
+]  # in the code folder
 QUALITY = {"silver": ("silver",), "gold": ("gold", "cross"), "features": ("features",)}
 PIN_FILE = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}
 INPUT_FOLDER = {"gold": "silver_input", "features": "gold_input"}
@@ -499,7 +505,7 @@ def validate(job: Job) -> None:
             output / "result.json",
         ]
         if kind == "features":
-            run_module(job, "scripts.features.feature_validation", arguments)
+            run_module(job, "scripts.features.feature_validation", [*arguments, *FEATURE_FILES])
         elif kind == "cross":
             run_module(job, "scripts.lakehouse.gold_reconcile", [*arguments, "--baselines", Path(SUITES) / baselines])
         else:
