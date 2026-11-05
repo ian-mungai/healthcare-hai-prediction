@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import threading
@@ -32,8 +33,22 @@ NAME = secret_store.POSTGRES_PASSWORD
 Case = Callable[[Path], dict[str, bool]]
 
 
+def recent_regular_bytes(path: Path, since: float) -> bytes | None:
+    """The bytes of a regular file written since ``since`` and at most 8 MiB, or ``None`` for anything else.
+
+    A link, a pipe, a device, an old file and a large file are skipped on one cheap look at the entry, unopened. The open that follows never waits
+    (a named pipe with no writer would block an ordinary open for ever) and never follows a link, and it checks the kind again on the descriptor,
+    so an entry swapped for a pipe after the look is still not waited on.
+    """
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_mtime < since or info.st_size > 8 * 1024 * 1024:
+        return None
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as handle:
+        return handle.read() if stat.S_ISREG(os.fstat(handle.fileno()).st_mode) else None
+
+
 def files_holding(values: Iterable[str], roots: Iterable[Path], since: float) -> list[str]:
-    """Every file under the roots written since ``since`` whose bytes hold one of the values."""
+    """Every regular file under the roots written since ``since`` whose bytes hold one of the values; a pipe, a device or a link is skipped unopened."""
     needles = [value.encode() for value in values if len(value) > 8]
     found = []
     for root in roots:
@@ -42,12 +57,10 @@ def files_holding(values: Iterable[str], roots: Iterable[Path], since: float) ->
             for name in files:
                 path = Path(folder) / name
                 try:
-                    if path.is_symlink() or path.stat().st_mtime < since or path.stat().st_size > 8 * 1024 * 1024:
-                        continue
-                    content = path.read_bytes()
+                    content = recent_regular_bytes(path, since)
                 except OSError:
                     continue
-                if any(needle in content for needle in needles):
+                if content is not None and any(needle in content for needle in needles):
                     found.append(str(path))
     return found
 
@@ -213,7 +226,7 @@ def store_races(root: Path) -> dict[str, bool]:
         waited, waited_created = store.ensure(slow, lambda: "must-not-be-used", wait=5)
         waited_seconds = time.monotonic() - began
         for timer in timers:
-            timer.join()
+            timer.join(timeout=5)
 
         stuck = secret_store.POLARIS_READER_CLIENT_ID
 
@@ -533,6 +546,39 @@ def model_api_redis_password(root: Path) -> dict[str, bool]:
     }
 
 
+def release_pipe(pipe: Path, seconds: float = 5.0) -> None:
+    """Open the write end of a pipe so that a reader blocked on it returns; give up after ``seconds`` when no reader is waiting."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            os.close(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK))
+            return
+        except OSError:
+            time.sleep(0.05)
+
+
+def scan_with_pipe(root: Path) -> dict[str, bool]:
+    """A scan for a secret value meets a named pipe that nobody writes to, ends at its deadline without opening it and still reads the files beside it."""
+    needle = "pipe-" + os.urandom(8).hex()
+    found: list[list[str]] = []
+    with tempfile.TemporaryDirectory(prefix="pipe_scan_cases_") as scratch:
+        folder = Path(scratch)
+        (folder / "holds.txt").write_text(needle)
+        os.mkfifo(folder / "pipe")
+        scan = threading.Thread(target=lambda: found.append(files_holding([needle], [folder], 0.0)), name="pipe-scan", daemon=True)
+        scan.start()
+        scan.join(timeout=5)
+        ended = not scan.is_alive()
+        if not ended:
+            release_pipe(folder / "pipe")
+            scan.join(timeout=5)
+        holder = str(folder / "holds.txt")
+    return {
+        "a scan ends at its deadline although the folder holds a named pipe with no writer": ended,
+        "the scan still reads the regular file beside the pipe": found == [[holder]],
+    }
+
+
 CASES: dict[str, Case] = {
     "store_behaviour": store_behaviour,
     "store_races": store_races,
@@ -541,6 +587,7 @@ CASES: dict[str, Case] = {
     "saved_plan": saved_plan,
     "openmetadata_passwords": openmetadata_passwords,
     "model_api_redis_password": model_api_redis_password,
+    "scan_with_pipe": scan_with_pipe,
 }
 
 
