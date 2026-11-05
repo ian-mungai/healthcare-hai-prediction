@@ -236,7 +236,10 @@ def job_cases() -> list[Case]:
 
 
 def record_cases() -> list[tuple[Any, ...]]:
-    """The launch records: created once under their prefix, read back, never replaced or removed."""
+    """The launch records: created once under their prefix and read back, never removed.
+
+    Only decision.json is replaced, and only with an If-Match version check.
+    """
     key = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
     decision = f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json"
     bucket = f"arn:aws:s3:::{BUCKET}"
