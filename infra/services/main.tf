@@ -225,7 +225,7 @@ resource "aws_ecs_task_definition" "service" {
   network_mode             = "host"
   execution_role_arn       = contains(local.serving_keys, each.key) ? var.serving_execution_role_arn : var.execution_role_arn
   task_role_arn            = each.value.task_role_arn
-  container_definitions    = jsonencode(each.value.containers)
+  container_definitions    = jsonencode(local.service_containers[each.key])
   tags                     = local.tags
 
   # Set to the provider defaults so that the plan knows them: the approval pin of the task settings cannot bind a value that is unknown.
@@ -255,6 +255,11 @@ resource "aws_ecs_task_definition" "service" {
     precondition {
       condition     = local.hard_memory_mib <= var.host_memory_mib - 2048
       error_message = "If every container, including the one-shot tasks, reached its hard memory limit, the host would keep less than 2 GiB for the operating system and the ECS agent."
+    }
+
+    precondition {
+      condition     = local.reserved_cpu_units <= var.host_cpu_units - var.job_cpu_units
+      error_message = "The services reserve more CPU units than the host keeps beside the largest job, so the job would not be placed or would starve the services."
     }
 
     precondition {
