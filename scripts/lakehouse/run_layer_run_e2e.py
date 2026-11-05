@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -111,9 +112,16 @@ UNUSED_DEFAULTS = {("silver_publish", "pin"): {"publish_dir"}} | {
 
 
 def parser_options(module: str) -> dict[str, tuple[bool, str | None]]:
-    """Each ``--option`` the module's parser declares: whether it is required and its default when that is a literal or ``Path`` of a literal. The source is
-    read, not imported, because the quality and Spark modules need packages that only their images carry."""
+    """Each ``--option`` the module's parser declares: whether it is required and its default when that is a literal, a module constant that holds one or
+    ``Path`` of either. The source is read, not imported, because the quality and Spark modules need packages that only their images carry."""
     tree = ast.parse((Path(__file__).resolve().parents[2] / (module.replace(".", "/") + ".py")).read_text())
+    constants = {
+        target.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
     options: dict[str, tuple[bool, str | None]] = {}
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument" and node.args):
@@ -123,7 +131,7 @@ def parser_options(module: str) -> dict[str, tuple[bool, str | None]]:
         default = keywords.get("default")
         if isinstance(default, ast.Call) and default.args:
             default = default.args[0]
-        value = default.value if isinstance(default, ast.Constant) else None
+        value = default.value if isinstance(default, ast.Constant) else constants.get(default.id) if isinstance(default, ast.Name) else None
         flag = keywords.get("required")
         required = isinstance(flag, ast.Constant) and flag.value is True
         for name in names:
@@ -186,6 +194,8 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
     elif name in ("pipeline_build", "features_build"):
         build(job, module, arguments, environment or {})
     elif name in ("silver_quality", "gold_reconcile", "feature_validation"):
+        if name == "feature_validation":
+            validation_files(job, arguments)
         database = Path(option(arguments, "--database"))
         counts = {"pass": 3, "warn": 1 if "quality_warn" in DEFECTS else 0, "fail": 0}
         result: dict[str, Any] = {"counts": counts, "build_file_sha256": sha_of(database)}
@@ -203,6 +213,15 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
         maintain_step(job, arguments)
     else:
         raise AssertionError(f"no stand-in for {module}")
+
+
+def validation_files(job: Job, arguments: Sequence[str | Path]) -> None:
+    """The features validation reads the feature schema and the publish contract. The module runs in the task's code folder, which is ``<work>/code`` on
+    the task and not ``/workspace``, so each file must be given and must resolve to that file of the unpacked code."""
+    for name, relative in (("--schema", "data_contracts/features/feature_schema.json"), ("--contract", "data_contracts/lakehouse/features_publish.json")):
+        require(name in map(str, arguments), f"the features validation is not given {name}, so it reads a default outside the task's code folder")
+        given = job.code / option(arguments, name)
+        require(given.is_file() and given.resolve() == (job.code / relative).resolve(), f"{name} {option(arguments, name)} is not {relative} of the code")
 
 
 def profile_database(job: Job) -> None:
@@ -527,7 +546,11 @@ def commit_repository(folder: Path) -> Path:
     (source / "dbt/dbt_project.yml").write_text("name: hai\n")
     (source / "dbt/package-lock.yml").write_text("packages:\n  - name: dbt_utils\n    package: dbt-labs/dbt_utils\n    version: 1.4.1\nsha1_hash: x\n")
     repository = Path(__file__).resolve().parents[2]
-    for relative in ("data_contracts/lakehouse/gold_contract.json", "data_contracts/lakehouse/features_publish.json"):
+    for relative in (
+        "data_contracts/lakehouse/gold_contract.json",
+        "data_contracts/lakehouse/features_publish.json",
+        "data_contracts/features/feature_schema.json",
+    ):
         (source / relative).parent.mkdir(parents=True, exist_ok=True)
         (source / relative).write_bytes((repository / relative).read_bytes())
     identity = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid"]
@@ -1010,6 +1033,25 @@ def case_deadline_leaves_no_descendant_of_the_phase_module(case: Case) -> None:
     require(not survivors, f"processes of the phase survived the deadline: {survivors}")
 
 
+def case_features_validation_reads_its_files_from_the_code_it_runs_from(case: Case) -> None:
+    """The task unpacks the code under ``<work>/code``, not at ``/workspace``. Started there without ``--schema`` and ``--contract``, the real validation
+    module must read the schema and the contract of that code, whatever the working folder: here an empty build file must reach the checks (exit 1 with
+    failed expectations), not stop on a missing file (exit 2)."""
+    repository = Path(__file__).resolve().parents[2]
+    code = case.root / "aws_work" / "code"
+    for relative in ("scripts", "data_contracts/features", "data_contracts/lakehouse"):
+        shutil.copytree(repository / relative, code / relative, ignore=shutil.ignore_patterns("__pycache__"))
+    database = case.root / "aws_work" / "staging.duckdb"
+    duckdb.connect(str(database)).close()
+    output = case.root / "aws_work" / "result.json"
+    environment = {**os.environ, "PYTHONPATH": str(code), "PYTHONDONTWRITEBYTECODE": "1"}
+    arguments = ["-m", "scripts.features.feature_validation", "--database", str(database), "--output", str(output)]
+    done = run_command(sys.executable, arguments, cwd=case.root, env=environment, timeout=300)
+    require(done.returncode == 1, (done.returncode, done.stderr[-2000:]))
+    record = read_json(output)
+    require(record.get("feature_schema_sha256") == sha_of(code / "data_contracts/features/feature_schema.json"), record.get("error", record.get("counts")))
+
+
 def case_step_timeout_leaves_no_descendant_of_the_phase_module(case: Case) -> None:
     """The step limit is the other way a module stops. The module is killed first there, so its children would be orphans that the driver can no longer
     find: the whole tree must go down at the limit, and the error names the module."""
@@ -1132,6 +1174,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
     "a phase that passes the task deadline leaves no process behind": case_deadline_leaves_no_descendant_of_the_phase_module,
     "a module that passes the step limit leaves no process behind": case_step_timeout_leaves_no_descendant_of_the_phase_module,
+    "features validation reads its schema and contract from the code it runs from": case_features_validation_reads_its_files_from_the_code_it_runs_from,
     "an export with a table outside the contract is refused": case_export_names_foreign_table,
     "dry run writes nothing and prints one plan": case_dry_run_writes_nothing,
     "a dry run with unreadable catalog state fails after printing the plan": case_dry_run_with_unreadable_catalog_state_fails,

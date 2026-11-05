@@ -40,8 +40,9 @@ from typing import Any
 from scripts.features import feature_schema
 from scripts.lakehouse import duckdb_bounds
 
-DEFAULT_SCHEMA = "/workspace/data_contracts/features/feature_schema.json"
-DEFAULT_CONTRACT = "/workspace/data_contracts/lakehouse/features_publish.json"
+REPO_ROOT = Path(__file__).resolve().parents[2]  # the code this module runs from: /workspace in the local container, <work>/code on the ECS task
+DEFAULT_SCHEMA = REPO_ROOT / "data_contracts/features/feature_schema.json"
+DEFAULT_CONTRACT = REPO_ROOT / "data_contracts/lakehouse/features_publish.json"
 SPINE = "int_hospital_spine"
 WINDOW_TABLE = feature_schema.WINDOW_TABLE
 INPUTS = "feature_build_inputs"
@@ -423,8 +424,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--schema", type=Path, default=Path(DEFAULT_SCHEMA))
-    parser.add_argument("--contract", type=Path, default=Path(DEFAULT_CONTRACT))
+    parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
+    parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument(
         "--suites", type=Path, nargs="*", default=[], help="suite folders of unexpected-rows expectations (data_contracts/great_expectations/features)"
     )
