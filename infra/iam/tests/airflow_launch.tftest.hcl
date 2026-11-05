@@ -149,7 +149,7 @@ run "airflow_launch_is_off_by_default" {
     condition = (
       length(aws_iam_role.airflow_launch_task) == 0 && length(aws_iam_role_policy.airflow_launch_jobs) == 0 &&
       length(aws_iam_role_policy.airflow_launch_records) == 0 && length(aws_iam_role_policy.airflow_launch_requests) == 0 &&
-      output.airflow_launch_roles == {}
+      length(aws_iam_role_policy.airflow_launch_bronze_record) == 0 && output.airflow_launch_roles == {}
     )
     error_message = "Without airflow_launch_prepared the IAM root adds no launch role and no launch grant."
   }
@@ -476,6 +476,42 @@ run "the_bronze_family_alone_adds_the_bronze_request_only" {
   assert {
     condition     = jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/bronze_request.json"]
     error_message = "The bronze family adds the bronze request key and not the serving request key."
+  }
+}
+
+run "no_bronze_record_grant_without_the_bronze_family" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["serve", "train"]
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.airflow_launch_bronze_record) == 0
+    error_message = "Without the bronze family the launch role holds no read grant on a bronze run record."
+  }
+}
+
+run "the_bronze_family_reads_only_the_bronze_run_record" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["bronze", "train"]
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.airflow_launch_bronze_record[0].role == aws_iam_role.airflow_launch_task[0].name &&
+      jsondecode(aws_iam_role_policy.airflow_launch_bronze_record[0].policy).Statement == [
+        {
+          Sid      = "ReadBronzeRunRecords"
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_runs/*/check.json"
+        }
+      ]
+    )
+    error_message = "The bronze family adds one get action on the run record name lakehouse/bronze_runs/<run>/check.json of the data bucket, with no list and no other key."
   }
 }
 

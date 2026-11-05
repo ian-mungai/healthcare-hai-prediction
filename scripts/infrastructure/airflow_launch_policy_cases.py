@@ -3,13 +3,14 @@
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
 families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
 instances, and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
-prefix. It holds nothing else.
+prefix. A role that may start the bronze family also reads the run record of each bronze run, ``lakehouse/bronze_runs/<run>/check.json``, as the job's
+evidence. It holds nothing else.
 
 The first check is closed: the permitted (action, resource, required conditions) triples of the role are written below as data, and every Allow statement
-of the three policies must be inside them. An action outside the set, a wildcard, a NotAction, a resource outside its triple or a missing required
+of the policies must be inside them. An action outside the set, a wildcard, a NotAction, a resource outside its triple or a missing required
 condition fails whatever the action is, so an unknown dangerous action fails by construction. The behavior cases and the fixed matrix below are extra checks.
 
-The three policies are one role, so every request is decided against all of them together. Each grant is checked against requests written here, apart from
+The policies are one role, so every request is decided against all of them together. Each grant is checked against requests written here, apart from
 the rendered policies. The refusals do not depend on the policy under inspection: a fixed list of actions is tried against a fixed list of resource
 classes, and only the intended pairs may be allowed. Every realistic widening of a policy (a dangerous action on a valid resource, a wider resource, a
 missing condition) must fail at least one request. Run from the repository root:
@@ -49,6 +50,7 @@ ROOT = Path(__file__).resolve().parents[2]
 JOBS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_jobs.json"
 RECORDS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_records.json"
 REQUESTS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_requests.json"
+BRONZE_RECORD_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_bronze_record.json"
 ENVIRONMENT = "dev"
 FAMILIES = ["bronze", "gold", "promote", "serve", "silver", "train"]
 RECORD_PREFIX = "lakehouse/launch_records/"
@@ -73,6 +75,8 @@ FAMILY_ROLES = {
 ALL_FAMILIES = sorted(FAMILY_ROLES)
 RECORDS = f"arn:aws:s3:::{BUCKET}/{RECORD_PREFIX}"
 STAGE = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs"
+BRONZE_RUNS = f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs"
+BRONZE_RECORD = f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/check.json"
 
 
 def definition(family: str, revision: str = "7") -> str:
@@ -336,6 +340,21 @@ def request_cases() -> list[tuple[Any, ...]]:
     ]
 
 
+def bronze_record_cases() -> list[tuple[Any, ...]]:
+    """The run record of a bronze run, read as the job's evidence. It exists because bronze is named. Only the record name is readable."""
+    return [
+        ("read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, True),
+        ("read another file of a bronze run", "s3:GetObject", f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/report.json", False),
+        ("read a check record outside a run folder", "s3:GetObject", f"{BRONZE_RUNS}/check.json", False),
+        ("read a check record under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs/silver/run/check.json", False),
+        ("read a bronze run record in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/bronze_runs/run/check.json", False),
+        ("write the run record of a bronze run", "s3:PutObject", BRONZE_RECORD, False, ONCE),
+        ("delete the run record of a bronze run", "s3:DeleteObject", BRONZE_RECORD, False),
+        ("read an earlier version of the run record", "s3:GetObjectVersion", BRONZE_RECORD, False),
+        ("list the bronze run records", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False, {"s3:prefix": ("lakehouse/bronze_runs/",)}),
+    ]
+
+
 def with_empty_context(rows: list[tuple[Any, ...]]) -> list[Case]:
     """Give every row the five fields of a case: a row without a context gets an empty one."""
     return [(row[0], row[1], row[2], row[3], row[4] if len(row) > 4 else {}) for row in rows]
@@ -388,6 +407,8 @@ RESOURCES = (
     Resource("staged bronze request", f"{STAGE}/bronze_request.json", GET, GET),
     Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
     Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
+    Resource("bronze run record", BRONZE_RECORD, GET, GET),
+    Resource("another file of a bronze run", f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/report.json", NONE, NONE),
     Resource("launch record", RECORD, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("claim record of a run", f"{RECORDS}20261030T100000Z-abcdef01/train/claim.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("decision record of a run", DECISION, frozenset({"s3:GetObject", "s3:PutObject"}), GET, frozenset({"s3:PutObject"})),
@@ -498,6 +519,7 @@ def train_only_cases() -> list[Case]:
         ("train only: pass the bronze role", "iam:PassRole", role("job_write_bronze_task"), False, pass_context),
         ("train only: read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", False, {}),
         ("train only: read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", False, {}),
+        ("train only: read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, False, {}),
         ("train only: create a launch record", "s3:PutObject", RECORD, True, ONCE),
     ]
 
@@ -530,6 +552,7 @@ WIDENING_ACTIONS = {
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
     "ListLaunchRecords": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
     "ReadStagedRequests": ("s3:PutObject", "s3:DeleteObject"),
+    "ReadBronzeRunRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
 }
 
 
@@ -572,7 +595,7 @@ def appended(document: dict[str, Any], statement: dict[str, Any]) -> dict[str, A
 
 def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
     """Named widenings that a reviewer could make by hand: the document each belongs to is the first field."""
-    jobs, records, requests = documents["jobs"], documents["records"], documents["requests"]
+    jobs, records, requests, bronze_record = documents["jobs"], documents["records"], documents["requests"], documents["bronze_record"]
     ssm = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter"
     pass_roles = next(item for item in jobs["Statement"] if item["Sid"] == "PassNamedJobRoles")["Resource"]
     definitions = [name.replace("_host:*", ":*") for name in next(item for item in jobs["Statement"] if item["Sid"] == "RunNamedHostJobs")["Resource"]]
@@ -700,6 +723,22 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ("jobs", "regression_action_wildcard", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:Delete*", "Resource": f"{ssm}{SIGNED}"})),
         ("requests", "ReadStagedRequests_every_input", replaced(requests, "ReadStagedRequests", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("requests", "ReadStagedRequests_any_object", replaced(requests, "ReadStagedRequests", Resource=[*request_resource, f"{bucket}/*"])),
+        (
+            "bronze_record",
+            "ReadBronzeRunRecords_every_file_of_a_run",
+            replaced(bronze_record, "ReadBronzeRunRecords", Resource=f"{bucket}/lakehouse/bronze_runs/*"),
+        ),
+        ("bronze_record", "ReadBronzeRunRecords_the_lakehouse", replaced(bronze_record, "ReadBronzeRunRecords", Resource=f"{bucket}/lakehouse/*")),
+        (
+            "bronze_record",
+            "ReadBronzeRunRecords_write_the_record",
+            replaced(bronze_record, "ReadBronzeRunRecords", Action=["s3:GetObject", "s3:PutObject"]),
+        ),
+        (
+            "bronze_record",
+            "ReadBronzeRunRecords_every_version",
+            replaced(bronze_record, "ReadBronzeRunRecords", Action=["s3:GetObject", "s3:GetObjectVersion"]),
+        ),
     ]
 
 
@@ -724,6 +763,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
     roles = tuple(sorted({role("job_execution"), *(role(FAMILY_ROLES[family]) for family in named)}))
     stage = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs"
     staged = (f"{stage}/code.sha256", f"{stage}/promotion_approval.json", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
+    staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs/*/check.json",) if "bronze" in named else ()
     tagged_tasks: Conditions = {"StringEquals": {"aws:ResourceTag/HaiJob": named}}
     return [
         Grant(
@@ -802,10 +842,13 @@ def allowlist_problems(documents: Role, families: list[str]) -> list[str]:
 
 
 def role_documents(directory: Path, families: list[str]) -> Role:
-    """The policies of one role, rendered from a folder of templates. The request policy exists only while bronze or serve is named."""
+    """The policies of one role, rendered from a folder of templates. The request policy exists only while bronze or serve is named, the bronze record
+    policy only while bronze is named."""
     documents = {"jobs": render(directory / JOBS_TEMPLATE.name, families), "records": render(directory / RECORDS_TEMPLATE.name, families)}
     if any(family in REQUEST_FILES for family in families):
         documents["requests"] = render(directory / REQUESTS_TEMPLATE.name, families)
+    if "bronze" in families:
+        documents["bronze_record"] = render(directory / BRONZE_RECORD_TEMPLATE.name, families)
     return documents
 
 
@@ -845,7 +888,7 @@ def allowlist_checks(label: str, documents: Role, families: list[str]) -> list[d
 def verify(output: Path, directory: Path = JOBS_TEMPLATE.parent) -> int:
     documents = role_documents(directory, FAMILIES)
     train_only = role_documents(directory, ["train"])
-    rows = with_empty_context(job_cases() + record_cases() + request_cases()) + matrix_cases()
+    rows = with_empty_context(job_cases() + record_cases() + request_cases() + bronze_record_cases()) + matrix_cases()
     checks = allowlist_checks("six family", documents, FAMILIES) + allowlist_checks("train only", train_only, ["train"])
     checks += evaluate_role(documents, rows)
     checks += evaluate_role(train_only, train_only_cases())
@@ -876,7 +919,7 @@ def verify(output: Path, directory: Path = JOBS_TEMPLATE.parent) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--policy-directory", type=Path, default=JOBS_TEMPLATE.parent, help="The folder with the three launch policy templates to inspect.")
+    parser.add_argument("--policy-directory", type=Path, default=JOBS_TEMPLATE.parent, help="The folder with the four launch policy templates to inspect.")
     arguments = parser.parse_args()
     return verify(arguments.output, arguments.policy_directory)
 

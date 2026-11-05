@@ -1,5 +1,5 @@
 variable "airflow_launch_prepared" {
-  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest, the job logs and the record of the signed first publishes, and write each launch record once under its own prefix."
+  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest, the job logs and the record of the signed first publishes, read the run record of each bronze run when bronze is named, and write each launch record once under its own prefix."
   type        = bool
   default     = false
   nullable    = false
@@ -109,6 +109,16 @@ resource "aws_iam_role_policy" "airflow_launch_requests" {
   name   = "airflow_launch_requests"
   role   = aws_iam_role.airflow_launch_task[0].name
   policy = templatefile("${path.module}/owner_policies/airflow_launch_requests.json", local.airflow_launch_policy_values)
+}
+
+# The bronze check container writes lakehouse/bronze_runs/<run>/check.json once. The launch mode reads it as the bronze job's evidence: the table snapshots
+# and the objects the run loaded. Only a launch role that may start the bronze family can read it, and only that record name.
+resource "aws_iam_role_policy" "airflow_launch_bronze_record" {
+  count = var.airflow_launch_prepared && contains(var.airflow_launch_families, "bronze") ? 1 : 0
+
+  name   = "airflow_launch_bronze_record"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_bronze_record.json", local.airflow_launch_policy_values)
 }
 
 output "airflow_launch_roles" {
