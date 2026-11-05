@@ -33,8 +33,9 @@ from scripts.process import TimeoutExpired, run_command
 
 yaml: Any = importlib.import_module("yaml")
 
-# The lineage worker compiles and parses every model. The whole check took 49 s on the development Mac, and the worker passed 90 s on a hosted runner.
-LINEAGE_WORKER_SECONDS = 300
+# The lineage worker compiles and parses every model. The whole check takes about 49 s alone on the development Mac,
+# but 225 to 265 s inside full local CI, where other groups run in parallel, and it passed 300 s there once.
+LINEAGE_WORKER_SECONDS = 600
 ROOT = Path(__file__).resolve().parents[2]
 DOCUMENT = "docs/quality_checks.md#model-metadata"
 DBT_DIRECTORY = "dbt"
