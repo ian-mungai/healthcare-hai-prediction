@@ -6,8 +6,9 @@
 locals {
   # Resizing the host is an administrator change: edit these, then plan and apply this stack; the Auto Scaling group below
   # takes the new template version through an instance refresh. Graviton only: the images are arm64.
-  host_instance_type  = "r7g.xlarge"
-  host_root_volume_gb = 30
+  host_instance_type = "r7g.xlarge"
+  # The root volume holds every service and job image and cannot grow without a new instance, so it is sized for the images.
+  host_root_volume_gb = 80
   platform_vpc_cidr   = "10.40.0.0/16"
   data_mount_path     = "/data"
 
@@ -22,13 +23,19 @@ locals {
   # The boot script bounds every wait and joins the cluster only after the data volume is mounted. The data volume and
   # Elastic IP belong to the platform stack, which applies later, so the script finds each by its Name and Project tags.
   data_volume_name = format(local.platform_name, "host_data")
+  # The scratch volume is a second volume of the platform stack, mounted under the data mount at the folder the job task volumes use.
+  scratch_volume_name = format(local.platform_name, "host_scratch")
+  scratch_mount_path  = "${local.data_mount_path}/job_scratch"
   host_user_data = templatefile("${path.module}/host_boot.sh.tftpl", {
-    region           = var.aws_region
-    mount_path       = local.data_mount_path
-    cluster_name     = local.cluster_name
-    data_volume_name = local.data_volume_name
-    address_name     = local.host_name
-    project_tag      = local.platform_project_tag
+    region              = var.aws_region
+    mount_path          = local.data_mount_path
+    cluster_name        = local.cluster_name
+    data_volume_name    = local.data_volume_name
+    scratch_volume_name = local.scratch_volume_name
+    scratch_path        = local.scratch_mount_path
+    address_name        = local.host_name
+    project_tag         = local.platform_project_tag
+    job_firewall_rules  = file("${path.module}/host_job_firewall.nft")
   })
 }
 
