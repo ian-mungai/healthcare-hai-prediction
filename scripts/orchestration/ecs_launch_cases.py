@@ -1148,7 +1148,7 @@ def every_send_guarded(order: list[str]) -> bool:
 
 
 SDK_TASK = {"taskArn": f"arn:aws:ecs:us-east-1:{ACCOUNT}:task/{CLUSTER}/{'c' * 32}", "lastStatus": "PROVISIONING", "containers": []}
-SDK_NOT_LISTED = {"ListTasks": [{"taskArns": []}]}  # ECS documents no listing guarantee: the accepted task is not listed yet
+SDK_NOT_LISTED: dict[str, list[Any]] = {"ListTasks": [{"taskArns": []}]}  # ECS documents no listing guarantee: the accepted task is not listed yet
 
 
 def sdk_retries_never_hide_an_accepted_send() -> None:
