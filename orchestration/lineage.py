@@ -274,9 +274,13 @@ class Outbox:
     def _upgrade_events(self) -> None:
         """Create and upgrade the events table under one write lock so concurrent openers never add a column twice.
 
-        BEGIN IMMEDIATE takes the write lock before the column read; a second opener waits for it up to the
-        connection timeout (1 s, far above the few milliseconds the upgrade holds it) and then sees the columns.
+        An outbox that already has every column needs no lock: a delivery can hold the write lock for seconds, and a
+        reader must still open. Otherwise BEGIN IMMEDIATE takes the write lock before the column read; a second opener
+        waits for it up to the connection timeout (1 s, far above the few milliseconds the upgrade holds it) and then
+        reads the columns again.
         """
+        if {"om_state", "om_result"} <= self._event_columns():
+            return
         self.connection.execute("BEGIN IMMEDIATE")
         if not self.connection.in_transaction:
             raise LineageError("outbox schema upgrade did not open its transaction")
@@ -284,7 +288,7 @@ class Outbox:
             self.connection.execute(
                 "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, sequence INTEGER NOT NULL, acked INTEGER NOT NULL DEFAULT 0)"
             )
-            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
+            columns = self._event_columns()
             if "om_state" not in columns:
                 self.connection.execute("ALTER TABLE events ADD COLUMN om_state INTEGER NOT NULL DEFAULT 0")
             if "om_result" not in columns:
@@ -293,6 +297,10 @@ class Outbox:
         except BaseException:
             self.connection.rollback()
             raise
+
+    def _event_columns(self) -> set[str]:
+        """Return the column names of the events table, empty when the table does not exist yet."""
+        return {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
 
     def _set_query_deadline(self, deadline: float | None) -> None:
         """Install or clear the VM progress fence for this connection."""

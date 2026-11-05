@@ -299,13 +299,17 @@ def concurrent_open() -> None:
             database = Path(folder) / f"outbox_{round_number}.sqlite"
             barrier = threading.Barrier(openers, timeout=5)
 
-            def open_outbox(path: Path = database, gate: threading.Barrier = barrier) -> None:
-                gate.wait()
+            opened: list[str] = []
+
+            def open_outbox(path: Path = database, gate: threading.Barrier = barrier, done: list[str] = opened) -> None:
                 try:
+                    gate.wait()
                     with lineage.Outbox(path) as box:
                         box.pending(1)
-                except (sqlite3.Error, LookupError) as error:
+                except (threading.BrokenBarrierError, sqlite3.Error, lineage.LineageError, OSError, LookupError) as error:
                     failures.append(f"{type(error).__name__}: {error}")
+                else:
+                    done.append(threading.current_thread().name)
 
             threads = [threading.Thread(target=open_outbox, name=f"outbox-opener-{index}") for index in range(openers)]
             for thread in threads:
@@ -313,11 +317,33 @@ def concurrent_open() -> None:
             for thread in threads:
                 thread.join(timeout=10)
             require(not any(thread.is_alive() for thread in threads), "a concurrent outbox opener did not finish within its bound")
+            require(len(opened) == openers, f"round {round_number}: {len(opened)} of {openers} concurrent openers succeeded")
             with lineage.Outbox(database) as box:
                 columns = {row[1] for row in box.connection.execute("PRAGMA table_info(events)")}
             require({"om_state", "om_result"} <= columns, "concurrent openers left the outbox without its delivery columns")
     OBSERVED["concurrent_open"] = {"openers": openers, "rounds": rounds, "failures": len(failures)}
     require(not failures, f"concurrent outbox openers failed: {failures[:3]}")
+
+
+def reopen_while_writing() -> None:
+    """Reopen an outbox whose columns already exist while another connection holds its write lock, as during a delivery."""
+    with tempfile.TemporaryDirectory() as folder:
+        database = Path(folder) / "outbox.sqlite"
+        with lineage.Outbox(database):
+            pass
+        writer = sqlite3.connect(database, timeout=1)
+        try:
+            writer.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            with lineage.Outbox(database) as box:
+                pending = box.pending(1)
+            waited = time.monotonic() - started
+        finally:
+            writer.rollback()
+            writer.close()
+    OBSERVED["reopen_while_writing"] = {"waited_seconds": round(waited, 3)}
+    require(pending == [], "a reopened outbox read events from an empty table")
+    require(waited < 0.5, f"a reopen waited {waited:.3f} s for a write lock it does not need")
 
 
 def automatic_collection() -> None:
@@ -802,6 +828,7 @@ CASES = {
     "declared_retention": declared_retention,
     "sql_deadline": sql_deadline,
     "concurrent_open": concurrent_open,
+    "reopen_while_writing": reopen_while_writing,
     "automatic_collection": automatic_collection,
     "independent_delivery": independent_delivery,
     "spool_permissions": spool_permissions,
