@@ -360,8 +360,12 @@ def run(output: Path, plugin_directory: Path | None, source: Path = stack.STACK)
         for name, file, mutate in DEFECTS if proved else []:
             planted = output / f"defect_{len(report['defects'])}"
             shutil.copytree(base, planted, ignore=shutil.ignore_patterns("plan.bin"))
-            (planted / file).write_text(mutate((planted / file).read_text(encoding="utf-8")), encoding="utf-8")
-            found = checks(planted, output, f"defect_{len(report['defects'])}")
+            try:
+                (planted / file).write_text(mutate((planted / file).read_text(encoding="utf-8")), encoding="utf-8")
+                found = checks(planted, output, f"defect_{len(report['defects'])}")
+            finally:
+                # Each copy holds the provider binary; keep one at a time so the hosted runner's disk does not fill.
+                shutil.rmtree(planted, ignore_errors=True)
             caught = {kind: items[:2] for kind, items in found.items() if items}
             report["defects"].append({"defect": name, "caught": bool(caught), "caught_by": caught})
     finally:
