@@ -394,6 +394,23 @@ run "thread_count_can_be_lowered" {
   }
 }
 
+run "the_features_build_keeps_two_threads_on_the_host" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = (
+      one([for container in jsondecode(output.host_container_definitions["features"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "2" &&
+      one([for container in jsondecode(output.host_container_definitions["silver"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "3" &&
+      one([for container in jsondecode(output.host_container_definitions["gold"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "3"
+    )
+    error_message = "On the host the features build keeps the two threads it needs for its DuckDB memory, and the silver and gold builds take the host cap of three."
+  }
+}
+
 run "run_task_and_dispatch_contract" {
   command = plan
 

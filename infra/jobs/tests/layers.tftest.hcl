@@ -310,6 +310,28 @@ run "every_layer_container_names_its_duckdb_spill_folder_and_cap" {
   }
 }
 
+run "the_features_build_runs_two_threads_and_the_other_layers_keep_four" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
+      for container in jsondecode(output.layer_phase_containers[layer]) : (
+        [for item in container.environment : item.value if item.name == "JOB_THREADS"] == [layer == "features" && container.name == "build" ? "2" : "4"]
+      )
+    ])])
+    error_message = "The features build ran out of DuckDB memory at four threads on Fargate, so only that container runs two threads. Every other container of every layer, and the silver and gold builds, keep four."
+  }
+
+  assert {
+    condition     = one([for container in jsondecode(output.layer_phase_containers["features"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "2"
+    error_message = "The features build container sets JOB_THREADS to 2."
+  }
+}
+
 run "a_single_layer_can_be_enabled_first" {
   command = plan
 

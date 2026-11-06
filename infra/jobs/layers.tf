@@ -166,7 +166,8 @@ locals {
             { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
             { name = "SPARK_JOB_MEMORY", value = "10g" },
             { name = "DUCKDB_MEMORY_LIMIT", value = "12GB" },
-            { name = "JOB_THREADS", value = "4" },
+            # The features build ran out of DuckDB memory at four threads on Fargate; the host rewrite changes only a value of "4", so it keeps the 2.
+            { name = "JOB_THREADS", value = layer == "features" && step.name == "build" ? "2" : "4" },
             { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
             { name = "HAI_DUCKDB_TEMP_DIRECTORY", value = "/workspace/duckdb_spill" },
             { name = "HAI_DUCKDB_MAX_TEMP_BYTES", value = tostring(local.layer_duckdb_spill_bytes) },
