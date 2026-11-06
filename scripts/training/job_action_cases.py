@@ -331,6 +331,8 @@ class FileTracking:
         self.lose_create: int | None = None
         self.models: dict[str, dict[str, Any]] = {}
         self.location = "mlflow-artifacts:/0"
+        self.hold_alias = False
+        self.pending: list[tuple[str, str, str]] = []
 
     def enter(self, call: str) -> None:
         """Record a call and fail it when the case asks for that failure."""
@@ -449,7 +451,21 @@ class FileTracking:
 
     def set_registered_model_alias(self, name: str, alias: str, version: str) -> None:
         self.enter("set_registered_model_alias")
+        if self.hold_alias:
+            self.hold_alias = False
+            self.pending.append((name, alias, version))
+            raise ConnectionError("synthetic read timeout; the server accepted the alias request and has not committed it")
         self.models[name]["aliases"][alias] = version
+
+    def deliver_pending(self) -> None:
+        """Commit the alias requests the server accepted earlier, the way a request handler that outlived its caller does."""
+        for name, alias, version in self.pending:
+            self.models[name]["aliases"][alias] = version
+        self.pending.clear()
+
+    def drop_pending(self) -> None:
+        """End the server process: a request it accepted and did not commit never commits."""
+        self.pending.clear()
 
     def get_model_version_by_alias(self, name: str, alias: str) -> SimpleNamespace:
         self.enter("get_model_version_by_alias")

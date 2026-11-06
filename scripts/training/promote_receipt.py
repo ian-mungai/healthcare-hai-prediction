@@ -6,9 +6,11 @@ model lease (``promote_lease``) gives the run its exclusive right to move the mo
 - ``intent.json`` is written before the alias moves. It names the promotion (schema, run, model, version, mode) and the version production held when the
   promotion started. A retry in a new task reads it instead of observing production again, so the true ``previous_version`` survives a crash between the
   alias move and the receipt.
+- ``attempt.json`` is written once, immediately before the alias request is sent, and only the call that created it sends the request. A retry that finds it
+  knows an earlier attempt may have sent the request, and sends nothing (``promote.start_attempt``).
 - ``promote.json`` is the receipt. It is the intent's promotion with the intent's ``previous_version``, and it is the only completion record. A second write
   keeps the first receipt and accepts only the same bytes.
-- ``abandoned.json`` is written by the owner (``promote_lease resolve``) for a run that will never finish. The run then refuses to start again.
+- ``abandoned.json`` is written by the owner (``promote_owner resolve``) for a run that will never finish. The run then refuses to start again.
 
 Absence is decided by an explicit prefix listing (``records_of``), never by a failed read: S3 answers a missing key with 403 instead of 404 when the role
 cannot list, and a refused read is not evidence. A key is read only after the listing showed it.
@@ -25,6 +27,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 PREFIX = "promote"
 RECORD = "promote.json"
 INTENT = "intent.json"
+ATTEMPT = "attempt.json"
 ABANDONED = "abandoned.json"
 MAX_PAGES = 50
 EXISTS = ("PreconditionFailed", "ConditionalRequestConflict")
@@ -123,6 +126,22 @@ def open_intent(client: Any, bucket: str, run: str, request: Mapping[str, Any], 
     if any(intent[name] != request[name] for name in PROMOTION_FIELDS):
         raise RequestConflict(f"{key} records another promotion than this request")
     return intent, False
+
+
+def open_attempt(client: Any, bucket: str, run: str, request: Mapping[str, Any]) -> bool:
+    """Store the attempt record once and return True only when this call created it.
+
+    A write whose reply was lost is read back. The stored record then cannot be told from an earlier attempt's, so the answer is False and the caller sends
+    nothing. A record that is not stored raises ReceiptError.
+    """
+    key = key_of(run, ATTEMPT)
+    try:
+        return put_once(client, bucket, key, canonical(request))
+    except Uncertain:
+        pass
+    if read(client, bucket, key) is None:
+        raise ReceiptError(f"{key} was not stored and does not exist")
+    return False
 
 
 def list_keys(client: Any, bucket: str, prefix: str) -> list[str]:

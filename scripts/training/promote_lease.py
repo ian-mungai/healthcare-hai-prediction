@@ -14,28 +14,20 @@ A run takes the lease by listing the model prefix and creating the next generati
 lists again: it refuses while the lease is held, and takes the next generation when the winner has already closed it. The same run ID finding its own held
 lease resumes it, so a retry in a fresh task continues from its intent. A different run is refused (``Busy``) and never reads or writes the registry.
 
-No timer proves a run dead, so a lease is never taken over by age. The lease of a run that will never return is closed by the owner with ``resolve``:
-
-1. Stop every sender of the run (the ECS task and the Airflow retry) and read the registry. ``show`` prints the lease, the run's records and the intent
-   (``python -m scripts.training.promote_lease show --model <model>``, with DATA_BUCKET_NAME set).
-2. If the run can simply be retried, retry it. It resumes its lease and finishes, so no resolution is needed.
-3. Otherwise run ``python -m scripts.training.promote_lease resolve --model <model> --run <run> --owner <name> --reason <text>``. It refuses when the
-   run holds no lease or already has a receipt. It writes ``promote/<run>/abandoned.json`` first, so the run refuses to start again, then closes the
-   generation. The owner reconciles the production alias by hand, and the next promotion then observes whatever production names.
+No timer proves a run dead, so a lease is never taken over by age. The lease of a run that will never return is closed by the owner with ``resolve``, which
+restarts the MLflow service first and records the production alias (``resolve`` here takes the restart and the alias read as calls; the owner command is
+``promote_owner``, whose docstring has the steps). A run that sent its alias request and did not see it commit cannot be retried: its retry fails with
+``promotion_needs_resolution`` and keeps the lease, because the MLflow server can still commit the earlier request (see ``promote``).
 
 The library calls no process and starts no thread. Every S3 call has the client's connect and read limits.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import re
-import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from scripts.training import promote_receipt
@@ -159,10 +151,15 @@ def held(client: Any, bucket: str, model: str) -> Lease | None:
     return Lease(model, latest, holder_of(client, bucket, model, latest)["run_id"])
 
 
-def resolve(client: Any, bucket: str, model: str, run: str, owner: str, reason: str, at: str) -> Lease:
+def resolve(
+    client: Any, bucket: str, model: str, run: str, owner: str, reason: str, at: str, restart: Callable[[], None], alias: Callable[[], str | None]
+) -> Lease:
     """Close the held lease of a run the owner has stopped for good, and fence the run so it never starts again.
 
-    Raises ReceiptError when the model is free, another run holds it, or the run already stored its receipt (a retry of the run closes its own lease).
+    ``restart`` restarts the MLflow service and returns only when every task that ran before is stopped and the new deployment is complete. It runs before
+    anything is recorded, so no request the old server accepted can commit after the close. ``alias`` then reads the production alias, which the fence records.
+    Either raises ReceiptError, and the lease stays held. Raises ReceiptError too when the model is free, another run holds it, or the run already stored its
+    receipt (a retry of the run closes its own lease).
     """
     lease = held(client, bucket, model)
     if lease is None:
@@ -171,7 +168,9 @@ def resolve(client: Any, bucket: str, model: str, run: str, owner: str, reason: 
         raise ReceiptError(f"the lease of {model} is held by run {lease.run_id}, not {run}")
     if promote_receipt.RECORD in promote_receipt.records_of(client, bucket, run):
         raise ReceiptError(f"run {run} stored its receipt. Retry it and it closes its own lease")
-    details = {"owner": owner, "reason": reason, "resolved_at": at}
+    restart()
+    production = alias()
+    details = {"owner": owner, "reason": reason, "resolved_at": at, "production_alias": production or "none"}
     fence = promote_receipt.canonical({"schema": 1, "run_id": run, "model": model, "generation": lease.generation, "outcome": "abandoned", **details})
     promote_receipt.put_once(client, bucket, promote_receipt.key_of(run, promote_receipt.ABANDONED), fence)
     close(client, bucket, lease, "abandoned", **details)
@@ -188,37 +187,3 @@ def report(client: Any, bucket: str, model: str) -> dict[str, Any]:
         intent = promote_receipt.stored_intent(client, bucket, lease.run_id) if promote_receipt.INTENT in names else None
         shown["held"] = {"generation": lease.generation, "run_id": lease.run_id, "lease": lease.key, "records": names, "intent": intent}
     return shown
-
-
-def main(arguments: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
-    """Show or resolve the lease of a model. Exit 0 on success, 2 on a refusal."""
-    parser = argparse.ArgumentParser(prog="promote_lease", description=__doc__.splitlines()[0] if __doc__ else None)
-    commands = parser.add_subparsers(dest="command", required=True)
-    shown = commands.add_parser("show", help="print the lease of a model and the records of its holder")
-    resolved = commands.add_parser("resolve", help="close the lease of a run that will never finish and fence the run")
-    for command in (shown, resolved):
-        command.add_argument("--model", required=True)
-    resolved.add_argument("--run", required=True)
-    resolved.add_argument("--owner", required=True)
-    resolved.add_argument("--reason", required=True)
-    options = parser.parse_args(arguments)
-    bucket = (os.environ if environ is None else environ).get("DATA_BUCKET_NAME", "")
-    if not bucket:
-        sys.stderr.write("DATA_BUCKET_NAME is not set\n")
-        return 2
-    client = promote_receipt.s3_client()
-    try:
-        if options.command == "show":
-            sys.stdout.write(json.dumps(report(client, bucket, options.model), sort_keys=True) + "\n")
-        else:
-            at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            lease = resolve(client, bucket, options.model, options.run, options.owner, options.reason, at)
-            sys.stdout.write(json.dumps({"resolved": lease.key, "run_id": options.run, "outcome": "abandoned"}, sort_keys=True) + "\n")
-    except ReceiptError as error:
-        sys.stderr.write(f"{error}\n")
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

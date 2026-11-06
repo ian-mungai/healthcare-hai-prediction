@@ -10,9 +10,14 @@ never touches the registry, whatever its timing. Only the holder observes produc
 
 Before the alias moves, the action stores the intent of the run in the data bucket (``promote_receipt``). A retry in a new task finds its own lease, reads that
 intent and so keeps the version production held before the first attempt. A retry that finds the receipt of the run returns it and changes nothing, whatever
-production names now. Otherwise the action moves the alias only when production still names the version before the promotion, finishes without a move when
-it already names the promoted version and refuses any other state with the lease still held. A request that differs from the stored intent is refused before
-any registry write. A run the owner abandoned (``promote_lease resolve``) is refused.
+production names now. Otherwise, when production already names the promoted version, the action finishes without a move. A request that differs from the
+stored intent is refused before any registry write. A run the owner abandoned (``promote_owner resolve``) is refused.
+
+The alias request is sent at most once per run (``start_attempt``). The MLflow server can commit a request after the task that sent it ended, so a request that
+was sent and not seen to commit may still move production later, after the lease closed and another run promoted. The create-only attempt record is written
+before the request, and only the call that created it sends. A retry that finds the record while production still names the version before the promotion cannot
+tell a request that never arrived from a pending one. It sends nothing, keeps the lease and fails with ``promotion_needs_resolution`` until the owner resolves
+the run, which restarts the MLflow service first. Automatic promotions of that model stay blocked until then.
 """
 
 from __future__ import annotations
@@ -90,7 +95,8 @@ def hold(client: Any, bucket: str, request: Mapping[str, Any]) -> promote_lease.
     except promote_lease.Busy as busy:
         raise JobFailure(
             "promotion_busy",
-            f"{busy}. Production was not changed. Retry run {busy.holder} to finish it, or the owner resolves it with promote_lease",
+            f"{busy}. Production was not changed. Retry run {busy.holder} to finish it. If that retry reports promotion_needs_resolution, "
+            "the owner resolves it with promote_owner",
         ) from None
     except promote_receipt.ReceiptError as error:
         raise JobFailure("promotion_lease_failed", f"{error}. Production was not changed") from None
@@ -117,7 +123,23 @@ def inspect(store: Any, request: Mapping[str, Any]) -> str | None:
     return None if current is None else str(current.version)
 
 
-def reconcile(store: Any, request: Mapping[str, Any], intent: Mapping[str, Any], observed: str | None) -> bytes:
+def start_attempt(client: Any, bucket: str, request: Mapping[str, Any], observed: str | None) -> None:
+    """Record that the alias request is about to be sent, or fail closed when an earlier attempt of the run may already have sent it."""
+    run = str(request["run_id"])
+    try:
+        first = promote_receipt.open_attempt(client, bucket, run, request)
+    except promote_receipt.ReceiptError as error:
+        raise JobFailure("promotion_attempt_failed", f"{error}. Production was not changed") from None
+    if not first:
+        raise JobFailure(
+            "promotion_needs_resolution",
+            f"run {run} sent its alias request in an earlier attempt and production still names {observed or 'no version'}, so that request may still commit. "
+            f"This task sent nothing and the lease of {request['model']} stays held. The owner resolves it: python -m scripts.training.promote_owner resolve "
+            f"--model {request['model']} --run {run} --owner <name> --reason <text>",
+        )
+
+
+def reconcile(client: Any, bucket: str, store: Any, request: Mapping[str, Any], intent: Mapping[str, Any], observed: str | None) -> bytes:
     """Bring the registry to the promotion the request names, from the intent and the version production names, and return the receipt bytes."""
     name, number, run = request["model"], request["version"], str(request["run_id"])
     previous = intent["previous_version"]
@@ -125,6 +147,7 @@ def reconcile(store: Any, request: Mapping[str, Any], intent: Mapping[str, Any],
         raise JobFailure("promotion_conflict", f"production names {observed or 'no version'}, not {previous or 'no version'} (before) or {number}")
     if previous != number:
         if observed != number:
+            start_attempt(client, bucket, request, observed)
             store.set_registered_model_alias(name, registry.CHAMPION_ALIAS, number)
         store.set_model_version_tag(name, number, PROMOTED_TAG, run)
     return promote_receipt.canonical({**request, "previous_version": previous})
@@ -152,7 +175,7 @@ def run(context: Any, record: Mapping[str, Any]) -> None:
                 inspect(store, request)
                 hold(client, bucket, request)
                 observed = inspect(store, request)
-                receipt = reconcile(store, request, settle(client, bucket, request, observed), observed)
+                receipt = reconcile(client, bucket, store, request, settle(client, bucket, request, observed), observed)
             except (JobFailure, ImportError):
                 raise
             except run_tracking.TrackingError as error:
