@@ -169,6 +169,7 @@ ROWS: list[Row] = [
         PLATFORM_DEFAULT_LOG_GROUPS,
         (["mlflow"], [*PLATFORM_DEFAULT_LOG_GROUPS, "unreviewed_group"], PLATFORM_LOG_GROUPS[1:]),
     ),
+    Row("platform", "scratch_volume_gb", 120, "120", 60, (0, -1, 1025, 2048, 1.5, 0.5, True, None)),
     *flags(
         "services",
         "model_api_enabled",
@@ -381,6 +382,13 @@ def completeness() -> dict[str, bool]:
     checks["the platform contract allows exactly the listed repositories and log groups"] = (
         schema.get("ecr_repositories", {}).get("items", {}).get("enum") == PLATFORM_REPOSITORIES
         and schema.get("log_groups", {}).get("items", {}).get("enum") == PLATFORM_LOG_GROUPS
+    )
+    size = re.search(r'variable "scratch_volume_gb" \{.*?>= (\d+) && var\.scratch_volume_gb <= (\d+)', platform, re.S)
+    contract = schema.get("scratch_volume_gb", {})
+    checks["the scratch size bounds of the platform contract equal the Terraform validation"] = (
+        size is not None
+        and contract.get("type") == "integer"
+        and (contract.get("minimum"), contract.get("maximum")) == (int(size.group(1)), int(size.group(2)))
     )
     return checks
 
@@ -700,6 +708,48 @@ def launch_wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
+def scratch_size_cases(workspace: Workspace) -> dict[str, bool]:
+    """The reviewed scratch volume size through the renderer and the wrapper: its bounds, and a saved plan that must carry exactly the reviewed size."""
+    checks: dict[str, bool] = {}
+    stack, name = "platform", "scratch_volume_gb"
+    siblings = [row for row in ROWS if row.stack == stack]
+    off = {row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None}
+    for size in (1, 60, 120, 1024):
+        workspace.clear(stack)
+        result = workspace.run(stack, {name: size})
+        checks[f"scratch size {size} GiB: the bounded whole number renders exactly"] = (
+            result.returncode == 0 and (workspace.written(stack) or {}).get(name) == size
+        )
+    workspace.clear(stack)
+    result = workspace.wrapper(stack, {name: 120})
+    checks["wrapper platform: a reviewed 120 GiB scratch size is rendered and plan runs"] = (
+        result.returncode == 0 and (workspace.written(stack) or {}).get(name) == 120
+    )
+    invalid: tuple[Any, ...] = (0, 1025, 1.5, "120")
+    for refused_size in invalid:
+        workspace.clear(stack)
+        result = workspace.wrapper(stack, {name: refused_size})
+        checks[f"wrapper platform: scratch size {refused_size!r} is refused before terraform"] = result.returncode == 2 and workspace.written(stack) is None
+    workspace.clear(stack)
+    workspace.run(stack, {name: 120})
+    rendered = dict(workspace.written(stack) or {})
+    directory = f"-chdir={workspace.root / STACKS[stack]}"
+    for planned, accepted in ((120, True), (60, False), (100, False), (1024, False)):
+        workspace.plan.write_text(json.dumps(plan_document({**rendered, name: planned}, off)))
+        result = workspace.run(stack, {name: 120}, "--check-plan", str(workspace.plan))
+        checks[f"scratch size plan {planned} against reviewed 120: the renderer {'accepts' if accepted else 'refuses'} it"] = (
+            result.returncode == 0 if accepted else result.returncode == 2 and "Saved plan inputs differ" in result.stderr
+        )
+        workspace.calls.unlink(missing_ok=True)
+        result = workspace.wrapper(stack, {name: 120}, "apply", str(workspace.plan))
+        show = [directory, "show", "-json", str(workspace.plan)]
+        expected = [show, [directory, "apply", "-input=false", str(workspace.plan)]] if accepted else [show]
+        checks[f"scratch size plan {planned} against reviewed 120: the wrapper {'applies' if accepted else 'stops before apply for'} it"] = (
+            result.returncode == (0 if accepted else 2) and workspace.called() == expected
+        )
+    return checks
+
+
 def run(output: Path) -> dict[str, dict[str, bool]]:
     results: dict[str, dict[str, bool]] = {"completeness": completeness()}
     with tempfile.TemporaryDirectory(prefix="activation_inputs_") as folder:
@@ -715,6 +765,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["plans"] = plans
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
+        results["scratch_size"] = scratch_size_cases(workspace)
         results["committed_defaults"] = {name: ok for row in COMMITTED_DEFAULTS for name, ok in committed_default_cases(workspace, row).items()}
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")

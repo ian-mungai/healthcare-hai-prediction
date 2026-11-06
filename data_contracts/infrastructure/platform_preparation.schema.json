@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Reviewed platform preparation inputs",
-  "description": "Nonsecret inputs of the platform stack, bound to a reviewed byte digest: the monitoring and serving switches and the reviewed additions to its repositories and log groups. Each list keeps every committed default.",
+  "description": "Nonsecret inputs of the platform stack, bound to a reviewed byte digest: the monitoring and serving switches, the scratch volume size and the reviewed additions to its repositories and log groups. Each list keeps every committed default.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,6 +25,12 @@
         },
         "serving_enabled": {
           "type": "boolean"
+        },
+        "scratch_volume_gb": {
+          "description": "Size in GiB of the host's scratch volume: a whole number from 1 to 1024, the bounds of the Terraform variable. A new size replaces the volume with an empty one.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
         },
         "ecr_repositories": {
           "description": "The full repository set: every committed default and only the reviewed additions of the training, drift and catalog owner steps.",
