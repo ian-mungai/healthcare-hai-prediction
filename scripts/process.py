@@ -3,8 +3,10 @@
 Every call resolves the program to a full path, passes a list of arguments (never a shell string), closes stdin and
 applies a timeout. A top-level call starts the program in a new session (``setsid``), which it leads; the call names it to its descendants with
 ``PROCESS_LAUNCH_SESSION=1``. At the deadline, or when the caller is interrupted, every member of that session stops: the call lists the live
-processes (``ps -A -o pid=,ppid=,stat=``; macOS ``pgrep`` has no session option and its ``ps`` shows the session as 0) and signals those whose
-``os.getsid`` is the session: every member is frozen (SIGSTOP), then gets KILL, then a check that no member is left. A frozen member never runs again, so
+processes and signals those whose ``os.getsid`` is the session. The listing reads the kernel's process table (``/proc/<pid>/stat``) when the platform has
+one, because a job image can have no ``ps``; a platform without it (macOS) runs ``ps -A -o pid=,ppid=,pgid=,stat=,lstart=`` (macOS ``pgrep`` has no session
+option and its ``ps`` shows the session as 0). A table that cannot be read fails the listing, as a ``ps`` that cannot run does. Every member is frozen
+(SIGSTOP), then gets KILL, then a check that no member is left. A frozen member never runs again, so
 its TERM handler cannot fork a child into a new session during the stop; a session stop therefore gives no grace period (a stopped Terraform can leave
 its state lock and Git its ``index.lock``). A call made inside such a session (a nested
 launch, whose environment carries the variable) stays in that session: it starts its program in a new process group and stops only that group at its
@@ -86,6 +88,11 @@ POLL_SECONDS = 0.05
 SESSION_VARIABLE = "PROCESS_LAUNCH_SESSION"
 # The command that lists every live process with its parent, process group, state and start time, and the seconds it may take.
 SESSION_LISTING = ("ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,lstart=")
+# The folder of the kernel's process table. Where ``PROC_ROOT/self/stat`` exists the session listing reads the table and starts no ``ps``: the job images
+# (python:3.12-slim) have no ``ps``. The choice is the capability, not the platform name, so a Linux host without a mounted table, and macOS, run ``ps``.
+PROC_ROOT = "/proc"
+# The 20th field after the command name in ``PROC_ROOT/<pid>/stat`` (proc(5) field 22) is the start time, in clock ticks since boot.
+PROC_START_FIELD = 19
 # Where a bare listing program is looked for when PATH does not hold it. A caller may limit PATH (the launcher E2E does, to test the Docker lookup), and
 # the stop of a launch must not fail for that. A program named with a path, or one these folders do not hold, is looked up as before.
 SYSTEM_PROGRAM_FOLDERS = ("/bin", "/usr/bin")
@@ -308,6 +315,52 @@ class ProcessRow(NamedTuple):
 
 
 def list_processes() -> list[ProcessRow]:
+    """Every live process, from the process table when the platform has one and from ``SESSION_LISTING`` otherwise. Raises ``SessionListingFailed``."""
+    if os.path.exists(f"{PROC_ROOT}/self/stat"):
+        return list_table_processes()
+    return list_ps_processes()
+
+
+def parse_proc_stat(pid: int, text: str) -> ProcessRow:
+    """The row of a process from the text of ``PROC_ROOT/<pid>/stat``: ``pid (name) state ppid pgrp session ... starttime ...``.
+
+    The name is the one field that can hold spaces, parentheses and newlines, so the fields after it start after the last ``)``. Raises
+    ``SessionListingFailed`` for text that is not such a record.
+    """
+    head, closing, tail = text.rpartition(")")
+    fields = tail.split()
+    numbers = [fields[1], fields[2], fields[3], fields[PROC_START_FIELD]] if len(fields) > PROC_START_FIELD else []
+    if not closing or not head.startswith(f"{pid} (") or not numbers or not all(number.isascii() and number.isdigit() for number in numbers):
+        raise SessionListingFailed(f"{PROC_ROOT}/{pid}/stat is not a process record: {text[:200]!r}")
+    return ProcessRow(pid, int(fields[1]), int(fields[2]), fields[0], fields[PROC_START_FIELD])
+
+
+def list_table_processes() -> list[ProcessRow]:
+    """Every live process, read from the process table. A process that ends during the read is not live and is left out; any other failure to read the
+    table, and a table that does not show the caller, fail the listing: a listing that is wrongly empty would let a stop report success."""
+    try:
+        names = os.listdir(PROC_ROOT)
+    except OSError as failure:
+        raise SessionListingFailed(f"{PROC_ROOT} could not be read: {failure}") from None
+    rows: list[ProcessRow] = []
+    for name in names:
+        if not (name.isascii() and name.isdigit()):
+            continue
+        try:
+            with open(f"{PROC_ROOT}/{name}/stat", encoding="utf-8", errors="replace") as record:
+                text = record.read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError as failure:
+            raise SessionListingFailed(f"{PROC_ROOT}/{name}/stat could not be read: {failure}") from None
+        if text:
+            rows.append(parse_proc_stat(int(name), text))
+    if all(row.pid != os.getpid() for row in rows):
+        raise SessionListingFailed(f"{PROC_ROOT} does not list this process ({os.getpid()}), so it is not the process table of this host")
+    return rows
+
+
+def list_ps_processes() -> list[ProcessRow]:
     """Every live process, from ``SESSION_LISTING``. Raises ``SessionListingFailed`` on any failure."""
     executable = listing_program(SESSION_LISTING[0])
     if executable is None:
