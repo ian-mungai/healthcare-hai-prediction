@@ -31,7 +31,7 @@ from unittest import mock
 
 from scripts.features import feast_aws_cases, online_cases
 from scripts.features import online_protocol as online
-from scripts.features.feast_harness import Checker, stop_worker
+from scripts.features.feast_harness import Checker, settle_threads, stop_worker
 from scripts.infrastructure import push_images, secret_store
 from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
@@ -939,32 +939,53 @@ def case_sink_late_commit(c: Checker) -> None:
     c.check("the stuck worker ends once released", hanging.wait_idle(5.0))
 
 
-def case_sink_requests_no_vended_credentials(c: Checker) -> None:
-    """The sink opens the REST catalog without asking Polaris for vended credentials, so no table load carries the access delegation header."""
+SINK_CLOSE_SECONDS = 5.0
+
+
+def check_sink_header(c: Checker, deadline: float, stalled: bool) -> None:
+    """Append one row through the sink against the REST catalog stand-in and check the table request, with a stalled table reply when ``stalled``."""
     real = importlib.util.find_spec("pyiceberg") is not None
     client = f"PyIceberg {importlib.import_module('pyiceberg').__version__}" if real else "the PyIceberg 0.12.0 header stand-in"
     standin = SimpleNamespace(import_module=lambda _name: SimpleNamespace(load_catalog=feast_aws_cases.RestClientStandIn))
     outcome: dict[str, str] = {}
+    before = set(threading.enumerate())
     with feast_aws_cases.rest_catalog_server() as server:
         endpoint = f"http://127.0.0.1:{server.server_port}/api/catalog"
         environ = {"POLARIS_URI": endpoint, "POLARIS_CLIENT_ID": "writer", "POLARIS_CLIENT_SECRET": "x"}
         sink = iceberg_sink.IcebergSink(environ)
+        if stalled:
+            server.table_gate.clear()
 
         def append() -> None:
             try:
-                sink.append(sink_rows("a"), 10.0)
+                sink.append(sink_rows("a"), deadline)
             except Exception as error:
                 outcome["error"] = f"{type(error).__name__}: {error}"
 
         patches: list[Any] = [mock.patch.object(iceberg_sink.reads, "polaris_token", return_value=feast_aws_cases.ISSUED)]
         if not real:
             patches.append(mock.patch.object(iceberg_sink, "importlib", standin))
+        owned = set(threading.enumerate())
         with contextlib.ExitStack() as stack:
             for patch in patches:
                 stack.enter_context(patch)
             worker = threading.Thread(target=append, daemon=True)
-            worker.start()
-            stop_worker(c, f"the sink append ({client})", worker, server.abort_connections, 20)
+            try:
+                worker.start()
+                stop_worker(c, f"the sink append ({client})", worker, server.abort_connections, 20)
+                if stalled:
+                    c.check(
+                        "the table reply was held past the caller's deadline",
+                        server.table_held.is_set() and outcome.get("error", "").startswith("TimeoutError"),
+                    )
+                    c.check("the sink's own client was still waiting when the caller gave up", any(t.name == "iceberg_append" for t in threading.enumerate()))
+            finally:
+                # The caller may have ended at its deadline while the sink's own client still waits, so stop_worker never aborts it: abort here, always.
+                server.abort_connections()
+                c.check(f"the sink closes within {SINK_CLOSE_SECONDS:g} s ({client})", sink.close(SINK_CLOSE_SECONDS))
+                server.table_gate.set()
+                worker.join(SINK_CLOSE_SECONDS)
+                settle_threads(c, f"the sink client ({client}) before the patches end", owned)
         paths = [request["path"] for request in server.requests]
         c.check("the client asked for the catalog config", any(path.endswith("/v1/config") for path in paths))
         c.check("the client asked for the predictions table", any(path.endswith(f"/tables/{CONTRACT['table']}") for path in paths))
@@ -972,6 +993,17 @@ def case_sink_requests_no_vended_credentials(c: Checker) -> None:
         c.check(f"no request carries the {feast_aws_cases.DELEGATION_HEADER} header", delegated == [])
         refused = [request["path"] for request in server.requests if request["status"] == 400]
         c.check("no table load is refused for credential vending", refused == [] and "400" not in outcome.get("error", ""))
+    settle_threads(c, f"the sink header case ({client})", before)
+
+
+def case_sink_requests_no_vended_credentials(c: Checker) -> None:
+    """The sink opens the REST catalog without asking Polaris for vended credentials, so no table load carries the access delegation header."""
+    check_sink_header(c, 10.0, stalled=False)
+
+
+def case_sink_stalled_reply_leaves_no_client(c: Checker) -> None:
+    """A table reply that outlasts the caller deadline ends the caller with a timeout, and the case closes the sink client and leaves no thread."""
+    check_sink_header(c, 2.0, stalled=True)
 
 
 def case_create_table_requests_no_vended_credentials(c: Checker) -> None:
@@ -1600,6 +1632,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "sink_requests_no_vended_credentials": (case_sink_requests_no_vended_credentials, "iceberg polaris"),
+    "sink_stalled_reply_leaves_no_client": (case_sink_stalled_reply_leaves_no_client, "iceberg polaris timeout"),
     "create_table_requests_no_vended_credentials": (case_create_table_requests_no_vended_credentials, "iceberg polaris"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
     "replay_budget": (case_replay_budget, "canary compare"),

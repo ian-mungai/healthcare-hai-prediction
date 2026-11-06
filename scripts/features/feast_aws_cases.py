@@ -87,6 +87,7 @@ class GuardedCatalog:
 
 
 DELEGATION_HEADER = "X-Iceberg-Access-Delegation"
+HELD_REPLY_SECONDS = 30.0
 VENDING_REFUSED = {"error": {"message": "credential vending is not enabled", "type": "BadRequestException", "code": 400}}
 
 
@@ -117,6 +118,10 @@ class RestCatalogHandler(http.server.BaseHTTPRequestHandler):
         server: Any = self.server
         headers = {name.lower(): value for name, value in self.headers.items()}
         server.requests.append({"path": path, "method": self.command, "headers": headers, "status": status})
+        if "/tables/" in path and not server.table_gate.is_set():
+            server.table_held.set()
+            if not server.table_gate.wait(HELD_REPLY_SECONDS):
+                return
         data = json.dumps(payload).encode()
         try:
             self.send_response(status)
@@ -132,7 +137,10 @@ class RestCatalogHandler(http.server.BaseHTTPRequestHandler):
 
 
 class CatalogServer(http.server.ThreadingHTTPServer):
-    """The loopback server of the REST catalog stand-in. It keeps the connections it accepted, so a case can close the ones a stalled client waits on."""
+    """The loopback server of the REST catalog stand-in. It keeps the connections it accepted, so a case can close the ones a stalled client waits on.
+
+    A case clears ``table_gate`` to hold every table reply until the gate is set again (``table_held`` is set once a reply waits there).
+    """
 
     daemon_threads = True
 
@@ -140,6 +148,9 @@ class CatalogServer(http.server.ThreadingHTTPServer):
         super().__init__(address, handler)
         self.requests: list[dict[str, Any]] = []
         self.connections: list[socket.socket] = []
+        self.table_gate = threading.Event()
+        self.table_gate.set()
+        self.table_held = threading.Event()
 
     def get_request(self) -> tuple[socket.socket, Any]:
         connection, address = super().get_request()
@@ -160,6 +171,7 @@ def rest_catalog_server() -> Iterator[Any]:
     try:
         yield server
     finally:
+        server.table_gate.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
@@ -170,6 +182,7 @@ class RestClientStandIn:
 
     PyIceberg copies every ``header.<name>`` property into the session headers and then calls
     ``setdefault`` for the access delegation header, so only a property that is already present keeps the default out.
+    Its table load sends no timeout, like the table request of that client, so only a closed connection ends a stalled reply.
     """
 
     def __init__(self, name: str, **properties: str | None) -> None:
@@ -184,7 +197,7 @@ class RestClientStandIn:
 
     def load_table(self, identifier: str) -> Any:
         namespace, table = identifier.split(".", 1)
-        self.session.get(f"{self.uri}/v1/namespaces/{namespace}/tables/{table}", timeout=5).raise_for_status()
+        self.session.get(f"{self.uri}/v1/namespaces/{namespace}/tables/{table}").raise_for_status()
         return None
 
     def create_namespace_if_not_exists(self, namespace: str) -> None:
