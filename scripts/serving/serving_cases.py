@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import importlib
+import importlib.util
 import io
 import json
 import logging
@@ -27,7 +29,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from scripts.features import online_cases
+from scripts.features import feast_aws_cases, online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker
 from scripts.infrastructure import push_images, secret_store
@@ -937,6 +939,42 @@ def case_sink_late_commit(c: Checker) -> None:
     c.check("the stuck worker ends once released", hanging.wait_idle(5.0))
 
 
+def case_sink_requests_no_vended_credentials(c: Checker) -> None:
+    """The sink opens the REST catalog without asking Polaris for vended credentials, so no table load carries the access delegation header."""
+    real = importlib.util.find_spec("pyiceberg") is not None
+    client = f"PyIceberg {importlib.import_module('pyiceberg').__version__}" if real else "the PyIceberg 0.12.0 header stand-in"
+    standin = SimpleNamespace(import_module=lambda _name: SimpleNamespace(load_catalog=feast_aws_cases.RestClientStandIn))
+    outcome: dict[str, str] = {}
+    with feast_aws_cases.rest_catalog_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/api/catalog"
+        environ = {"POLARIS_URI": endpoint, "POLARIS_CLIENT_ID": "writer", "POLARIS_CLIENT_SECRET": "x"}
+        sink = iceberg_sink.IcebergSink(environ)
+
+        def append() -> None:
+            try:
+                sink.append(sink_rows("a"), 10.0)
+            except Exception as error:
+                outcome["error"] = f"{type(error).__name__}: {error}"
+
+        patches: list[Any] = [mock.patch.object(iceberg_sink.reads, "polaris_token", return_value=feast_aws_cases.ISSUED)]
+        if not real:
+            patches.append(mock.patch.object(iceberg_sink, "importlib", standin))
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            worker = threading.Thread(target=append, daemon=True)
+            worker.start()
+            worker.join(timeout=20)
+        c.check(f"the sink append ends within 20 s ({client})", not worker.is_alive())
+        paths = [request["path"] for request in server.requests]
+        c.check("the client asked for the catalog config", any(path.endswith("/v1/config") for path in paths))
+        c.check("the client asked for the predictions table", any(path.endswith(f"/tables/{CONTRACT['table']}") for path in paths))
+        delegated = [request["path"] for request in server.requests if feast_aws_cases.DELEGATION_HEADER.lower() in request["headers"]]
+        c.check(f"no request carries the {feast_aws_cases.DELEGATION_HEADER} header", delegated == [])
+        refused = [request["path"] for request in server.requests if request["status"] == 400]
+        c.check("no table load is refused for credential vending", refused == [] and "400" not in outcome.get("error", ""))
+
+
 def case_nonfinite(c: Checker) -> None:
     """A prediction that is not a finite number is a model failure: it triggers fallback and ejection, and it is never returned or recorded."""
     keys_ = hospital_keys(40)
@@ -1520,6 +1558,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "parameter_names_agree": (case_parameter_names, "iam services"),
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
+    "sink_requests_no_vended_credentials": (case_sink_requests_no_vended_credentials, "iceberg polaris"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
     "replay_budget": (case_replay_budget, "canary compare"),
     "replay_http_drip": (case_replay_http_drip, "timeout network"),
