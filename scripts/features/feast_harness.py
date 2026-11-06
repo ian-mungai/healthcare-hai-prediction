@@ -70,6 +70,15 @@ def stop_worker(c: Checker, label: str, worker: threading.Thread, abort: Callabl
     c.check(f"{label} is stopped", not worker.is_alive())
 
 
+def settle_threads(c: Checker, label: str, before: set[threading.Thread], timeout: float = STOP_SECONDS) -> None:
+    """Join every thread started since ``before`` for ``timeout`` seconds in all; the check fails, naming them, for each one still running."""
+    deadline = time.monotonic() + timeout
+    for thread in set(threading.enumerate()) - before:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    alive = sorted(thread.name for thread in set(threading.enumerate()) - before)
+    c.check(f"{label} leaves no thread running" + (f" ({', '.join(alive)} still runs)" if alive else ""), not alive)
+
+
 def run_cases(cases: dict[str, tuple[Callable[[Checker], None], str]], selected: Sequence[str]) -> dict[str, Any]:
     """Run the selected cases (all when none is named); an unexpected exception fails the case, names the innermost project frame and keeps its traceback."""
     names = list(selected) or list(cases)
