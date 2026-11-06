@@ -376,7 +376,7 @@ run "host_launch_template" {
       alltrue([
         for text in [
           "vol-0123456789abcdef0", "eipalloc-0123456789abcdef0", "tags/instance/"
-        ] : !strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : !strcontains(local.host_user_data, text)
       ]) &&
       alltrue([
         for text in [
@@ -385,9 +385,9 @@ run "host_launch_template" {
           "data_volume_name=\"example_project_host_data_dev\"", "address_name=\"example_project_host_dev\"", "project_tag=\"example_project\"",
           "current_step=\"Finding the data volume\"\nvolume=$(run_within 60 \"$current_step\" aws ec2 describe-volumes", "current_step=\"Finding the Elastic IP\"\nallocation=$(run_within 60 \"$current_step\" aws ec2 describe-addresses",
           "\"Name=tag:Project,Values=$project_tag\"", "^vol-[0-9a-f]{8,17}$", "^eipalloc-[0-9a-f]{8,17}$"
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ]) &&
-      length(split("ECS_CLUSTER=", base64decode(aws_launch_template.host.user_data))[0]) > length(split("mountpoint -q", base64decode(aws_launch_template.host.user_data))[0])
+      length(split("ECS_CLUSTER=", local.host_user_data)[0]) > length(split("mountpoint -q", local.host_user_data)[0])
     )
     error_message = "Boot finds the data volume and the Elastic IP by their Name and Project tags, attaches them and joins the cluster only after the volume is mounted."
   }
@@ -406,11 +406,11 @@ run "host_launch_template" {
           "run_within 120 \"Starting the metadata firewall\" systemctl enable --now platform_imds_guard.service",
           "run_within 60 \"Checking the metadata firewall\" \"$guard_script\" check",
           "run_within 60 \"Starting the metadata firewall timer\" systemctl enable --now platform_imds_watch.timer"
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ]) &&
-      !strcontains(base64decode(aws_launch_template.host.user_data), "iptables") &&
-      length(split("systemctl enable --now platform_imds_guard.service", base64decode(aws_launch_template.host.user_data))[0]) <
-      length(split("latest/api/token", base64decode(aws_launch_template.host.user_data))[0])
+      !strcontains(local.host_user_data, "iptables") &&
+      length(split("systemctl enable --now platform_imds_guard.service", local.host_user_data)[0]) <
+      length(split("latest/api/token", local.host_user_data)[0])
     )
     error_message = "Boot must load, check and keep a root-only metadata rule that survives firewall reloads, gates Docker and the ECS agent and is rechecked every 10 seconds, before it reads metadata."
   }
@@ -425,7 +425,7 @@ run "host_launch_template" {
         "[Unit]\nRequires=platform_imds_guard.service\nAfter=platform_imds_guard.service\n\n[Service]\nExecStartPre=$guard_script apply\n",
         "[Unit]\nDescription=Check the metadata firewall and stop the ECS agent and Docker when it cannot be restored\nAfter=platform_imds_guard.service\n\n[Service]\nType=oneshot\nTimeoutStartSec=400\nExecStart=$guard_script enforce\n",
         "[Unit]\nDescription=Check the metadata firewall every 10 seconds\n\n[Timer]\nOnActiveSec=10s\nOnUnitActiveSec=10s\nAccuracySec=1s\n\n[Install]\nWantedBy=timers.target\n"
-      ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+      ] : strcontains(local.host_user_data, text)
     ])
     error_message = "The systemd units must keep each directive in its section: dependencies in [Unit], commands in [Service], timers in [Timer]."
   }
@@ -439,11 +439,11 @@ run "host_launch_template" {
           "sysctl_file=\"/etc/sysctl.d/90-platform-core-dumps.conf\"", "kernel.core_pattern = core", "fs.suid_dumpable = 0",
           "run_within 30 \"Applying the core dump settings\" sysctl -q -p \"$sysctl_file\"",
           "if [ \"$core_pattern\" != \"core\" ] || [ \"$suid_dumpable\" != \"0\" ]; then"
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ]) &&
-      !can(regex("core_pattern\\s*=\\s*\\|", base64decode(aws_launch_template.host.user_data))) &&
-      length(split("Applying the core dump settings", base64decode(aws_launch_template.host.user_data))[0]) <
-      length(split("ECS_CLUSTER=", base64decode(aws_launch_template.host.user_data))[0])
+      !can(regex("core_pattern\\s*=\\s*\\|", local.host_user_data)) &&
+      length(split("Applying the core dump settings", local.host_user_data)[0]) <
+      length(split("ECS_CLUSTER=", local.host_user_data)[0])
     )
     error_message = "Boot must set a plain-file core pattern and disable set-user-ID dumps, persisted in sysctl.d, and check both before joining the cluster."
   }
@@ -461,10 +461,10 @@ run "host_launch_template" {
           "log \"finished: every step succeeded and ECS_CLUSTER is written.\"",
           "log \"FAILED: exit status $status at line $line during: $current_step\"",
           "log \"starting: $step (limit $seconds seconds)\"", "--allow-reassociation >/dev/null", "--device /dev/xvdf >/dev/null"
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ]) &&
-      length(split("trap 'finish $LINENO' EXIT", base64decode(aws_launch_template.host.user_data))[0]) <
-      length(split("Applying the core dump settings", base64decode(aws_launch_template.host.user_data))[0])
+      length(split("trap 'finish $LINENO' EXIT", local.host_user_data)[0]) <
+      length(split("Applying the core dump settings", local.host_user_data)[0])
     )
     error_message = "Boot must copy every log line to the console with the platform_boot prefix, state success or the failing status at the end and print no AWS CLI output."
   }
@@ -474,11 +474,11 @@ run "host_launch_template" {
   assert {
     condition = (
       alltrue([
-        for line in split("\n", base64decode(aws_launch_template.host.user_data)) :
+        for line in split("\n", local.host_user_data) :
         !can(regex("^\\s*(systemctl|mkfs\\.xfs|mount|dnf|aws|blkid|rpm|iptables|mountpoint|nft|sysctl|setpriv) ", line))
       ]) &&
       alltrue([
-        for line in split("\n", base64decode(aws_launch_template.host.user_data)) :
+        for line in split("\n", local.host_user_data) :
         strcontains(line, "timeout --kill-after=") if can(regex("(^|\\s)timeout\\s", line)) && !can(regex("^\\s*#", line))
       ]) &&
       alltrue([
@@ -488,7 +488,7 @@ run "host_launch_template" {
           "run_within 120 \"Mounting the data volume\" mount",
           "timeout --kill-after=10 \"$seconds\" \"$@\"",
           "did not finish within $seconds seconds and ignored the stop signal, so it was killed 10 seconds later."
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ])
     )
     error_message = "Service start, formatting, mounting and every other command that can stall must run under a deadline that also kills a command ignoring TERM."
