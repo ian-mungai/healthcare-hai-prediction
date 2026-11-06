@@ -12,8 +12,9 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
   It then runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
 - ``promote`` (training image, a separate task): records the code identity and the promotion parameters, then runs the ``promote`` action. It moves the
   ``production`` alias of one registered model to the version the parameters name. The broker checks the owner's approval before the task starts. Before the
-  phase reports success it copies the receipt ``promote.json`` to ``promote/<run>/promote.json`` in the data bucket, once, because the workspace ends
-  with the task.
+  alias moves, the action stores the intent ``promote/<run>/intent.json`` in the data bucket, once, with the version production held. Before the phase
+  reports success it copies the receipt ``promote.json`` to ``promote/<run>/promote.json``, once, because the workspace ends with the task. A retry in a
+  new task reads the intent and the receipt first, so it never moves the alias again for a run that completed.
 
 Each action writes to ``<work>/in/<action>``, where the next action reads it, as the local renderer mounts them. A phase checks the completion records of
 the steps an action needs before it starts that action. A rerun in the same workspace resumes: a completed step is verified and not run again. A rerun in a
