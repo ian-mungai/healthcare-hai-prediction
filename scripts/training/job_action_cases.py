@@ -20,7 +20,20 @@ from typing import Any
 from unittest import mock
 
 from scripts.features.training_extract import canonical, content_sha256
-from scripts.training import bundle, dvc_baseline, guards, hac_validation, job, job_inputs, mediation, promotion, promotion_cases, promotion_check, run_tracking
+from scripts.training import (
+    bundle,
+    dvc_baseline,
+    guards,
+    hac_validation,
+    job,
+    job_inputs,
+    mediation,
+    promotion,
+    promotion_cases,
+    promotion_check,
+    registry,
+    run_tracking,
+)
 from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
 from scripts.training.lane_b_cases import RUN, Cases, require
@@ -317,6 +330,16 @@ class NotFound(Exception):
     error_code = "RESOURCE_DOES_NOT_EXIST"
 
 
+class InvalidParameter(Exception):
+    """The error the MLflow 3.17.0 client raises (``RestException``) for an HTTP 400: the code is a prefix of the message, as the client formats it."""
+
+    error_code = "INVALID_PARAMETER_VALUE"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{self.error_code}: {message}")
+        self.message = f"{self.error_code}: {message}"
+
+
 class FileTracking:
     """A stand-in for the MLflow client: the calls the log_run action makes, with MLflow's rules for parameters, tags and run lookup."""
 
@@ -469,8 +492,10 @@ class FileTracking:
 
     def get_model_version_by_alias(self, name: str, alias: str) -> SimpleNamespace:
         self.enter("get_model_version_by_alias")
-        if alias not in self.models.get(name, {"aliases": {}})["aliases"]:
-            raise NotFound(alias)
+        if name not in self.models:
+            raise NotFound(f"Registered Model with name={name} not found")
+        if alias not in self.models[name]["aliases"]:
+            raise InvalidParameter(f"Registered model alias {alias} not found.")
         return self.version_of(name, self.find_version(name, self.models[name]["aliases"][alias]))
 
     def set_registered_model_tag(self, name: str, key: str, value: str) -> None:
@@ -1477,6 +1502,31 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             code, _, error = run_promotion(fixture)
         require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
 
+    def champion_reads_only_the_missing_alias_answer_as_none() -> None:
+        store = FileTracking(folder / "alias_answers")
+        store.models[name] = {"tags": {}, "versions": [], "aliases": {}}
+        require(registry.champion(store, "hai_model_missing") is None, "a registered model that does not exist (404) was not read as no champion")
+        require(
+            registry.champion(store, name) is None,
+            "a registered model without the production alias (400, the message of MLflow 3.17.0) was not read as no champion",
+        )
+        other = InvalidParameter(f"Invalid alias name: '{registry.CHAMPION_ALIAS}'. Aliases may not contain spaces.")
+        wrong_code = InvalidParameter(f"Registered model alias {registry.CHAMPION_ALIAS} not found.")
+        wrong_code.error_code = "BAD_REQUEST"
+        challenger = InvalidParameter("Registered model alias challenger not found.")
+        for label, error in (
+            ("another 400 message", other),
+            ("another code", wrong_code),
+            ("another alias", challenger),
+            ("a server error", RuntimeError("boom")),
+        ):
+            with mock.patch.object(store, "get_model_version_by_alias", side_effect=error):
+                try:
+                    registry.champion(store, name)
+                except type(error):
+                    continue
+            raise ValueError(f"{label} was read as no champion")
+
     def champion_deadline() -> None:
         fixture = promoted(folder / "champion_deadline", Predictor(LABEL, constant=3.0))
 
@@ -1517,6 +1567,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_refuses_changed_log_run", changed_log_run)
     cases.check("job_promotion_check_refuses_verdict_mismatch_on_written_file", mismatch)
     cases.check("job_promotion_check_deadline_named", deadline)
+    cases.check("job_promotion_check_champion_reads_only_the_missing_alias_answer_as_none", champion_reads_only_the_missing_alias_answer_as_none)
     cases.check("job_promotion_check_champion_load_deadline_named", champion_deadline)
     cases.check("job_promotion_check_needs_tracking_uri", no_uri)
 

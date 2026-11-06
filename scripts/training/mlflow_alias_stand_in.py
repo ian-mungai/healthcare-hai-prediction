@@ -4,12 +4,16 @@
 
 - 200 and ``{"model_version": {"name": ..., "version": "<number>", "aliases": [...], ...}}`` for a set alias.
 - 404 and ``{"error_code": "RESOURCE_DOES_NOT_EXIST", "message": ...}`` for a missing registered model.
+- 400 and ``{"error_code": "INVALID_PARAMETER_VALUE", "message": "Registered model alias <alias> not found."}`` for a registered model that exists (``exists``
+  returns True for it) and has no such alias. Without ``exists`` no model exists.
 - 401 and a plain-text body when the request carries no valid HTTP Basic login.
 
 ``lookup(model, alias)`` returns the version number the alias names, or None. ``fault`` names what goes wrong instead: ``server_error`` (500),
-``other_404`` (404 with the code ENDPOINT_NOT_FOUND, as a wrong address gives), ``malformed`` (200 with text that is not JSON), ``wrong_shape`` (200 with JSON
-that has no version), ``redirect`` (302 to another path of the same server) and ``stall`` (no answer until the server stops). ``requests`` records what each
-call asked for and whether its login was right, never the login itself. Start and stop it as a context manager; stopping waits at most ``STOP_SECONDS``.
+``other_404`` (404 with the code ENDPOINT_NOT_FOUND, as a wrong address gives), ``invalid_alias_400`` (400 with the code INVALID_PARAMETER_VALUE and the message
+of an invalid alias name), ``other_code_400`` (400 with the alias message and another code), ``other_alias_400`` (400 with the alias message for another
+alias), ``malformed`` (200 with text that is not JSON), ``wrong_shape`` (200 with JSON that has no version), ``redirect`` (302 to another path of the same
+server) and ``stall`` (no answer until the server stops). ``requests`` records what each call asked for and whether its login was right, never the login
+itself. Start and stop it as a context manager; stopping waits at most ``STOP_SECONDS``.
 """
 
 from __future__ import annotations
@@ -31,8 +35,8 @@ STALL_SECONDS = 30.0
 class AliasServer:
     """One local server for the alias endpoint, bound to an unused port of 127.0.0.1."""
 
-    def __init__(self, lookup: Callable[[str, str], str | None], username: str, password: str) -> None:
-        self.lookup, self.fault = lookup, ""
+    def __init__(self, lookup: Callable[[str, str], str | None], username: str, password: str, exists: Callable[[str], bool] = lambda model: False) -> None:
+        self.lookup, self.exists, self.fault = lookup, exists, ""
         self.expected = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
         self.requests: list[dict[str, Any]] = []
         self.release = threading.Event()
@@ -81,13 +85,25 @@ class AliasServer:
             self.send(handler, 500, {"error_code": "INTERNAL_ERROR", "message": "the stand-in failed"})
         elif self.fault == "other_404":
             self.send(handler, 404, {"error_code": "ENDPOINT_NOT_FOUND", "message": "no such endpoint"})
+        elif self.fault == "invalid_alias_400":
+            self.send(
+                handler,
+                400,
+                {"error_code": "INVALID_PARAMETER_VALUE", "message": f"Invalid alias name: '{query.get('alias')}'. Aliases may not contain spaces."},
+            )
+        elif self.fault == "other_code_400":
+            self.send(handler, 400, {"error_code": "BAD_REQUEST", "message": f"Registered model alias {query.get('alias')} not found."})
+        elif self.fault == "other_alias_400":
+            self.send(handler, 400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "Registered model alias challenger not found."})
         elif self.fault == "malformed":
             self.send(handler, 200, "<html>not json", "text/html")
         elif self.fault == "wrong_shape":
             self.send(handler, 200, {"model_version": {"name": query.get("name"), "aliases": [query.get("alias")]}})
         else:
             version = self.lookup(query.get("name", ""), query.get("alias", ""))
-            if version is None:
+            if version is None and self.exists(query.get("name", "")):
+                self.send(handler, 400, {"error_code": "INVALID_PARAMETER_VALUE", "message": f"Registered model alias {query.get('alias')} not found."})
+            elif version is None:
                 self.send(handler, 404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": f"Registered Model with name={query.get('name')} not found"})
             else:
                 self.send(handler, 200, {"model_version": {"name": query["name"], "version": version, "aliases": [query["alias"]], "tags": []}})
