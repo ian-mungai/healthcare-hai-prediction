@@ -1,10 +1,12 @@
 # The AWS profile of the Feast settings (selected by FEAST_PROFILE=aws, see scripts/features/feast_aws.py). It holds the same stores as feature_store.yaml:
 # the registry is the S3 URI of the step's closed key, the offline store reads the Iceberg tables through DuckDB, the online store is the host Redis.
+# The registry store is the project's (scripts/features/feast_registry_store.py): Feast's S3 store calls HeadBucket, which the task roles may not do.
 # Every value arrives through the job environment. The Redis password comes from the secret store at run time and is never written to a file.
 project: hai_prediction
 provider: local
 registry:
   registry_type: file
+  registry_store_type: scripts.features.feast_registry_store.S3ObjectRegistryStore
   path: ${FEAST_REGISTRY_PATH}
   cache_ttl_seconds: 60
 offline_store:
