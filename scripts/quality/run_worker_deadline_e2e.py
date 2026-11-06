@@ -798,12 +798,15 @@ def behaviour_held(checks: dict[str, Any]) -> bool:
 def not_before_the_limit(base: Path) -> dict[str, Any]:
     """The checks in TIMING_PRECONDITIONS are the setup of this case, not the dispatcher: the stand-in launcher aligns the launch inside a wall-clock second,
     and a loaded machine can miss that while the dispatcher behaves correctly. An attempt that misses it proves nothing about the dispatcher, so the scenario
-    runs again in a fresh sandbox, up to TIMING_ATTEMPTS times. The first attempt whose setup held decides the case: it passes only when every other check of
-    that attempt is true. When no attempt held the setup, the case fails with timing_preconditions_held_in_an_attempt false."""
+    runs again in a fresh sandbox, up to TIMING_ATTEMPTS times, but only when every other check of that attempt passed: an attempt with a failed behaviour
+    check fails the case at once, whether or not its setup held. Otherwise the first attempt whose setup held decides the case: it passes only when every
+    other check of that attempt is true. When no attempt held the setup, the case fails with timing_preconditions_held_in_an_attempt false."""
     attempts: list[dict[str, Any]] = []
     for number in range(1, TIMING_ATTEMPTS + 1):
         attempts.append(not_before_the_limit_attempt(base, number))
-        if "raised" in attempts[-1]["checks"] or setup_held(attempts[-1]["checks"]):
+        # Only a pure timing miss runs again: a failed behaviour check decides the case even when the setup also missed, so a defect that shows only on a
+        # missed setup cannot be discarded by a later attempt.
+        if "raised" in attempts[-1]["checks"] or setup_held(attempts[-1]["checks"]) or not behaviour_held(attempts[-1]["checks"]):
             break
     checks = dict(attempts[-1]["checks"])
     if "raised" not in checks:
