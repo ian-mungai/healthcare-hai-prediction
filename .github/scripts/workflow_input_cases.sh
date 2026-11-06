@@ -127,8 +127,10 @@ step_stops_on_the_first_error() { redis_step | grep -q 'set -euo pipefail'; }
 step_checks_the_installed_version() { redis_step | grep -q "dpkg-query --show" && redis_step | grep -qF "== \"${dollar}REDIS_VERSION\""; }
 step_does_not_ignore_failure() { [[ -n "$(redis_step)" ]] && ! redis_step | grep -qE '\|\| *(true|:)|continue-on-error|2> */dev/null'; }
 exactly_one_job_asks_for_the_server() { [[ "$(grep -c 'redis-server: "true"' "$workflow")" -eq 1 ]]; }
+core_job() { awk '/^  core:$/ {on = 1; next} on && /^  [a-z_]+:$/ {exit} on' "$workflow"; }
+part_runs_terraform_checks() { python3 -c 'import json, sys; sys.exit("terraform_checks" not in json.load(open("config/quality/ci_groups.json"))["parts"]["core_sql_terraform"])'; }
 that_job_runs_the_core_part() {
-  awk '/^  [a-z_]+:$/ {job = $1} /redis-server: "true"/ {print job}' "$workflow" | grep -qx 'local_ci:' && awk '/^  local_ci:$/ {on = 1; next} on && /^  [a-z_]+:$/ {exit} on' "$workflow" | grep -q 'CI_PART: core'
+  awk '/^  [a-z_]+:$/ {job = $1} /redis-server: "true"/ {print job}' "$workflow" | grep -qx 'core:' && core_job | grep -qF "CI_PART: \${{ matrix.part }}" && core_job | grep -qx ' *- part: core_sql_terraform' && part_runs_terraform_checks
 }
 group_has_no_skip() { ! grep -qE 'GITHUB_ACTIONS|::warning' "$group"; }
 group_runs_the_cases_in_every_environment() { [[ "$(grep -c 'bash .github/scripts/redis_acl_cases.sh' "$group")" -eq 1 ]] && ! grep -B2 'redis_acl_cases.sh' "$group" | grep -qE '^\s*(if|elif|else)'; }
