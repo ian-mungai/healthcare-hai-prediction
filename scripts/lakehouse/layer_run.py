@@ -706,7 +706,7 @@ def upload_dbt_artifacts(job: Job, bucket: str, client: Any) -> list[str]:
 def maintain(job: Job) -> None:
     """Gold only, after the upload: expire and remove orphans under the chain rule, bound to this gold run."""
     accepted_publish(job)
-    arguments = ["--run", job.run, "--mode", job.mode, "--protection", "chain", "--publish-dir", job.publish_folder, *job.local_flags]
+    arguments: list[str | Path] = ["--run", job.run, "--mode", job.mode, "--protection", "chain", "--publish-dir", job.publish_folder, *job.local_flags]
     run_module(job, "scripts.lakehouse.gold_maintenance", arguments)
 
 
