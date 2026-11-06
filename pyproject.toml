@@ -226,9 +226,9 @@ spark = [
   "s3transfer==0.19.2; sys_platform == 'linux'",
 ]
 
-# MLflow tracking server image with the PostgreSQL driver and boto3 for S3 artifacts.
+# MLflow tracking server image with the auth extra (Flask-WTF, which the basic-auth app needs to import), the PostgreSQL driver and boto3 for S3 artifacts.
 mlflow = [
-  "mlflow==3.17.0; sys_platform == 'linux'",
+  "mlflow[auth]==3.17.0; sys_platform == 'linux'",
   "psycopg2-binary==2.9.13; sys_platform == 'linux'",
   "boto3==1.43.123; sys_platform == 'linux'",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
@@ -236,6 +236,7 @@ mlflow = [
   "botocore==1.43.123; sys_platform == 'linux'",
   "cachetools==7.2.7; sys_platform == 'linux'",
   "databricks-sdk==0.158.0; sys_platform == 'linux'",
+  "flask-wtf==1.3.0; sys_platform == 'linux'",
   "google-auth==2.62.0; sys_platform == 'linux'",
   "huey==3.5.3; sys_platform == 'linux'",
   "importlib-metadata==9.1.0; sys_platform == 'linux'",
@@ -245,6 +246,7 @@ mlflow = [
   "python-dotenv==1.2.4; sys_platform == 'linux'",
   "s3transfer==0.19.3; sys_platform == 'linux'",
   "sqlparse==0.6.0; sys_platform == 'linux'",
+  "wtforms==3.3.2; sys_platform == 'linux'",
 ]
 
 # Model API image. The model libraries equal the training group's, because a model saved with one scikit-learn or XGBoost release is not safe to load with another (scripts/quality/lock_checks.py).

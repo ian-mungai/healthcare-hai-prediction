@@ -9,9 +9,11 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import tarfile
+import tomllib
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -547,6 +549,9 @@ def start_cases(cases: Any, folder: Path) -> None:
             "admin_password": password,
         }
         require(found == wanted, f"auth file: { {key: value for key, value in found.items() if key != 'admin_password'} }")
+        key = env.get("MLFLOW_FLASK_SERVER_SECRET_KEY", "")
+        require(re.fullmatch(r"[0-9a-f]{64}", key) is not None, "the server process has no random 32-byte CSRF secret key")
+        require(key not in ini.read_text() and key not in error, "the CSRF secret key was written to the auth file or the error output")
 
     def restarted() -> None:
         work = folder / "restarted"
@@ -554,6 +559,13 @@ def start_cases(cases: Any, folder: Path) -> None:
         require(start(work, options)[0] == 0, "the first start failed")
         before = (work / "mlflow_auth.ini").read_bytes()
         require(start(work, options)[0] == 0 and (work / "mlflow_auth.ini").read_bytes() == before, "a second start changed the auth file")
+
+    def new_key_each_start() -> None:
+        work = folder / "new_key"
+        work.mkdir(parents=True)
+        preset = "-".join(("preset", "key"))
+        keys = {start(work, options, MLFLOW_FLASK_SERVER_SECRET_KEY=preset)[3].get("MLFLOW_FLASK_SERVER_SECRET_KEY") for _ in range(2)}
+        require(len(keys) == 2 and preset not in keys, f"each start must make its own key: {len(keys)} distinct, preset kept: {preset in keys}")
 
     def refuses(name: str, reason: str, argv: list[str] | None = None, **changes: str | None) -> None:
         def case() -> None:
@@ -565,8 +577,18 @@ def start_cases(cases: Any, folder: Path) -> None:
 
         cases.check(f"mlflow_start_{name}", case)
 
+    def lock_holds_auth() -> None:
+        # The basic-auth app refuses to import without Flask-WTF, which only the mlflow[auth] extra brings, so the image lock must hold it.
+        group = tomllib.loads((START.parents[2] / "pyproject.toml").read_text())["dependency-groups"]["mlflow"]
+        require(
+            '"basic-auth"' not in START.read_text() or any(entry.startswith("mlflow[auth]==") for entry in group),
+            "the mlflow group of pyproject.toml lacks the mlflow[auth] extra for the basic-auth app",
+        )
+
+    cases.check("mlflow_start_image_lock_holds_the_basic_auth_packages", lock_holds_auth)
     cases.check("mlflow_start_runs_the_server_with_basic_auth_and_a_private_password_file", started)
     cases.check("mlflow_start_restart_keeps_the_same_file", restarted)
+    cases.check("mlflow_start_makes_a_new_csrf_key_at_each_start", new_key_each_start)
     refuses("refuses_a_missing_password", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD=None)
     refuses("refuses_a_short_password", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD="-".join(("short", "1")))
     refuses("refuses_a_password_with_a_percent_sign", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD="%".join(("abcdefgh", "(ijklmnop)s")))

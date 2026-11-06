@@ -7,6 +7,10 @@ every request and grants nothing by default: ``default_permission`` is ``NO_PERM
 password that the task injects as MLFLOW_ADMIN_PASSWORD. The training jobs and the owner hold the same password. The authentication settings live in a file
 that only this user can read. The file is written to the temporary file system of this container, and the server process does not keep the password in its
 environment. MLflow reads ``admin_password`` only when it creates the administrator, so a changed parameter does not change an existing user.
+
+The basic-auth app also needs a static Flask secret key for the CSRF protection of the web UI forms. There is one server, so each start makes its own random
+key and passes it only in the server process environment (owner decision A, Nov 5 2026): a restart ends open browser sessions, and API calls with basic
+auth are unaffected. A key set from outside is replaced.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 import importlib
 import os
 import re
+import secrets
 import sys
 import tempfile
 from collections.abc import Callable, MutableMapping, Sequence
@@ -77,6 +82,7 @@ def main(argv: Sequence[str], environ: MutableMapping[str, str] | None = None, r
         return 1
     del environ["MLFLOW_ADMIN_PASSWORD"]
     environ["MLFLOW_AUTH_CONFIG_PATH"] = str(path)
+    environ["MLFLOW_FLASK_SERVER_SECRET_KEY"] = secrets.token_hex(32)
     run(["server", "--app-name", "basic-auth", *argv])
     return 0
 
