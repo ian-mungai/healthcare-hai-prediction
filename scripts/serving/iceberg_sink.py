@@ -134,7 +134,7 @@ def create_table(environ: Mapping[str, str]) -> None:
     ]
     token = reads.polaris_token(environ["POLARIS_URI"], environ["POLARIS_CLIENT_ID"], environ["POLARIS_CLIENT_SECRET"])
     catalog = importlib.import_module("pyiceberg.catalog").load_catalog(
-        reads.CATALOG_NAME, type="rest", uri=environ["POLARIS_URI"], warehouse=reads.WAREHOUSE, token=token
+        reads.CATALOG_NAME, type="rest", uri=environ["POLARIS_URI"], warehouse=reads.WAREHOUSE, token=token, **{reads.ACCESS_DELEGATION_PROPERTY: None}
     )
     catalog.create_namespace_if_not_exists(contract["namespace"])
     catalog.create_table_if_not_exists(f"{contract['namespace']}.{contract['table']}", schema=schema_module.Schema(*fields))
