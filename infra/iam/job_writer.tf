@@ -243,13 +243,13 @@ output "job_layer_runs_contract" {
   }
 }
 
-# The features job uploads its run records for the acceptance report, and Feast calls HeadBucket before it reads its registry object. HeadBucket needs s3:ListBucket
-# and sends no prefix, so the prefix condition of the layer storage policy refuses it. These two grants belong to the features activation, so a silver or gold
-# window changes nothing on this role.
+# The features job uploads its run records for the acceptance report. Feast reads its registry through the project registry store with GetObject and
+# PutObject only (scripts/features/feast_registry_store.py), so no unprefixed s3:ListBucket is granted (owner, Nov 6 2026). This grant belongs to the
+# features activation, so a silver or gold window changes nothing on this role.
 resource "aws_iam_role_policy" "job_writer_features_activation" {
   count = var.job_features_image_prepared ? 1 : 0
 
-  name = "features_run_upload_and_registry_check"
+  name = "features_run_upload"
   role = aws_iam_role.job_write_layer_task["features"].name
   policy = templatefile("${path.module}/owner_policies/job_writer_features_activation.json", {
     BUCKET_ARN      = local.bronze_bucket_arn

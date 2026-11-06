@@ -6,13 +6,6 @@
       "Effect": "Allow",
       "Action": ["s3:PutObject"],
       "Resource": ${RUN_OBJECT_ARNS}
-    },
-    {
-      "Sid": "FeastRegistryBucketCheck",
-      "Effect": "Allow",
-      "Action": ["s3:ListBucket"],
-      "Resource": "${BUCKET_ARN}",
-      "Condition": {"Null": {"s3:prefix": "true"}}
     }
   ]
 }
