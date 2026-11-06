@@ -3,6 +3,11 @@
 The approval of the owner is checked before the job starts (the broker reads the staged record), so this action changes the registry only for the one version
 the request names. A forward promotion needs a version whose promotion check passed. A rollback needs a version that was in production before, which the version
 tag ``promoted_run`` shows. Setting the alias to the version it already names changes nothing, so a repeat in a new task is safe.
+
+Before the alias moves, the action stores the intent of the run in the data bucket (``promote_receipt``). A retry in a new task reads that intent, so the
+receipt keeps the version production held before the first attempt. A retry that finds the receipt of the run returns it and changes nothing. Otherwise the
+action moves the alias only when production still names the version before the promotion, finishes without a move when it already names the promoted version
+and refuses any other state. A request that differs from the stored intent is refused before any registry write.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from orchestration import training_contract
-from scripts.training import job_actions, job_inputs, registry, run_tracking
+from scripts.training import job_actions, job_inputs, promote_receipt, registry, run_tracking
 from scripts.training.job_failure import JobFailure
 
 PROMOTED_TAG = "promoted_run"
@@ -39,6 +44,48 @@ def check_version(version: Any, mode: str, number: str) -> None:
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")
 
 
+def settle(request: Mapping[str, Any], observed: str | None) -> tuple[dict[str, Any], bytes | None]:
+    """Store the intent of the run before any registry write and return it with the stored receipt, when the run has completed.
+
+    Only a retry reads the receipt. A first attempt just created the intent, so no receipt can exist and no absent read is needed.
+    """
+    run, bucket = str(request["run_id"]), os.environ.get("DATA_BUCKET_NAME", "")
+    if not bucket:
+        raise JobFailure("receipt_bucket_missing", "DATA_BUCKET_NAME is not set")
+    client = promote_receipt.s3_client()
+    try:
+        intent, created = promote_receipt.open_intent(client, bucket, run, request, observed)
+    except promote_receipt.RequestConflict as error:
+        raise JobFailure("promotion_conflict", f"{error}. Production was not changed") from None
+    except promote_receipt.ReceiptError as error:
+        raise JobFailure("promotion_intent_failed", f"{error}. Production was not changed") from None
+    if created:
+        return intent, None
+    try:
+        return intent, promote_receipt.completed(client, bucket, run)
+    except promote_receipt.ReceiptError as error:
+        raise JobFailure("promotion_state_unknown", f"cannot tell whether run {run} already completed: {error}. Production was not changed") from None
+
+
+def reconcile(store: Any, request: Mapping[str, Any], observed: str | None) -> bytes:
+    """Bring the registry and the records of the run to the promotion the request names and return the receipt bytes."""
+    name, number, run = request["model"], request["version"], str(request["run_id"])
+    intent, stored = settle(request, observed)
+    previous = intent["previous_version"]
+    receipt = promote_receipt.canonical({**request, "previous_version": previous})
+    if stored is not None:
+        if stored != receipt:
+            raise JobFailure("promotion_conflict", f"{promote_receipt.key_of(run)} already holds another receipt")
+        return stored
+    if observed not in (previous, number):
+        raise JobFailure("promotion_conflict", f"production names {observed or 'no version'}, not {previous or 'no version'} (before) or {number}")
+    if previous != number:
+        if observed != number:
+            store.set_registered_model_alias(name, registry.CHAMPION_ALIAS, number)
+        store.set_model_version_tag(name, number, PROMOTED_TAG, run)
+    return receipt
+
+
 def run(context: Any, record: Mapping[str, Any]) -> None:
     """Move the alias for the version the parameters name and record what changed."""
     with job_actions.guarded("promote"):
@@ -57,18 +104,16 @@ def run(context: Any, record: Mapping[str, Any]) -> None:
                 if target is None:
                     raise JobFailure("version_missing", f"{name} has no version {number}")
                 current = registry.champion(store, name)
-                previous = None if current is None else str(current.version)
+                observed = None if current is None else str(current.version)
                 check_version(target, mode, number)
-                if previous != number:
-                    store.set_registered_model_alias(name, registry.CHAMPION_ALIAS, number)
-                    store.set_model_version_tag(name, number, PROMOTED_TAG, context.run)
+                request = {"schema": 1, "run_id": context.run, "model": name, "version": number, "mode": mode}
+                receipt = reconcile(store, request, observed)
             except (JobFailure, ImportError):
                 raise
             except run_tracking.TrackingError as error:
                 raise JobFailure(error.name, error.detail) from None
             except Exception as error:
                 raise JobFailure("mlflow_failed", f"{type(error).__name__}: {error}") from None
-            document = {"schema": 1, "run_id": context.run, "model": name, "version": number, "previous_version": previous, "mode": mode}
-            return {RECORD: job_actions.text(document)}
+            return {RECORD: receipt}
 
         job_actions.run_step(context, record, "promote", {RECORD}.__contains__, plan)

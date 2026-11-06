@@ -626,6 +626,8 @@ def scenarios(cases: Any, folder: Path) -> None:
 
 PROMOTION = {"hai_type": HAI_TYPE, "model_version": "2", "promotion_mode": "promote", "mlflow": "aws"}
 MODEL = f"hai_model_{HAI_TYPE}"
+INTENT_KEY = f"promote/{RUN}/intent.json"
+REGISTRY_WRITES = ("set_registered_model_alias", "set_model_version_tag")
 
 
 def registry_fixture(folder: Path) -> Fixture:
@@ -744,18 +746,147 @@ def promote_cases(cases: Any, folder: Path) -> None:
 
     def failed_upload_fails_the_job() -> None:
         fixture, bucket = registry_fixture(folder / "receipt_down"), receipt_bucket()
-        bucket.faults["put_object"] = [client_error("AccessDenied", "put_object")]
+        bucket.put_faults["promote.json"] = [client_error("AccessDenied", "put_object")]
         code, out, error = promote_in(fixture, folder / "receipt_down_work", bucket)
         require(code != 0 and "receipt_upload_failed" in error, f"a failed upload did not fail the job: {code} {error}")
         require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported after a failed upload")
-        require(not bucket.objects, "an object was stored by a failed write")
+        require(promote_receipt.key_of(RUN) not in bucket.objects, "a receipt was stored by a failed write")
 
     def lost_reply_is_adopted() -> None:
         fixture, bucket = registry_fixture(folder / "receipt_lost"), receipt_bucket()
-        bucket.lose_reply_once = True
+        bucket.write_hook = lambda key: setattr(bucket, "lose_reply_once", key.endswith("promote.json"))
         code, _, error = promote_in(fixture, folder / "receipt_lost_work", bucket)
         require(code != 0 and "receipt_upload_failed" in error, f"a lost reply was not reported: {code} {error}")
         require(promote_in(fixture, folder / "receipt_lost_retry", bucket)[0] == 0, "a retry after a lost reply did not adopt the stored receipt")
+
+    def writes(fixture: Fixture) -> list[str]:
+        return [name for name in fixture.tracking.calls if name in REGISTRY_WRITES]
+
+    def stored_receipt(bucket: FakeLaunchBucket) -> dict[str, Any]:
+        return dict(json.loads(bucket.objects[promote_receipt.key_of(RUN)]))
+
+    def records_the_intent_first() -> None:
+        fixture, bucket = registry_fixture(folder / "intent_first"), receipt_bucket()
+        seen: list[tuple[str, str]] = []
+        bucket.write_hook = lambda key: seen.append((key, alias(fixture)))
+        code, _, error = promote_in(fixture, folder / "intent_first_work", bucket)
+        require(code == 0, f"promote failed: {error}")
+        require(seen == [(INTENT_KEY, "1"), (promote_receipt.key_of(RUN), "2")], f"writes and the alias they saw: {seen}")
+        intent = json.loads(bucket.objects[INTENT_KEY])
+        require(intent["previous_version"] == "1" and intent["version"] == "2" and intent["run_id"] == RUN, f"intent: {intent}")
+        require(bucket.calls[0][1].get("IfNoneMatch") == "*", "the intent write is not create-only")
+
+    def interrupted_after_the_move(name: str, champion: bool) -> None:
+        def case() -> None:
+            fixture, bucket = registry_fixture(folder / name), receipt_bucket()
+            if not champion:
+                del fixture.tracking.models[MODEL]["aliases"]["production"]
+            bucket.put_faults["promote.json"] = [client_error("AccessDenied", "put_object")]
+            code, _, error = promote_in(fixture, folder / f"{name}_first", bucket)
+            require(code != 0 and "receipt_upload_failed" in error and alias(fixture) == "2", f"the first task did not stop after the move: {code} {error}")
+            code, _, error = promote_in(fixture, folder / f"{name}_retry", bucket)
+            require(code == 0, f"the retry in a new task failed: {error}")
+            require(
+                stored_receipt(bucket)["previous_version"] == ("1" if champion else None),
+                f"the receipt lost the original predecessor: {stored_receipt(bucket)}",
+            )
+            require(
+                json.loads((folder / f"{name}_retry/in/promote/promote.json").read_text()) == stored_receipt(bucket),
+                "the workspace receipt differs from the stored one",
+            )
+            require(alias(fixture) == "2", "the retry changed production")
+
+        cases.check(name, case)
+
+    def stale_retry_moves_nothing(name: str, later: str) -> None:
+        def case() -> None:
+            fixture, bucket = registry_fixture(folder / name), receipt_bucket()
+            require(promote_in(fixture, folder / f"{name}_first", bucket)[0] == 0, "the first promote failed")
+            fixture.tracking.set_registered_model_alias(MODEL, "production", later)
+            fixture.tracking.calls.clear()
+            first = dict(bucket.objects)
+            for attempt in ("one", "two"):
+                code, _, error = promote_in(fixture, folder / f"{name}_{attempt}", bucket)
+                require(code == 0, f"the retry {attempt} failed: {error}")
+                require(alias(fixture) == later and not writes(fixture), f"the retry {attempt} wrote to the registry: {alias(fixture)} {writes(fixture)}")
+                require(bucket.objects == first, f"the retry {attempt} changed the durable records")
+                require(
+                    json.loads((folder / f"{name}_{attempt}/in/promote/promote.json").read_text()) == stored_receipt(bucket),
+                    "the retry returned another receipt",
+                )
+
+        cases.check(name, case)
+
+    def changed_request_is_refused() -> None:
+        fixture, bucket = registry_fixture(folder / "collision"), receipt_bucket()
+        require(promote_in(fixture, folder / "collision_first", bucket)[0] == 0, "the first promote failed")
+        fixture.tracking.calls.clear()
+        first = dict(bucket.objects)
+        code, out, error = promote_in(fixture, folder / "collision_work", bucket, {**PROMOTION, "model_version": "1", "promotion_mode": "rollback"})
+        require(code != 0 and "promotion_conflict" in error, f"a changed request was not refused: {code} {error}")
+        require(alias(fixture) == "2" and not writes(fixture) and bucket.objects == first, "a refused request changed the registry or the records")
+        require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported for a conflicting request")
+
+    def intent_failure_stops_the_move() -> None:
+        fixture, bucket = registry_fixture(folder / "intent_down"), receipt_bucket()
+        bucket.put_faults["intent.json"] = [client_error("AccessDenied", "put_object")]
+        code, out, error = promote_in(fixture, folder / "intent_down_work", bucket)
+        require(code != 0 and "promotion_intent_failed" in error, f"a failed intent write did not fail the job: {code} {error}")
+        require(alias(fixture) == "1" and not writes(fixture) and not bucket.objects, "the alias moved without a stored intent")
+        require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported without an intent")
+        require(promote_in(fixture, folder / "intent_down_retry", bucket)[0] == 0 and stored_receipt(bucket)["previous_version"] == "1", "the retry failed")
+
+    def stopped_before_the_move_completes_on_retry() -> None:
+        fixture, bucket = registry_fixture(folder / "before_move"), receipt_bucket()
+        fixture.tracking.fail_on = "set_registered_model_alias"
+        code, _, error = promote_in(fixture, folder / "before_move_first", bucket)
+        require(code != 0 and alias(fixture) == "1" and INTENT_KEY in bucket.objects, f"the first task did not stop after the intent: {code} {error}")
+        fixture.tracking.fail_on = None
+        code, _, error = promote_in(fixture, folder / "before_move_retry", bucket)
+        require(code == 0 and alias(fixture) == "2", f"the retry did not finish the planned move: {error}")
+        require(stored_receipt(bucket)["previous_version"] == "1", "the receipt lost the predecessor")
+
+    def unknown_completion_fails_closed() -> None:
+        fixture, bucket = registry_fixture(folder / "cannot_tell"), receipt_bucket()
+        bucket.absent_reads_denied = True
+        fixture.tracking.fail_on = "set_registered_model_alias"
+        require(promote_in(fixture, folder / "cannot_tell_first", bucket)[0] != 0, "the first task did not stop before the move")
+        fixture.tracking.fail_on = None
+        fixture.tracking.calls.clear()
+        code, _, error = promote_in(fixture, folder / "cannot_tell_retry", bucket)
+        require(code != 0 and "promotion_state_unknown" in error, f"an unreadable completion state was not refused: {code} {error}")
+        require(alias(fixture) == "1" and not writes(fixture), "the retry moved production without knowing whether the run had completed")
+
+    def first_promotion_needs_no_list_grant() -> None:
+        fixture, bucket = registry_fixture(folder / "no_list"), receipt_bucket()
+        bucket.absent_reads_denied = True
+        code, _, error = promote_in(fixture, folder / "no_list_work", bucket)
+        require(
+            code == 0 and alias(fixture) == "2" and stored_receipt(bucket)["previous_version"] == "1",
+            f"a first promotion needed an absent read: {code} {error}",
+        )
+
+    def intent_lost_reply_is_adopted() -> None:
+        fixture, bucket = registry_fixture(folder / "intent_lost"), receipt_bucket()
+        bucket.lose_reply_once = True
+        code, _, error = promote_in(fixture, folder / "intent_lost_work", bucket)
+        require(code == 0 and alias(fixture) == "2", f"a lost intent reply was not adopted: {code} {error}")
+        require(
+            writes(fixture).count("set_registered_model_alias") == 1 and stored_receipt(bucket)["previous_version"] == "1",
+            "the promotion was repeated or lost its predecessor",
+        )
+
+    cases.check("promote_records_the_intent_before_the_alias_moves", records_the_intent_first)
+    interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_with_a_champion", True)
+    interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_without_a_champion", False)
+    stale_retry_moves_nothing("promote_stale_retry_after_a_later_promotion_moves_nothing", "3")
+    stale_retry_moves_nothing("promote_stale_retry_after_a_return_to_the_predecessor_moves_nothing", "1")
+    cases.check("promote_refuses_a_changed_request_for_a_recorded_run", changed_request_is_refused)
+    cases.check("promote_stops_before_the_move_when_the_intent_is_not_stored", intent_failure_stops_the_move)
+    cases.check("promote_retry_finishes_a_move_that_never_happened", stopped_before_the_move_completes_on_retry)
+    cases.check("promote_retry_fails_closed_when_completion_cannot_be_read", unknown_completion_fails_closed)
+    cases.check("promote_first_run_needs_no_list_grant", first_promotion_needs_no_list_grant)
+    cases.check("promote_adopts_an_intent_whose_reply_was_lost", intent_lost_reply_is_adopted)
 
     cases.check("promote_moves_production", moved)
     cases.check("promote_stores_a_durable_receipt_before_success", stores_a_durable_receipt)

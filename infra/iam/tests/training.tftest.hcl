@@ -210,9 +210,12 @@ run "training_roles_are_narrow" {
       jsondecode(local.training_policy_documents.promote_receipts).Statement[0].Condition.StringEquals["s3:if-none-match"] == "*" &&
       jsondecode(local.training_policy_documents.promote_receipts).Statement[1].Action == "s3:GetObject" &&
       jsondecode(local.training_policy_documents.promote_receipts).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/promote/*" &&
-      length(jsondecode(local.training_policy_documents.promote_receipts).Statement) == 2
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[2].Action == "s3:ListBucket" &&
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[2].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[2].Condition.StringLike["s3:prefix"] == ["promote/*"] &&
+      length(jsondecode(local.training_policy_documents.promote_receipts).Statement) == 3
     )
-    error_message = "The promotion receipt grant creates objects under promote/ only when none exists, reads them back and allows nothing else."
+    error_message = "The promotion record grant creates objects under promote/ only when none exists, reads them back, lists the promote/ prefix alone so an absent record answers as absent, and allows nothing else."
   }
 
   assert {
