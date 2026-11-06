@@ -114,13 +114,11 @@ run "the_features_activation_lets_the_role_upload_its_run_and_check_the_registry
     condition = (
       length(aws_iam_role_policy.job_writer_features_activation) == 1 &&
       aws_iam_role_policy.job_writer_features_activation[0].role == aws_iam_role.job_write_layer_task["features"].name &&
-      length(jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement) == 2 &&
+      length(jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement) == 1 &&
       jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[0].Action == ["s3:PutObject"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*"] &&
-      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[1].Action == ["s3:ListBucket"] &&
-      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
-      jsondecode(aws_iam_role_policy.job_writer_features_activation[0].policy).Statement[1].Condition.Null["s3:prefix"] == "true"
+      !strcontains(aws_iam_role_policy.job_writer_features_activation[0].policy, "s3:ListBucket")
     )
-    error_message = "The features role may put objects under its own run prefix and may make the bucket check of the Feast registry, which sends no prefix. A list with a prefix stays refused."
+    error_message = "The features role may put objects under its own run prefix and gets no bucket list here: the project registry store reads the Feast registry with GetObject only, so no unprefixed ListBucket is granted (owner, Nov 6 2026)."
   }
 }
