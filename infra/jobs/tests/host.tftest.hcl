@@ -191,14 +191,14 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
       promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
       } : (
-      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" && !(container.name == "init" && contains(["command", "linuxParameters"], key)) }] ==
-      [for container in fargate : { for key, value in container : key => value if key != "environment" && !(container.name == "init" && contains(["command", "linuxParameters"], key)) }] &&
+      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters"], key)) || (key == "command" && container.essential && container.name != "guard")) }] ==
+      [for container in fargate : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters"], key)) || (key == "command" && container.essential && container.name != "guard")) }] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.name]] ==
       [for container in fargate : [for item in container.environment : item.name]] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]] ==
       [for container in fargate : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]]
     )])
-    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts. The init step differs by its wipe and capabilities, which the scratch cases pin."
+    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts. The init step differs by its wipe and capabilities and the last phase by its cleanup, which the scratch cases pin."
   }
 
   assert {
@@ -504,11 +504,12 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
 
   assert {
     condition = (
-      length(jsondecode(output.host_container_definitions["metadata"])) == 1 &&
-      jsondecode(output.host_container_definitions["metadata"])[0].name == "ingest" && jsondecode(output.host_container_definitions["metadata"])[0].essential &&
-      jsondecode(output.host_container_definitions["metadata"])[0].image == var.openmetadata_images["ingestion"]
+      length(jsondecode(output.host_container_definitions["metadata"])) == 2 &&
+      jsondecode(output.host_container_definitions["metadata"])[0].name == "init" && !jsondecode(output.host_container_definitions["metadata"])[0].essential &&
+      jsondecode(output.host_container_definitions["metadata"])[1].name == "ingest" && jsondecode(output.host_container_definitions["metadata"])[1].essential &&
+      alltrue([for container in jsondecode(output.host_container_definitions["metadata"]) : container.image == var.openmetadata_images["ingestion"]])
     )
-    error_message = "The metadata host task holds exactly one container, the ingestion image, and not the database, search and server of the catalog."
+    error_message = "The metadata host task holds an init step and one ingestion container, both in the ingestion image, and not the database, search and server of the catalog."
   }
 
   assert {
@@ -520,7 +521,7 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
   }
 
   assert {
-    condition = alltrue([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : (
+    condition = alltrue([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : (
       !startswith(item.name, "DB_") && !startswith(item.name, "ELASTICSEARCH_") && !startswith(item.name, "POSTGRES_") && !startswith(item.name, "OPENSEARCH_") &&
       !contains(["SEARCH_TYPE", "PGDATA", "OM_DATABASE", "discovery.type", "OM_LIFETIME_SECONDS", "OM_INGESTION_TOKEN"], item.name)
     )])
@@ -529,9 +530,9 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
 
   assert {
     condition = (
-      one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == "http://10.0.1.20:8585/api" &&
-      toset([for item in jsondecode(output.host_container_definitions["metadata"])[0].secrets : item.name]) == toset(["OM_INGESTION_TOKEN", "POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"]) &&
-      one([for item in jsondecode(output.host_container_definitions["metadata"])[0].secrets : item.valueFrom if item.name == "OM_INGESTION_TOKEN"]) ==
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://10.0.1.20:8585/api" &&
+      toset([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.name]) == toset(["OM_INGESTION_TOKEN", "POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"]) &&
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.valueFrom if item.name == "OM_INGESTION_TOKEN"]) ==
       "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_ingestion"
     )
     error_message = "The container is told the catalog API address and receives the ingestion bot token from its Parameter Store parameter."
@@ -539,19 +540,19 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
 
   assert {
     condition = (
-      jsondecode(output.host_container_definitions["metadata"])[0].entryPoint == ["python", "-m", "scripts.infrastructure.openmetadata_host_ingest"] &&
-      jsondecode(output.host_container_definitions["metadata"])[0].command == ["--config-dir", "/opt/hai/repo/config/metadata/ingestion", "--work-dir", "/workspace", "polaris", "dbt"] &&
-      jsondecode(output.host_container_definitions["metadata"])[0].workingDirectory == "/opt/hai/repo"
+      jsondecode(output.host_container_definitions["metadata"])[1].entryPoint == ["sh", "-c"] &&
+      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace polaris dbt)") &&
+      jsondecode(output.host_container_definitions["metadata"])[1].workingDirectory == "/opt/hai/repo"
     )
     error_message = "The container runs the host ingestion script from the mounted checkout for the Polaris and dbt sources."
   }
 
   assert {
     condition = (
-      toset([for mount in jsondecode(output.host_container_definitions["metadata"])[0].mountPoints : "${mount.sourceVolume}:${mount.containerPath}:${mount.readOnly}"]) ==
+      toset([for mount in jsondecode(output.host_container_definitions["metadata"])[1].mountPoints : "${mount.sourceVolume}:${mount.containerPath}:${mount.readOnly}"]) ==
       toset(["workspace:/workspace:false", "tmp:/tmp:false", "repo:/opt/hai/repo:true"]) &&
-      !contains(keys(jsondecode(output.host_container_definitions["metadata"])[0]), "memory") && jsondecode(output.host_container_definitions["metadata"])[0].readonlyRootFilesystem &&
-      jsondecode(output.host_container_definitions["metadata"])[0].user == "10001:10001"
+      !contains(keys(jsondecode(output.host_container_definitions["metadata"])[1]), "memory") && jsondecode(output.host_container_definitions["metadata"])[1].readonlyRootFilesystem &&
+      jsondecode(output.host_container_definitions["metadata"])[1].user == "10001:10001"
     )
     error_message = "The checkout is mounted read-only, the root filesystem stays read-only and the job user is not root."
   }
@@ -911,7 +912,7 @@ run "the_catalog_address_accepts_ten" {
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
     error_message = "A private address on port 8585 with the /api path reaches the container."
   }
 }
@@ -926,7 +927,7 @@ run "the_catalog_address_accepts_ten_edges" {
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
     error_message = "A private address on port 8585 with the /api path reaches the container."
   }
 }
@@ -941,7 +942,7 @@ run "the_catalog_address_accepts_low_172" {
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
     error_message = "A private address on port 8585 with the /api path reaches the container."
   }
 }
@@ -956,7 +957,7 @@ run "the_catalog_address_accepts_high_172" {
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
     error_message = "A private address on port 8585 with the /api path reaches the container."
   }
 }
@@ -971,7 +972,7 @@ run "the_catalog_address_accepts_private_192" {
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[0].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
     error_message = "A private address on port 8585 with the /api path reaches the container."
   }
 }
