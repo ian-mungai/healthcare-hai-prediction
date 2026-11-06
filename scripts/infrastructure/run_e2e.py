@@ -2321,6 +2321,25 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
     run_console_copy_cases(evidence, bash, template, gnu_timeout)
 
 
+def nft_check_prefix(evidence: Evidence) -> list[str] | None:
+    """The command prefix that lets nft -c run: none as root; else a new user and network namespace with root mapped; else sudo without a password (a
+    hosted Ubuntu runner restricts unprivileged user namespaces but allows it). None when neither works, so the check is recorded as pending."""
+    if os.geteuid() == 0:
+        return []
+    unshare = shutil.which("unshare")
+    if unshare:
+        namespace = [unshare, "--user", "--map-root-user", "--net"]
+        step, result = evidence.run("job_firewall_namespace_probe", [*namespace, "true"], evidence.temporary)
+        if result.returncode == 0:
+            return namespace
+    sudo = shutil.which("sudo")
+    if sudo:
+        step, result = evidence.run("job_firewall_sudo_probe", [sudo, "-n", "true"], evidence.temporary)
+        if result.returncode == 0:
+            return [sudo, "-n"]
+    return None
+
+
 def run_job_firewall_syntax_cases(evidence: Evidence) -> None:
     """Check the job firewall file with the real nft where one exists, and record the check as pending where it does not."""
     nft = shutil.which("nft")
@@ -2333,8 +2352,16 @@ def run_job_firewall_syntax_cases(evidence: Evidence) -> None:
             }
         )
         return
-    unshare = shutil.which("unshare")
-    prefix = [unshare, "--user", "--map-root-user", "--net"] if unshare and os.geteuid() != 0 else []
+    prefix = nft_check_prefix(evidence)
+    if prefix is None:
+        evidence.report.setdefault("pending", []).append(
+            {
+                "name": "job_firewall_syntax",
+                "reason": "nft is installed, but this user can neither map root in a new user namespace nor run sudo without a password.",
+                "runs_where": "a Linux machine that allows unprivileged user namespaces, or passwordless sudo, or as root",
+            }
+        )
+        return
     rules = REPO_ROOT / JOB_FIREWALL_FILE
     step, result = evidence.run("job_firewall_syntax_accepted", [*prefix, nft, "-c", "-f", str(rules)], evidence.temporary)
     evidence.check(step, "the_tracked_rules_file_passes_nft_check", result.returncode == 0)
