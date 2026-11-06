@@ -16,9 +16,9 @@ aws ssm start-session --profile healthcare_hai_prediction_dev --region us-west-2
   --document-name AWS-StartPortForwardingSession --parameters portNumber=5100,localPortNumber=5100
 
 Then set MLFLOW_TRACKING_URI=http://localhost:5100, MLFLOW_TRACKING_USERNAME=admin and MLFLOW_TRACKING_PASSWORD in the shell of the owner command. The password
-is the value of the SecureString parameter /healthcare_hai_prediction/mlflow_admin_password. The project profile has no grant on it, so read it with the
-administrator profile and never print it or write it to a file. Show reads only the data bucket and needs none of this. If the forward drops, open it again
-and run resolve again.
+is the value of the SecureString parameter /healthcare_hai_prediction/mlflow_admin_password. The project profile healthcare_hai_prediction_dev may read it
+(ssm:GetParameter in the project SSM policy), so read it with that profile into the variable and never print it or write it to a file. Show reads only the
+data bucket and needs none of this. If the forward drops, open it again and run resolve again.
 
 A run that sent its alias request and did not see it commit cannot be retried. Its retry fails with promotion_needs_resolution and keeps the lease,
 because the MLflow server can still commit the earlier request after the task that sent it ended (promote has the rule). Automatic promotions of the
