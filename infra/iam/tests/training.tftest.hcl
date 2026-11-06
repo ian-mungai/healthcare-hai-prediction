@@ -186,20 +186,33 @@ run "training_roles_are_narrow" {
 
   assert {
     condition = (
-      toset(keys(aws_iam_role_policy.train_policy)) == toset(["stage_read", "features_read", "dvc_baseline"]) &&
+      toset(keys(aws_iam_role_policy.train_policy)) == toset(["stage_read", "features_read", "dvc_baseline", "promote_receipts"]) &&
       aws_iam_role_policy.train_policy["stage_read"].policy == local.job_policy_documents.job_stage_read &&
       aws_iam_role_policy.train_policy["features_read"].policy == local.training_policy_documents.job_features_read &&
       aws_iam_role_policy.train_policy["dvc_baseline"].policy == local.training_policy_documents.job_dvc_baseline &&
+      aws_iam_role_policy.train_policy["promote_receipts"].policy == local.training_policy_documents.promote_receipts &&
       alltrue([for policy in aws_iam_role_policy.train_policy : policy.role == aws_iam_role.train_task[0].name]) &&
       aws_iam_role_policy.mlflow_artifacts[0].role == aws_iam_role.mlflow_task[0].name &&
       aws_iam_role_policy.mlflow_artifacts[0].policy == local.training_policy_documents.mlflow_artifacts
     )
-    error_message = "The training role holds the stage read, the feature read and the DVC grant. The MLflow role holds the mlflow/ artifact grant alone. Neither holds a lakehouse write."
+    error_message = "The training role holds the stage read, the feature read, the DVC grant and the promotion receipt grant. The MLflow role holds the mlflow/ artifact grant alone. Neither holds a lakehouse write."
   }
 
   assert {
     condition     = jsondecode(local.training_policy_documents.mlflow_artifacts).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/mlflow/*"
     error_message = "The MLflow grant names the data bucket mlflow/ prefix."
+  }
+
+  assert {
+    condition = (
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[0].Action == "s3:PutObject" &&
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/promote/*" &&
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[0].Condition.StringEquals["s3:if-none-match"] == "*" &&
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[1].Action == "s3:GetObject" &&
+      jsondecode(local.training_policy_documents.promote_receipts).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/promote/*" &&
+      length(jsondecode(local.training_policy_documents.promote_receipts).Statement) == 2
+    )
+    error_message = "The promotion receipt grant creates objects under promote/ only when none exists, reads them back and allows nothing else."
   }
 
   assert {

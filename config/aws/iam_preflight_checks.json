@@ -186,7 +186,8 @@
       "policies": [
         "owner_policies/job_stage_read.json",
         "owner_policies/job_features_read.json",
-        "owner_policies/job_dvc_baseline.json"
+        "owner_policies/job_dvc_baseline.json",
+        "owner_policies/promote_receipts.json"
       ]
     },
     "drift": {

@@ -21,8 +21,10 @@ from unittest import mock
 
 from orchestration import code_digest
 from scripts.features import publication_reads, training_extract
+from scripts.orchestration.ecs_broker_fake import client_error
+from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
-from scripts.training import guards, promotion_check
+from scripts.training import guards, promote_receipt, promotion_check
 from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
 from scripts.training.job_cases import COMMIT, DIGEST
 from scripts.training.lane_b_cases import RUN
@@ -643,14 +645,29 @@ def registry_fixture(folder: Path) -> Fixture:
     return fixture
 
 
-def promote_call(fixture: Fixture, work: Path, parameters: Any = PROMOTION, **changes: str | None) -> tuple[int, str, str]:
-    """Run the promote phase in a work folder that holds the unpacked code of the run."""
+def receipt_bucket() -> FakeLaunchBucket:
+    """A bucket that answers like the train task role: a create-only write and a read under the receipt prefix, and nothing else."""
+    return FakeLaunchBucket(BUCKET, f"{promote_receipt.PREFIX}/")
+
+
+def promote_in(fixture: Fixture, work: Path, bucket: FakeLaunchBucket | None, parameters: Any = PROMOTION, **changes: str | None) -> tuple[int, str, str]:
+    """Run the promote phase in a work folder that holds the unpacked code of the run, with the receipt bucket stand-in."""
     work.mkdir(parents=True, exist_ok=True)
     if not (work / "code.tar.gz").exists():
         code_archive(work)
     sha = hashlib.sha256((work / "code.tar.gz").read_bytes()).hexdigest()
-    with standins(fixture), environment(CODE_SHA256=sha, TRAINING_PARAMETERS=json.dumps(parameters), **changes):
+    client = bucket if bucket is not None else receipt_bucket()
+    with (
+        standins(fixture),
+        mock.patch.object(promote_receipt, "s3_client", return_value=client),
+        environment(CODE_SHA256=sha, TRAINING_PARAMETERS=json.dumps(parameters), **changes),
+    ):
         return call("promote", "--run", RUN, "--mode", "real", "--work", str(work))
+
+
+def promote_call(fixture: Fixture, work: Path, parameters: Any = PROMOTION, **changes: str | None) -> tuple[int, str, str]:
+    """Run the promote phase with a receipt bucket of its own."""
+    return promote_in(fixture, work, None, parameters, **changes)
 
 
 def promote_cases(cases: Any, folder: Path) -> None:
@@ -696,7 +713,56 @@ def promote_cases(cases: Any, folder: Path) -> None:
 
         cases.check(name, case)
 
+    def stores_a_durable_receipt() -> None:
+        fixture, bucket = registry_fixture(folder / "durable"), receipt_bucket()
+        work = folder / "durable_work"
+        code, out, error = promote_in(fixture, work, bucket)
+        require(code == 0, f"promote failed: {error}")
+        stored = bucket.objects.get(promote_receipt.key_of(RUN))
+        require(stored is not None, f"no durable receipt after a successful promote: {sorted(bucket.objects)}")
+        require(stored == (work / "in/promote/promote.json").read_bytes(), "the durable receipt differs from the workspace receipt")
+        require(json.loads(stored or b"{}")["previous_version"] == "1", "the durable receipt lost the previous version")
+        require(bucket.calls[0][1].get("IfNoneMatch") == "*", "the receipt write is not create-only")
+        require(any(item.get("step") == "promote" for item in lines_of(out)), "success was not reported")
+
+    def receipt_rerun_is_idempotent() -> None:
+        fixture, bucket = registry_fixture(folder / "receipt_again"), receipt_bucket()
+        work = folder / "receipt_again_first"
+        require(promote_in(fixture, work, bucket)[0] == 0, "the first promote failed")
+        first = dict(bucket.objects)
+        require(promote_in(fixture, work, bucket)[0] == 0 and bucket.objects == first, "a resumed task changed the durable receipt")
+        code, _, error = promote_in(fixture, folder / "receipt_again_new_task", bucket)
+        require(code == 0 and bucket.objects == first, f"a rerun in a new task failed or replaced the durable receipt: {error}")
+        require(json.loads(first[promote_receipt.key_of(RUN)])["previous_version"] == "1", "the first receipt lost the previous version")
+
+    def receipt_conflict_refused() -> None:
+        fixture, bucket = registry_fixture(folder / "receipt_conflict"), receipt_bucket()
+        bucket.objects[promote_receipt.key_of(RUN)] = b'{"schema":1,"run_id":"other"}\n'
+        code, out, error = promote_in(fixture, folder / "receipt_conflict_work", bucket)
+        require(code != 0 and "receipt_upload_failed" in error and "another receipt" in error, f"{code} {error}")
+        require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported with a conflicting receipt")
+
+    def failed_upload_fails_the_job() -> None:
+        fixture, bucket = registry_fixture(folder / "receipt_down"), receipt_bucket()
+        bucket.faults["put_object"] = [client_error("AccessDenied", "put_object")]
+        code, out, error = promote_in(fixture, folder / "receipt_down_work", bucket)
+        require(code != 0 and "receipt_upload_failed" in error, f"a failed upload did not fail the job: {code} {error}")
+        require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported after a failed upload")
+        require(not bucket.objects, "an object was stored by a failed write")
+
+    def lost_reply_is_adopted() -> None:
+        fixture, bucket = registry_fixture(folder / "receipt_lost"), receipt_bucket()
+        bucket.lose_reply_once = True
+        code, _, error = promote_in(fixture, folder / "receipt_lost_work", bucket)
+        require(code != 0 and "receipt_upload_failed" in error, f"a lost reply was not reported: {code} {error}")
+        require(promote_in(fixture, folder / "receipt_lost_retry", bucket)[0] == 0, "a retry after a lost reply did not adopt the stored receipt")
+
     cases.check("promote_moves_production", moved)
+    cases.check("promote_stores_a_durable_receipt_before_success", stores_a_durable_receipt)
+    cases.check("promote_receipt_rerun_changes_nothing", receipt_rerun_is_idempotent)
+    cases.check("promote_receipt_refuses_another_receipt", receipt_conflict_refused)
+    cases.check("promote_fails_visibly_when_the_receipt_upload_fails", failed_upload_fails_the_job)
+    cases.check("promote_adopts_a_receipt_whose_reply_was_lost", lost_reply_is_adopted)
     cases.check("promote_rerun_changes_nothing", rerun_changes_nothing)
     cases.check("promote_rolls_back_to_an_earlier_production_version", rolled_back)
     refuses("promote_refuses_a_failed_version", {**PROMOTION, "model_version": "3"})

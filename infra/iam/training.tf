@@ -1,12 +1,13 @@
 locals {
   training_policy_documents = {
-    for name in ["job_dvc_baseline", "job_features_read", "mlflow_artifacts"] :
+    for name in ["job_dvc_baseline", "job_features_read", "mlflow_artifacts", "promote_receipts"] :
     name => templatefile("${path.module}/owner_policies/${name}.json", local.job_policy_inputs)
   }
   training_policies = var.training_prepared ? {
-    stage_read    = local.job_policy_documents.job_stage_read
-    features_read = local.training_policy_documents.job_features_read
-    dvc_baseline  = local.training_policy_documents.job_dvc_baseline
+    stage_read       = local.job_policy_documents.job_stage_read
+    features_read    = local.training_policy_documents.job_features_read
+    dvc_baseline     = local.training_policy_documents.job_dvc_baseline
+    promote_receipts = local.training_policy_documents.promote_receipts
   } : {}
   training_endpoints = var.training_prepared && var.job_endpoints_enabled
   mlflow_parameter_values = merge(local.owner_policy_values, {
@@ -19,7 +20,7 @@ resource "aws_iam_role" "train_task" {
   count = var.training_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "job_train_task")
-  description          = "Training job: stage reads, the feature tables, the Feast registry and the DVC remote. No lakehouse write and no mlflow/ access."
+  description          = "Training and promotion jobs: stage reads, the feature tables, the Feast registry, the DVC remote and the create-only promotion receipts under promote/. No lakehouse write and no mlflow/ access."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags
