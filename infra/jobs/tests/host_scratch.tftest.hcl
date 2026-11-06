@@ -83,7 +83,12 @@ variables {
 # - the wipe runs after another step or reaches beyond the two scratch folders;
 # - the init container cannot delete files the job user wrote, because it dropped the capabilities that let root delete them,
 #   so every job stops at its first step;
-# - the Fargate definition, which needs no wipe, changes with the host definition.
+# - the Fargate definition, which needs no wipe, changes with the host definition;
+# - a successful job leaves its files on the shared volume, so the next job of another family finds less room than it needs;
+# - the metadata job, which had only one container, starts on the files of its previous attempt;
+# - the cleanup runs although the last phase failed, so the files that show the failure are gone, or it runs before the evidence is durable;
+# - the cleanup is a container that starts only after the essential last phase has ended, which stops the task first, so it never runs;
+# - the cleanup reaches the folders of another family or the read-only repository checkout.
 
 run "every_host_init_wipes_the_two_scratch_folders_first" {
   command = plan
@@ -94,7 +99,7 @@ run "every_host_init_wipes_the_two_scratch_folders_first" {
 
   assert {
     condition = alltrue([
-      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve"] : (
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
         jsondecode(output.host_container_definitions[family])[0].name == "init" &&
         startswith(jsondecode(output.host_container_definitions[family])[0].command[0], "find /workspace /tmp -mindepth 1 -delete && ") &&
         length(regexall("find ", jsondecode(output.host_container_definitions[family])[0].command[0])) == 1 &&
@@ -104,16 +109,44 @@ run "every_host_init_wipes_the_two_scratch_folders_first" {
         jsondecode(output.host_container_definitions[family])[0].dependsOn == []
       )
     ])
-    error_message = "The first step of each job on the host wipes only the contents of /workspace and /tmp, as root, before any other command."
+    error_message = "The first step of each job on the host, the metadata job included, wipes only the contents of /workspace and /tmp, as root, before any other command."
   }
 
   assert {
     condition = alltrue([
-      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve"] : (
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
         strcontains(jsondecode(output.host_container_definitions[family])[0].command[0], "chown 10001:10001 /workspace /tmp")
       )
     ])
     error_message = "The wipe is followed by the init step the Fargate twin runs, which hands the folders to the job user."
+  }
+
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        jsondecode(output.host_container_definitions[family])[0].image == jsondecode(output.host_container_definitions[family])[1].image || family == "metadata"
+      )
+    ]) && jsondecode(output.host_container_definitions["metadata"])[0].image == var.openmetadata_images["ingestion"]
+    error_message = "The metadata init step runs in the ingestion image, the only image of that job, and the other families keep the init image of their Fargate twin."
+  }
+
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        toset([for mount in jsondecode(output.host_container_definitions[family])[0].mountPoints : "${mount.sourceVolume}:${mount.containerPath}:${mount.readOnly}"]) ==
+        toset(["workspace:/workspace:false", "tmp:/tmp:false"])
+      )
+    ])
+    error_message = "The init step mounts the family's two scratch folders and nothing else, so its wipe cannot reach the repository checkout or another family."
+  }
+
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        jsondecode(output.host_container_definitions[family])[1].dependsOn == [{ containerName = "init", condition = "SUCCESS" }]
+      )
+    ])
+    error_message = "The first phase waits for the success of the init step in every family."
   }
 }
 
@@ -126,7 +159,7 @@ run "host_init_keeps_the_capabilities_that_let_root_delete_the_job_users_files" 
 
   assert {
     condition = alltrue([
-      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve"] : (
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
         !contains(jsondecode(output.host_container_definitions[family])[0].linuxParameters.capabilities.drop, "DAC_OVERRIDE") &&
         !contains(jsondecode(output.host_container_definitions[family])[0].linuxParameters.capabilities.drop, "FOWNER") &&
         jsondecode(output.host_container_definitions[family])[0].linuxParameters.capabilities.add == [] &&
@@ -138,7 +171,7 @@ run "host_init_keeps_the_capabilities_that_let_root_delete_the_job_users_files" 
 
   assert {
     condition = alltrue(flatten([
-      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve"] : [
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : [
         for container in slice(jsondecode(output.host_container_definitions[family]), 1, length(jsondecode(output.host_container_definitions[family]))) :
         container.linuxParameters.capabilities.drop == ["ALL"] && container.user == "10001:10001"
       ]
@@ -147,7 +180,112 @@ run "host_init_keeps_the_capabilities_that_let_root_delete_the_job_users_files" 
   }
 }
 
-run "the_fargate_definitions_and_the_metadata_job_need_no_wipe_and_do_not_change" {
+run "every_host_job_cleans_its_scratch_after_its_last_phase_succeeds" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  # The task stops when its essential container ends, so a cleanup in a later container would never start. The last phase is the essential container
+  # and runs the cleanup itself, joined with && so that it follows only a success of the whole phase, after the phase has made its evidence durable.
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        endswith(one([for container in jsondecode(output.host_container_definitions[family]) : container if container.essential && container.name != "guard"]).command[0], ") && find /workspace /tmp -mindepth 1 -delete") &&
+        startswith(one([for container in jsondecode(output.host_container_definitions[family]) : container if container.essential && container.name != "guard"]).command[0], "(") &&
+        slice(one([for container in jsondecode(output.host_container_definitions[family]) : container if container.essential && container.name != "guard"]).entryPoint, length(one([for container in jsondecode(output.host_container_definitions[family]) : container if container.essential && container.name != "guard"]).entryPoint) - 2, length(one([for container in jsondecode(output.host_container_definitions[family]) : container if container.essential && container.name != "guard"]).entryPoint)) == ["sh", "-c"]
+      )
+    ])
+    error_message = "The last phase of every host job, the metadata job included, ends with a cleanup of /workspace and /tmp that runs only after the whole phase succeeded."
+  }
+
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard" && container.essential]) == 1 &&
+        jsondecode(output.host_container_definitions[family])[length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"]) - 1].essential &&
+        !contains([for container in jsondecode(output.host_container_definitions[family]) : container.name], "cleanup")
+      )
+    ])
+    error_message = "The cleanup is no container of its own: only one container stays essential, the last phase, and no container could start after it."
+  }
+
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard" && strcontains(container.command[0], "find ")]) == 2 &&
+        alltrue([
+          for container in jsondecode(output.host_container_definitions[family]) :
+          length(regexall("find ", container.command[0])) == length(regexall("find /workspace /tmp -mindepth 1 -delete", container.command[0]))
+          if container.name != "guard"
+        ]) &&
+        alltrue([
+          for container in jsondecode(output.host_container_definitions[family]) :
+          !strcontains(container.command[0], "rm ") && !strcontains(container.command[0], "..") && !strcontains(container.command[0], var.host_scratch_root)
+          if container.name != "guard"
+        ])
+      )
+    ])
+    error_message = "Only the init step and the last phase delete anything, only the contents of /workspace and /tmp, and no command names the scratch root, a parent folder or the repository checkout."
+  }
+
+  assert {
+    condition = alltrue([
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
+        alltrue([
+          for container in jsondecode(output.host_container_definitions[family]) :
+          alltrue([for mount in container.mountPoints : contains(["workspace", "tmp", "repo"], mount.sourceVolume) && (mount.sourceVolume != "repo" || mount.readOnly)])
+          if container.name != "guard"
+        ]) &&
+        alltrue([
+          for name, path in {
+            for volume in aws_ecs_task_definition.host[family].volume : volume.name => volume.host_path
+          } : name == "repo" ? path == var.host_repo_path : startswith(path, "${var.host_scratch_root}/${family}/")
+        ])
+      )
+    ])
+    error_message = "A cleanup can reach only the family's own two scratch folders: their host folders lie under <root>/<family>/ and the repository checkout stays read-only."
+  }
+}
+
+run "the_cleanup_keeps_the_phase_command_and_follows_only_its_success" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([
+      for pair in [
+        { family = "silver", fargate = output.layer_container_definitions["silver"] },
+        { family = "gold", fargate = output.layer_container_definitions["gold"] },
+        { family = "features", fargate = output.layer_container_definitions["features"] },
+        { family = "bronze", fargate = output.bronze_container_definitions },
+        { family = "train", fargate = output.train_container_definitions },
+        { family = "drift", fargate = output.drift_container_definitions },
+        { family = "promote", fargate = output.promote_container_definitions },
+        { family = "serve", fargate = output.serve_container_definitions },
+        ] : (
+        [for container in jsondecode(output.host_container_definitions[pair.family]) : container if container.name != "guard"][length([for container in jsondecode(output.host_container_definitions[pair.family]) : container if container.name != "guard"]) - 1].command[0] ==
+        format("(%s) && find /workspace /tmp -mindepth 1 -delete", [for container in jsondecode(pair.fargate) : container if container.name != "guard"][length([for container in jsondecode(pair.fargate) : container if container.name != "guard"]) - 1].command[0])
+      )
+    ])
+    error_message = "The host cleanup wraps the unchanged command of the last Fargate phase in a group and follows it with &&, so a failed phase keeps its files."
+  }
+
+  assert {
+    condition = (
+      jsondecode(output.host_container_definitions["metadata"])[1].name == "ingest" &&
+      jsondecode(output.host_container_definitions["metadata"])[1].command[0] == "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace polaris dbt) && find /workspace /tmp -mindepth 1 -delete" &&
+      jsondecode(output.host_container_definitions["metadata"])[1].dependsOn == [{ containerName = "init", condition = "SUCCESS" }]
+    )
+    error_message = "The metadata ingestion command is unchanged inside the group, joined to the cleanup with &&, and it waits for the init step."
+  }
+}
+
+run "the_fargate_definitions_need_no_wipe_and_do_not_change" {
   command = plan
 
   variables {
@@ -161,11 +299,14 @@ run "the_fargate_definitions_and_the_metadata_job_need_no_wipe_and_do_not_change
         output.drift_container_definitions, output.promote_container_definitions, output.serve_container_definitions
       ] : [for container in jsondecode(json) : !strcontains(jsonencode(container.command), "find /workspace")]
     ]))
-    error_message = "The Fargate definitions start with an empty workspace and carry no wipe."
+    error_message = "The Fargate definitions start with an empty workspace and carry no wipe or cleanup."
   }
 
   assert {
-    condition     = length(jsondecode(output.host_container_definitions["metadata"])) == 1 && jsondecode(output.host_container_definitions["metadata"])[0].name == "ingest"
-    error_message = "The metadata job keeps its one ingestion container, which the cleanup after a run and the host preparation cover."
+    condition = (
+      [for container in jsondecode(output.layer_container_definitions["silver"]) : container.name][0] == "init" &&
+      alltrue([for json in [output.bronze_container_definitions, output.train_container_definitions, output.drift_container_definitions, output.promote_container_definitions, output.serve_container_definitions] : jsondecode(json)[length(jsondecode(json)) - 1].essential])
+    )
+    error_message = "The last Fargate phase stays the essential container."
   }
 }
