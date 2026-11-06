@@ -52,6 +52,10 @@
       "runtime": "feature_store",
       "reason": "Cannot find implementation or library stub for module named \"feast\"; Cannot find implementation or library stub for module named \"feast.infra.data_sources.contrib.iceberg_catalog.iceberg_source\"; Cannot find implementation or library stub for module named \"feast.types\"; Cannot find implementation or library stub for module named \"feast.value_type\""
     },
+    "scripts/features/feast_registry_store.py": {
+      "runtime": "feature_store",
+      "reason": "Cannot find implementation or library stub for module named \"feast.infra.registry.registry_store\"; Cannot find implementation or library stub for module named \"feast.protos.feast.core.Registry_pb2\""
+    },
     "dags/training_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""

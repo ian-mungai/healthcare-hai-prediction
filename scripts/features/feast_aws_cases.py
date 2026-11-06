@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA17 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA19 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -10,6 +10,7 @@ The report lists case names, failure-mode IDs, check names and verdicts only.
 
 from __future__ import annotations
 
+import abc
 import builtins
 import contextlib
 import hashlib
@@ -17,12 +18,16 @@ import http.server
 import importlib
 import importlib.util
 import json
+import os
+import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -30,7 +35,7 @@ from orchestration import ecs_target
 from scripts.features import feast_aws, feast_cases, feast_job, feast_materialize, online_cases
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
-from scripts.features.feast_harness import Checker
+from scripts.features.feast_harness import Checker, fake_module
 from scripts.features.publication_reads import ReadError
 
 SENTINEL = "sentinel-secret-9f31c2"
@@ -721,7 +726,13 @@ def case_fa13(c: Checker) -> None:
         return [line for line in path.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
     c.check("the AWS settings file exists", feast_aws.AWS_SETTINGS_FILE.is_file())
-    c.check("the AWS file holds the same stores and options as the local file", body(feast_aws.AWS_SETTINGS_FILE) == body(feast_job.SETTINGS_FILE))
+    registry_store_line = f"  registry_store_type: {REGISTRY_STORE_TYPE}"
+    aws_body = body(feast_aws.AWS_SETTINGS_FILE)
+    c.check("the AWS file adds the registry store type to the local file's stores and options", registry_store_line in aws_body)
+    c.check(
+        "the AWS file holds the same stores and options as the local file",
+        [line for line in aws_body if line != registry_store_line] == body(feast_job.SETTINGS_FILE),
+    )
     text = feast_aws.AWS_SETTINGS_FILE.read_text()
     c.check(
         "every variable of the AWS file is one the profile sets",
@@ -890,6 +901,220 @@ def case_fa18(c: Checker) -> None:
         c.check("no table load is refused for credential vending", refused == [] and "BadRequestError" not in outcome.get("error", ""))
 
 
+REGISTRY_STORE_MODULE = "scripts.features.feast_registry_store"
+REGISTRY_STORE_TYPE = f"{REGISTRY_STORE_MODULE}.S3ObjectRegistryStore"
+REGISTRY_BUCKET = "example-registry-bucket"
+REGISTRY_KEY = "lakehouse/feast/registry.pb"
+REGISTRY_URI = f"s3://{REGISTRY_BUCKET}/{REGISTRY_KEY}"
+S3_ERROR = '<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code><Message>{code}</Message></Error>'
+
+
+class S3Handler(http.server.BaseHTTPRequestHandler):
+    """A loopback stand-in for the registry bucket of a role that holds GetObject and PutObject on the registry key and nothing else.
+
+    It records every request. The object is ``server.stored``; ``server.refuse_object`` makes a read of the key answer 403. Any call on the bucket itself
+    (HeadBucket, ListObjectsV2) and any call on another key answers 403, as S3 does for a caller without those grants.
+    """
+
+    protocol_version = "HTTP/1.1"
+
+    def _route(self) -> None:
+        server: Any = self.server
+        parts = urllib.parse.urlsplit(self.path)
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length) if length else b""
+        server.requests.append({"method": self.command, "path": parts.path, "query": parts.query})
+        if parts.path != f"/{REGISTRY_BUCKET}/{REGISTRY_KEY}":
+            self._answer(403, S3_ERROR.format(code="AccessDenied").encode())
+        elif self.command == "PUT":
+            server.stored = body
+            self._answer(200, b"", {"ETag": '"0"'})
+        elif self.command == "DELETE":
+            server.stored = None
+            self._answer(204, b"")
+        elif server.refuse_object:
+            self._answer(403, S3_ERROR.format(code="AccessDenied").encode())
+        elif server.stored is None:
+            self._answer(404, S3_ERROR.format(code="NoSuchKey").encode())
+        else:
+            self._answer(200, server.stored, {"Content-Type": "application/octet-stream", "ETag": '"0"'})
+
+    do_GET = do_PUT = do_HEAD = do_DELETE = _route
+
+    def _answer(self, status: int, body: bytes, headers: Mapping[str, str] | None = None) -> None:
+        try:
+            self.send_response(status)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+        except OSError:
+            return
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        del fmt, args
+
+
+@contextlib.contextmanager
+def s3_server() -> Iterator[Any]:
+    server: Any = http.server.ThreadingHTTPServer(("127.0.0.1", 0), S3Handler)
+    server.requests = []
+    server.stored = None
+    server.refuse_object = False
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class RegistryProtoStandIn:
+    """The two fields of Feast's ``Registry`` message that the store touches, for a host without Feast; the bytes are JSON."""
+
+    class Stamp:
+        def __init__(self) -> None:
+            self.moment = ""
+
+        def FromDatetime(self, value: Any) -> None:
+            self.moment = value.isoformat()
+
+    def __init__(self) -> None:
+        self.version_id = ""
+        self.last_updated = self.Stamp()
+
+    def ParseFromString(self, data: bytes) -> None:
+        fields = json.loads(data)
+        self.version_id = fields["version_id"]
+        self.last_updated.moment = fields["moment"]
+
+    def SerializeToString(self) -> bytes:
+        return json.dumps({"version_id": self.version_id, "moment": self.last_updated.moment}).encode()
+
+
+class RegistryStore(abc.ABC):
+    """Feast's ``RegistryStore`` interface as of 0.66.0 and 0.67.0: three abstract methods."""
+
+    @abc.abstractmethod
+    def get_registry_proto(self) -> Any: ...
+
+    @abc.abstractmethod
+    def update_registry_proto(self, registry_proto: Any) -> None: ...
+
+    @abc.abstractmethod
+    def teardown(self) -> None: ...
+
+
+@contextlib.contextmanager
+def registry_store_module(real: bool) -> Iterator[Any]:
+    """The project's registry store module: imported against Feast when it is installed, otherwise against the two Feast modules it imports, as stand-ins."""
+    if real:
+        sys.modules.pop(REGISTRY_STORE_MODULE, None)
+        yield importlib.import_module("scripts.features.feast_registry_store")
+        return
+    stand_ins = {
+        "feast.infra.registry.registry_store": fake_module("feast.infra.registry.registry_store", RegistryStore=RegistryStore),
+        "feast.protos.feast.core.Registry_pb2": fake_module("feast.protos.feast.core.Registry_pb2", Registry=RegistryProtoStandIn),
+    }
+    with mock.patch.dict(sys.modules, stand_ins):
+        sys.modules.pop(REGISTRY_STORE_MODULE, None)
+        yield importlib.import_module("scripts.features.feast_registry_store")
+
+
+@contextlib.contextmanager
+def s3_client_environment(server: Any) -> Iterator[None]:
+    """The client settings of a loopback S3 call: obviously fake credentials, no profile, no instance metadata lookup, no config file."""
+    settings = {
+        "AWS_ENDPOINT_URL_S3": f"http://127.0.0.1:{server.server_port}",
+        "AWS_ACCESS_KEY_ID": "registry-case-key-id",
+        "AWS_SECRET_ACCESS_KEY": "registry-case-secret",
+        "AWS_DEFAULT_REGION": "us-east-2",
+        "AWS_EC2_METADATA_DISABLED": "true",
+        "AWS_CONFIG_FILE": os.devnull,
+        "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+        "NO_PROXY": "127.0.0.1",
+    }
+    with mock.patch.dict(os.environ, settings):
+        os.environ.pop("AWS_PROFILE", None)
+        yield
+
+
+def bucket_level(requests: list[dict[str, str]]) -> list[str]:
+    """The requests that are not a call on the registry key: HeadBucket, ListObjectsV2 and anything else on the bucket."""
+    return [f"{request['method']} {request['path']}?{request['query']}" for request in requests if request["path"] != f"/{REGISTRY_BUCKET}/{REGISTRY_KEY}"]
+
+
+def case_fa19(c: Checker) -> None:
+    """FA19: the registry store of the project reads and writes the one registry object with GetObject and PutObject only (no ListBucket needed)."""
+    real = importlib.util.find_spec("feast") is not None
+    client = "Feast" if real else "the two Feast modules as stand-ins"
+    settings = (feast_job.REPO / "feature_store_aws.yaml").read_text()
+    c.check("feature_store_aws.yaml names the project registry store", f"registry_store_type: {REGISTRY_STORE_TYPE}\n" in settings)
+    with s3_server() as server, s3_client_environment(server), registry_store_module(real) as module:
+        config = SimpleNamespace(path=REGISTRY_URI, s3_additional_kwargs=None)
+        if real:
+            config = importlib.import_module("feast.repo_config").RegistryConfig(
+                registry_type="file", path=REGISTRY_URI, registry_store_type=REGISTRY_STORE_TYPE
+            )
+        store = module.S3ObjectRegistryStore(config, Path("."))
+        c.check(f"the store is a Feast RegistryStore ({client})", any(base.__name__ == "RegistryStore" for base in type(store).mro()))
+        try:
+            store.get_registry_proto()
+            missing = ""
+        except FileNotFoundError as error:
+            missing = str(error)
+        except Exception as error:
+            missing = f"raised {type(error).__name__}"
+        c.check("a missing registry object is a FileNotFoundError that names the URI", REGISTRY_URI in missing and not missing.startswith("raised"))
+        proto = module.RegistryProto()
+        store.update_registry_proto(proto)
+        c.check("a write stamps a version ID", bool(proto.version_id))
+        c.check("a write puts the object once", [r["method"] for r in server.requests if r["method"] == "PUT"] == ["PUT"] and server.stored is not None)
+        again = store.get_registry_proto()
+        c.check("a read returns the object that was written", again.version_id == proto.version_id)
+        server.refuse_object = True
+        denied = ""
+        try:
+            store.get_registry_proto()
+        except FileNotFoundError:
+            denied = "FileNotFoundError"
+        except Exception as error:
+            denied = type(error).__name__
+        c.check("an access error is not reported as a missing registry", denied == "ClientError")
+        server.refuse_object = False
+        store.teardown()
+        c.check("the teardown deletes the object", server.stored is None and server.requests[-1]["method"] == "DELETE")
+        c.check("no request reached the bucket itself or another key", bucket_level(server.requests) == [])
+        methods = sorted({request["method"] for request in server.requests})
+        c.check("the store used GET, PUT and DELETE on the registry key only", methods == ["DELETE", "GET", "PUT"])
+    if real:
+        registry = importlib.import_module("feast.infra.registry.registry")
+        repo_config = importlib.import_module("feast.repo_config")
+        errors = importlib.import_module("feast.errors")
+        with s3_server() as server, s3_client_environment(server), tempfile.TemporaryDirectory(prefix="feast_registry_") as raw:
+            stock = repo_config.RegistryConfig(registry_type="file", path=REGISTRY_URI)
+            try:
+                registry.Registry("hai_prediction", stock, Path(raw))
+                stock_outcome = "created"
+            except errors.S3RegistryBucketForbiddenAccess:
+                stock_outcome = "S3RegistryBucketForbiddenAccess"
+            except Exception as error:
+                stock_outcome = type(error).__name__
+            c.check("the stock S3 registry store fails on HeadBucket without ListBucket", stock_outcome == "S3RegistryBucketForbiddenAccess")
+            c.check("the stock store's first call is HeadBucket", server.requests[:1] == [{"method": "HEAD", "path": f"/{REGISTRY_BUCKET}", "query": ""}])
+        with s3_server() as server, s3_client_environment(server), tempfile.TemporaryDirectory(prefix="feast_registry_") as raw:
+            project = repo_config.RegistryConfig(registry_type="file", path=REGISTRY_URI, registry_store_type=REGISTRY_STORE_TYPE, cache_ttl_seconds=0)
+            first = registry.Registry("hai_prediction", project, Path(raw))
+            c.check("a first Feast registry on the project store creates the object", server.stored is not None)
+            second = registry.Registry("hai_prediction", project, Path(raw))
+            c.check("a second Feast registry reads the stamped object back", bool(second.cached_registry_proto.version_id) and first is not second)
+            c.check("Feast never reached the bucket itself or another key", bucket_level(server.requests) == [])
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -909,4 +1134,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA16": (case_fa16, "FA16"),
     "FA17": (case_fa17, "FA17"),
     "FA18": (case_fa18, "FA18"),
+    "FA19": (case_fa19, "FA19"),
 }

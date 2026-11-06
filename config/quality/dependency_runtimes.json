@@ -114,7 +114,8 @@
         "feature_store"
       ],
       "code": [
-        "feature_store/*.py"
+        "feature_store/*.py",
+        "scripts/features/feast_registry_store.py"
       ]
     },
     "serving": {
