@@ -37,6 +37,7 @@ DEPLOYMENT_PATH = Path("/workspace/infra/deployment.auto.tfvars.json")
 CATALOG_NAME = "hai"
 WAREHOUSE = "hai_lakehouse"
 RUNS_TABLE = "publish_runs"
+ACCESS_DELEGATION_PROPERTY = "header.X-Iceberg-Access-Delegation"
 SPINE_TABLE = "int_hospital_spine"
 MODES = ("publish_fixture", "real")
 NAMESPACES = {"publish_fixture": "features_e2e", "real": "features"}
@@ -405,12 +406,18 @@ def catalog_settings(environ: Mapping[str, str], mode: str, *, bearer: str = "")
 
 
 def open_catalog(settings: CatalogSettings, loader: Callable[..., Any] | None = None) -> IcebergCatalog:
-    """Open catalog ``hai`` with PyIceberg: Polaris REST with the token (real runs) or the SQL catalog file (fixture runs)."""
+    """Open catalog ``hai`` with PyIceberg: Polaris REST with the token (real runs) or the SQL catalog file (fixture runs).
+
+    The REST catalog asks for no vended credentials: Polaris cannot vend them and refuses a table load that asks (HTTP 400). PyIceberg adds the
+    access delegation header only when no ``header.`` property names it, and requests drops a session header whose value is None, so no request
+    carries it.
+    """
     load = loader if loader is not None else importlib.import_module("pyiceberg.catalog").load_catalog
+    properties: dict[str, str | None]
     if settings.catalog_type == "rest":
         if not settings.token:
             raise ReadError("the REST catalog needs a Polaris token")
-        properties = {"type": "rest", "uri": settings.endpoint, "warehouse": WAREHOUSE, "token": settings.token}
+        properties = {"type": "rest", "uri": settings.endpoint, "warehouse": WAREHOUSE, "token": settings.token, ACCESS_DELEGATION_PROPERTY: None}
     else:
         properties = {"type": "sql", "uri": settings.sql_uri, "warehouse": settings.sql_warehouse}
     catalog: IcebergCatalog = load(CATALOG_NAME, **properties)

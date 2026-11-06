@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA16 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA17 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -13,11 +13,14 @@ from __future__ import annotations
 import builtins
 import contextlib
 import hashlib
+import http.server
+import importlib
+import importlib.util
 import json
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -75,6 +78,75 @@ class GuardedCatalog:
             raise ReadError(f"the stand-in catalog refuses {name}")
 
         return refuse
+
+
+DELEGATION_HEADER = "X-Iceberg-Access-Delegation"
+
+
+class RestCatalogHandler(http.server.BaseHTTPRequestHandler):
+    """A loopback stand-in for the Polaris REST catalog: it records the headers of every request and refuses a table load that asks for vended credentials."""
+
+    def do_GET(self) -> None:
+        server: Any = self.server
+        path = self.path.split("?", 1)[0]
+        headers = {name.lower(): value for name, value in self.headers.items()}
+        payload: dict[str, Any]
+        if path.endswith("/v1/config"):
+            status, payload = 200, {"defaults": {}, "overrides": {}}
+        elif "/tables/" in path and self.headers.get(DELEGATION_HEADER) is not None:
+            status, payload = 400, {"error": {"message": "credential vending is not enabled", "type": "BadRequestException", "code": 400}}
+        else:
+            status, payload = 404, {"error": {"message": "the stand-in holds no tables", "type": "NoSuchTableException", "code": 404}}
+        server.requests.append({"path": path, "headers": headers, "status": status})
+        data = json.dumps(payload).encode()
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except OSError:
+            return
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        del fmt, args
+
+
+@contextlib.contextmanager
+def rest_catalog_server() -> Iterator[Any]:
+    server: Any = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RestCatalogHandler)
+    server.requests = []
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class RestClientStandIn:
+    """Sends the headers that PyIceberg 0.12.0 ``RestCatalog`` sends, for a host without PyIceberg.
+
+    PyIceberg copies every ``header.<name>`` property into the session headers and then calls
+    ``setdefault`` for the access delegation header, so only a property that is already present keeps the default out.
+    """
+
+    def __init__(self, name: str, **properties: str | None) -> None:
+        del name
+        requests = importlib.import_module("requests")
+        self.uri = str(properties["uri"]).rstrip("/")
+        self.session = requests.Session()
+        self.session.headers.update({key[len("header.") :]: value for key, value in properties.items() if key.startswith("header.")})
+        self.session.headers["Authorization"] = f"Bearer {properties['token']}"
+        self.session.headers.setdefault(DELEGATION_HEADER, "vended-credentials")
+        self.session.get(f"{self.uri}/v1/config", params={"warehouse": properties["warehouse"]}, timeout=5).raise_for_status()
+
+    def load_table(self, identifier: str) -> Any:
+        namespace, table = identifier.split(".", 1)
+        self.session.get(f"{self.uri}/v1/namespaces/{namespace}/tables/{table}", timeout=5).raise_for_status()
+        return None
 
 
 def aws_environment(**changes: str | None) -> dict[str, str]:
@@ -767,6 +839,37 @@ def case_fa17(c: Checker) -> None:
     c.check("the variable names catalog hai and the header", feast_aws.NO_DELEGATION_VARIABLE == "PYICEBERG_CATALOG__HAI__HEADER__X_ICEBERG_ACCESS_DELEGATION")
 
 
+def case_fa18(c: Checker) -> None:
+    """FA18: the REST catalog asks Polaris for no vended credentials, so a table load reaches the catalog without the access delegation header."""
+    real = importlib.util.find_spec("pyiceberg") is not None
+    loader: Callable[..., Any] | None = None if real else RestClientStandIn
+    client = f"PyIceberg {importlib.import_module('pyiceberg').__version__}" if real else "the PyIceberg 0.12.0 header stand-in"
+    with rest_catalog_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/api/catalog"
+        settings = reads.CatalogSettings("real", "features", "rest", endpoint=endpoint, token=ISSUED)
+        outcome: dict[str, str] = {}
+
+        def open_and_load() -> None:
+            try:
+                reads.load_table(reads.open_catalog(settings, loader), "features", reads.RUNS_TABLE)
+            except ReadError as error:
+                outcome["error"] = str(error)
+            except Exception as error:
+                outcome["error"] = f"open failed ({type(error).__name__})"
+
+        worker = threading.Thread(target=open_and_load, daemon=True)
+        worker.start()
+        worker.join(timeout=20)
+        c.check(f"the catalog open and table load end within 20 s ({client})", not worker.is_alive())
+        paths = [request["path"] for request in server.requests]
+        c.check("the client asked for the catalog config", any(path.endswith("/v1/config") for path in paths))
+        c.check("the client asked for the publish_runs table", any(path.endswith(f"/tables/{reads.RUNS_TABLE}") for path in paths))
+        delegated = [request["path"] for request in server.requests if DELEGATION_HEADER.lower() in request["headers"]]
+        c.check(f"no request carries the {DELEGATION_HEADER} header", delegated == [])
+        refused = [request["path"] for request in server.requests if request["status"] == 400]
+        c.check("no table load is refused for credential vending", refused == [] and "BadRequestError" not in outcome.get("error", ""))
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -785,4 +888,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA15": (case_fa15, "FA15"),
     "FA16": (case_fa16, "FA16"),
     "FA17": (case_fa17, "FA17"),
+    "FA18": (case_fa18, "FA18"),
 }
