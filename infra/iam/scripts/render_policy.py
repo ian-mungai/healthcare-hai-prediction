@@ -2,6 +2,8 @@
 
 A template holds ``${AWS_REGION}``, ``${AWS_ACCOUNT_ID}``, ``${PROJECT_NAME}``, ``${ENVIRONMENT}`` and ``${DATA_BUCKET_NAME}``; IAM policy variables such as
 ``${aws:username}`` stay. An unresolved or unknown placeholder, a document that is not a policy and a policy over the managed policy size limit stop the render.
+The S3 policy repeats the bucket name, so for a bucket name of 51 to 63 characters (the validators accept 3 to 63) it is over the 6,144 character limit and the
+render refuses it with a size error.
 
 The secret, parameter and lakehouse role names are not in any template. A list element that holds ``${SHARED_SECRET_NAME}``, ``${READ_PARAMETER_NAME}``
 or ``${MANAGED_PARAMETER_NAME}`` is repeated once per name. A single name is a placeholder that is its variable's name in upper case, for example

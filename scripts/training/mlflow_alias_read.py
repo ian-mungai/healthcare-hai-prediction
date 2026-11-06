@@ -10,17 +10,25 @@ mean that no version holds the alias: 404 and ``{"error_code": "RESOURCE_DOES_NO
 (``get_model_version_by_alias`` of the SQL store, passed through ``catch_mlflow_exception`` unchanged). Every other answer is a failure: a network error, a
 missing answer within the deadline, a redirect (the login is never sent to another address), 401, 403, 5xx, another 400 (another code or message) or 404 (a
 wrong address) and an answer that is not the JSON of a version of the model. The login never enters a message.
+
+One absolute deadline of ``TIMEOUT_SECONDS`` covers the connection, the status line and headers and every byte of the body, the body of a 400 or 404 answer
+included. Every receive on the socket gets the time that is left as its timeout, so a server that sends one byte at a time cannot keep the call open. Two
+steps have only a per-step bound: the name lookup of the address, and the TLS handshake of an https address, which each can use the full limit again.
 """
 
 from __future__ import annotations
 
 import base64
+import functools
+import http.client
+import io
 import json
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode, urlsplit
 
 ENDPOINT = "/api/2.0/mlflow/registered-models/alias"
@@ -60,32 +68,126 @@ class AliasRequest(urllib.request.Request):
             f"{uri.rstrip('/')}{ENDPOINT}?{urlencode({'name': model, 'alias': alias})}",
             headers={"Authorization": f"Basic {login}", "Accept": "application/json"},
         )
+        self.deadline = 0.0
 
 
-def body_of(response: Any, deadline: float, timeout: float) -> bytes:
-    """Read at most ``MAX_BYTES`` of the answer, and fail when it is not complete at the deadline."""
+def time_left(deadline: float) -> float:
+    """The seconds until the deadline. Raise TimeoutError when it has passed."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the deadline has passed")
+    return left
+
+
+class DeadlineReader(io.RawIOBase):
+    """The raw reader of one socket that gives every receive the time left until the deadline as its timeout."""
+
+    def __init__(self, sock: Any, deadline: float) -> None:
+        super().__init__()
+        self.sock, self.deadline = sock, deadline
+        self.raw = sock.makefile("rb", buffering=0)
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int | None:
+        self.sock.settimeout(time_left(self.deadline))
+        return self.raw.readinto(buffer)
+
+    def close(self) -> None:
+        self.raw.close()
+        super().close()
+
+
+class DeadlineSocket:
+    """The socket as ``http.client.HTTPResponse`` sees it: its only use is ``makefile``, which here reads under the deadline."""
+
+    def __init__(self, sock: Any, deadline: float) -> None:
+        self.sock, self.deadline = sock, deadline
+
+    def makefile(self, mode: str) -> io.BufferedReader:
+        return io.BufferedReader(DeadlineReader(self.sock, self.deadline))
+
+
+def deadline_response(deadline: float) -> type[http.client.HTTPResponse]:
+    """The response class that reads the status line, the headers and the body under the deadline."""
+
+    class Response(http.client.HTTPResponse):
+        def __init__(self, sock: socket.socket, *arguments: Any, **options: Any) -> None:
+            super().__init__(cast(socket.socket, DeadlineSocket(sock, deadline)), *arguments, **options)
+
+    return Response
+
+
+class DeadlineHTTPConnection(http.client.HTTPConnection):
+    """An http connection that connects within the time left and reads under the deadline."""
+
+    def __init__(self, *arguments: Any, deadline: float, **options: Any) -> None:
+        super().__init__(*arguments, **options)
+        self.deadline = deadline
+        self.response_class = deadline_response(deadline)
+
+    def connect(self) -> None:
+        self.timeout = time_left(self.deadline)
+        super().connect()
+        self.sock.settimeout(time_left(self.deadline))
+
+
+class DeadlineHTTPSConnection(http.client.HTTPSConnection):
+    """An https connection that connects within the time left and reads under the deadline."""
+
+    def __init__(self, *arguments: Any, deadline: float, **options: Any) -> None:
+        super().__init__(*arguments, **options)
+        self.deadline = deadline
+        self.response_class = deadline_response(deadline)
+
+    def connect(self) -> None:
+        self.timeout = time_left(self.deadline)
+        super().connect()
+        self.sock.settimeout(time_left(self.deadline))
+
+
+class DeadlineHTTPHandler(urllib.request.HTTPHandler):
+    """The http handler whose connection works under the deadline of the request."""
+
+    def http_open(self, req: Any) -> Any:
+        return self.do_open(functools.partial(DeadlineHTTPConnection, deadline=req.deadline), req)
+
+
+class DeadlineHTTPSHandler(urllib.request.HTTPSHandler):
+    """The https handler whose connection works under the deadline of the request."""
+
+    def https_open(self, req: Any) -> Any:
+        return self.do_open(functools.partial(DeadlineHTTPSConnection, deadline=req.deadline), req)
+
+
+def body_of(response: Any) -> bytes:
+    """Read at most ``MAX_BYTES`` of the answer. A read that outlasts the deadline raises TimeoutError."""
     data = b""
     while chunk := response.read(CHUNK_BYTES):
         data += chunk
         if len(data) > MAX_BYTES:
             raise AliasReadError(f"the answer is longer than {MAX_BYTES} bytes")
-        if time.monotonic() > deadline:
-            raise AliasReadError(f"MLflow did not answer within {timeout:g} seconds")
     return data
+
+
+def fetch(request: AliasRequest, limit: float) -> tuple[urllib.error.HTTPError | None, bytes]:
+    """Send the request and read the whole answer under the deadline: the body of a 200, or the error and its body when the status is 400 or 404."""
+    request.deadline = time.monotonic() + limit
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect, DeadlineHTTPHandler, DeadlineHTTPSHandler)
+    try:
+        with opener.open(request, timeout=limit) as response:
+            return None, body_of(response)
+    except urllib.error.HTTPError as error:
+        with error:
+            return error, body_of(error) if error.code in {400, 404} else b""
 
 
 def read_alias(uri: str, model: str, alias: str, username: str, password: str, timeout: float | None = None) -> str | None:
     """Return the version number the alias names, or None when MLflow answers that the model or the alias does not exist. Raise AliasReadError otherwise."""
     limit = TIMEOUT_SECONDS if timeout is None else timeout
-    request = AliasRequest(uri, model, alias, username, password)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
-    deadline = time.monotonic() + limit
     try:
-        with opener.open(request, timeout=limit) as response:
-            raw = body_of(response, deadline, limit)
-    except urllib.error.HTTPError as error:
-        check_missing(error, body_of(error, deadline, limit) if error.code in {400, 404} else b"", alias)
-        return None
+        error, body = fetch(AliasRequest(uri, model, alias, username, password), limit)
     except TimeoutError:
         raise AliasReadError(f"MLflow did not answer within {limit:g} seconds") from None
     except urllib.error.URLError as error:
@@ -94,7 +196,10 @@ def read_alias(uri: str, model: str, alias: str, username: str, password: str, t
         raise AliasReadError(f"MLflow cannot be reached at the tracking address: {type(error.reason).__name__}") from None
     except OSError as error:
         raise AliasReadError(f"the answer of MLflow cannot be read: {type(error).__name__}") from None
-    return version_in(raw, model)
+    if error is None:
+        return version_in(body, model)
+    check_missing(error, body, alias)
+    return None
 
 
 def check_missing(error: urllib.error.HTTPError, body: bytes, alias: str) -> None:

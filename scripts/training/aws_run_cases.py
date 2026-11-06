@@ -15,6 +15,7 @@ import shutil
 import stat
 import sys
 import tarfile
+import time
 import tomllib
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -1315,6 +1316,39 @@ def promote_cases(cases: Any, folder: Path) -> None:
         code, out, error, _, _ = owner_run(fixture, bucket, service, resolve)
         require(code == 0 and lease_closed(1) in lease_keys(bucket), f"the repeat after the failures did not close the lease: {code} {out} {error}")
 
+    def owner_alias_read_deadline_covers_every_byte() -> None:
+        fixture, bucket, service = stuck_run("rest_deadline")
+        limit, margin = 0.6, 1.2
+        slow = mlflow_alias_stand_in.DRIP_SECONDS * mlflow_alias_stand_in.DRIP_BYTES
+        require(slow > limit + margin, f"the dripped answer takes {slow} seconds, which is not longer than the deadline and its margin")
+        for fault in ("drip_headers", "drip_body", "drip_error_body"):
+            started = time.monotonic()
+            code, out, error, requests, _ = owner_run(fixture, bucket, service, resolve, fault=fault, timeout=limit)
+            elapsed = time.monotonic() - started
+            require(code == 2 and f"did not answer within {limit:g} seconds" in error, f"{fault}: the late answer was not refused as a timeout: {code} {error}")
+            require(elapsed < limit + margin, f"{fault}: the call took {elapsed:.2f} seconds for a deadline of {limit} seconds")
+            require("The lease is still held" in error and len(requests) == 1, f"{fault}: the lease state or request count is wrong: {error} {requests}")
+            require(
+                promote_receipt.key_of(RUN, "abandoned.json") not in bucket.objects and lease_closed(1) not in lease_keys(bucket),
+                f"{fault}: the run was closed",
+            )
+            require(OWNER_LOGIN not in out + error, f"{fault}: a MLflow login reached the output")
+
+    def owner_alias_error_body_timeout_keeps_the_lease_held() -> None:
+        fixture, bucket, service = stuck_run("rest_error_body")
+        for status in (400, 404):
+            code, out, error, requests, _ = owner_run(fixture, bucket, service, resolve, fault=f"withhold_{status}", timeout=0.5)
+            require(
+                code == 2 and "did not answer within 0.5 seconds" in error, f"HTTP {status}: the withheld body was not refused as a timeout: {code} {error}"
+            )
+            require("The lease is still held" in error and len(requests) == 1, f"HTTP {status}: the lease state or request count is wrong: {error} {requests}")
+            require(
+                promote_receipt.key_of(RUN, "abandoned.json") not in bucket.objects and lease_closed(1) not in lease_keys(bucket),
+                f"HTTP {status}: the run was closed",
+            )
+        code, out, error, _, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and lease_closed(1) in lease_keys(bucket), f"the repeat after the timeouts did not close the lease: {code} {out} {error}")
+
     def attempt_reply_lost_fails_closed() -> None:
         fixture, bucket = registry_fixture(folder / "attempt_lost"), receipt_bucket()
         bucket.write_hook = lambda key: setattr(bucket, "lose_reply_once", key.endswith("attempt.json"))
@@ -1404,6 +1438,8 @@ def promote_cases(cases: Any, folder: Path) -> None:
     cases.check("promote_owner_reads_a_missing_production_alias_as_none", owner_reads_a_missing_alias_as_none)
     cases.check("promote_owner_reads_a_missing_model_as_none", owner_reads_a_missing_model_as_none)
     cases.check("promote_owner_alias_read_failures_keep_the_lease_held", owner_alias_read_failures_keep_the_lease_held)
+    cases.check("promote_owner_alias_read_deadline_covers_every_byte", owner_alias_read_deadline_covers_every_byte)
+    cases.check("promote_owner_alias_error_body_timeout_keeps_the_lease_held", owner_alias_error_body_timeout_keeps_the_lease_held)
     cases.check("promote_records_the_intent_before_the_alias_moves", records_the_intent_first)
     interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_with_a_champion", True)
     interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_without_a_champion", False)

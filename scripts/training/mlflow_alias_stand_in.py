@@ -12,8 +12,11 @@
 ``other_404`` (404 with the code ENDPOINT_NOT_FOUND, as a wrong address gives), ``invalid_alias_400`` (400 with the code INVALID_PARAMETER_VALUE and the message
 of an invalid alias name), ``other_code_400`` (400 with the alias message and another code), ``other_alias_400`` (400 with the alias message for another
 alias), ``malformed`` (200 with text that is not JSON), ``wrong_shape`` (200 with JSON that has no version), ``redirect`` (302 to another path of the same
-server) and ``stall`` (no answer until the server stops). ``requests`` records what each call asked for and whether its login was right, never the login
-itself. Start and stop it as a context manager; stopping waits at most ``STOP_SECONDS``.
+server) and ``stall`` (no answer until the server stops). Four faults deliver a correct answer too slowly. ``drip_headers`` sends the 200 answer, its status
+line and headers included, one byte every ``DRIP_SECONDS`` for its first ``DRIP_BYTES`` bytes. ``drip_body`` does the same for the body of the 200 answer
+only, and ``drip_error_body`` for the body of the 400 answer for an alias that is not set. ``withhold_400`` and ``withhold_404`` send the headers of that answer
+with its Content-Length and never the body. ``requests`` records what each call asked for and whether its login was right, never the login itself. Start and
+stop it as a context manager; stopping waits at most ``STOP_SECONDS``.
 """
 
 from __future__ import annotations
@@ -30,6 +33,8 @@ from urllib.parse import parse_qs, urlsplit
 ENDPOINT = "/api/2.0/mlflow/registered-models/alias"
 STOP_SECONDS = 10.0
 STALL_SECONDS = 30.0
+DRIP_SECONDS = 0.25
+DRIP_BYTES = 12
 
 
 class AliasServer:
@@ -95,6 +100,14 @@ class AliasServer:
             self.send(handler, 400, {"error_code": "BAD_REQUEST", "message": f"Registered model alias {query.get('alias')} not found."})
         elif self.fault == "other_alias_400":
             self.send(handler, 400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "Registered model alias challenger not found."})
+        elif self.fault in {"drip_headers", "drip_body", "drip_error_body"}:
+            self.drip(handler, query)
+        elif self.fault in {"withhold_400", "withhold_404"}:
+            handler.send_response(int(self.fault[-3:]))
+            handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", "100")
+            handler.end_headers()
+            self.release.wait(STALL_SECONDS)
         elif self.fault == "malformed":
             self.send(handler, 200, "<html>not json", "text/html")
         elif self.fault == "wrong_shape":
@@ -107,6 +120,27 @@ class AliasServer:
                 self.send(handler, 404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": f"Registered Model with name={query.get('name')} not found"})
             else:
                 self.send(handler, 200, {"model_version": {"name": query["name"], "version": version, "aliases": [query["alias"]], "tags": []}})
+
+    def drip(self, handler: BaseHTTPRequestHandler, query: dict[str, str]) -> None:
+        """Send the answer of the fault slowly: one byte every ``DRIP_SECONDS`` for ``DRIP_BYTES`` bytes, then the rest at once. Stop when the server stops."""
+        alias = query.get("alias")
+        if self.fault == "drip_error_body":
+            status, text = "400 Bad Request", json.dumps({"error_code": "INVALID_PARAMETER_VALUE", "message": f"Registered model alias {alias} not found."})
+        else:
+            status, text = "200 OK", json.dumps({"model_version": {"name": query.get("name"), "version": "2", "aliases": [alias], "tags": []}})
+        body = text.encode()
+        head = f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+        slow = head + body if self.fault == "drip_headers" else body
+        if self.fault != "drip_headers":
+            handler.wfile.write(head)
+        try:
+            for index in range(min(DRIP_BYTES, len(slow))):
+                handler.wfile.write(slow[index : index + 1])
+                if self.release.wait(DRIP_SECONDS):
+                    return
+            handler.wfile.write(slow[DRIP_BYTES:])
+        except OSError:
+            return
 
     @staticmethod
     def send(handler: BaseHTTPRequestHandler, status: int, body: Any, content_type: str = "application/json", headers: dict[str, str] | None = None) -> None:
