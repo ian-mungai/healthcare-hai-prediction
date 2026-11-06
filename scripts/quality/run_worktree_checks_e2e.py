@@ -3,8 +3,9 @@
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_worktree_checks_e2e``. Each case builds a scratch repository with this repository's hook
 setup and scripts (``run_checks_e2e.scratch_repo``), gives it a bare ``origin`` that holds ``main``, and runs the check as its own command and through
 ``pre-commit`` itself, so a hook that is not wired in cannot pass. The head cases cover a good branch, ``main``, a detached head, a rebase, a merge and a
-cherry-pick in progress, a branch behind ``origin/main`` and an unreachable ``origin``. The tools cases cover a good main checkout and a good linked
-worktree, links that point elsewhere or are folders, a pinned tool without an executable, a missing and a damaged package archive and a missing push gate.
+cherry-pick in progress, a branch behind ``origin/main`` and an unreachable ``origin``. The tools cases use stand-in executables for the pinned tools.
+They cover a good main checkout and a good linked worktree, links that point elsewhere or are folders, a pinned tool without an executable, a missing
+and a damaged package archive and a missing push gate.
 Every blocked case must print its own message, so a failure for another reason cannot pass. The report is the run's output.
 """
 
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from scripts.lakehouse.dbt_package_archive import ARCHIVES, RECORD, pack, sha
 from scripts.process import clear_git_environment, run_command
+from scripts.quality.check_tools import OTHER_EXECUTABLES
 from scripts.quality.hook_stage import hook_stage
 from scripts.quality.run_checks_e2e import Case, git, scratch_repo
 
@@ -147,9 +149,26 @@ def synthetic_archive(repo: Path) -> None:
     (repo / relative).write_bytes(data)
 
 
+def synthetic_tools(repo: Path) -> None:
+    """A tools folder of stand-in executables for every pinned tool, with receipts that name the pinned versions, in place of the link to this checkout's
+    folder. The cases then test the check and not the tools that the machine running them happens to have installed (a hosted hook job installs only some).
+    """
+    (repo / ".tools").unlink()
+    tools = json.loads((repo / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]
+    places = [Path(".tools/bin") / name for name in tools] + [Path(path) for path in OTHER_EXECUTABLES]
+    for relative in places:
+        (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+        (repo / relative).write_text("#!/bin/sh\nexit 0\n")
+        (repo / relative).chmod(0o755)
+    (repo / ".tools/receipts").mkdir(parents=True)
+    for name, entry in tools.items():
+        (repo / ".tools/receipts" / f"{name}.json").write_text(json.dumps({"version": entry["version"]}))
+
+
 def tools_repo(scratch: Path) -> Path:
-    """A main checkout with its tools linked, a synthetic package archive and its record, and the push gate installed."""
+    """A main checkout with stand-in pinned tools, a synthetic package archive and its record, and the push gate installed."""
     repo = scratch_repo(scratch, Case("tools setup", "check-tools", True))
+    synthetic_tools(repo)
     synthetic_archive(repo)
     run_command(str(PYTHON), ["-m", "scripts.quality.pre_push", "install-shim"], cwd=repo, timeout=120, check=True)
     return repo
