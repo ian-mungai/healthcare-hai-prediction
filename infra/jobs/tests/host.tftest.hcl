@@ -265,19 +265,87 @@ run "scratch_is_a_host_path_per_family" {
   }
 }
 
-run "scratch_root_can_move" {
+run "scratch_root_can_move_within_the_scratch_mount" {
   command = plan
 
   variables {
     host_jobs_enabled = true
     host_jobs         = ["gold"]
-    host_scratch_root = "/mnt/job_scratch"
+    host_scratch_root = "/data/job_scratch/spill"
   }
 
   assert {
-    condition     = toset([for volume in aws_ecs_task_definition.host["gold"].volume : volume.host_path]) == toset(["/mnt/job_scratch/gold/work", "/mnt/job_scratch/gold/tmp"])
-    error_message = "The scratch root is one input, so the separate scratch volume can take another mount point."
+    condition     = toset([for volume in aws_ecs_task_definition.host["gold"].volume : volume.host_path]) == toset(["/data/job_scratch/spill/gold/work", "/data/job_scratch/spill/gold/tmp"])
+    error_message = "The scratch root can name a folder inside the scratch mount."
   }
+}
+
+# Boot mounts the separate scratch volume only at /data/job_scratch, so a job bind source anywhere else is a folder of the
+# snapshotted data volume. Every writable bind source of every family lies under that mount, for the default and for a folder in it.
+run "every_writable_job_bind_source_lies_under_the_scratch_mount" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for family, task in aws_ecs_task_definition.host : alltrue([
+      for volume in task.volume : volume.name == "repo" || startswith(volume.host_path, "/data/job_scratch/")
+    ])])
+    error_message = "Every volume except the read-only repository checkout binds a folder under the separate scratch mount /data/job_scratch."
+  }
+
+  assert {
+    condition = alltrue(flatten([for family, json in output.host_container_definitions : [for container in jsondecode(json) : [
+      for mount in container.mountPoints : mount.readOnly || startswith(one([for volume in aws_ecs_task_definition.host[family].volume : volume.host_path if volume.name == mount.sourceVolume]), "/data/job_scratch/")
+    ]]]))
+    error_message = "Every writable mount point binds a source under /data/job_scratch."
+  }
+}
+
+run "the_scratch_root_must_lie_on_the_scratch_mount" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_scratch_root = "/data/scratch_a"
+  }
+
+  expect_failures = [var.host_scratch_root]
+}
+
+run "the_scratch_root_may_not_be_the_data_volume_itself" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_scratch_root = "/data"
+  }
+
+  expect_failures = [var.host_scratch_root]
+}
+
+run "the_scratch_root_may_not_share_only_the_mount_name_prefix" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_scratch_root = "/data/job_scratch_other"
+  }
+
+  expect_failures = [var.host_scratch_root]
+}
+
+run "the_scratch_root_may_not_use_another_mount_point" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_scratch_root = "/mnt/job_scratch"
+  }
+
+  expect_failures = [var.host_scratch_root]
 }
 
 run "one_family_can_move_first" {
