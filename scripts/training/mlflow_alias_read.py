@@ -4,10 +4,12 @@ The owner command ``promote_owner`` runs in the host environment, which has no M
 
 ``GET {tracking_uri}/api/2.0/mlflow/registered-models/alias?name=<model>&alias=<alias>``
 
-with 200 and ``{"model_version": {"name": ..., "version": "<number>", ...}}``, and with 404 and ``{"error_code": "RESOURCE_DOES_NOT_EXIST", ...}`` when the
-registered model does not exist. The server with the basic-auth app also needs an HTTP Basic login. Only that 404 means that no version holds the alias. Every
-other answer is a failure: a network error, a missing answer within the deadline, a redirect (the login is never sent to another address), 401, 403, 5xx,
-another 404 (a wrong address) and an answer that is not the JSON of a version of the model. The login never enters a message.
+with 200 and ``{"model_version": {"name": ..., "version": "<number>", ...}}``. The server with the basic-auth app also needs an HTTP Basic login. Two answers
+mean that no version holds the alias: 404 and ``{"error_code": "RESOURCE_DOES_NOT_EXIST", ...}`` when the registered model does not exist, and 400 and
+``{"error_code": "INVALID_PARAMETER_VALUE", "message": "Registered model alias <alias> not found."}`` when the model exists and the alias is not set
+(``get_model_version_by_alias`` of the SQL store, passed through ``catch_mlflow_exception`` unchanged). Every other answer is a failure: a network error, a
+missing answer within the deadline, a redirect (the login is never sent to another address), 401, 403, 5xx, another 400 (another code or message) or 404 (a
+wrong address) and an answer that is not the JSON of a version of the model. The login never enters a message.
 """
 
 from __future__ import annotations
@@ -26,7 +28,13 @@ TIMEOUT_SECONDS = 30.0
 MAX_BYTES = 1_048_576
 CHUNK_BYTES = 65_536
 ABSENT = "RESOURCE_DOES_NOT_EXIST"
+INVALID = "INVALID_PARAMETER_VALUE"
 VERSION = re.compile(r"[0-9]+")
+
+
+def missing_alias_message(alias: str) -> str:
+    """The message MLflow 3.17.0 gives with the code ``INVALID_PARAMETER_VALUE`` when the registered model exists and the alias is not set."""
+    return f"Registered model alias {alias} not found."
 
 
 class AliasReadError(Exception):
@@ -67,7 +75,7 @@ def body_of(response: Any, deadline: float, timeout: float) -> bytes:
 
 
 def read_alias(uri: str, model: str, alias: str, username: str, password: str, timeout: float | None = None) -> str | None:
-    """Return the version number the alias names, or None when MLflow answers that the registered model does not exist. Raise AliasReadError otherwise."""
+    """Return the version number the alias names, or None when MLflow answers that the model or the alias does not exist. Raise AliasReadError otherwise."""
     limit = TIMEOUT_SECONDS if timeout is None else timeout
     request = AliasRequest(uri, model, alias, username, password)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
@@ -76,7 +84,7 @@ def read_alias(uri: str, model: str, alias: str, username: str, password: str, t
         with opener.open(request, timeout=limit) as response:
             raw = body_of(response, deadline, limit)
     except urllib.error.HTTPError as error:
-        check_missing_model(error, body_of(error, deadline, limit) if error.code == 404 else b"")
+        check_missing(error, body_of(error, deadline, limit) if error.code in {400, 404} else b"", alias)
         return None
     except TimeoutError:
         raise AliasReadError(f"MLflow did not answer within {limit:g} seconds") from None
@@ -89,15 +97,16 @@ def read_alias(uri: str, model: str, alias: str, username: str, password: str, t
     return version_in(raw, model)
 
 
-def check_missing_model(error: urllib.error.HTTPError, body: bytes) -> None:
-    """Return when the answer is the 404 that names a missing registered model. Raise AliasReadError for every other status."""
-    if error.code == 404:
-        try:
-            code = json.loads(body).get("error_code")
-        except (ValueError, AttributeError):
-            code = None
-        if code == ABSENT:
-            return
+def check_missing(error: urllib.error.HTTPError, body: bytes, alias: str) -> None:
+    """Return when the answer is the 404 of a missing registered model or the 400 of an alias that is not set. Raise AliasReadError for every other answer."""
+    try:
+        answer = json.loads(body)
+    except ValueError:
+        answer = None
+    fields = answer if isinstance(answer, dict) else {}
+    seen = (error.code, fields.get("error_code"), fields.get("message"))
+    if seen[:2] == (404, ABSENT) or seen == (400, INVALID, missing_alias_message(alias)):
+        return
     hint = " Check MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD." if error.code in {401, 403} else ""
     raise AliasReadError(f"MLflow answered HTTP {error.code}.{hint}")
 

@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
+from scripts.training.mlflow_alias_read import INVALID, missing_alias_message
 from scripts.training.run_tracking import TrackingError
 
 PENDING = "pending_create."
@@ -45,6 +46,16 @@ def absent(error: Exception) -> bool:
     return getattr(error, "error_code", "") == "RESOURCE_DOES_NOT_EXIST"
 
 
+def alias_unset(error: Exception, alias: str) -> bool:
+    """Tell the answer for an alias that is not set on an existing registered model from any other failure.
+
+    MLflow 3.17.0 answers HTTP 400 with the code ``INVALID_PARAMETER_VALUE`` and the message ``Registered model alias <alias> not found.``. The REST client
+    keeps the code as a prefix of the message. Another message with the same code (an invalid alias name) is a failure.
+    """
+    message = missing_alias_message(alias)
+    return getattr(error, "error_code", "") == INVALID and getattr(error, "message", "") in {message, f"{INVALID}: {message}"}
+
+
 def ensure_model(store: RegistryStore, name: str) -> Any:
     """Return the registered model, creating it once when it does not exist."""
     try:
@@ -66,11 +77,11 @@ def versions_of(store: RegistryStore, name: str) -> list[Any]:
 
 
 def champion(store: RegistryStore, name: str) -> Any | None:
-    """Return the version the ``production`` alias names, or None when the alias is not set."""
+    """Return the version the ``production`` alias names, or None when the registered model does not exist or the alias is not set."""
     try:
         return store.get_model_version_by_alias(name, CHAMPION_ALIAS)
     except Exception as error:
-        if absent(error):
+        if absent(error) or alias_unset(error, CHAMPION_ALIAS):
             return None
         raise
 

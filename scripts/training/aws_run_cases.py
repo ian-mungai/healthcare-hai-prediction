@@ -753,7 +753,10 @@ def owner_run(
     from scripts.training import mlflow_alias_read, promote_owner
 
     out, err = io.StringIO(), io.StringIO()
-    with mlflow_alias_stand_in.AliasServer(lookup or alias_lookup(fixture), "admin", OWNER_LOGIN) as server, without_mlflow() as blocker:
+    with (
+        mlflow_alias_stand_in.AliasServer(lookup or alias_lookup(fixture), "admin", OWNER_LOGIN, lambda model: model in fixture.tracking.models) as server,
+        without_mlflow() as blocker,
+    ):
         server.fault = fault
         environ = {"DATA_BUCKET_NAME": BUCKET, "MLFLOW_TRACKING_URI": server.uri, "MLFLOW_TRACKING_USERNAME": "admin"}
         if login is not None:
@@ -1272,6 +1275,15 @@ def promote_cases(cases: Any, folder: Path) -> None:
         fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
         require(fence["production_alias"] == "none", f"the fence does not record no production alias: {fence}")
 
+    def owner_reads_a_missing_model_as_none() -> None:
+        fixture, bucket, service = stuck_run("rest_no_model")
+        del fixture.tracking.models[MODEL]
+        code, out, error, requests, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and "abandoned" in out and lease_closed(1) in lease_keys(bucket), f"a missing model was not read as none: {code} {out} {error}")
+        require(len(requests) == 1, f"the alias was not read once: {requests}")
+        fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
+        require(fence["production_alias"] == "none", f"the fence does not record no production alias: {fence}")
+
     def owner_alias_read_failures_keep_the_lease_held() -> None:
         fixture, bucket, service = stuck_run("rest_failures")
         wrong = "-".join(("synthetic", "wrong", "login", "1357924680"))
@@ -1280,6 +1292,9 @@ def promote_cases(cases: Any, folder: Path) -> None:
             ("no_login", {"login": None}, "MLFLOW_TRACKING_PASSWORD", 0),
             ("server_error", {"fault": "server_error"}, "HTTP 500", 1),
             ("other_404", {"fault": "other_404"}, "HTTP 404", 1),
+            ("invalid_alias_400", {"fault": "invalid_alias_400"}, "HTTP 400", 1),
+            ("other_code_400", {"fault": "other_code_400"}, "HTTP 400", 1),
+            ("other_alias_400", {"fault": "other_alias_400"}, "HTTP 400", 1),
             ("redirect", {"fault": "redirect"}, "HTTP 302", 1),
             ("malformed", {"fault": "malformed"}, "not JSON", 1),
             ("wrong_shape", {"fault": "wrong_shape"}, "no version", 1),
@@ -1387,6 +1402,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
     cases.check("promote_owner_cannot_resolve_a_run_that_stored_its_receipt", owner_cannot_resolve_a_run_that_stored_its_receipt)
     cases.check("promote_owner_reads_the_alias_without_the_mlflow_package", owner_reads_the_alias_without_the_mlflow_package)
     cases.check("promote_owner_reads_a_missing_production_alias_as_none", owner_reads_a_missing_alias_as_none)
+    cases.check("promote_owner_reads_a_missing_model_as_none", owner_reads_a_missing_model_as_none)
     cases.check("promote_owner_alias_read_failures_keep_the_lease_held", owner_alias_read_failures_keep_the_lease_held)
     cases.check("promote_records_the_intent_before_the_alias_moves", records_the_intent_first)
     interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_with_a_champion", True)
