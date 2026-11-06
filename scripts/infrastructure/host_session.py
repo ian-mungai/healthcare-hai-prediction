@@ -33,6 +33,7 @@ REGISTRATION_SECONDS = 600
 HOST_PREPARE_SECONDS = 600
 BOOTSTRAP_SECONDS = 600
 SERVICES_STABLE_SECONDS = 1200
+SERVICE_RESTART_SECONDS = 900
 TERMINATE_SECONDS = 900
 POLL_SECONDS = 15
 CALL_SECONDS = 180
@@ -41,6 +42,7 @@ UNCONFIRMED = "request_unconfirmed"
 TASK_POLL_SECONDS = 6
 FAILED_POLLS_ALLOWED = 3
 DESCRIBE_SERVICES_LIMIT = 10
+DESCRIBE_TASKS_LIMIT = 100
 FIRST_SERVICE = "postgres"
 HOST_PREPARE = "host_prepare"
 POLARIS_BOOTSTRAP = "polaris_bootstrap"
@@ -388,6 +390,38 @@ class Session:
         self.wait("services stable", self.services_stable, SERVICES_STABLE_SECONDS, POLL_SECONDS)
         self.step("services_stable", ", ".join(f"{item['serviceName']}={item['runningCount']}" for item in self.service_states()))
 
+    def restart_service(self, key: str, seconds: int = SERVICE_RESTART_SECONDS) -> None:
+        """Force a new deployment of one project service and wait until every task that ran before it is STOPPED and the new deployment is COMPLETED.
+
+        No process that served the service before the call is left when this returns, so no request that process had accepted can still complete. A failed
+        call, a rollout that ends FAILED or a wait past ``seconds`` raises HostSessionError.
+        """
+        name = self.names.services.get(key)
+        if name is None:
+            raise HostSessionError(f"the service {key} is not in the session's services")
+        before = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--service-name", name, "--desired-status", "RUNNING"]).get("taskArns", [])
+        updated = self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, "--force-new-deployment"])
+        forced = [item for item in updated.get("service", {}).get("deployments", []) if item.get("status") == "PRIMARY" and item.get("id")]
+        if len(forced) != 1:
+            raise HostSessionError(f"update-service for {key} answered no single new deployment")
+        self.step(f"{key}_restart_forced", f"{len(before)} task(s) to stop")
+        self.wait(f"{key} restart", lambda: self.replaced(name, str(forced[0]["id"]), before), seconds, POLL_SECONDS)
+        self.step(f"{key}_restarted")
+
+    def replaced(self, name: str, deployment: str, before: list[str]) -> bool:
+        """True when every task in ``before`` is STOPPED and the deployment is the only one left on the service, COMPLETED."""
+        for index in range(0, len(before), DESCRIBE_TASKS_LIMIT):
+            described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", *before[index : index + DESCRIBE_TASKS_LIMIT]])
+            if described.get("failures"):
+                raise HostSessionError("describe-tasks reported failures")
+            if any(task.get("lastStatus") != "STOPPED" for task in described.get("tasks", [])):
+                return False
+        described = self.call("ecs", "describe-services", ["--cluster", self.names.cluster, "--services", name])
+        found = described.get("services", [])
+        if described.get("failures") or len(found) != 1:
+            raise HostSessionError("describe-services reported failures")
+        return self.settled(found[0]) and [item.get("id") for item in found[0].get("deployments", [])] == [deployment]
+
     def openmetadata_bootstrap(self) -> None:
         """Run the repeatable catalog bootstrap (administrator password, bot tokens) once the services are stable.
 
@@ -496,6 +530,13 @@ class Session:
         }
 
 
+def open_session() -> Session:
+    """The session of the project profile, with the names read from the Terraform outputs. Raises ConfigurationError."""
+    settings, _ = load_configuration(REPO_ROOT / ".env")
+    session = Session(AwsCli(settings, tolerant_runner), load_names(settings))
+    return session
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The command line."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -514,8 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run one subcommand and return 0 on success, 1 on a failed, interrupted or terminated step, 2 on a configuration error."""
     arguments = build_parser().parse_args(argv)
     try:
-        settings, _ = load_configuration(REPO_ROOT / ".env")
-        session = Session(AwsCli(settings, tolerant_runner), load_names(settings))
+        session = open_session()
     except ConfigurationError as error:
         sys.stderr.write(f"configuration: {error}\n")
         return 2

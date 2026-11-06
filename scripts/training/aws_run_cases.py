@@ -24,10 +24,11 @@ from scripts.features import publication_reads, training_extract
 from scripts.orchestration.ecs_broker_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
-from scripts.training import guards, promote_receipt, promotion_check
+from scripts.training import guards, promote_receipt, promotion_check, run_tracking
 from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
 from scripts.training.job_cases import COMMIT, DIGEST
 from scripts.training.lane_b_cases import RUN
+from scripts.training.mlflow_service_stand_in import CLUSTER, PROFILE, REGION, SERVICE, MlflowService
 from scripts.training.step_records import verify_done, write_done
 
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": [HAI_TYPE], "trigger": "manual", "mlflow": "aws"}
@@ -628,6 +629,7 @@ PROMOTION = {"hai_type": HAI_TYPE, "model_version": "2", "promotion_mode": "prom
 MODEL = f"hai_model_{HAI_TYPE}"
 RUN_B = "20261024T000001Z-5678abcd"
 INTENT_KEY = f"promote/{RUN}/intent.json"
+ATTEMPT_KEY = f"promote/{RUN}/attempt.json"
 LEASE_PREFIX = f"promote/models/{MODEL}/"
 REGISTRY_WRITES = ("set_registered_model_alias", "set_model_version_tag")
 
@@ -673,6 +675,38 @@ class ListingBucket(FakeLaunchBucket):
 def receipt_bucket() -> ListingBucket:
     """A bucket that answers like the train task role: a create-only write, a read and a list under the receipt prefix, and nothing else."""
     return ListingBucket(BUCKET, f"{promote_receipt.PREFIX}/")
+
+
+@contextlib.contextmanager
+def mlflow_restart(service: MlflowService) -> Iterator[None]:
+    """Give the owner command the stand-in ECS service in place of Terraform, the AWS CLI and the clock."""
+    from scripts.infrastructure import host_session
+
+    clock = host_session.Clock
+    names = host_session.Names(CLUSTER, "stand-in-group", "stand-in-provider", "stand-in-project", {"mlflow": SERVICE}, {})
+    with (
+        mock.patch.object(host_session, "load_configuration", return_value=({"aws_profile": PROFILE, "aws_region": REGION}, None)),
+        mock.patch.object(host_session, "load_names", return_value=names),
+        mock.patch.object(host_session, "tolerant_runner", service.runner),
+        mock.patch.object(host_session, "Clock", side_effect=lambda: clock(lambda: service.now, service.advance)),
+    ):
+        yield
+
+
+def owner_command(fixture: Fixture, bucket: ListingBucket, service: MlflowService, *arguments: str) -> tuple[int, str, str]:
+    """Run ``promote_owner`` as the owner does: the receipt bucket, the registry and the MLflow ECS service are the stand-ins."""
+    from scripts.training import promote_owner
+
+    out, err = io.StringIO(), io.StringIO()
+    with (
+        mock.patch.object(promote_receipt, "s3_client", return_value=bucket),
+        mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
+        mlflow_restart(service),
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(err),
+    ):
+        code = promote_owner.main(list(arguments), {"DATA_BUCKET_NAME": BUCKET, "MLFLOW_TRACKING_URI": TRACKING})
+    return code, out.getvalue(), err.getvalue()
 
 
 def promote_in(
@@ -750,7 +784,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(stored == (work / "in/promote/promote.json").read_bytes(), "the durable receipt differs from the workspace receipt")
         require(json.loads(stored or b"{}")["previous_version"] == "1", "the durable receipt lost the previous version")
         puts = [arguments for operation, arguments in bucket.calls if operation == "put_object"]
-        require(len(puts) == 4 and all(item.get("IfNoneMatch") == "*" for item in puts), f"a write is not create-only: {puts}")
+        require(len(puts) == 5 and all(item.get("IfNoneMatch") == "*" for item in puts), f"a write is not create-only: {puts}")
         require(any(item.get("step") == "promote" for item in lines_of(out)), "success was not reported")
 
     def receipt_rerun_is_idempotent() -> None:
@@ -800,8 +834,8 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code == 0, f"promote failed: {error}")
         lease, closing = f"{LEASE_PREFIX}lease-0000000001.json", f"{LEASE_PREFIX}lease-0000000001.done.json"
         require(
-            seen == [(lease, "1"), (INTENT_KEY, "1"), (promote_receipt.key_of(RUN), "2"), (closing, "2")],
-            f"writes and the alias they saw (lease, intent, receipt, then the lease closes): {seen}",
+            seen == [(lease, "1"), (INTENT_KEY, "1"), (ATTEMPT_KEY, "1"), (promote_receipt.key_of(RUN), "2"), (closing, "2")],
+            f"writes and the alias they saw (lease, intent, attempt, receipt, then the lease closes): {seen}",
         )
         intent = json.loads(bucket.objects[INTENT_KEY])
         require(intent["previous_version"] == "1" and intent["version"] == "2" and intent["run_id"] == RUN, f"intent: {intent}")
@@ -867,15 +901,26 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported without an intent")
         require(promote_in(fixture, folder / "intent_down_retry", bucket)[0] == 0 and stored_receipt(bucket)["previous_version"] == "1", "the retry failed")
 
-    def stopped_before_the_move_completes_on_retry() -> None:
+    def retry_does_not_send_the_alias_request_again() -> None:
         fixture, bucket = registry_fixture(folder / "before_move"), receipt_bucket()
         fixture.tracking.fail_on = "set_registered_model_alias"
         code, _, error = promote_in(fixture, folder / "before_move_first", bucket)
-        require(code != 0 and alias(fixture) == "1" and INTENT_KEY in bucket.objects, f"the first task did not stop after the intent: {code} {error}")
+        require(code != 0 and alias(fixture) == "1", f"the first task did not stop at the alias request: {code} {error}")
+        require(INTENT_KEY in bucket.objects and ATTEMPT_KEY in bucket.objects, f"the intent and the attempt were not stored first: {sorted(bucket.objects)}")
         fixture.tracking.fail_on = None
-        code, _, error = promote_in(fixture, folder / "before_move_retry", bucket)
-        require(code == 0 and alias(fixture) == "2", f"the retry did not finish the planned move: {error}")
-        require(stored_receipt(bucket)["previous_version"] == "1", "the receipt lost the predecessor")
+        fixture.tracking.calls.clear()
+        before = dict(bucket.objects)
+        for attempt in ("one", "two"):
+            code, out, error = promote_in(fixture, folder / f"before_move_retry_{attempt}", bucket)
+            require(
+                code != 0 and "promotion_needs_resolution" in error and "promote_owner resolve" in error,
+                f"the retry {attempt} did not ask for the owner: {code} {error}",
+            )
+            require(alias(fixture) == "1" and not writes(fixture), f"the retry {attempt} wrote to the registry: {alias(fixture)} {writes(fixture)}")
+            require(bucket.objects == before, f"the retry {attempt} changed the records: {sorted(bucket.objects)}")
+            require(not any(item.get("step") == "promote" for item in lines_of(out)), f"success was reported by the retry {attempt}")
+        code, _, error = run_b(fixture, folder / "before_move_b", bucket, "1", "rollback")
+        require(code != 0 and "promotion_busy" in error and not writes(fixture), f"run B was not refused while run A needs the owner: {code} {error}")
 
     def unknown_completion_fails_closed() -> None:
         fixture, bucket = registry_fixture(folder / "cannot_tell"), receipt_bucket()
@@ -890,7 +935,10 @@ def promote_cases(cases: Any, folder: Path) -> None:
         bucket.deny_list = False
         bucket.absent_reads_denied = True
         code, _, error = promote_in(fixture, folder / "cannot_tell_again", bucket)
-        require(code == 0 and alias(fixture) == "2", f"a retry needed an absent read: {code} {error}")
+        require(
+            code != 0 and "promotion_needs_resolution" in error and "promotion_state_unknown" not in error, f"a retry needed an absent read: {code} {error}"
+        )
+        require(alias(fixture) == "1" and not writes(fixture), "the retry sent the alias request again")
 
     def first_promotion_needs_no_list_grant() -> None:
         fixture, bucket = registry_fixture(folder / "no_list"), receipt_bucket()
@@ -903,7 +951,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
 
     def intent_lost_reply_is_adopted() -> None:
         fixture, bucket = registry_fixture(folder / "intent_lost"), receipt_bucket()
-        bucket.lose_reply_once = True
+        bucket.write_hook = lambda key: setattr(bucket, "lose_reply_once", key.endswith("intent.json"))
         code, _, error = promote_in(fixture, folder / "intent_lost_work", bucket)
         require(code == 0 and alias(fixture) == "2", f"a lost intent reply was not adopted: {code} {error}")
         require(
@@ -1079,16 +1127,13 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code == 0 and alias(fixture) == "1" and not writes(fixture) and bucket.objects == before, f"{code} {error}")
 
     def owner_resolution_closes_a_stuck_lease_and_fences_the_run() -> None:
-        from scripts.training import promote_lease
-
         fixture, bucket = registry_fixture(folder / "resolve"), receipt_bucket()
         bucket.put_faults["promote.json"] = [client_error("AccessDenied", "put_object")]
         require(promote_in(fixture, folder / "resolve_a", bucket)[0] != 0 and alias(fixture) == "2", "run A did not stop after the move")
+        service = MlflowService(fixture.tracking)
 
         def lease_command(*arguments: str) -> tuple[int, str, str]:
-            out, err = io.StringIO(), io.StringIO()
-            with mock.patch.object(promote_receipt, "s3_client", return_value=bucket), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                return promote_lease.main(list(arguments), {"DATA_BUCKET_NAME": BUCKET}), out.getvalue(), err.getvalue()
+            return owner_command(fixture, bucket, service, *arguments)
 
         resolve = ("resolve", "--model", MODEL, "--owner", "owner", "--reason", "the task was lost")
         code, out, error = lease_command("show", "--model", MODEL)
@@ -1096,6 +1141,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code == 0 and shown["run_id"] == RUN and shown["intent"]["previous_version"] == "1", f"show: {code} {out} {error}")
         code, _, error = lease_command(*resolve, "--run", RUN_B)
         require(code == 2 and RUN in error and not any(key.endswith("abandoned.json") for key in bucket.objects), f"another run was resolved: {code} {error}")
+        require(service.restarts == 0, "MLflow was restarted for a refused resolution")
         bucket.put_faults[lease_closed(1)] = [client_error("AccessDenied", "put_object")]
         code, _, error = lease_command(*resolve, "--run", RUN)
         require(code == 2 and promote_receipt.key_of(RUN, "abandoned.json") in bucket.objects, f"a failed close was not reported: {code} {error}")
@@ -1106,23 +1152,99 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code != 0 and "promotion_busy" in error, f"the lease was released before its close: {code} {error}")
         code, out, error = lease_command(*resolve, "--run", RUN)
         require(code == 0 and "abandoned" in out and lease_closed(1) in lease_keys(bucket), f"the repeat did not close the lease: {code} {out} {error}")
+        require(service.restarts == 2, f"each resolution that passed its checks restarts MLflow once: {service.restarts}")
         code, _, error = lease_command(*resolve, "--run", RUN)
-        require(code == 2 and "not held" in error, f"a free model was resolved: {code} {error}")
+        require(code == 2 and "not held" in error and service.restarts == 2, f"a free model was resolved: {code} {error}")
         code, _, error = run_b(fixture, folder / "resolve_b", bucket, "1", "rollback")
         require(code == 0 and alias(fixture) == "1" and receipt_of(bucket, RUN_B)["previous_version"] == "2", f"the next run was not served: {code} {error}")
 
     def owner_cannot_resolve_a_run_that_stored_its_receipt() -> None:
-        from scripts.training import promote_lease
+        from scripts.training import promote_owner
 
         fixture, bucket = registry_fixture(folder / "resolve_done"), receipt_bucket()
         bucket.put_faults[lease_closed(1)] = [client_error("AccessDenied", "put_object")]
         require(promote_in(fixture, folder / "resolve_done_a", bucket)[0] != 0, "run A did not stop before closing its lease")
         with mock.patch.object(promote_receipt, "s3_client", return_value=bucket), contextlib.redirect_stderr(io.StringIO()) as error:
-            code = promote_lease.main(["resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "x"], {"DATA_BUCKET_NAME": BUCKET})
+            code = promote_owner.main(["resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "x"], {"DATA_BUCKET_NAME": BUCKET})
         require(code == 2 and "stored its receipt" in error.getvalue(), f"{code} {error.getvalue()}")
         require(promote_receipt.key_of(RUN, "abandoned.json") not in bucket.objects, "a completed run was fenced")
 
+    def attempt_reply_lost_fails_closed() -> None:
+        fixture, bucket = registry_fixture(folder / "attempt_lost"), receipt_bucket()
+        bucket.write_hook = lambda key: setattr(bucket, "lose_reply_once", key.endswith("attempt.json"))
+        code, _, error = promote_in(fixture, folder / "attempt_lost_work", bucket)
+        require(code != 0 and "promotion_needs_resolution" in error, f"a lost attempt reply was not refused: {code} {error}")
+        require(alias(fixture) == "1" and not writes(fixture) and ATTEMPT_KEY in bucket.objects, "the alias request was sent without a known attempt record")
+
+    def pending_alias_request_cannot_revert_a_later_promotion() -> None:
+        fixture, bucket = registry_fixture(folder / "pending"), receipt_bucket()
+        allow_three(fixture)
+        service, resolve = MlflowService(fixture.tracking), ("resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "the task was lost")
+        fixture.tracking.hold_alias = True
+        code, _, error = promote_in(fixture, folder / "pending_a", bucket)
+        require(
+            code != 0 and alias(fixture) == "1" and fixture.tracking.pending == [(MODEL, "production", "2")],
+            f"run A did not leave a pending request: {code} {error}",
+        )
+        fixture.tracking.calls.clear()
+        code, _, error = promote_in(fixture, folder / "pending_a_retry", bucket)
+        require(code != 0 and "promotion_needs_resolution" in error, f"the retry in a fresh workspace was not stopped: {code} {error}")
+        require("set_registered_model_alias" not in writes(fixture) and alias(fixture) == "1", f"the retry sent the alias request again: {writes(fixture)}")
+        require(lease_keys(bucket) == ["lease-0000000001.json"], f"the lease was closed or replaced: {lease_keys(bucket)}")
+        code, _, error = run_b(fixture, folder / "pending_b_early", bucket)
+        require(code != 0 and "promotion_busy" in error and alias(fixture) == "1" and not writes(fixture), f"run B took the model: {code} {error}")
+        code, out, error = owner_command(fixture, bucket, service, "show", "--model", MODEL)
+        require(code == 0 and "attempt.json" in json.loads(out)["held"]["records"], f"show does not list the attempt: {code} {out} {error}")
+        seen: list[bool] = []
+        original = fixture.tracking.get_model_version_by_alias
+
+        def read_after_restart(name: str, alias_name: str) -> Any:
+            seen.append(service.restart_done)
+            return original(name, alias_name)
+
+        with mock.patch.object(fixture.tracking, "get_model_version_by_alias", side_effect=read_after_restart):
+            code, out, error = owner_command(fixture, bucket, service, *resolve)
+        require(code == 0 and service.restarts == 1 and not fixture.tracking.pending, f"the owner resolution did not restart MLflow: {code} {out} {error}")
+        require(seen == [True], f"the alias was read before the restart finished: {seen}")
+        fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
+        require(fence["production_alias"] == "1" and lease_closed(1) in lease_keys(bucket), f"the resolution did not record the alias and close: {fence}")
+        code, _, error = run_b(fixture, folder / "pending_b", bucket)
+        require(code == 0 and alias(fixture) == "3", f"run B did not promote after the resolution: {code} {error}")
+        fixture.tracking.deliver_pending()
+        require(alias(fixture) == "3", f"the old alias request reverted production to {alias(fixture)}")
+        require(receipt_of(bucket, RUN_B)["previous_version"] == "1", "run B lost its predecessor")
+        code, _, error = promote_in(fixture, folder / "pending_a_late", bucket)
+        require(code != 0 and "promotion_abandoned" in error and alias(fixture) == "3", f"the abandoned run started again: {code} {error}")
+
+    def resolution_needs_a_finished_restart() -> None:
+        fixture, bucket = registry_fixture(folder / "restart"), receipt_bucket()
+        allow_three(fixture)
+        fixture.tracking.hold_alias = True
+        require(promote_in(fixture, folder / "restart_a", bucket)[0] != 0, "run A did not stop after its alias request")
+        resolve = ("resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "the task was lost")
+        for fault, reason in (("update_error", "AccessDenied"), ("never_stop", "not reached within"), ("rollout_failed", "rollout FAILED")):
+            service = MlflowService(fixture.tracking, {fault})
+            code, _, error = owner_command(fixture, bucket, service, *resolve)
+            require(code == 2 and reason in error and "lease is still held" in error, f"{fault}: the failed restart was not reported: {code} {error}")
+            require(
+                not any(key.endswith("abandoned.json") for key in bucket.objects) and lease_closed(1) not in lease_keys(bucket),
+                f"{fault}: the lease was closed",
+            )
+            code, _, error = run_b(fixture, folder / f"restart_b_{fault}", bucket)
+            require(code != 0 and "promotion_busy" in error and alias(fixture) == "1", f"{fault}: run B took the model: {code} {error}")
+        code, _, error = owner_command(
+            fixture, bucket, MlflowService(fixture.tracking), "resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "x"
+        )
+        require(code == 0 and lease_closed(1) in lease_keys(bucket), f"a healthy restart did not resolve: {code} {error}")
+        code, _, error = owner_command(
+            fixture, bucket, MlflowService(fixture.tracking), "resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "x"
+        )
+        require(code == 2 and "not held" in error, f"a second resolution was not refused: {code} {error}")
+
     cases.check("promote_refuses_a_second_run_while_an_interrupted_run_is_unresolved", rolled_back_run_cannot_repeat_the_move)
+    cases.check("promote_pending_alias_request_cannot_revert_a_later_promotion", pending_alias_request_cannot_revert_a_later_promotion)
+    cases.check("promote_owner_resolution_needs_a_finished_mlflow_restart", resolution_needs_a_finished_restart)
+    cases.check("promote_attempt_record_whose_reply_was_lost_fails_closed", attempt_reply_lost_fails_closed)
     cases.check("promote_concurrent_run_that_finishes_first_is_not_overwritten", run_that_finishes_first_is_not_overwritten)
     cases.check("promote_concurrent_run_is_refused_while_the_first_is_unresolved", run_that_is_unresolved_blocks_the_delayed_run)
     cases.check("promote_lease_survives_a_failure_before_the_intent", lease_survives_a_failure_before_the_intent)
@@ -1140,7 +1262,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
     stale_retry_moves_nothing("promote_stale_retry_after_a_return_to_the_predecessor_moves_nothing", "1")
     cases.check("promote_refuses_a_changed_request_for_a_recorded_run", changed_request_is_refused)
     cases.check("promote_stops_before_the_move_when_the_intent_is_not_stored", intent_failure_stops_the_move)
-    cases.check("promote_retry_finishes_a_move_that_never_happened", stopped_before_the_move_completes_on_retry)
+    cases.check("promote_retry_does_not_send_a_recorded_alias_request_again", retry_does_not_send_the_alias_request_again)
     cases.check("promote_retry_fails_closed_when_completion_cannot_be_read", unknown_completion_fails_closed)
     cases.check("promote_first_run_needs_no_list_grant", first_promotion_needs_no_list_grant)
     cases.check("promote_adopts_an_intent_whose_reply_was_lost", intent_lost_reply_is_adopted)
