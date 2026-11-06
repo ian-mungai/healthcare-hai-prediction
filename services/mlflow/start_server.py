@@ -11,6 +11,9 @@ environment. MLflow reads ``admin_password`` only when it creates the administra
 The basic-auth app also needs a static Flask secret key for the CSRF protection of the web UI forms. There is one server, so each start makes its own random
 key and passes it only in the server process environment (owner decision A, Nov 5 2026): a restart ends open browser sessions, and API calls with basic
 auth are unaffected. A key set from outside is replaced.
+
+MLflow copies its server environment into the runner of its server-side jobs, which is on by default. This service runs no such jobs, so each start sets
+MLFLOW_SERVER_ENABLE_JOB_EXECUTION to false, and the key never reaches a job runner.
 """
 
 from __future__ import annotations
@@ -82,6 +85,7 @@ def main(argv: Sequence[str], environ: MutableMapping[str, str] | None = None, r
         return 1
     del environ["MLFLOW_ADMIN_PASSWORD"]
     environ["MLFLOW_AUTH_CONFIG_PATH"] = str(path)
+    environ["MLFLOW_SERVER_ENABLE_JOB_EXECUTION"] = "false"
     environ["MLFLOW_FLASK_SERVER_SECRET_KEY"] = secrets.token_hex(32)
     run(["server", "--app-name", "basic-auth", *argv])
     return 0

@@ -567,6 +567,16 @@ def start_cases(cases: Any, folder: Path) -> None:
         keys = {start(work, options, MLFLOW_FLASK_SERVER_SECRET_KEY=preset)[3].get("MLFLOW_FLASK_SERVER_SECRET_KEY") for _ in range(2)}
         require(len(keys) == 2 and preset not in keys, f"each start must make its own key: {len(keys)} distinct, preset kept: {preset in keys}")
 
+    def jobs_off() -> None:
+        # MLflow copies the server environment, including the CSRF key, into the job runner it starts while job execution is on (the default).
+        # This service runs no server-side MLflow jobs, so every start switches job execution off, whatever the outside value was.
+        switch = "MLFLOW_SERVER_ENABLE_JOB_EXECUTION"
+        for index, outside in enumerate((None, "true", "false")):
+            work = folder / f"jobs_off_{index}"
+            work.mkdir(parents=True)
+            env = start(work, options, **{switch: outside})[3]
+            require(env.get(switch) == "false", f"job execution stays on for an outside value of {outside}: {env.get(switch)}")
+
     def refuses(name: str, reason: str, argv: list[str] | None = None, **changes: str | None) -> None:
         def case() -> None:
             work = folder / name
@@ -589,6 +599,7 @@ def start_cases(cases: Any, folder: Path) -> None:
     cases.check("mlflow_start_runs_the_server_with_basic_auth_and_a_private_password_file", started)
     cases.check("mlflow_start_restart_keeps_the_same_file", restarted)
     cases.check("mlflow_start_makes_a_new_csrf_key_at_each_start", new_key_each_start)
+    cases.check("mlflow_start_switches_server_job_execution_off", jobs_off)
     refuses("refuses_a_missing_password", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD=None)
     refuses("refuses_a_short_password", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD="-".join(("short", "1")))
     refuses("refuses_a_password_with_a_percent_sign", "MLFLOW_ADMIN_PASSWORD", MLFLOW_ADMIN_PASSWORD="%".join(("abcdefgh", "(ijklmnop)s")))
