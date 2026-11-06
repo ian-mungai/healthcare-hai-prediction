@@ -57,7 +57,7 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
             add(f"{layer} lookalike {namespace}", layer, "s3:PutObject", f"{BUCKET}/lakehouse/{namespace}_other/file", False)
         for prefix in ("", "lakehouse/", f"lakehouse/{layer}", f"lakehouse/{layer}_other/"):
             add(f"{layer} list boundary {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
-        add(f"{layer} list needs prefix", layer, "s3:ListBucket", BUCKET, layer == "features")  # the bucket check of the Feast registry sends none
+        add(f"{layer} list needs prefix", layer, "s3:ListBucket", BUCKET, False)
         add(f"{layer} list other bucket", layer, "s3:ListBucket", OTHER_BUCKET, False, {"s3:prefix": (f"lakehouse/{layer}/",)})
         for action in WRITER_ACTIONS:
             add(f"{layer} other bucket {action}", layer, action, f"{OTHER_BUCKET}/lakehouse/{layer}/file", False)
@@ -111,7 +111,7 @@ def cases(collections: tuple[str, ...]) -> list[Case]:
         add(f"{layer} feast registry delete", layer, "s3:DeleteObject", REGISTRY, False)
         add(f"{layer} feast other object", layer, "s3:PutObject", f"{BUCKET}/lakehouse/feast/other.pb", False)
         add(f"{layer} feast e2e registry", layer, "s3:PutObject", f"{BUCKET}/lakehouse/feast_e2e/registry.pb", False)
-        add(f"{layer} registry bucket check sends no prefix", layer, "s3:ListBucket", BUCKET, layer == "features")
+        add(f"{layer} registry store gets no unprefixed bucket list", layer, "s3:ListBucket", BUCKET, False)
         add(f"{layer} registry bucket check is not a list of the whole bucket", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": ("",)})
         add(f"{layer} registry bucket check is not a list of another bucket", layer, "s3:ListBucket", OTHER_BUCKET, False)
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")
