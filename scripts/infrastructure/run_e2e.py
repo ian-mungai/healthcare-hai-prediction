@@ -2321,7 +2321,7 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
     run_console_copy_cases(evidence, bash, template, gnu_timeout)
 
 
-def nft_check_prefix(evidence: Evidence) -> list[str] | None:
+def nft_check_prefix(evidence: Evidence, nft: str) -> list[str] | None:
     """The command prefix that lets nft -c run: none as root; else a new user and network namespace with root mapped; else sudo without a password (a
     hosted Ubuntu runner restricts unprivileged user namespaces but allows it). None when neither works, so the check is recorded as pending."""
     if os.geteuid() == 0:
@@ -2329,7 +2329,8 @@ def nft_check_prefix(evidence: Evidence) -> list[str] | None:
     unshare = shutil.which("unshare")
     if unshare:
         namespace = [unshare, "--user", "--map-root-user", "--net"]
-        step, result = evidence.run("job_firewall_namespace_probe", [*namespace, "true"], evidence.temporary)
+        # The probe runs nft by its absolute path: the child PATH holds only the suite's own tools.
+        step, result = evidence.run("job_firewall_namespace_probe", [*namespace, nft, "--version"], evidence.temporary)
         if result.returncode == 0:
             return namespace
     sudo = shutil.which("sudo")
@@ -2341,8 +2342,12 @@ def nft_check_prefix(evidence: Evidence) -> list[str] | None:
 
 
 def run_job_firewall_syntax_cases(evidence: Evidence) -> None:
-    """Check the job firewall file with the real nft where one exists, and record the check as pending where it does not."""
+    """Check the job firewall file with the real nft where one exists, and record the check as pending where it does not. On hosted CI the check must
+    run: a runner without nft, or without a way to run it, fails the suite instead of passing with the check pending."""
+    hosted = os.environ.get("GITHUB_ACTIONS") == "true"
     nft = shutil.which("nft")
+    if nft is None and hosted:
+        raise CheckFailed("job_firewall_syntax: hosted CI must check the job firewall file, but nft is not installed on the runner")
     if nft is None:
         evidence.report.setdefault("pending", []).append(
             {
@@ -2352,7 +2357,9 @@ def run_job_firewall_syntax_cases(evidence: Evidence) -> None:
             }
         )
         return
-    prefix = nft_check_prefix(evidence)
+    prefix = nft_check_prefix(evidence, nft)
+    if prefix is None and hosted:
+        raise CheckFailed("job_firewall_syntax: hosted CI must check the job firewall file, but the runner allows neither a user namespace nor sudo -n")
     if prefix is None:
         evidence.report.setdefault("pending", []).append(
             {
