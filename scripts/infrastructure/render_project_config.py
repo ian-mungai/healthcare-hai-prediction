@@ -26,6 +26,7 @@ PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_co
 PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
 # Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
 OPTIONAL_PREPARATION_FLAGS = (
+    "airflow_launch_prepared",
     "job_endpoints_enabled",
     "training_prepared",
     "athena_mirror_prepared",
@@ -43,14 +44,16 @@ OPTIONAL_PREPARATION_FLAGS = (
     "serve_prepared",
 )
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
-OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix")
-# Lists that may be left out: the job families the broker role may start.
-OPTIONAL_PREPARATION_LISTS = ("broker_job_families",)
+OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix", "airflow_launch_record_prefix")
+# Lists that may be left out: the job families the broker role and the Airflow launch role may start.
+OPTIONAL_PREPARATION_LISTS = ("broker_job_families", "airflow_launch_families")
 BROKER_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
 OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS})
 OWNER_USER = re.compile(r"[A-Za-z0-9_+=,.@-]{1,64}")
 REGISTRY_KEY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,500}")
 MANIFEST_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]")
+# The same rule as the airflow_launch_record_prefix validation in infra/iam/airflow_launch.tf.
+LAUNCH_RECORD_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
@@ -146,6 +149,21 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
     families = document.get("broker_job_families", [])
     if not isinstance(families, list) or len(set(map(str, families))) != len(families) or not all(item in BROKER_FAMILIES for item in families):
         raise ConfigurationError("Set broker_job_families to distinct job families in the IAM preparation file.")
+    launch_families = document.get("airflow_launch_families", ["train"])
+    if (
+        not isinstance(launch_families, list)
+        or len(set(map(str, launch_families))) != len(launch_families)
+        or not all(item in BROKER_FAMILIES for item in launch_families)
+        or (document.get("airflow_launch_prepared") is True and not launch_families)
+    ):
+        raise ConfigurationError(
+            "Set airflow_launch_families to distinct job families, at least one while airflow_launch_prepared is true, in the IAM preparation file."
+        )
+    launch_prefix = document.get("airflow_launch_record_prefix", "lakehouse/launch_records/")
+    if not isinstance(launch_prefix, str) or len(launch_prefix) > 256 or not LAUNCH_RECORD_PREFIX.fullmatch(launch_prefix) or ".." in launch_prefix:
+        raise ConfigurationError(
+            "Set airflow_launch_record_prefix to a key prefix that ends with a slash, with parts of letters, digits, underscores, dots and dashes."
+        )
     collection = document["bronze_qualification_collection"]
     if not isinstance(collection, str) or (collection and not COLLECTION_PATTERN.fullmatch(collection)):
         raise ConfigurationError("Set bronze_qualification_collection to empty or a publisher/collection name in the IAM preparation file.")
