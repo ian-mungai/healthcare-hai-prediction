@@ -341,15 +341,19 @@ def parse_proc_stat(pid: int, text: str) -> ProcessRow:
 def list_table_processes() -> list[ProcessRow]:
     """Every live process, read from the process table. A process that ends during the read is not live and is left out; any other failure to read the
     table, and a table that does not show the caller, fail the listing: a listing that is wrongly empty would let a stop report success. The table must
-    also be the caller's own pid namespace: ``self/stat`` must name the caller's pid, since another namespace's table can show an unrelated process with
-    the caller's pid number."""
+    also be the caller's own pid namespace: the ``NStgid`` line of ``self/status`` lists the caller's pid in the table's namespace and then in each
+    namespace inward, so it must be the caller's pid alone. A table of an ancestor namespace has more entries even when the numbers are equal, and its
+    rows can show unrelated processes under the caller's pid numbers. A missing or malformed line fails the listing."""
     try:
-        with open(f"{PROC_ROOT}/self/stat", encoding="utf-8", errors="replace") as record:
-            own = record.read().split(" ", 1)[0]
+        with open(f"{PROC_ROOT}/self/status", encoding="utf-8", errors="replace") as record:
+            status = record.read()
     except OSError as failure:
-        raise SessionListingFailed(f"{PROC_ROOT}/self/stat could not be read: {failure}") from None
-    if own != str(os.getpid()):
-        raise SessionListingFailed(f"{PROC_ROOT}/self/stat names process {own[:20]!r}, not this process ({os.getpid()}): the table is of another pid namespace")
+        raise SessionListingFailed(f"{PROC_ROOT}/self/status could not be read: {failure}") from None
+    vectors = [line.split(":", 1)[1].split() for line in status.splitlines() if line.startswith("NStgid:")]
+    if vectors != [[str(os.getpid())]]:
+        raise SessionListingFailed(
+            f"{PROC_ROOT}/self/status shows the pid namespaces {vectors[:1]!r}, not this process ({os.getpid()}) alone: the table is not of this pid namespace"
+        )
     try:
         names = os.listdir(PROC_ROOT)
     except OSError as failure:
