@@ -11,7 +11,9 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
 - ``train`` (training image): logs in to MLflow with MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD, because the server grants nothing without a login.
   It then runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
 - ``promote`` (training image, a separate task): records the code identity and the promotion parameters, then runs the ``promote`` action. It moves the
-  ``production`` alias of one registered model to the version the parameters name. The broker checks the owner's approval before the task starts.
+  ``production`` alias of one registered model to the version the parameters name. The broker checks the owner's approval before the task starts. Before the
+  phase reports success it copies the receipt ``promote.json`` to ``promote/<run>/promote.json`` in the data bucket, once, because the workspace ends
+  with the task.
 
 Each action writes to ``<work>/in/<action>``, where the next action reads it, as the local renderer mounts them. A phase checks the completion records of
 the steps an action needs before it starts that action. A rerun in the same workspace resumes: a completed step is verified and not run again. A rerun in a
@@ -37,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import code_digest, mlflow_service, training_contract
-from scripts.training import job
+from scripts.training import job, promote_receipt
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
 
@@ -214,12 +216,23 @@ def promote(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
         raise RunRefused(f"MLFLOW_TRACKING_URI must be http://<private IPv4 address>:{mlflow_service.PORT}. It is {uri or 'not set'}")
     for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
         required(name)
+    destination = bucket()
     task_environment(work)
     record_code(work, run)
     write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
     step = run_action(work, run, mode, "promote")
+    publish_receipt(work, run, destination)
     sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return [step]
+
+
+def publish_receipt(work: Path, run: str, destination: str) -> None:
+    """Store the receipt of the promote step in the data bucket, so it outlives the task. A failure stops the phase before it reports success."""
+    try:
+        body = (work / "in" / "promote" / promote_receipt.RECORD).read_bytes()
+        promote_receipt.upload(promote_receipt.s3_client(), destination, run, body)
+    except (OSError, promote_receipt.ReceiptError) as error:
+        raise StepFailed("promote", EXIT_FAILED, "receipt_upload_failed", str(error)) from None
 
 
 def parse_json(name: str) -> Any:
