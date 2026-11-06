@@ -403,27 +403,46 @@ def run_entry(work: Path, out: Path, label: str, extra: dict[str, str]) -> tuple
     return result.returncode, log, summary.read_text(encoding="utf-8") if summary.exists() else ""
 
 
+def tooling_suites() -> list[str]:
+    """The modules that the ci_tooling_checks group file runs as its E2E suites."""
+    return re.findall(r"-m (scripts\.quality\.run_\w+_e2e)\b", (ROOT / GROUP_FILES / "ci_tooling_checks.sh").read_text(encoding="utf-8"))
+
+
+def install_tooling_filter(work: Path) -> Path:
+    """An interpreter stand-in that replaces the E2E suites of ci_tooling_checks, which start nested CI runs (this runner among them) and last about 15 minutes,
+    by a marker line and runs every other command for real. It lies outside the checkout, because the gates lint every untracked file in it."""
+    path = work.parent / "tooling_filter.sh"
+    patterns = "|".join(f"*{module}*" for module in tooling_suites())
+    path.write_text(
+        f'#!/usr/bin/env bash\ncase "$*" in\n  {patterns}) printf \'stand-in for %s\\n\' "$*" >&2; exit 0 ;;\nesac\nexec {PYTHON} "$@"\n', encoding="utf-8"
+    )
+    path.chmod(0o755)
+    return path
+
+
 def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     name = "docs_only_runs_gates" if part == "core" else f"docs_only_runs_gates_{part}_part"
     stage_readme(work)
+    tooling = install_tooling_filter(work)
     # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
     launcher_part = "launcher" in PART_GROUPS[part]
     marker = (install_launcher_group_stub(work) if "repository_code_checks" in PART_GROUPS[part] else install_launcher_stub(work)) if launcher_part else None
     try:
-        code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part})
+        code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part, "PYTHON_BIN": str(tooling)})
     finally:
         restore(work)
+        tooling.unlink(missing_ok=True)
+    required = ["repository_code_checks", "ci_tooling_checks"]
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "conditional_groups_skipped_with_reason": all(
-            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "launcher"}
-        ),
+        "conditional_groups_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {*required, "launcher"}),
+        "tooling_suites_stood_in": all(f"stand-in for -m {module}" in log for module in tooling_suites()) == (part in {"core", "all"}),
         "launcher_selected_and_started": (marker is not None and "run launcher" in log and marker.exists()) if launcher_part else "run launcher" not in log,
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
         # sql_style is selected by path in the staged scope (always_except_commits), so a README-only change skips it with a reason.
-        "required_groups_only": re.findall(r"^== (\w+) ==$", log, re.MULTILINE) == (["repository_code_checks"] if part in {"core", "all"} else []),
+        "required_groups_only": sorted(re.findall(r"^== (\w+) ==$", log, re.MULTILINE)) == (sorted(required) if part in {"core", "all"} else []),
         "summary_has_durations": "| Step | Seconds |" in text and re.search(r"^\| gates \| \d+ \|$", text, re.MULTILINE) is not None,
     }
     return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code}
@@ -3119,7 +3138,10 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
         wanted.append([str(PYTHON), *flags, "-m", module, *expanded])
     actual = [row["argv"] for row in rows if row["label"].startswith("orchestration_checks:")]
     labels = [row["label"].strip() for row in rows if not row["label"].startswith(("gates:", "orchestration_checks:"))]
-    expected = [f"probe: {entry}" for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "configuration_checks"])]
+    expected = [
+        f"probe: {entry}"
+        for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "ci_tooling_checks", "configuration_checks"])
+    ]
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
         expected += ["probe: lakehouse_features_store"]
@@ -3933,6 +3955,7 @@ STAND_IN_ENTRIES = {
     "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
     "launcher": ["launcher_e2e"],
     "lakehouse_features": ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine", "lakehouse_features_store"],
+    "orchestration_checks": ["orchestration_checks_sdk_runtime", "orchestration_checks"],
 }
 # A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
 STAND_IN_BODY = """#!/usr/bin/env bash
@@ -3943,7 +3966,8 @@ STAND_IN_BODY = """#!/usr/bin/env bash
 """
 PYTHON_FILTER = """#!/usr/bin/env bash
 # Stand-in for the interpreter of the gates: only the group selection runs for real.
-if [[ "$*" == *scripts.quality.ci_groups* || "$*" == *config/quality/ci_groups.json* ]]; then
+# The step that starts a worker in its own session and the step that stops the sessions import scripts.process: they run for real too.
+if [[ "$*" == *scripts.quality.ci_groups* || "$*" == *config/quality/ci_groups.json* || "$*" == *"from scripts.process import"* ]]; then
   exec {python} "$@"
 fi
 exit 0

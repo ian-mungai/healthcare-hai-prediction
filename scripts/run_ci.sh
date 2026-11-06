@@ -384,7 +384,8 @@ run_launcher_shards() {
 }
 launcher_settings="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json")); print(c["launcher_shards"], c["launcher_shard_seconds"])')"
 read -r launcher_shards launcher_shard_seconds <<<"$launcher_settings"
-if [[ "$part" != "core" ]] && is_selected launcher; then
+# CI_ADMISSION_ONLY=1 runs no worker, so it skips the launcher shards too (they would start the real launcher E2E).
+if [[ "$part" != "core" && "${CI_ADMISSION_ONLY:-0}" != "1" ]] && is_selected launcher; then
   require_group_file launcher
   started=$SECONDS
   if [[ -z "${LAUNCHER_SHARD:-}" && "$launcher_shards" -gt 1 ]]; then
