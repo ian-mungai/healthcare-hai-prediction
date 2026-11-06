@@ -81,23 +81,36 @@ class GuardedCatalog:
 
 
 DELEGATION_HEADER = "X-Iceberg-Access-Delegation"
+VENDING_REFUSED = {"error": {"message": "credential vending is not enabled", "type": "BadRequestException", "code": 400}}
 
 
 class RestCatalogHandler(http.server.BaseHTTPRequestHandler):
-    """A loopback stand-in for the Polaris REST catalog: it records the headers of every request and refuses a table load that asks for vended credentials."""
+    """A loopback stand-in for the Polaris REST catalog: it records every request and refuses a table or namespace call that asks for vended credentials."""
 
     def do_GET(self) -> None:
-        server: Any = self.server
         path = self.path.split("?", 1)[0]
-        headers = {name.lower(): value for name, value in self.headers.items()}
         payload: dict[str, Any]
         if path.endswith("/v1/config"):
             status, payload = 200, {"defaults": {}, "overrides": {}}
         elif "/tables/" in path and self.headers.get(DELEGATION_HEADER) is not None:
-            status, payload = 400, {"error": {"message": "credential vending is not enabled", "type": "BadRequestException", "code": 400}}
+            status, payload = 400, VENDING_REFUSED
         else:
             status, payload = 404, {"error": {"message": "the stand-in holds no tables", "type": "NoSuchTableException", "code": 404}}
-        server.requests.append({"path": path, "headers": headers, "status": status})
+        self._answer(path, status, payload)
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        path = self.path.split("?", 1)[0]
+        if self.headers.get(DELEGATION_HEADER) is not None:
+            status, payload = 400, VENDING_REFUSED
+        else:
+            status, payload = 200, {}
+        self._answer(path, status, payload)
+
+    def _answer(self, path: str, status: int, payload: dict[str, Any]) -> None:
+        server: Any = self.server
+        headers = {name.lower(): value for name, value in self.headers.items()}
+        server.requests.append({"path": path, "method": self.command, "headers": headers, "status": status})
         data = json.dumps(payload).encode()
         try:
             self.send_response(status)
@@ -147,6 +160,13 @@ class RestClientStandIn:
         namespace, table = identifier.split(".", 1)
         self.session.get(f"{self.uri}/v1/namespaces/{namespace}/tables/{table}", timeout=5).raise_for_status()
         return None
+
+    def create_namespace_if_not_exists(self, namespace: str) -> None:
+        self.session.post(f"{self.uri}/v1/namespaces", json={"namespace": [namespace]}, timeout=5).raise_for_status()
+
+    def create_table_if_not_exists(self, identifier: str, schema: Any) -> None:
+        namespace, table = identifier.split(".", 1)
+        self.session.post(f"{self.uri}/v1/namespaces/{namespace}/tables", json={"name": table, "schema": str(schema)}, timeout=5).raise_for_status()
 
 
 def aws_environment(**changes: str | None) -> dict[str, str]:

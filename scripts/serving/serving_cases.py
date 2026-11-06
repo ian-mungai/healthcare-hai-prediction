@@ -975,6 +975,49 @@ def case_sink_requests_no_vended_credentials(c: Checker) -> None:
         c.check("no table load is refused for credential vending", refused == [] and "400" not in outcome.get("error", ""))
 
 
+def case_create_table_requests_no_vended_credentials(c: Checker) -> None:
+    """The owner's table creation opens the REST catalog without asking Polaris for vended credentials, so no namespace or table creation carries the header."""
+    real = importlib.util.find_spec("pyiceberg") is not None
+    client = f"PyIceberg {importlib.import_module('pyiceberg').__version__}" if real else "the PyIceberg 0.12.0 header stand-in"
+    types = SimpleNamespace(
+        NestedField=lambda index, name, kind, required: (index, name, kind), **{kind: (lambda kind=kind: kind) for kind in iceberg_sink.TYPES.values()}
+    )
+    modules = {
+        "pyiceberg.catalog": SimpleNamespace(load_catalog=feast_aws_cases.RestClientStandIn),
+        "pyiceberg.types": types,
+        "pyiceberg.schema": SimpleNamespace(Schema=lambda *fields: list(fields)),
+    }
+    standin = SimpleNamespace(import_module=lambda name: modules[name])
+    outcome: dict[str, str] = {}
+    with feast_aws_cases.rest_catalog_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/api/catalog"
+        environ = {"POLARIS_URI": endpoint, "POLARIS_CLIENT_ID": "admin", "POLARIS_CLIENT_SECRET": "x"}
+
+        def create() -> None:
+            try:
+                iceberg_sink.create_table(environ)
+            except Exception as error:
+                outcome["error"] = f"{type(error).__name__}: {error}"
+
+        patches: list[Any] = [mock.patch.object(iceberg_sink.reads, "polaris_token", return_value=feast_aws_cases.ISSUED)]
+        if not real:
+            patches.append(mock.patch.object(iceberg_sink, "importlib", standin))
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            worker = threading.Thread(target=create, daemon=True)
+            worker.start()
+            worker.join(timeout=20)
+        c.check(f"the table creation ends within 20 s ({client})", not worker.is_alive())
+        posts = [request["path"] for request in server.requests if request["method"] == "POST"]
+        c.check("the client created the serving namespace", any(path.endswith("/v1/namespaces") for path in posts))
+        c.check(f"the client created the {CONTRACT['table']} table", any(path.endswith(f"/namespaces/{CONTRACT['namespace']}/tables") for path in posts))
+        delegated = [request["path"] for request in server.requests if feast_aws_cases.DELEGATION_HEADER.lower() in request["headers"]]
+        c.check(f"no request carries the {feast_aws_cases.DELEGATION_HEADER} header", delegated == [])
+        refused = [request["path"] for request in server.requests if request["status"] == 400]
+        c.check("no creation is refused for credential vending", refused == [] and "400" not in outcome.get("error", ""))
+
+
 def case_nonfinite(c: Checker) -> None:
     """A prediction that is not a finite number is a model failure: it triggers fallback and ejection, and it is never returned or recorded."""
     keys_ = hospital_keys(40)
@@ -1559,6 +1602,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "sink_requests_no_vended_credentials": (case_sink_requests_no_vended_credentials, "iceberg polaris"),
+    "create_table_requests_no_vended_credentials": (case_create_table_requests_no_vended_credentials, "iceberg polaris"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),
     "replay_budget": (case_replay_budget, "canary compare"),
     "replay_http_drip": (case_replay_http_drip, "timeout network"),
