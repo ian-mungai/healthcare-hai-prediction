@@ -10,8 +10,8 @@ Two protection sources exist, and the caller names one (``--protection``):
   loses it once ``retain_sets`` newer sets exist and its snapshots pass the cutoff (owner rule). To keep an older set, tag each table's snapshot of
   that set (``ALTER TABLE ... CREATE TAG ... AS OF VERSION ...``); maintenance keeps every tag head.
 
-A reader that wants a published set takes a reservation first, then reads the newest ``publish_runs`` row, then pins the set (a registration). Maintenance
-never expires a snapshot of a set that a reservation or a registration names.
+In registry mode, a reader that wants a published set takes a reservation first, then reads the newest ``publish_runs`` row, then pins the set (a
+registration). Maintenance never expires a snapshot of a set that a reservation or a registration names.
 
 The launcher registry owns the protection and the fence around it. At the admission of a maintenance job it writes the protected file this module reads
 and, in the same registry transaction, takes the maintenance fence; the fence refuses every new reservation and registration until the attempt of the job
