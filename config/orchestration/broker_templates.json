@@ -3436,7 +3436,7 @@
       }
     },
     "gold_maintenance": {
-      "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (gold_maintenance_dag)",
+      "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (local launcher runs; on AWS the gold job's maintain phase)",
       "modes": {
         "publish_fixture": {
           "class": "offline",
@@ -4164,84 +4164,6 @@
                 "reconcile_candidates": "success",
                 "catalog_backup": "success",
                 "commit_publish": "success",
-                "run_record": "success",
-                "catalog_release": "success"
-              }
-            }
-          }
-        }
-      }
-    },
-    "maintenance_final_gate_accepted": {
-      "purpose": "Check every required maintenance task before the terminal release",
-      "modes": {
-        "publish_fixture": {
-          "class": "offline",
-          "no_op": false,
-          "control": {
-            "action": "gate_accepted",
-            "params": {
-              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
-              "expected_states": {
-                "acquire_run": "success",
-                "catalog_up": "success",
-                "gold_maintenance": "success",
-                "run_record": "success",
-                "catalog_release": "success"
-              }
-            }
-          }
-        },
-        "real": {
-          "class": "offline",
-          "no_op": false,
-          "control": {
-            "action": "gate_accepted",
-            "params": {
-              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
-              "expected_states": {
-                "acquire_run": "success",
-                "catalog_up": "success",
-                "gold_maintenance": "success",
-                "run_record": "success",
-                "catalog_release": "success"
-              }
-            }
-          }
-        }
-      }
-    },
-    "maintenance_final_gate_rejected": {
-      "purpose": "Check every required maintenance task before the terminal release",
-      "modes": {
-        "publish_fixture": {
-          "class": "offline",
-          "no_op": false,
-          "control": {
-            "action": "gate_rejected",
-            "params": {
-              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
-              "expected_states": {
-                "acquire_run": "success",
-                "catalog_up": "success",
-                "gold_maintenance": "success",
-                "run_record": "success",
-                "catalog_release": "success"
-              }
-            }
-          }
-        },
-        "real": {
-          "class": "offline",
-          "no_op": false,
-          "control": {
-            "action": "gate_rejected",
-            "params": {
-              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
-              "expected_states": {
-                "acquire_run": "success",
-                "catalog_up": "success",
-                "gold_maintenance": "success",
                 "run_record": "success",
                 "catalog_release": "success"
               }

@@ -82,7 +82,6 @@ PIPELINE_CHAINS = {
         "commit_publish",
         "run_record",
     ),
-    "gold_maintenance_dag": ("acquire_run", "catalog_up", "gold_maintenance", "run_record"),
     "features_transform_dag": (
         "acquire_run",
         "catalog_up",

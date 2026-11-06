@@ -207,6 +207,29 @@ def pin_cases(report: Report) -> None:
             "a run named with a bad ID is refused",
             refuses(lambda: pin_with(good, source="not-a-run"), "gold", "invalid"),
         )
+        newer_run = "20261015T040000Z-0000ab02"
+        two = FakeSpark([gold_run_row(plan), gold_run_row(plan, run=newer_run)], every)
+
+        def chain_pin(source: str | None) -> Any:
+            return features_input.pin(context(two), Path(folder) / f"{len(list(Path(folder).iterdir()))}.json", source, newest_only=True)
+
+        report.case("E02", "A1", "the chain pin of the newest committed gold run is accepted", chain_pin(newer_run)["source_run_id"] == newer_run)
+        report.case(
+            "E02",
+            "A1",
+            "the chain pin refuses an older committed gold run and names it and the newest one",
+            refuses(lambda: chain_pin(GOLD_RUN), GOLD_RUN, newer_run, "not the newest committed gold run"),
+        )
+        report.case("E02", "A1", "the chain pin refuses to run without a named gold run", refuses(lambda: chain_pin(None), "names no gold run"))
+        report.case(
+            "E02",
+            "A1",
+            "the chain pin refuses when no gold set is committed",
+            refuses(
+                lambda: features_input.pin(context(FakeSpark([], every, tables=False)), Path(folder) / "none.json", newer_run, newest_only=True),
+                "no committed gold run",
+            ),
+        )
         bad_records = {
             "wrong run": {**record, "run_id": "20261023T000000Z-00000009"},
             "wrong namespace": {**record, "namespace": "silver_e2e"},

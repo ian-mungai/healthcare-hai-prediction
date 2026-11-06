@@ -15,11 +15,9 @@ from scripts.orchestration import transform_fixtures
 from scripts.orchestration.run_transform_e2e import TEMP_ROOT, Stack
 
 ROOT = Path(__file__).resolve().parents[2]
-DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag")
+DAGS = ("silver_transform_dag", "gold_transform_dag")
 CONTRACTS = {"silver": "silver_publish.json", "gold": "gold_contract.json"}
 OUTLET_RULE = 'name == "commit_publish"'
-REGISTERED_KEEP = "            keep.add(str(item.run_id))\n"
-PENDING_KEEP = "            keep |= set(known[start:])\n"
 HIT = "        self.hits.append(point)\n"
 BARRIER = """        self.hits.append(point)
         barrier = Path("/workspace/out/publish/a3_barrier.txt")
@@ -125,7 +123,6 @@ class PipelineStack(Stack):
     """Run the shipped publication rows against a private checkout and local Iceberg catalog."""
 
     mutant: str | None = None
-    retain_sets: int | None = None
     barrier: bool = False
 
     @staticmethod
@@ -151,22 +148,15 @@ class PipelineStack(Stack):
         for name in ("orchestration", "scripts", "services", "config", "data_contracts", "dbt", "dags"):
             shutil.copytree(ROOT / name, self.checkout / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".env", "*.tfvars.json"))
         runtime = self.checkout / "orchestration/dag_runtime.py"
-        maintenance = self.checkout / "scripts/lakehouse/gold_maintenance.py"
         if self.mutant == "asset_on_build":
             replace_once(runtime, OUTLET_RULE, 'name in ("gold_build", "commit_publish")')
         publish = self.checkout / "scripts/lakehouse/gold_publish.py"
-        if self.mutant == "maintenance_ignores_registrations":
-            replace_once(maintenance, REGISTERED_KEEP, "            pass\n")
-        if self.mutant == "maintenance_ignores_pending":
-            replace_once(maintenance, PENDING_KEEP, "            pass\n")
         if self.mutant == "candidates_visible":
             replace_once(publish, AFTER_MERGE, "        ctx.sql(FAST_FORWARD, name=name, branch=ctx.branch)\n" + AFTER_MERGE)
         if self.mutant == "row_before_fast_forward":
             replace_once(publish, FAST_FORWARD_LOOP, EARLY_ROW + FAST_FORWARD_LOOP)
         if self.barrier:
             replace_once(publish, HIT, BARRIER)
-        if self.retain_sets is not None:
-            replace_once(self.checkout / "data_contracts/lakehouse/gold_contract.json", '"retain_sets": 3', f'"retain_sets": {self.retain_sets}')
         shutil.copy2(ROOT / "docker-compose.yaml", self.checkout / "docker-compose.yaml")
         shutil.copytree(ROOT / "data/analytics/dbt/dbt_packages", self.checkout / "data/analytics/dbt/dbt_packages")
         seed = ROOT / "data/orchestration/fixture_seed"

@@ -396,7 +396,7 @@ run "host_definitions_pass_the_secret_flow_check" {
 
   assert {
     condition = toset(output.host_secret_flow.containers_checked) == toset([
-      "host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_features/pin",
+      "host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_gold/maintain", "host_features/pin",
       "host_features/publish", "host_features/feast", "host_bronze/load", "host_train/extract", "host_train/train", "host_drift/baseline", "host_drift/current",
       "host_promote/promote", "host_serve/serve", "host_metadata/ingest"
     ])

@@ -1149,7 +1149,7 @@
       "kind": "finite"
     },
     "gold_maintenance": {
-      "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (gold_maintenance_dag)",
+      "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (local launcher runs; on AWS the gold job's maintain phase)",
       "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "entrypoint": [
         "python",

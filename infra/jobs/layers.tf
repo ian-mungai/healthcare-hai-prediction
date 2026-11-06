@@ -93,6 +93,7 @@ locals {
       export   = ["RUN_ID", "CODE_RUN_ID"]
       publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
       upload   = ["RUN_ID", "CODE_RUN_ID"]
+      maintain = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
     }
     features = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
@@ -111,20 +112,22 @@ locals {
     import boto3, hashlib, os, re, tarfile; d = os.environ["DATA_BUCKET_NAME"]; r = os.environ["CODE_RUN_ID"]; assert re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", r), "CODE_RUN_ID is not a run ID"; p = "/workspace/code.tar.gz"; boto3.client("s3").download_file(d, "lakehouse/run_stage/" + r + "/inputs/code.tar.gz", p); assert hashlib.sha256(open(p, "rb").read()).hexdigest() == os.environ["CODE_SHA256"], "code.tar.gz differs from CODE_SHA256"; tarfile.open(p).extractall("/workspace/code", filter="data")
   EOT
   )
-  layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", feast = "feature_store" }
+  layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", maintain = "spark", feast = "feature_store" }
   # DuckDB spills to the workspace volume. The cap is 60 GiB of the 100 GiB scratch default, which leaves room for the run folder, the sealed copy and Spark's own spill.
   layer_duckdb_spill_bytes = 60 * 1073741824
   # The silver build reads the catalog through dbt, whose profile names the pair DBT_ENV_SECRET_POLARIS_CLIENT_ID and _SECRET so that dbt scrubs them from its logs.
   layer_build_secrets = [for item in local.reader_parameters : { name = "DBT_ENV_SECRET_${item.name}", valueFrom = item.valueFrom }]
+  # Gold maintenance commits snapshot removal to the catalog, so it holds the gold writer pair; it is a gold phase only.
   layer_phase_secrets = {
-    pin     = "reader"
-    verify  = "reader"
-    feast   = "reader"
-    publish = "writer"
+    pin      = "reader"
+    verify   = "reader"
+    feast    = "reader"
+    publish  = "writer"
+    maintain = "writer"
   }
   layer_phases = {
     silver   = ["fetch", "pin", "build", "validate", "verify", "export", "publish", "upload"]
-    gold     = ["fetch", "pin", "build", "validate", "export", "publish", "upload"]
+    gold     = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "maintain"]
     features = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "feast"]
   }
   layer_steps = {
