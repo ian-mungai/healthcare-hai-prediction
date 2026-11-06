@@ -215,7 +215,7 @@ run "training_roles_are_narrow" {
       jsondecode(local.training_policy_documents.promote_receipts).Statement[2].Condition.StringLike["s3:prefix"] == ["promote/*"] &&
       length(jsondecode(local.training_policy_documents.promote_receipts).Statement) == 3
     )
-    error_message = "The promotion record grant creates objects under promote/ only when none exists, reads them back, lists the promote/ prefix alone so an absent record answers as absent, and allows nothing else."
+    error_message = "The promotion record grant creates objects under promote/ only when none exists (receipts, intents and the per-model lease records under promote/models/), reads them back, lists the promote/ prefix alone so the run and the model lease are found by an explicit listing, and allows nothing else."
   }
 
   assert {
