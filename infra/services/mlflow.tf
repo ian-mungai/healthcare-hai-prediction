@@ -9,10 +9,12 @@ locals {
       image                  = lookup(local.image, "mlflow", "")
       user                   = "10005:10005"
       readonlyRootFilesystem = true
-      memory                 = 640
-      memoryReservation      = 384
-      stopTimeout            = 60
-      entryPoint             = ["python", "-I", "/opt/mlflow/start_server.py"]
+      # Measured peak 1869 MiB in the first 90 s with basic auth on, Nov 5 2026, while MLflow 3.17 still started its job scheduler workers;
+      # job execution is now off (start_server.py), so the real peak should be lower. Keep this limit until a fresh measurement supports a change.
+      memory            = 2560
+      memoryReservation = 2048
+      stopTimeout       = 60
+      entryPoint        = ["python", "-I", "/opt/mlflow/start_server.py"]
       command = [
         "--host", "0.0.0.0",
         "--port", tostring(local.mlflow_port),
