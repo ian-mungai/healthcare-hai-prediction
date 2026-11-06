@@ -63,7 +63,7 @@ class IcebergSink:
             uri=self._endpoint,
             warehouse=reads.WAREHOUSE,
             token=token,
-            **{"s3.connect-timeout": reads.S3_CONNECT_TIMEOUT, "s3.request-timeout": reads.S3_REQUEST_TIMEOUT},
+            **{reads.ACCESS_DELEGATION_PROPERTY: None, "s3.connect-timeout": reads.S3_CONNECT_TIMEOUT, "s3.request-timeout": reads.S3_REQUEST_TIMEOUT},
         )
 
     def _append_to_table(self, rows: Sequence[Mapping[str, Any]], timeout: float) -> None:
