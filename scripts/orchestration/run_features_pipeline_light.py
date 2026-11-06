@@ -1626,6 +1626,10 @@ def work_steps(dag: str) -> tuple[str, ...] | None:
     return None
 
 
+# Gold maintenance runs as the last phase of every gold job (owner decision, Nov 5 2026), so its DAG left the graph.
+RETIRED_DAGS = frozenset({"gold_maintenance_dag"})
+
+
 def build_tasks_family(dag: str) -> str | None:
     path = ROOT / "dags" / f"{dag}.py"
     match = re.search(r'build_tasks\(WORK_STEPS, "([a-z_]+)"\)', path.read_text()) if path.is_file() else None
@@ -1643,6 +1647,9 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         if dag in graph.PIPELINE_CHAINS:
             checks[f"{dag}_reference_valid"] = graph.validate_transform_graph(graph.reference_graph(dag), dag) == []
     for dag, chain in base.PIPELINE_CHAINS.items():
+        if dag in RETIRED_DAGS:  # retired on purpose: it must be gone, not unchanged
+            checks[f"{dag}_retired"] = dag not in graph.PIPELINE_CHAINS
+            continue
         checks[f"{dag}_unchanged"] = graph.PIPELINE_CHAINS.get(dag) == chain
     checks["transform_dag_unchanged"] = graph.requirements("transform_dag") == base.requirements("transform_dag")
     features_dag = (ROOT / "dags" / f"{FEATURES_DAG}.py").read_text() if (ROOT / "dags" / f"{FEATURES_DAG}.py").is_file() else ""
