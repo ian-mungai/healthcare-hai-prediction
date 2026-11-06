@@ -94,7 +94,7 @@
       "code": [
         "dags/*.py",
         "orchestration/dag_runtime.py",
-          "orchestration/ecs_launch_provider.py",
+        "orchestration/ecs_launch_provider.py",
         "orchestration/training_contract.py",
         "scripts/orchestration/in_image_checks.py",
         "scripts/orchestration/db_dump.py",

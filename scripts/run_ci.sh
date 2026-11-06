@@ -18,7 +18,7 @@ set -euo pipefail
 # CI_LIST_ONLY=1 prints the plan and runs nothing. CI_ADMISSION_ONLY=1 runs the gates, checks that every worker has a limit, prints the workers and runs none. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
 # session and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
 # worker. A worker is overdue only when the whole seconds since its start exceed its limit, so it is never stopped before its limit. At the deadline the dispatcher stops every member
-# of the worker's session (scripts/process.py stop_sessions: TERM, then KILL after CI_WORKER_GRACE_SECONDS, default 5), which includes the groups that the worker's descendants
+# of the worker's session (scripts/process.py stop_sessions: it freezes every member with SIGSTOP, then KILLs it and confirms none is left), which includes the groups that the worker's descendants
 # started through scripts/process.py, confirms that no member is left and fails the run with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker
 # session the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
@@ -83,7 +83,7 @@ release_docker() {
 # Each worker leads its own session: a short Python step (worker_session_step) calls setsid, resets SIGINT and SIGQUIT (a background job of a shell without job
 # control starts with them ignored), sets PROCESS_LAUNCH_SESSION=1 (a scripts/process.py launch inside the worker stays in its session) and starts a new bash. setsid cannot run
 # inside a bash subshell, so that bash reads the functions and the variables a worker uses from a private state file (write_worker_state). The step stays as the session's leader
-# and watchdog. When the bash ends, the step stops every other member of its session (TERM, KILL after the grace period) and confirms that none is left before it exits with
+# and watchdog. When the bash ends, the step stops every other member of its session (SIGSTOP, then KILL) and confirms that none is left before it exits with
 # the bash's status (70, with a message, when a member survives or the session cannot be listed; its fallback never signals the leader's own group), so a descendant that the worker left has no unwatched moment. When its parent
 # (this script) has died, even by KILL, it does the same (its arguments: the repository and the grace seconds) within 0.2 s plus the grace period plus the 5 s confirmation.
 # The live workers are listed in worker_pids; each pid is also the worker's session id.
@@ -163,7 +163,7 @@ forget_worker() {
   done
   worker_pids=(${keep[@]+"${keep[@]}"})
 }
-# stop_workers: stop every member of every live worker session (the exit trap, so also after Ctrl-C and TERM). It waits 2 s after TERM, less than the 5 s that scripts/process.py
+# stop_workers: stop every member of every live worker session (the exit trap, so also after Ctrl-C and TERM). It passes a 2 s grace that scripts/process.py ignores (members are frozen with SIGSTOP, then KILLed), less than the 5 s that scripts/process.py
 # gives this script after its own TERM. The stop step is a new process in this script's session, which an outer session stop signals too, so TERM, INT and HUP are ignored first:
 # the step inherits that and finishes its KILL; an outer KILL still ends it.
 stop_workers() {
