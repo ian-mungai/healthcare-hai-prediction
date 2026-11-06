@@ -672,7 +672,7 @@
         },
         "host_scratch_root": {
           "type": "string",
-          "pattern": "^(?!.*\\.\\.)(?!.*//)/[A-Za-z0-9_][A-Za-z0-9_./-]*[A-Za-z0-9_]$"
+          "pattern": "^(?!.*\\.\\.)(?!.*//)/data/job_scratch(/[A-Za-z0-9_]([A-Za-z0-9_./-]*[A-Za-z0-9_])?)?$"
         },
         "host_metadata_resources": {
           "type": "object",

@@ -40,14 +40,14 @@ variable "host_job_threads" {
 }
 
 variable "host_scratch_root" {
-  description = "Absolute folder on the host's scratch volume. Each family gets <root>/<family>/<volume> for its task volumes. The job wipes it at start and after success."
+  description = "Folder on the host's scratch volume: /data/job_scratch, where boot mounts that volume, or a folder inside it. Each family gets <root>/<family>/<volume> for its task volumes. The job wipes it at start and after success."
   type        = string
   default     = "/data/job_scratch"
   nullable    = false
 
   validation {
-    condition     = can(regex("^/[A-Za-z0-9_][A-Za-z0-9_./-]*[A-Za-z0-9_]$", var.host_scratch_root)) && !strcontains(var.host_scratch_root, "..") && !strcontains(var.host_scratch_root, "//")
-    error_message = "Use an absolute folder without a trailing slash, a parent step or a double slash, for example /data/job_scratch."
+    condition     = can(regex("^/data/job_scratch(/[A-Za-z0-9_]([A-Za-z0-9_./-]*[A-Za-z0-9_])?)?$", var.host_scratch_root)) && !strcontains(var.host_scratch_root, "..") && !strcontains(var.host_scratch_root, "//")
+    error_message = "Use /data/job_scratch, where boot mounts the scratch volume, or a folder inside it, without a trailing slash, a parent step or a double slash. Any other folder is on the snapshotted data volume."
   }
 }
 

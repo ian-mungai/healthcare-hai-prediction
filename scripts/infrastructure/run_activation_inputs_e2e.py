@@ -270,10 +270,25 @@ ROWS: list[Row] = [
     Row(
         "jobs",
         "host_scratch_root",
-        "/data/scratch_a",
+        "/data/job_scratch/spill",
         5,
         "/data/job_scratch",
-        ("data/job_scratch", "/data/job_scratch/", "/data/../etc", "/data/a..b", "/data//job_scratch", "/", "/a", "/data/job scratch", "/data/job_scratch."),
+        (
+            "data/job_scratch",
+            "/data/job_scratch/",
+            "/data/../etc",
+            "/data/a..b",
+            "/data//job_scratch",
+            "/",
+            "/a",
+            "/data/job scratch",
+            "/data/job_scratch.",
+            "/data/scratch_a",
+            "/data",
+            "/mnt/job_scratch",
+            "/data/job_scratch_other",
+            "/data/job_scratch/../postgres",
+        ),
     ),
     Row(
         "jobs",
@@ -750,6 +765,36 @@ def scratch_size_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
+def scratch_root_cases(workspace: Workspace) -> dict[str, bool]:
+    """The jobs scratch root through the renderer and the wrapper: only the scratch mount boot creates, or a folder inside it, is admitted."""
+    checks: dict[str, bool] = {}
+    stack, name = "jobs", "host_scratch_root"
+    for root in ("/data/job_scratch", "/data/job_scratch/spill"):
+        workspace.clear(stack)
+        result = workspace.run(stack, {name: root})
+        checks[f"scratch root {root}: the scratch mount and a folder in it render exactly"] = (
+            result.returncode == 0 and (workspace.written(stack) or {}).get(name) == root
+        )
+    for root in ("/data/scratch_a", "/data"):
+        workspace.clear(stack)
+        result = workspace.run(stack, {name: root})
+        checks[f"scratch root {root}: the renderer refuses a folder of the data volume and writes nothing"] = (
+            result.returncode == 2 and workspace.written(stack) is None
+        )
+        workspace.clear(stack)
+        workspace.calls.unlink(missing_ok=True)
+        result = workspace.wrapper(stack, {name: root})
+        checks[f"wrapper jobs: scratch root {root} is refused before terraform"] = (
+            result.returncode == 2 and workspace.written(stack) is None and not workspace.called()
+        )
+    workspace.clear(stack)
+    result = workspace.wrapper(stack, {name: "/data/job_scratch"})
+    checks["wrapper jobs: the default scratch root is rendered and plan runs"] = (
+        result.returncode == 0 and (workspace.written(stack) or {}).get(name) == "/data/job_scratch"
+    )
+    return checks
+
+
 def run(output: Path) -> dict[str, dict[str, bool]]:
     results: dict[str, dict[str, bool]] = {"completeness": completeness()}
     with tempfile.TemporaryDirectory(prefix="activation_inputs_") as folder:
@@ -766,6 +811,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
         results["scratch_size"] = scratch_size_cases(workspace)
+        results["scratch_root"] = scratch_root_cases(workspace)
         results["committed_defaults"] = {name: ok for row in COMMITTED_DEFAULTS for name, ok in committed_default_cases(workspace, row).items()}
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
