@@ -12,9 +12,11 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
   It then runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
 - ``promote`` (training image, a separate task): records the code identity and the promotion parameters, then runs the ``promote`` action. It moves the
   ``production`` alias of one registered model to the version the parameters name. The broker checks the owner's approval before the task starts. Before the
-  alias moves, the action stores the intent ``promote/<run>/intent.json`` in the data bucket, once, with the version production held. Before the phase
-  reports success it copies the receipt ``promote.json`` to ``promote/<run>/promote.json``, once, because the workspace ends with the task. A retry in a
-  new task reads the intent and the receipt first, so it never moves the alias again for a run that completed.
+  alias moves, the action takes the lease of the model (``promote/models/<model>/lease-<generation>.json``, one run at a time, create-only) and stores the
+  intent ``promote/<run>/intent.json`` in the data bucket, once, with the version production held. Before the phase reports success it copies the receipt
+  ``promote.json`` to ``promote/<run>/promote.json``, once, because the workspace ends with the task, and only then closes the lease. A retry in a new task
+  resumes its own lease from the intent, or returns the receipt, so it never moves the alias again for a run that completed. Another run for the model is
+  refused while the lease is held.
 
 Each action writes to ``<work>/in/<action>``, where the next action reads it, as the local renderer mounts them. A phase checks the completion records of
 the steps an action needs before it starts that action. A rerun in the same workspace resumes: a completed step is verified and not run again. A rerun in a
@@ -40,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import code_digest, mlflow_service, training_contract
-from scripts.training import job, promote_receipt
+from scripts.training import job, promote_lease, promote_receipt
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
 
@@ -228,12 +230,21 @@ def promote(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
 
 
 def publish_receipt(work: Path, run: str, destination: str) -> None:
-    """Store the receipt of the promote step in the data bucket, so it outlives the task. A failure stops the phase before it reports success."""
+    """Store the receipt of the promote step in the data bucket, so it outlives the task, then close the lease of the model.
+
+    The lease stays held until the receipt is durable, so a failure of either call stops the phase before it reports success. A retry finds the receipt and
+    closes the lease.
+    """
     try:
         body = (work / "in" / "promote" / promote_receipt.RECORD).read_bytes()
-        promote_receipt.upload(promote_receipt.s3_client(), destination, run, body)
+        client = promote_receipt.s3_client()
+        promote_receipt.upload(client, destination, run, body)
     except (OSError, promote_receipt.ReceiptError) as error:
         raise StepFailed("promote", EXIT_FAILED, "receipt_upload_failed", str(error)) from None
+    try:
+        promote_lease.release(client, destination, str(json.loads(body)["model"]), run)
+    except (ValueError, KeyError, promote_receipt.ReceiptError) as error:
+        raise StepFailed("promote", EXIT_FAILED, "lease_release_failed", f"the receipt is stored but the lease is open: {error}") from None
 
 
 def parse_json(name: str) -> Any:

@@ -1454,6 +1454,8 @@
     "scripts/training/models/suite.py",
     "scripts/training/models/trees.py",
     "scripts/training/promote.py",
+    "scripts/training/promote_lease.py",
+    "scripts/training/promote_receipt.py",
     "scripts/training/promotion.py",
     "scripts/training/promotion_check.py",
     "scripts/training/registry.py",

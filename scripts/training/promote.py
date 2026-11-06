@@ -4,10 +4,15 @@ The approval of the owner is checked before the job starts (the broker reads the
 the request names. A forward promotion needs a version whose promotion check passed. A rollback needs a version that was in production before, which the version
 tag ``promoted_run`` shows. Setting the alias to the version it already names changes nothing, so a repeat in a new task is safe.
 
-Before the alias moves, the action stores the intent of the run in the data bucket (``promote_receipt``). A retry in a new task reads that intent, so the
-receipt keeps the version production held before the first attempt. A retry that finds the receipt of the run returns it and changes nothing. Otherwise the
-action moves the alias only when production still names the version before the promotion, finishes without a move when it already names the promoted version
-and refuses any other state. A request that differs from the stored intent is refused before any registry write.
+One run at a time moves a model. The action takes the lease of the model (``promote_lease``) before it stores the intent, keeps it through the alias move and
+any recovery, and ``aws_run.publish_receipt`` closes it once the receipt is durable. A second run for the same model is refused with ``promotion_busy`` and
+never touches the registry, whatever its timing. Only the holder observes production, so the version it records as ``previous_version`` is the true one.
+
+Before the alias moves, the action stores the intent of the run in the data bucket (``promote_receipt``). A retry in a new task finds its own lease, reads that
+intent and so keeps the version production held before the first attempt. A retry that finds the receipt of the run returns it and changes nothing, whatever
+production names now. Otherwise the action moves the alias only when production still names the version before the promotion, finishes without a move when
+it already names the promoted version and refuses any other state with the lease still held. A request that differs from the stored intent is refused before
+any registry write. A run the owner abandoned (``promote_lease resolve``) is refused.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from orchestration import training_contract
-from scripts.training import job_actions, job_inputs, promote_receipt, registry, run_tracking
+from scripts.training import job_actions, job_inputs, promote_lease, promote_receipt, registry, run_tracking
 from scripts.training.job_failure import JobFailure
 
 PROMOTED_TAG = "promoted_run"
@@ -44,46 +49,85 @@ def check_version(version: Any, mode: str, number: str) -> None:
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")
 
 
-def settle(request: Mapping[str, Any], observed: str | None) -> tuple[dict[str, Any], bytes | None]:
-    """Store the intent of the run before any registry write and return it with the stored receipt, when the run has completed.
-
-    Only a retry reads the receipt. A first attempt just created the intent, so no receipt can exist and no absent read is needed.
-    """
-    run, bucket = str(request["run_id"]), os.environ.get("DATA_BUCKET_NAME", "")
+def storage() -> tuple[Any, str]:
+    """The S3 client of the task and the data bucket that holds the promotion records."""
+    bucket = os.environ.get("DATA_BUCKET_NAME", "")
     if not bucket:
         raise JobFailure("receipt_bucket_missing", "DATA_BUCKET_NAME is not set")
-    client = promote_receipt.s3_client()
+    return promote_receipt.s3_client(), bucket
+
+
+def completed_receipt(client: Any, bucket: str, request: Mapping[str, Any]) -> bytes | None:
+    """The stored receipt when the run has completed, checked against the request and the intent, else None. Nothing is written.
+
+    The listing of the run's records decides absence. A run the owner abandoned, a receipt without its intent and a receipt that differs from the one the
+    intent and the request produce are refused.
+    """
+    run = str(request["run_id"])
     try:
-        intent, created = promote_receipt.open_intent(client, bucket, run, request, observed)
+        names = promote_receipt.records_of(client, bucket, run)
+        if promote_receipt.ABANDONED in names:
+            raise JobFailure("promotion_abandoned", f"run {run} was abandoned by the owner and never starts again. Production was not changed")
+        if promote_receipt.RECORD not in names:
+            return None
+        if promote_receipt.INTENT not in names:
+            raise JobFailure("promotion_conflict", f"{promote_receipt.key_of(run)} exists without an intent. Production was not changed")
+        intent = promote_receipt.stored_intent(client, bucket, run)
+        stored = promote_receipt.fetch(client, bucket, promote_receipt.key_of(run))
+    except promote_receipt.ReceiptError as error:
+        raise JobFailure("promotion_state_unknown", f"cannot tell whether run {run} already completed: {error}. Production was not changed") from None
+    if any(intent[name] != request[name] for name in promote_receipt.PROMOTION_FIELDS) or stored != promote_receipt.canonical(
+        {**request, "previous_version": intent["previous_version"]}
+    ):
+        raise JobFailure("promotion_conflict", f"{promote_receipt.key_of(run)} already holds another promotion. Production was not changed")
+    return stored
+
+
+def hold(client: Any, bucket: str, request: Mapping[str, Any]) -> promote_lease.Lease:
+    """Take the lease of the model for the run, or resume the lease the run holds. Another holder refuses the run before it reads the registry."""
+    try:
+        return promote_lease.acquire(client, bucket, str(request["model"]), str(request["run_id"]))
+    except promote_lease.Busy as busy:
+        raise JobFailure(
+            "promotion_busy",
+            f"{busy}. Production was not changed. Retry run {busy.holder} to finish it, or the owner resolves it with promote_lease",
+        ) from None
+    except promote_receipt.ReceiptError as error:
+        raise JobFailure("promotion_lease_failed", f"{error}. Production was not changed") from None
+
+
+def settle(client: Any, bucket: str, request: Mapping[str, Any], observed: str | None) -> dict[str, Any]:
+    """Store the intent of the run before any registry write and return it, the stored one when the run was here before."""
+    try:
+        return promote_receipt.open_intent(client, bucket, str(request["run_id"]), request, observed)[0]
     except promote_receipt.RequestConflict as error:
         raise JobFailure("promotion_conflict", f"{error}. Production was not changed") from None
     except promote_receipt.ReceiptError as error:
         raise JobFailure("promotion_intent_failed", f"{error}. Production was not changed") from None
-    if created:
-        return intent, None
-    try:
-        return intent, promote_receipt.completed(client, bucket, run)
-    except promote_receipt.ReceiptError as error:
-        raise JobFailure("promotion_state_unknown", f"cannot tell whether run {run} already completed: {error}. Production was not changed") from None
 
 
-def reconcile(store: Any, request: Mapping[str, Any], observed: str | None) -> bytes:
-    """Bring the registry and the records of the run to the promotion the request names and return the receipt bytes."""
+def inspect(store: Any, request: Mapping[str, Any]) -> str | None:
+    """Refuse a request the registry cannot serve and return the version production names, or None."""
+    name, number = request["model"], request["version"]
+    target = next((item for item in registry.versions_of(store, name) if str(item.version) == number), None)
+    if target is None:
+        raise JobFailure("version_missing", f"{name} has no version {number}")
+    current = registry.champion(store, name)
+    check_version(target, request["mode"], number)
+    return None if current is None else str(current.version)
+
+
+def reconcile(store: Any, request: Mapping[str, Any], intent: Mapping[str, Any], observed: str | None) -> bytes:
+    """Bring the registry to the promotion the request names, from the intent and the version production names, and return the receipt bytes."""
     name, number, run = request["model"], request["version"], str(request["run_id"])
-    intent, stored = settle(request, observed)
     previous = intent["previous_version"]
-    receipt = promote_receipt.canonical({**request, "previous_version": previous})
-    if stored is not None:
-        if stored != receipt:
-            raise JobFailure("promotion_conflict", f"{promote_receipt.key_of(run)} already holds another receipt")
-        return stored
     if observed not in (previous, number):
         raise JobFailure("promotion_conflict", f"production names {observed or 'no version'}, not {previous or 'no version'} (before) or {number}")
     if previous != number:
         if observed != number:
             store.set_registered_model_alias(name, registry.CHAMPION_ALIAS, number)
         store.set_model_version_tag(name, number, PROMOTED_TAG, run)
-    return receipt
+    return promote_receipt.canonical({**request, "previous_version": previous})
 
 
 def run(context: Any, record: Mapping[str, Any]) -> None:
@@ -95,19 +139,20 @@ def run(context: Any, record: Mapping[str, Any]) -> None:
         number, mode = parameters["model_version"], parameters["promotion_mode"]
 
         def plan() -> dict[str, bytes]:
+            request = {"schema": 1, "run_id": context.run, "model": name, "version": number, "mode": mode}
+            client, bucket = storage()
+            receipt = completed_receipt(client, bucket, request)
+            if receipt is not None:
+                return {RECORD: receipt}
             uri = os.environ.get("MLFLOW_TRACKING_URI", "")
             if not uri:
                 raise JobFailure("mlflow_uri_missing", "MLFLOW_TRACKING_URI is not set")
             try:
                 store: Any = run_tracking.open_store(uri)
-                target = next((item for item in registry.versions_of(store, name) if str(item.version) == number), None)
-                if target is None:
-                    raise JobFailure("version_missing", f"{name} has no version {number}")
-                current = registry.champion(store, name)
-                observed = None if current is None else str(current.version)
-                check_version(target, mode, number)
-                request = {"schema": 1, "run_id": context.run, "model": name, "version": number, "mode": mode}
-                receipt = reconcile(store, request, observed)
+                inspect(store, request)
+                hold(client, bucket, request)
+                observed = inspect(store, request)
+                receipt = reconcile(store, request, settle(client, bucket, request, observed), observed)
             except (JobFailure, ImportError):
                 raise
             except run_tracking.TrackingError as error:
