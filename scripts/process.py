@@ -324,20 +324,32 @@ def list_processes() -> list[ProcessRow]:
 def parse_proc_stat(pid: int, text: str) -> ProcessRow:
     """The row of a process from the text of ``PROC_ROOT/<pid>/stat``: ``pid (name) state ppid pgrp session ... starttime ...``.
 
-    The name is the one field that can hold spaces, parentheses and newlines, so the fields after it start after the last ``)``. Raises
-    ``SessionListingFailed`` for text that is not such a record.
+    The name is the one field that can hold spaces, parentheses and newlines, so the fields after it start after the last ``)``. The group and the session
+    are -1 in the record of a process reaped while the record is made (Linux ``do_task_stat`` starts them at -1); such a record is valid, and -1 matches no
+    owned group. Raises ``SessionListingFailed`` for text that is not such a record.
     """
     head, closing, tail = text.rpartition(")")
     fields = tail.split()
-    numbers = [fields[1], fields[2], fields[3], fields[PROC_START_FIELD]] if len(fields) > PROC_START_FIELD else []
-    if not closing or not head.startswith(f"{pid} (") or not numbers or not all(number.isascii() and number.isdigit() for number in numbers):
+    counts = [fields[1], fields[PROC_START_FIELD]] if len(fields) > PROC_START_FIELD else []
+    ids = [fields[2], fields[3]] if counts else []
+    valid = all(number.isascii() and number.isdigit() for number in counts) and all(number == "-1" or (number.isascii() and number.isdigit()) for number in ids)
+    if not closing or not head.startswith(f"{pid} (") or not counts or not valid:
         raise SessionListingFailed(f"{PROC_ROOT}/{pid}/stat is not a process record: {text[:200]!r}")
     return ProcessRow(pid, int(fields[1]), int(fields[2]), fields[0], fields[PROC_START_FIELD])
 
 
 def list_table_processes() -> list[ProcessRow]:
     """Every live process, read from the process table. A process that ends during the read is not live and is left out; any other failure to read the
-    table, and a table that does not show the caller, fail the listing: a listing that is wrongly empty would let a stop report success."""
+    table, and a table that does not show the caller, fail the listing: a listing that is wrongly empty would let a stop report success. The table must
+    also be the caller's own pid namespace: ``self/stat`` must name the caller's pid, since another namespace's table can show an unrelated process with
+    the caller's pid number."""
+    try:
+        with open(f"{PROC_ROOT}/self/stat", encoding="utf-8", errors="replace") as record:
+            own = record.read().split(" ", 1)[0]
+    except OSError as failure:
+        raise SessionListingFailed(f"{PROC_ROOT}/self/stat could not be read: {failure}") from None
+    if own != str(os.getpid()):
+        raise SessionListingFailed(f"{PROC_ROOT}/self/stat names process {own[:20]!r}, not this process ({os.getpid()}): the table is of another pid namespace")
     try:
         names = os.listdir(PROC_ROOT)
     except OSError as failure:

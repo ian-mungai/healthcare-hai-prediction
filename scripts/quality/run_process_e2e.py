@@ -2150,11 +2150,15 @@ def proc_stat(pid: int, name: str, state: str, parent: int, group: int, session:
     return f"{pid} ({name}) " + PROC_TAIL.format(state=state, parent=parent, group=group, session=session, start=start)
 
 
-def stand_in_proc(folder: Path, records: Mapping[int, str | None]) -> Path:
-    """A process table in a folder: ``self/stat`` and, per pid, a ``stat`` file (a None record is a process folder without one: the process ended)."""
+def stand_in_proc(folder: Path, records: Mapping[int, str | None], self_pid: int | None = None) -> Path:
+    """A process table in a folder: ``self/stat`` and, per pid, a ``stat`` file (a None record is a process folder without one: the process ended).
+
+    ``self_pid`` is the pid ``self/stat`` names (the caller's by default): another pid is the table of another pid namespace, which can show the caller's
+    pid number for an unrelated process."""
     root = folder / "proc"
     (root / "self").mkdir(parents=True)
-    (root / "self" / "stat").write_text(proc_stat(os.getpid(), "python", "R", os.getppid(), os.getpgrp(), os.getsid(0)), encoding="utf-8")
+    own = os.getpid() if self_pid is None else self_pid
+    (root / "self" / "stat").write_text(proc_stat(own, "python", "R", os.getppid(), os.getpgrp(), os.getsid(0)), encoding="utf-8")
     (root / "version").write_text("stand-in\n", encoding="utf-8")
     for pid, text in records.items():
         (root / str(pid)).mkdir()
@@ -2210,12 +2214,16 @@ def proc_names(base: Path) -> dict[str, Any]:
             for number, (key, name) in enumerate(names.items())
         }
         expected = {key: (900 + number, 800, 801, "S", str(5000 + number)) for number, key in enumerate(names)}
+        # A process reaped while its record is made keeps the kernel's -1 for its group and session (Linux do_task_stat): a valid record, not a failure.
+        exiting = process.parse_proc_stat(990, proc_stat(990, "exiting", "X", 0, -1, -1, 6000))
         rejected = {}
         for key, text in {
             "other_pid": proc_stat(1, "a", "S", 2, 3, 4),
             "no_name": "900 S 800 801 802 0 -1 0 0 0 0 0 0 0 0 0 0 20 0 1 0 5000\n",
             "short": "900 (a) S 800 801 802\n",
             "letters": proc_stat(900, "a", "S", 800, 801, 802).replace(" 800 ", " x "),
+            "negative_parent": proc_stat(900, "a", "S", -1, 801, 802),
+            "other_negative_group": proc_stat(900, "a", "S", 800, -2, 802),
             "empty": "",
         }.items():
             try:
@@ -2226,6 +2234,7 @@ def proc_names(base: Path) -> dict[str, Any]:
                 rejected[key] = False
         return {
             "every_name_parses_to_its_fields": {key: tuple(row) for key, row in rows.items()} == expected,
+            "exit_race_record_parses": tuple(exiting) == (990, 0, -1, "X", "6000"),
             "malformed_records_are_rejected": all(rejected.values()),
             "rejected": rejected,
         }
@@ -2243,6 +2252,7 @@ def proc_listing_vanished(base: Path) -> dict[str, Any]:
             4002: None,
             4003: "",
             4004: proc_stat(4004, "gone", "S", 1, 4004, 4004),
+            4005: proc_stat(4005, "exiting", "X", 0, -1, -1),
         }
         proc_root = stand_in_proc(scratch.folder, records)
         real_open = open
@@ -2254,7 +2264,7 @@ def proc_listing_vanished(base: Path) -> dict[str, Any]:
 
         with mock.patch("scripts.process.PROC_ROOT", str(proc_root), create=True), mock.patch("builtins.open", reading):
             pids = sorted(row.pid for row in process.list_processes())
-        return {"only_the_live_processes_are_listed": pids == sorted([os.getpid(), 4001]), "listed": pids}
+        return {"only_the_live_processes_are_listed": pids == sorted([os.getpid(), 4001, 4005]), "listed": pids}
 
     return case("proc_listing_skips_a_process_that_ended_during_the_read", base, body)
 
@@ -2267,8 +2277,10 @@ def proc_listing_failure(base: Path) -> dict[str, Any]:
             "garbled_record": {**own_record(), 4001: "4001 not a stat record\n"},
             "record_that_is_a_folder": {**own_record(), 4001: None},
             "no_caller": {4001: proc_stat(4001, "a", "S", 1, 4001, 4001)},
+            # Another pid namespace's table: it shows an unrelated process with the caller's pid number, and self/stat names another pid.
+            "other_namespace": {**own_record(), 4001: proc_stat(4001, "a", "S", 1, 4001, 4001)},
         }
-        roots = {key: stand_in_proc(scratch.folder / key, records) for key, records in tables.items()}
+        roots = {key: stand_in_proc(scratch.folder / key, records, self_pid=4001 if key == "other_namespace" else None) for key, records in tables.items()}
         (roots["record_that_is_a_folder"] / "4001" / "stat").mkdir()
         outcomes: dict[str, bool] = {}
         for key, root in roots.items():
