@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator, Sequence
@@ -49,6 +50,24 @@ class Checker:
             return ""
         self.results.append((f"{name} (nothing was refused)", False))
         return ""
+
+
+STOP_SECONDS = 5.0
+
+
+def stop_worker(c: Checker, label: str, worker: threading.Thread, abort: Callable[[], None], timeout: float) -> None:
+    """Join a client worker for ``timeout`` seconds, then close what it waits on and join again.
+
+    A worker that is still running at the deadline fails the first check. ``abort`` closes the connections the worker waits on, so it ends with an error;
+    the second check fails only if it is still running ``STOP_SECONDS`` later. A thread cannot be cancelled, so only these two checks make that visible.
+    """
+    worker.join(timeout=timeout)
+    ended = not worker.is_alive()
+    if not ended:
+        abort()
+        worker.join(timeout=STOP_SECONDS)
+    c.check(f"{label} ends within {timeout:g} s", ended)
+    c.check(f"{label} is stopped", not worker.is_alive())
 
 
 def run_cases(cases: dict[str, tuple[Callable[[Checker], None], str]], selected: Sequence[str]) -> dict[str, Any]:

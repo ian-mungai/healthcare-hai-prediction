@@ -31,7 +31,7 @@ from unittest import mock
 
 from scripts.features import feast_aws_cases, online_cases
 from scripts.features import online_protocol as online
-from scripts.features.feast_harness import Checker
+from scripts.features.feast_harness import Checker, stop_worker
 from scripts.infrastructure import push_images, secret_store
 from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
 
@@ -964,8 +964,7 @@ def case_sink_requests_no_vended_credentials(c: Checker) -> None:
                 stack.enter_context(patch)
             worker = threading.Thread(target=append, daemon=True)
             worker.start()
-            worker.join(timeout=20)
-        c.check(f"the sink append ends within 20 s ({client})", not worker.is_alive())
+            stop_worker(c, f"the sink append ({client})", worker, server.abort_connections, 20)
         paths = [request["path"] for request in server.requests]
         c.check("the client asked for the catalog config", any(path.endswith("/v1/config") for path in paths))
         c.check("the client asked for the predictions table", any(path.endswith(f"/tables/{CONTRACT['table']}") for path in paths))
@@ -1007,8 +1006,7 @@ def case_create_table_requests_no_vended_credentials(c: Checker) -> None:
                 stack.enter_context(patch)
             worker = threading.Thread(target=create, daemon=True)
             worker.start()
-            worker.join(timeout=20)
-        c.check(f"the table creation ends within 20 s ({client})", not worker.is_alive())
+            stop_worker(c, f"the table creation ({client})", worker, server.abort_connections, 20)
         posts = [request["path"] for request in server.requests if request["method"] == "POST"]
         c.check("the client created the serving namespace", any(path.endswith("/v1/namespaces") for path in posts))
         c.check(f"the client created the {CONTRACT['table']} table", any(path.endswith(f"/namespaces/{CONTRACT['namespace']}/tables") for path in posts))

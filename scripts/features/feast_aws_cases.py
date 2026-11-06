@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA19 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA20 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -19,6 +19,7 @@ import importlib
 import importlib.util
 import json
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -35,7 +36,7 @@ from orchestration import ecs_target
 from scripts.features import feast_aws, feast_cases, feast_job, feast_materialize, online_cases
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
-from scripts.features.feast_harness import Checker, fake_module
+from scripts.features.feast_harness import Checker, fake_module, stop_worker
 from scripts.features.publication_reads import ReadError
 
 SENTINEL = "sentinel-secret-9f31c2"
@@ -130,10 +131,30 @@ class RestCatalogHandler(http.server.BaseHTTPRequestHandler):
         del fmt, args
 
 
+class CatalogServer(http.server.ThreadingHTTPServer):
+    """The loopback server of the REST catalog stand-in. It keeps the connections it accepted, so a case can close the ones a stalled client waits on."""
+
+    daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], handler: type[http.server.BaseHTTPRequestHandler]) -> None:
+        super().__init__(address, handler)
+        self.requests: list[dict[str, Any]] = []
+        self.connections: list[socket.socket] = []
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        connection, address = super().get_request()
+        self.connections.append(connection)
+        return connection, address
+
+    def abort_connections(self) -> None:
+        for connection in self.connections:
+            with contextlib.suppress(OSError):
+                connection.shutdown(socket.SHUT_RDWR)
+
+
 @contextlib.contextmanager
 def rest_catalog_server() -> Iterator[Any]:
-    server: Any = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RestCatalogHandler)
-    server.requests = []
+    server = CatalogServer(("127.0.0.1", 0), RestCatalogHandler)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     try:
@@ -890,8 +911,7 @@ def case_fa18(c: Checker) -> None:
 
         worker = threading.Thread(target=open_and_load, daemon=True)
         worker.start()
-        worker.join(timeout=20)
-        c.check(f"the catalog open and table load end within 20 s ({client})", not worker.is_alive())
+        stop_worker(c, f"the catalog open and table load ({client})", worker, server.abort_connections, 20)
         paths = [request["path"] for request in server.requests]
         c.check("the client asked for the catalog config", any(path.endswith("/v1/config") for path in paths))
         c.check("the client asked for the publish_runs table", any(path.endswith(f"/tables/{reads.RUNS_TABLE}") for path in paths))
@@ -1115,6 +1135,34 @@ def case_fa19(c: Checker) -> None:
             c.check("Feast never reached the bucket itself or another key", bucket_level(server.requests) == [])
 
 
+def case_fa20(c: Checker) -> None:
+    """FA20: a catalog client that is still running at its deadline fails the case and is then stopped, so no worker outlives its case."""
+    with rest_catalog_server() as server:
+
+        def stalled() -> None:
+            with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", server.server_port), timeout=60) as link:
+                link.recv(1)
+
+        def quick() -> None:
+            return None
+
+        slow = threading.Thread(target=stalled, daemon=True)
+        slow.start()
+        fast = threading.Thread(target=quick, daemon=True)
+        fast.start()
+        slow_checks, fast_checks = Checker(), Checker()
+        stop_worker(slow_checks, "the stalled client", slow, server.abort_connections, 0.3)
+        stop_worker(fast_checks, "the quick client", fast, server.abort_connections, 0.3)
+        c.check("a client past its deadline records a failed deadline check", slow_checks.results[0] == ("the stalled client ends within 0.3 s", False))
+        c.check(
+            "the stalled client is stopped before the case goes on", slow_checks.results[1] == ("the stalled client is stopped", True) and not slow.is_alive()
+        )
+        c.check(
+            "a client that ends in time passes both checks",
+            fast_checks.results == [("the quick client ends within 0.3 s", True), ("the quick client is stopped", True)],
+        )
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -1135,4 +1183,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA17": (case_fa17, "FA17"),
     "FA18": (case_fa18, "FA18"),
     "FA19": (case_fa19, "FA19"),
+    "FA20": (case_fa20, "FA20"),
 }
