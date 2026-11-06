@@ -183,16 +183,30 @@
       ]
     },
     {
-      "Sid": "ReadCatalogMetadataVersions",
+      "Sid": "ReadCatalogMetadataAndStageVersions",
       "Effect": "Allow",
       "Action": "s3:GetObjectVersion",
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/*/metadata/*.metadata.json"
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/*/metadata/*.metadata.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*"
+      ]
     },
     {
-      "Sid": "ReadStageVersions",
+      "Sid": "ReadPromotionRecords",
       "Effect": "Allow",
-      "Action": "s3:GetObjectVersion",
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*"
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/promote/*"
+    },
+    {
+      "Sid": "CreatePromotionRecords",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/promote/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:if-none-match": "*"
+        }
+      }
     }
   ]
 }

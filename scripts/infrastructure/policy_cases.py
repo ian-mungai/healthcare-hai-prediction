@@ -392,6 +392,32 @@ def single_copy_cases() -> Iterator[Case]:
     yield s3_case("no whole-bucket object write", "PutObject", "unlisted/x", False, False)
 
 
+PROMOTE_RUN = "20261024T000000Z-1234abcd"
+
+
+def promote_cases() -> Iterator[Case]:
+    """The owner's access to the promotion records: read and create once under promote/, and nothing else.
+
+    The listing comes from the whole-bucket ``s3:ListBucket`` of the bucket statements, so these cases cover the object actions only.
+    """
+    for name in (f"promote/{PROMOTE_RUN}/attempt.json", f"promote/{PROMOTE_RUN}/abandoned.json", "promote/models/hai_model_HAI_1/lease-0000000001.json"):
+        yield s3_case(f"promote records: GetObject {name}", "GetObject", name, False, True)
+        yield s3_case(f"promote records: create {name} once", "PutObject", name, True, True)
+        yield s3_case(f"promote records: overwrite {name} without the header refused", "PutObject", name, False, False)
+        yield Case(
+            f"promote records: PutObject {name} with another if-none-match value refused",
+            request("s3:PutObject", f"{BUCKET}/{name}", extra={"s3:if-none-match": "abc"}, region=None),
+            False,
+        )
+        for action in ("DeleteObject", "DeleteObjectVersion", "GetObjectVersion", "PutObjectTagging", "PutObjectAcl", "AbortMultipartUpload"):
+            for header in (True, False):
+                yield s3_case(f"promote records: {action} {name} header={header} refused", action, name, header, False)
+    for name in ("promoted/x.json", "promote", "other/promote/x.json", "unlisted/x.json"):
+        yield s3_case(f"promote records: GetObject outside promote/ {name} refused", "GetObject", name, False, False)
+        for header in (True, False):
+            yield s3_case(f"promote records: PutObject outside promote/ {name} header={header} refused", "PutObject", name, header, False)
+
+
 def logging_bucket_cases() -> Iterator[Case]:
     """The logging bucket may be created and configured, and the project bucket may send its access logs there. Nothing else follows."""
     other = f"{BUCKET}-other"
@@ -1018,7 +1044,7 @@ def job_project_cases() -> Iterator[Case]:
         "job stage: versioned input",
         request("s3:GetObjectVersion", f"{BUCKET}/lakehouse/run_stage/run/inputs/code.tar", region=None),
         True,
-        "ReadStageVersions",
+        "ReadCatalogMetadataAndStageVersions",
     )
     for key in ("lakehouse/silver/table/metadata.json", "lakehouse/run_stage_extra/run/input", "lakehouse/run_stage", "unlisted/x"):
         yield Case(f"job stage: refuse {key}", request("s3:GetObjectVersion", f"{BUCKET}/{key}", region=None), False)
@@ -2179,6 +2205,7 @@ def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from scope_cases(operations)
     yield from scope_cases({"s3": bucket_requests()})
     yield from single_copy_cases()
+    yield from promote_cases()
     yield from logging_bucket_cases()
     yield from tag_cases()
     yield from container_instance_cases()
@@ -2417,6 +2444,16 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         documents["healthcare_hai_prediction_sts_policy"]["Statement"].append(
             {"Sid": "PlantedDirectAthena", "Effect": "Allow", "Action": ["athena:StartQueryExecution", "glue:GetTable"], "Resource": "*"}
         )
+
+    def promote_create_unconditional(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "s3", "CreatePromotionRecords")["Condition"]
+
+    def promote_read_whole_bucket(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "s3", "ReadPromotionRecords")["Resource"] = f"arn:aws:s3:::{B}/*"
+
+    def promote_records_deleted(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "s3", "CreatePromotionRecords")
+        statement["Action"] = [*as_list(statement["Action"]), "s3:DeleteObject"]
 
     def percent_deny_missing(documents: dict[str, dict[str, Any]]) -> None:
         drop(documents, "s3", "DenyPercentSignInSingleCopyKeys")
@@ -2707,7 +2744,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 "job assume: refuse job_execution",
                 job_resource("sts", "AssumeTryOutputRole", 0, f"arn:aws:iam::{A}:role/{P}_job_*_{E}"),
             ),
-            "job stage version resource widened": ("job stage: refuse lakehouse/silver", job_resource("s3", "ReadStageVersions", 0, f"{BUCKET}/lakehouse/*")),
+            "job stage version resource widened": (
+                "job stage: refuse lakehouse/silver",
+                job_resource("s3", "ReadCatalogMetadataAndStageVersions", 1, f"{BUCKET}/lakehouse/*"),
+            ),
             "training PassRole resource widened": (
                 "training pass: refuse job_train_task_extra",
                 job_resource("iam", "PassTrainingRoles", 0, role("job_train_task*")),
@@ -3324,6 +3364,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "the Athena statement reaches every Athena role": ("AssumeRole another athena role", athena_role_prefix),
         "the Athena statement reaches the reader of every environment": ("AssumeRole athena_reader of another environment", athena_any_environment),
         "the Athena statement carries direct Athena and Glue actions": ("the project user has no direct athena:StartQueryExecution", athena_direct_access),
+        "the promotion create loses its header condition": ("promote records: overwrite", promote_create_unconditional),
+        "the promotion read reaches the whole bucket": ("promote records: GetObject outside promote/", promote_read_whole_bucket),
+        "the promotion records may be deleted": ("promote records: DeleteObject", promote_records_deleted),
         "the percent-sign deny is missing": ("single copy: PutObject leaf", percent_deny_missing),
         "the older-grants deny is missing": ("single copy: PutObject bronze_objects", older_grants_deny_missing),
         "the single-copy create loses its header condition": ("single copy: create without the header", create_once_unconditional),
