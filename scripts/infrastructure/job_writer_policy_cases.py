@@ -177,7 +177,7 @@ def verify(root: Path, base: dict[str, dict[str, Any]], output: Path) -> tuple[l
     defects = []
     selected = [(name, statement) for name in POLICIES for statement in documents[name]["Statement"]]
     selected += [("project_iam", statement) for statement in documents["project_iam"]["Statement"] if statement["Sid"] == "PassE2eWriterRole"]
-    selected += [("project_s3", statement) for statement in documents["project_s3"]["Statement"] if statement["Sid"] == "ReadCatalogMetadataVersions"]
+    selected += [("project_s3", statement) for statement in documents["project_s3"]["Statement"] if statement["Sid"] == "ReadCatalogMetadataAndStageVersions"]
     for name, statement in selected:
         variants: list[tuple[str, str, Any]] = [("widen_resource", "Resource", "*")]
         if "Condition" in statement:
