@@ -933,6 +933,10 @@ def main() -> int:
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     for result in results:
         sys.stdout.write(("PASS " if result["passed"] else "FAIL ") + result["case"] + "\n")
+        if not result["passed"]:
+            # A hosted job keeps no report folder, so the failed checks and the measured values go to the log.
+            details = {key: value for key, value in result.items() if key not in {"case", "passed"} and value is not True}
+            sys.stdout.write("     " + json.dumps(details, sort_keys=True, default=str) + "\n")
     sys.stdout.write(f"{report['passed']}/{report['total']} passed; report {out / 'report.json'}\n")
     return 0 if not failed else 1
 
