@@ -156,9 +156,7 @@ def refuse_size_skips(output: str, aliases: dict[str, str] | None = None) -> int
     skipped = [(aliases or {}).get(name, name).removeprefix(str(ROOT) + "/").removeprefix("./") for name in SIZE_SKIP.findall(output)]
     blocked = [name for name in skipped if not name.startswith("dbt/macros/")]
     for name in blocked:
-        sys.stderr.write(
-            f"{name}:1: SQLFluff skipped this file for size, so it was not linted. Set large_file_skip_byte_limit = 0 in .sqlfluff (docs/quality_checks.md).\n"
-        )
+        sys.stderr.write(f"{name}:1: SQLFluff skipped this file for size, so it was not linted. Set large_file_skip_byte_limit = 0 in .sqlfluff.\n")
     return int(bool(blocked))
 
 
@@ -490,7 +488,7 @@ def lint(check: str) -> int:
         version = run_command(program, ["-m", "yamllint", "--version"], cwd=ROOT, timeout=30)
         pinned = json.loads((ROOT / "config/quality_tools.json").read_text())["tools"]["yamllint"]["version"]
         if version.returncode or version.stdout.strip() != f"yamllint {pinned}":
-            raise ValueError(f"requirements.txt:1: yamllint {pinned} is required in the project environment.")
+            raise ValueError(f"pyproject.toml:1: yamllint {pinned} is required in the project environment.")
         return call(program, ["-m", "yamllint", "--strict", "--config-file", str(ROOT / ".yamllint"), "--", *selected])
     program = native(check)
     arguments = ["--norc"] if check == "shellcheck" else ["-oneline"] if check == "actionlint" else []

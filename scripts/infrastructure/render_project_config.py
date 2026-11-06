@@ -23,7 +23,7 @@ PUBLIC_PARAMETER_PREFIX = "/aws/service/"
 PREPARATION_PATH = REPO_ROOT / "config" / "aws" / "iam_preparation.json"
 BRONZE_TABLES_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 PREPARATION_NAMES = frozenset({"bronze_live_locations", "bronze_qualification_collection", "bronze_writer_prepared", "job_writer_e2e_prepared"})
-PREPARATION_FLAGS = ("bronze_writer_prepared", "job_writer_e2e_prepared")
+PREPARATION_FLAGS = ("bronze_live_locations", "bronze_writer_prepared", "job_writer_e2e_prepared")
 # Flags that may be left out of the file, which then keeps the stack default (false). The owner adds one only for the run that needs it.
 OPTIONAL_PREPARATION_FLAGS = (
     "airflow_launch_prepared",
@@ -122,7 +122,11 @@ def mapped_collections(path: Path) -> set[object]:
 
 
 def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = BRONZE_TABLES_PATH) -> dict[str, object]:
-    """Read the committed IAM preparation inputs and refuse anything but the documented values; no rejected value is echoed."""
+    """Read the committed IAM preparation inputs and refuse anything but the documented values; no rejected value is echoed.
+
+    ``bronze_live_locations`` is a true/false flag in the file. When true, the two namespace locations of the data bucket are built here, as the stack
+    input ``bronze_live_locations`` (a map) expects them; when false the map is empty.
+    """
     if not path.is_file():
         raise ConfigurationError("The IAM preparation file is missing: config/aws/iam_preparation.json.")
     try:
@@ -172,9 +176,7 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
             "Set bronze_qualification_collection to a mapped collection; that value is not a mapped collection in config/lakehouse/bronze_tables.json."
         )
     locations = {"bronze": f"s3://{bucket}/lakehouse/bronze/", "bronze_dictionary": f"s3://{bucket}/lakehouse/bronze_dictionary/"}
-    if document["bronze_live_locations"] not in ({}, locations):
-        raise ConfigurationError("Set bronze_live_locations to empty or exactly the two namespace locations of the data bucket in the IAM preparation file.")
-    return document
+    return {**document, "bronze_live_locations": locations if document["bronze_live_locations"] else {}}
 
 
 def verify_project_identity(storage: dict[str, str]) -> None:

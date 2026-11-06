@@ -10,7 +10,7 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
 - Every scope also runs the ``osv-scanner`` hook (``pre-commit run osv-scanner --hook-stage pre-push``) over the range, or over all files when there is no
   range. Hosted CI runs it in the code hook partition, which a small change leaves out, so a small change runs it here only. The hook skips itself
-  unless the range changes a pinned requirements file or its allowlist.
+  unless the range changes uv.lock, a requirements file or the allowlist.
 - A ``range`` of a small change (``pre_push.small_change``: at most ``max_files`` files and ``max_changed_lines`` changed lines, none on the ``not_paths``
   list, none a CI file) leaves out the acquisition hook and the three hook partitions. Hosted CI runs them.
 
@@ -25,8 +25,10 @@ that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKI
 The checks read the working tree, so ``run`` refuses a head that is not the checked-out commit and tracked files that differ from it (staged or unstaged).
 The hook form, ``run --hook``, is the gate of every push. ``install-shim`` registers it as a Git config hook (Git 2.54 or newer; Git starts it before the
 hooks-directory hook, for every push, with the whole input on standard input), so the gate does not depend on the reference pre-commit hands its hooks. It
-judges each updated reference: a deletion is allowed; a reference whose commit is already in ``origin/main`` is allowed with nothing to check and is recorded
-in ``report.json``; a reference at the checked-out commit is checked; any other reference refuses the push. The ``local_ci_pushed`` pre-commit hook runs
+judges each updated reference: a deletion is allowed; a reference that names a ``temp/`` branch (as its remote name, its local name or ``HEAD`` on
+such a branch) is refused whatever its commit, because temporary code never reaches GitHub; a reference whose commit is already in ``origin/main`` is
+allowed with nothing to check and is recorded in ``report.json``; a reference at the checked-out commit is checked; any other reference refuses the push.
+The ``local_ci_pushed`` pre-commit hook runs
 ``check-shim``, which refuses a push when the Git config hook is missing, disabled or changed.
 
     .venv/bin/python -m scripts.quality.pre_push install-shim
@@ -51,13 +53,12 @@ import os
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
 
-from scripts.process import CompletedProcess, TimeoutExpired, run_command
+from scripts.process import CompletedProcess, LaunchesNotStopped, LaunchPool, ProcessGroupSurvived, TimeoutExpired, run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
@@ -67,10 +68,11 @@ SHIM_COMMAND = ".venv/bin/python -m scripts.quality.pre_push run --hook"
 MINIMUM_GIT = (2, 54)
 INSTALL_HINT = ".venv/bin/python -m scripts.quality.pre_push install-shim"
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+TEMP_PREFIX = "refs/heads/temp/"
 SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
 # The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
 OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
-# The gate never reuses a local pass of a check group (docs/quality_checks.md; scripts/quality/ci_main_passes.py).
+# The gate never reuses a local pass of a check group (scripts/quality/ci_main_passes.py).
 NO_REUSE = {"HAI_CI_REUSE": "off"}
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
@@ -78,6 +80,10 @@ EXECUTION_CONTROLS = (
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
+    "CI_ADMISSION_ONLY",
+    "CI_WORKER_LIMIT_SECONDS",
+    "CI_WORKER_GRACE_SECONDS",
+    "PROCESS_LAUNCH_SESSION",
     "RANGE_START",
     "RANGE_END",
     "LAUNCHER_SHARD",
@@ -299,6 +305,8 @@ def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
     try:
         result = launch(root, step, environment)
         code, text = result.returncode, result.stdout + result.stderr
+    except ProcessGroupSurvived as survived:
+        code, text, error = 1, "", f"step {step['name']} exceeded its deadline of {step['timeout_seconds']} seconds and its stop is not confirmed: {survived}"
     except TimeoutExpired:
         code, text, error = 1, "", f"step {step['name']} exceeded its deadline of {step['timeout_seconds']} seconds and was stopped"
     except FileNotFoundError as missing:
@@ -320,12 +328,22 @@ def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dic
     steps = [step for step in steps if step["kind"] != "run_ci"]
     serial = [step for step in steps if step["kind"] in SERIAL_KINDS]
     jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])
-    finished = []
+    finished: list[list[dict[str, Any]]] | None = None
+    unstopped = ""
     if jobs:
-        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
-    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in [completed, *finished] for row in job}
-    return [rows[step["name"]] for step in planned]
+        try:
+            with LaunchPool(max_workers=len(jobs)) as pool:
+                finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
+        except LaunchesNotStopped as failure:
+            # The pool is left with a stop that was not confirmed. Without results (an interrupt) the failure goes to the caller; with them it is a failing row.
+            if finished is None:
+                raise
+            unstopped = str(failure)
+    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in [completed, *(finished or [])] for row in job}
+    results = [rows[step["name"]] for step in planned]
+    if unstopped:
+        results.append({"name": "stop_confirmation", "exit": 1, "seconds": 0.0, "output": "", "error": unstopped})
+    return results
 
 
 def release(root: Path, started: float, registry: str = "") -> dict[str, Any]:
@@ -377,16 +395,16 @@ def release_line(released: dict[str, Any]) -> str:
     )
 
 
-def parse_updates(text: str) -> list[tuple[str, str]]:
-    """The (remote reference, local object) pairs of a pre-push input; a deletion has an all-zero object."""
-    updates: list[tuple[str, str]] = []
+def parse_updates(text: str) -> list[tuple[str, str, str]]:
+    """The (remote reference, local object, local reference) triples of a pre-push input; a deletion has an all-zero object."""
+    updates: list[tuple[str, str, str]] = []
     for line in text.splitlines():
         if not line.strip():
             continue
         fields = line.split()
         if len(fields) != 4 or not SHA.fullmatch(fields[1]):
             raise ValueError(f"unreadable line in the push input: {line!r}")
-        updates.append((fields[2], fields[1]))
+        updates.append((fields[2], fields[1], fields[0]))
     return updates
 
 
@@ -404,11 +422,25 @@ def judge(root: Path, sha: str, current: str) -> tuple[str, str]:
     return "refused", f"is neither in origin/main nor the checked-out commit {current[:12]}"
 
 
-def decide(root: Path, updates: list[tuple[str, str]]) -> list[dict[str, str]]:
+def temporary(root: Path, remote_ref: str, local_ref: str) -> str:
+    """The ``temp/`` branch a pushed reference names, as its remote name, its local name or the checked-out branch behind ``HEAD``; empty when none."""
+    if local_ref == "HEAD":
+        code, branch = git(root, "symbolic-ref", "-q", "HEAD")
+        local_ref = branch if code == 0 else local_ref
+    for name in (remote_ref, local_ref):
+        if name.startswith(TEMP_PREFIX):
+            return name
+    return ""
+
+
+def decide(root: Path, updates: list[tuple[str, str, str]]) -> list[dict[str, str]]:
     current = resolve_commit(root, "HEAD")
     rows = []
-    for ref, sha in updates:
+    for ref, sha, local in updates:
         decision, reason = judge(root, sha, current)
+        named = temporary(root, ref, local) if decision != "deleted" else ""
+        if named:
+            decision, reason = "refused", f"names the temp/ branch {named}; temporary code stays on a local branch and is never pushed"
         rows.append({"ref": ref, "sha": sha, "decision": decision, "reason": reason})
     return rows
 

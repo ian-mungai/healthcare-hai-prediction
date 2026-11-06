@@ -10,7 +10,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from scripts.acquisition.s3_store import ACCESS_RELEASE_PATH, TERMS_ACCEPTANCE_P
 from scripts.acquisition.source_registry import LOCK_PATH, canonical_hash, load_registry, read_json, validate_registry
 from scripts.acquisition.transport import CaptureError, Limits
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration
+from scripts.process import LaunchPool
 
 
 def bounded_jobs(jobs: list[dict], budget: int) -> tuple:
@@ -299,7 +300,7 @@ def main() -> None:
     write_once(args.state_root / "registry_lock.json", encoded_json(lock))
     execution_lock = (args.state_root / ".execution.lock").open("a")
     fcntl.flock(execution_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+    with LaunchPool(max_workers=args.workers) as pool:
         pending = {pool.submit(run_job, job, registry, validator, args.state_root, settings, outputs): job for job in [*jobs, *rechecked]}
         for future in as_completed(pending):
             job = pending[future]

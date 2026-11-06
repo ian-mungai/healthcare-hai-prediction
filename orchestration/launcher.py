@@ -554,9 +554,12 @@ def demultiplex(buffer: bytes) -> tuple[list[tuple[int, bytes]], bytes]:
 class EventStream:
     """The Docker events response: lines of JSON until the daemon or this side closes it."""
 
-    def __init__(self, connection: UnixConnection, response: http.client.HTTPResponse) -> None:
+    def __init__(self, connection: UnixConnection, response: http.client.HTTPResponse, sock: socket.socket | None) -> None:
         self.connection = connection
         self.response = response
+        # http.client drops ``connection.sock`` when the response closes the connection, but the response keeps reading from the socket: this is the one to
+        # set the time limit of and to shut down.
+        self.sock = sock
 
     def readline(self) -> bytes:
         """The next line; an empty result means the stream ended."""
@@ -565,8 +568,8 @@ class EventStream:
     def close(self) -> None:
         """Close the connection, which ends a blocked ``readline`` in another thread."""
         with contextlib.suppress(OSError):
-            if self.connection.sock is not None:
-                self.connection.sock.shutdown(socket.SHUT_RDWR)
+            if self.sock is not None:
+                self.sock.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self.connection.close()
 
@@ -770,6 +773,7 @@ class DockerApi:
         query = "filters=" + _quote(self.filters(label=[label], type=["container"]))
         try:
             connection.request("GET", f"{self.prefix}/events?{query}")
+            sock = connection.sock
             response = connection.getresponse()
         except (OSError, http.client.HTTPException) as error:
             connection.close()
@@ -777,9 +781,9 @@ class DockerApi:
         if response.status != 200:
             connection.close()
             raise DockerError(response.status, "events refused")
-        if connection.sock is not None:
-            connection.sock.settimeout(None)
-        return EventStream(connection, response)
+        if sock is not None:
+            sock.settimeout(None)
+        return EventStream(connection, response, sock)
 
     def attach(self, container_id: str, detach_keys: str) -> socket.socket:
         """Attach to a container with the hijacked connection; returns the raw socket after the upgrade."""
@@ -7688,6 +7692,7 @@ class Launcher:
         if catalog["phase"] == "tearing_down":
             raise LauncherError("the catalog is being torn down", "refused")
         ctx.state["launcher"]["catalog"] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "services": {},
@@ -7819,7 +7824,8 @@ class Launcher:
                 self.fail_catalog(catalog, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
                 return
             container_id = attempt["container_id"]
-            actions.append(lambda: self.spawn(f"health:{service}", "health", self.read_health, container_id))
+            health_key = self.operation_key(f"health:{service}", catalog)
+            actions.append(lambda: self.spawn(health_key, "health", self.read_health, container_id))
 
     def record_network_op(self, state: dict[str, Any], kind: str, network: str | None = None, name: str | None = None) -> str:
         """Record a network operation with the identity it acts on (the network name, and the ID for a removal)."""
@@ -7907,9 +7913,12 @@ class Launcher:
         """Record a service's health."""
         if outcome != "ok":
             return
-        service = key.split(":", 1)[1]
+        service = key.split(":", 2)[1]
         with self.tx() as state:
-            self.catalog_record(state).setdefault("health", {})[service] = value
+            catalog = self.catalog_record(state)
+            if key != self.operation_key(f"health:{service}", catalog):
+                return
+            catalog.setdefault("health", {})[service] = value
 
     def advance_catalog_stop(self, state: dict[str, Any], catalog: dict[str, Any], actions: list[Callable[[], None]]) -> None:
         """Stop and clean up the service attempts in reverse order, remove the network, then confirm absence before clearing the barrier."""
@@ -7945,7 +7954,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "netremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("catalog:confirm", "catalogconfirm", self.catalog_absent))
+            confirm_key = self.operation_key("catalog:confirm", catalog)
+            actions.append(lambda: self.spawn(confirm_key, "catalogconfirm", self.catalog_absent))
 
     def catalog_absent(self) -> bool:
         """Worker: True when no catalog service container and no catalog network exist."""
@@ -7974,7 +7984,7 @@ class Launcher:
             return
         with self.tx() as state:
             catalog = self.catalog_record(state)
-            if catalog["phase"] != "tearing_down":
+            if catalog["phase"] != "tearing_down" or key != self.operation_key("catalog:confirm", catalog):
                 return
             error = catalog.get("error", "")
             state["launcher"]["catalog"] = {"phase": "down", "services": {}, "error": error, "down_at": utc_now()}
@@ -8060,6 +8070,7 @@ class Launcher:
                 raise LauncherError("the orchestration stack is up with other parameters; orchestration_down first", "refused")
             return {"phase": stack["phase"]}
         ctx.state["launcher"]["orchestration"] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "services": {},
@@ -8074,7 +8085,7 @@ class Launcher:
         }
         own = f"hai-{self.registry_id[:8]}-svc-orch-"
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
-        self.spawn("orch:limits", "orchlimits", self.compute_orchestration_limits, growth)
+        self.spawn(self.operation_key("orch:limits", ctx.state["launcher"]["orchestration"]), "orchlimits", self.compute_orchestration_limits, growth)
         return {"phase": "starting"}
 
     def compute_orchestration_limits(self, growth: dict[str, int]) -> dict[str, Any]:
@@ -8095,7 +8106,7 @@ class Launcher:
         """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
         with self.tx() as state:
             stack = self.orchestration_record(state)
-            if stack["phase"] != "starting":
+            if stack["phase"] != "starting" or key != self.operation_key("orch:limits", stack):
                 return
             if outcome != "ok":
                 self.fail_orchestration(stack, f"no memory limit for the orchestration services: {failure_text(value)}")
@@ -8191,14 +8202,19 @@ class Launcher:
             self.fail_orchestration(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
             return
         container_id = attempt["container_id"]
-        actions.append(lambda: self.spawn(f"orchhealth:{service}", "orchhealth", self.read_health, container_id))
+        health_key = self.operation_key(f"orchhealth:{service}", stack)
+        actions.append(lambda: self.spawn(health_key, "orchhealth", self.read_health, container_id))
 
     def on_orchhealth(self, key: str, outcome: str, value: Any) -> None:
         """Record a stack service's health."""
         if outcome != "ok":
             return
+        service = key.split(":", 2)[1]
         with self.tx() as state:
-            self.orchestration_record(state).setdefault("health", {})[key.split(":", 1)[1]] = value
+            stack = self.orchestration_record(state)
+            if key != self.operation_key(f"orchhealth:{service}", stack):
+                return
+            stack.setdefault("health", {})[service] = value
 
     def on_orchnetcreate(self, key: str, outcome: str, value: Any) -> None:
         """The stack's network exists: PostgreSQL starts next."""
@@ -8277,7 +8293,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("orch:confirm", "orchconfirm", self.orchestration_absent))
+            confirm_key = self.operation_key("orch:confirm", stack)
+            actions.append(lambda: self.spawn(confirm_key, "orchconfirm", self.orchestration_absent))
 
     def orchestration_absent(self) -> bool:
         """Worker: True when no container and no network of the orchestration stack exist, in any state."""
@@ -8306,7 +8323,7 @@ class Launcher:
             return
         with self.tx() as state:
             stack = self.orchestration_record(state)
-            if stack["phase"] != "tearing_down":
+            if stack["phase"] != "tearing_down" or key != self.operation_key("orch:confirm", stack):
                 return
             state["launcher"]["orchestration"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
             for service in ORCHESTRATION_MEMORY:
@@ -8432,6 +8449,7 @@ class Launcher:
             return {"phase": stack["phase"]}
         self.initialize_lineage_config(checkout, Path(folder))
         ctx.state["launcher"]["lineage"] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "services": {},
@@ -8448,7 +8466,7 @@ class Launcher:
         }
         own = f"hai-{self.registry_id[:8]}-svc-lineage-"
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
-        self.spawn("lineage:limits", "lineagelimits", self.compute_lineage_limits, growth, Path(folder))
+        self.spawn(self.operation_key("lineage:limits", ctx.state["launcher"]["lineage"]), "lineagelimits", self.compute_lineage_limits, growth, Path(folder))
         return {"phase": "starting"}
 
     def compute_lineage_limits(self, growth: dict[str, int], folder: Path) -> dict[str, Any]:
@@ -8469,7 +8487,7 @@ class Launcher:
         """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
         with self.tx() as state:
             stack = self.lineage_record(state)
-            if stack["phase"] != "starting":
+            if stack["phase"] != "starting" or key != self.operation_key("lineage:limits", stack):
                 return
             if outcome != "ok":
                 self.fail_lineage(stack, f"the lineage services cannot start: {failure_text(value)}")
@@ -8597,14 +8615,19 @@ class Launcher:
             self.fail_lineage(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
             return
         container_id = attempt["container_id"]
-        actions.append(lambda: self.spawn(f"lineagehealth:{service}", "lineagehealth", self.read_health, container_id))
+        health_key = self.operation_key(f"lineagehealth:{service}", stack)
+        actions.append(lambda: self.spawn(health_key, "lineagehealth", self.read_health, container_id))
 
     def on_lineagehealth(self, key: str, outcome: str, value: Any) -> None:
         """Record a stack service's health."""
         if outcome != "ok":
             return
+        service = key.split(":", 2)[1]
         with self.tx() as state:
-            self.lineage_record(state).setdefault("health", {})[key.split(":", 1)[1]] = value
+            stack = self.lineage_record(state)
+            if key != self.operation_key(f"lineagehealth:{service}", stack):
+                return
+            stack.setdefault("health", {})[service] = value
 
     def on_lineagenetcreate(self, key: str, outcome: str, value: Any) -> None:
         op_id = key.split(":", 1)[1]
@@ -8684,7 +8707,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "lineagenetremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("lineage:confirm", "lineageconfirm", self.lineage_absent))
+            confirm_key = self.operation_key("lineage:confirm", stack)
+            actions.append(lambda: self.spawn(confirm_key, "lineageconfirm", self.lineage_absent))
 
     def lineage_absent(self) -> bool:
         """Worker: True when no container and no network of the lineage stack exist, in any state."""
@@ -8713,7 +8737,7 @@ class Launcher:
             return
         with self.tx() as state:
             stack = self.lineage_record(state)
-            if stack["phase"] != "tearing_down":
+            if stack["phase"] != "tearing_down" or key != self.operation_key("lineage:confirm", stack):
                 return
             state["launcher"]["lineage"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
             for service in LINEAGE_MEMORY:
@@ -8767,6 +8791,7 @@ class Launcher:
             raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
         checkout = self.cfg.root
         ctx.state["launcher"][online_store.STACK] = {
+            "id": ctx.key,
             "phase": "starting",
             "step": "limits",
             "service": None,
@@ -8781,7 +8806,7 @@ class Launcher:
         }
         own = online_store.container_name(self.registry_id)
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if name != own}
-        self.spawn("online:limits", "onlinelimits", self.compute_online_limits, growth)
+        self.spawn(self.operation_key("online:limits", ctx.state["launcher"][online_store.STACK]), "onlinelimits", self.compute_online_limits, growth)
         return {"phase": "starting"}
 
     def m_online_store_down(self, ctx: Ctx) -> dict[str, Any]:
@@ -8826,7 +8851,7 @@ class Launcher:
         """Record the memory settings, reserve the limit for the other plans and go on to the network."""
         with self.tx() as state:
             record = self.online_record(state)
-            if record["phase"] != "starting":
+            if record["phase"] != "starting" or key != self.operation_key("online:limits", record):
                 return
             if outcome != "ok":
                 self.fail_online(record, f"the online store cannot start: {failure_text(value)}")
@@ -8925,13 +8950,17 @@ class Launcher:
             self.fail_online(record, f"online-store was not healthy within {self.timings.health_wait:.0f} s")
             return
         container_id = attempt["container_id"]
-        actions.append(lambda: self.spawn(f"onlinehealth:{online_store.SERVICE}", "onlinehealth", self.read_health, container_id))
+        health_key = self.operation_key(f"onlinehealth:{online_store.SERVICE}", record)
+        actions.append(lambda: self.spawn(health_key, "onlinehealth", self.read_health, container_id))
 
     def on_onlinehealth(self, key: str, outcome: str, value: Any) -> None:
         if outcome != "ok":
             return
         with self.tx() as state:
-            self.online_record(state)["health"] = value
+            record = self.online_record(state)
+            if key != self.operation_key(f"onlinehealth:{online_store.SERVICE}", record):
+                return
+            record["health"] = value
 
     def on_onlinenetcreate(self, key: str, outcome: str, value: Any) -> None:
         op_id = key.split(":", 1)[1]
@@ -8998,7 +9027,8 @@ class Launcher:
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "onlinenetremove", self.docker.remove_network, network))
         elif step == "confirm":
-            actions.append(lambda: self.spawn("online:confirm", "onlineconfirm", self.online_absent))
+            confirm_key = self.operation_key("online:confirm", record)
+            actions.append(lambda: self.spawn(confirm_key, "onlineconfirm", self.online_absent))
 
     def online_absent(self) -> bool:
         """Worker: True when no container and no network of the online store exist, in any state."""
@@ -9027,7 +9057,7 @@ class Launcher:
             return
         with self.tx() as state:
             record = self.online_record(state)
-            if record["phase"] != "tearing_down":
+            if record["phase"] != "tearing_down" or key != self.operation_key("online:confirm", record):
                 return
             state["launcher"][online_store.STACK] = {"phase": "down", "service": None, "error": record.get("error", ""), "down_at": utc_now()}
             state["services"].pop(online_store.SERVICE, None)
@@ -9152,16 +9182,17 @@ class Launcher:
         if restart.get("kind") == "quit":
             self.advance_quit(state, restart, actions)
         elif restart["phase"] == "restart":
-            if "restart:cmd" not in self.inflight:
-                actions.append(lambda: self.spawn("restart:cmd", "restartcmd", self.run_restart_command))
+            command_key = self.operation_key("restart:cmd", restart)
+            if command_key not in self.inflight:
+                actions.append(lambda: self.spawn(command_key, "restartcmd", self.run_restart_command))
         elif restart["phase"] == "wait":
             waited = time.time() - restart.get("started", time.time())
             if waited > self.timings.restart_answer:
                 state["launcher"]["restart"] = None
                 message = f"Docker did not answer within {self.timings.restart_answer:g} s after the restart"
                 actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
-            elif self.status == "serving" and self.docker_ok and "restart:ping" not in self.inflight and waited > 1:
-                actions.append(lambda: self.spawn("restart:ping", "restartping", self.docker.ping))
+            elif self.status == "serving" and self.docker_ok and self.operation_key("restart:ping", restart) not in self.inflight and waited > 1:
+                actions.append(lambda: self.spawn(self.operation_key("restart:ping", restart), "restartping", self.docker.ping))
 
     def run_restart_command(self) -> int:
         """Worker: the restart command of the Docker application."""
@@ -9183,7 +9214,7 @@ class Launcher:
         request_key = ""
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart:
+            if not restart or restart["phase"] != "restart" or key != self.operation_key("restart:cmd", restart):
                 return
             request_key = restart["request"]
             if outcome != "ok":
@@ -9200,7 +9231,7 @@ class Launcher:
         request_key = ""
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart or restart["phase"] != "wait" or self.status != "serving":
+            if not restart or restart["phase"] != "wait" or self.status != "serving" or key != self.operation_key("restart:ping", restart):
                 return
             request_key = restart["request"]
             state["launcher"]["restart"] = None
@@ -9223,6 +9254,13 @@ class Launcher:
         for key in keys:
             self.complete_request(key, result, error)
 
+    @staticmethod
+    def operation_key(name: str, record: Mapping[str, Any]) -> str:
+        """The worker key of one step of a recorded operation (Docker Desktop, a release, a restart, a stack start or a stack teardown), scoped to that
+        record. An operation ends at its deadline while its worker (the stop of a hung command, a slow listing) still runs; a worker key shared by every
+        operation would hold the next operation's worker back and let the earlier worker's result end or refuse the next operation."""
+        return f"{name}:{record.get('id') or record.get('request') or ''}"
+
     def m_desktop_start(self, ctx: Ctx) -> Any:
         """Start Docker Desktop when the daemon does not answer and wait until the launcher serves, within one deadline (failure modes R7, R8, R15)."""
         deadline = self.seconds_param(ctx.params, "deadline", self.timings.start_wait)
@@ -9234,6 +9272,7 @@ class Launcher:
             record["requests"].append(ctx.key)
         else:
             ctx.state["launcher"]["desktop"] = {
+                "id": ctx.key,
                 "phase": "probe",
                 "requests": [ctx.key],
                 "at": utc_now(),
@@ -9258,11 +9297,13 @@ class Launcher:
                 message = f"Docker Desktop did not answer within {record['deadline']:g} s; open Docker Desktop, answer any dialog, then run the command again"
                 actions.append(lambda: self.finish_requests(requests, {}, Degraded(message)))
             elif record["phase"] == "probe":
-                if "desktop:ping" not in self.inflight:
-                    actions.append(lambda: self.spawn("desktop:ping", "desktopping", self.docker.ping))
+                ping_key = self.operation_key("desktop:ping", record)
+                if ping_key not in self.inflight:
+                    actions.append(lambda: self.spawn(ping_key, "desktopping", self.docker.ping))
             elif record["phase"] == "command":
-                if "desktop:cmd" not in self.inflight:
-                    actions.append(lambda: self.spawn("desktop:cmd", "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
+                command_key = self.operation_key("desktop:cmd", record)
+                if command_key not in self.inflight:
+                    actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
             elif self.status == "serving" and self.docker_ok:
                 state["launcher"]["desktop"] = None
                 result = {"started": bool(record["ran"]), "seconds": round(time.time() - record["began"], 1)}
@@ -9282,7 +9323,7 @@ class Launcher:
         """The daemon answered the start's first ping or did not: only a silent daemon gets the start command."""
         with self.tx() as state:
             record = state["launcher"].get("desktop")
-            if not record or record["phase"] != "probe":
+            if not record or record["phase"] != "probe" or key != self.operation_key("desktop:ping", record):
                 return
             record["phase"] = "wait" if outcome == "ok" and value else "command"
         if outcome == "ok" and value:
@@ -9294,7 +9335,7 @@ class Launcher:
         error: LauncherError | None = None
         with self.tx() as state:
             record = state["launcher"].get("desktop")
-            if not record or record["phase"] != "command":
+            if not record or record["phase"] != "command" or key != self.operation_key("desktop:cmd", record):
                 return
             if outcome == "ok":
                 record.update({"phase": "wait", "ran": True})
@@ -9365,8 +9406,9 @@ class Launcher:
                 release["phase"] = "recheck"
             return
         else:
-            if "release:list" not in self.inflight:
-                actions.append(lambda: self.spawn("release:list", "releasecheck", lambda: self.docker.containers(all_states=False)))
+            list_key = self.operation_key("release:list", release)
+            if list_key not in self.inflight:
+                actions.append(lambda: self.spawn(list_key, "releasecheck", lambda: self.docker.containers(all_states=False)))
             return
         state["launcher"]["release"] = None
         actions.append(lambda: self.complete_request(request, result, error))
@@ -9377,7 +9419,7 @@ class Launcher:
         error: LauncherError | None = None
         with self.tx() as state:
             release = state["launcher"].get("release")
-            if not release or release["phase"] not in ("check", "recheck"):
+            if not release or release["phase"] not in ("check", "recheck") or key != self.operation_key("release:list", release):
                 return
             request = release["request"]
             if outcome != "ok":
@@ -9423,11 +9465,12 @@ class Launcher:
             )
             actions.append(lambda: self.complete_request(restart["request"], {}, Degraded(message)))
         elif restart["phase"] == "restart":
-            if "quit:cmd" not in self.inflight:
-                actions.append(lambda: self.spawn("quit:cmd", "quitcmd", self.run_desktop_command, self.cfg.quit_command, left))
-        elif "quit:ping" not in self.inflight and time.time() - restart.get("pinged", 0.0) >= 1.0:
+            command_key = self.operation_key("quit:cmd", restart)
+            if command_key not in self.inflight:
+                actions.append(lambda: self.spawn(command_key, "quitcmd", self.run_desktop_command, self.cfg.quit_command, left))
+        elif self.operation_key("quit:ping", restart) not in self.inflight and time.time() - restart.get("pinged", 0.0) >= 1.0:
             restart["pinged"] = time.time()
-            actions.append(lambda: self.spawn("quit:ping", "quitping", self.daemon_silent))
+            actions.append(lambda: self.spawn(self.operation_key("quit:ping", restart), "quitping", self.daemon_silent))
 
     def daemon_silent(self) -> bool:
         """Worker: True when the daemon no longer answers."""
@@ -9442,7 +9485,7 @@ class Launcher:
         error: LauncherError | None = None
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart or restart.get("kind") != "quit" or restart["phase"] != "restart":
+            if not restart or restart.get("kind") != "quit" or restart["phase"] != "restart" or key != self.operation_key("quit:cmd", restart):
                 return
             request = restart["request"]
             if outcome == "ok":
@@ -9461,7 +9504,7 @@ class Launcher:
             return
         with self.tx() as state:
             restart = state["launcher"].get("restart")
-            if not restart or restart.get("kind") != "quit" or restart["phase"] != "wait":
+            if not restart or restart.get("kind") != "quit" or restart["phase"] != "wait" or key != self.operation_key("quit:ping", restart):
                 return
             request, began = restart["request"], restart["began"]
             state["launcher"]["restart"] = None
@@ -9577,6 +9620,7 @@ class Launcher:
         if stack["phase"] == "down":
             stack.update(
                 {
+                    "id": ctx.key,
                     "phase": "starting",
                     "checkout": str(checkout),
                     "services": {},
@@ -9698,7 +9742,7 @@ class Launcher:
                         if time.time() >= stack["health_deadlines"][service]:
                             stack.update({"phase": "tearing_down", "error": f"local MLflow service {service} was not healthy within 120 seconds"})
                             return
-                        key = f"mlflow_health:{service}"
+                        key = self.operation_key(f"mlflow_health:{service}", stack)
                         if key not in self.inflight:
                             actions.append(partial(self.spawn, key, "mlflow_health", self.read_health, attempt["container_id"]))
                     return
@@ -9718,8 +9762,11 @@ class Launcher:
                 if attempt is not None and is_open(attempt):
                     attempt["cancel_intent"] = attempt["cancel_intent"] or {"reason": "mlflow_down", "at": utc_now()}
                     return
-            if "mlflow:stop" not in self.inflight:
-                actions.append(partial(self.spawn, "mlflow:stop", "mlflow_stop", self.remove_mlflow_shared))
+            # One stop worker at a time: it lists and removes by the shared stack label, so a second worker (a retry's, while an earlier one is late) could
+            # remove the networks of a start that follows the retry's down. The retry waits for the running worker, within its stop deadline; the key only tells
+            # whose result it is.
+            if not any(key.startswith("mlflow:stop:") for key in self.inflight):
+                actions.append(partial(self.spawn, self.mlflow_stop_key(stack), "mlflow_stop", self.remove_mlflow_shared))
 
     def expire_mlflow_startup(self) -> None:
         """Record startup or cleanup expiry even while the Docker connection is unavailable."""
@@ -9737,8 +9784,9 @@ class Launcher:
         """Record health only for an MLflow service that is still starting."""
         with self.tx() as state:
             stack = state["launcher"].get("mlflow", {})
-            if outcome == "ok" and stack.get("phase") == "starting":
-                stack["health"][key.partition(":")[2]] = value
+            service = key.split(":", 2)[1]
+            if outcome == "ok" and stack.get("phase") == "starting" and key == self.operation_key(f"mlflow_health:{service}", stack):
+                stack["health"][service] = value
 
     def create_mlflow_client(self, run_id: str, name: str, server: str, deadline: float) -> dict[str, str]:
         """Provision an isolated client bridge and connect only the shared MLflow server."""
@@ -9833,6 +9881,11 @@ class Launcher:
             stack["stop_deadline"] = time.time() + mlflow_service.RELEASE_SECONDS
         return {"phase": stack["phase"]}
 
+    @staticmethod
+    def mlflow_stop_key(stack: Mapping[str, Any]) -> str:
+        """The worker key of one teardown of the MLflow stack: its stop deadline, which every teardown sets anew (so does the owner's retry)."""
+        return f"mlflow:stop:{stack.get('stop_deadline')!r}"
+
     def remove_mlflow_shared(self) -> bool:
         """Remove only the registry's shared MLflow networks and confirm all service containers are gone."""
         label = f"{LABEL_STACK}={mlflow_service.STACK}"
@@ -9853,7 +9906,7 @@ class Launcher:
             return
         with self.tx() as state:
             stack = state["launcher"].get("mlflow", {})
-            if stack.get("phase") != "tearing_down":
+            if stack.get("phase") != "tearing_down" or key != self.mlflow_stop_key(stack):
                 return
             state["launcher"]["mlflow"] = {"phase": "down", "error": stack.get("error", "")}
             for service in mlflow_service.SERVICES:

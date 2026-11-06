@@ -25,6 +25,7 @@ from typing import Any
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import host_session_fake_aws as fake_aws
 from scripts.infrastructure.host_session_fake_aws import GROUP, STATE_ENV
+from scripts.process import SESSION_VARIABLE
 
 DEADLINE_SECONDS = 30.0
 POLL_SECONDS = 0.02
@@ -34,10 +35,12 @@ HANG_SECONDS = 15.0
 
 
 def drive_stop(module: ModuleType, root: Path, bin_directory: Path) -> int:
-    """In the forked driver: put the stand-in first on PATH, run the real ``stop`` and write its report lines under ``root``. Returns the exit code."""
+    """In the forked driver, which runs as a launched command (the launch variable is set, as in every CI group): put the stand-in first on PATH, run the
+    real ``stop`` and write its report lines under ``root``. Returns the exit code."""
     os.setsid()
     os.environ["PATH"] = f"{bin_directory}{os.pathsep}{os.environ['PATH']}"
     os.environ[STATE_ENV] = str(root)
+    os.environ[SESSION_VARIABLE] = "1"
 
     def report(line: str) -> None:
         with (root / "report.txt").open("a", encoding="utf-8") as handle:
@@ -189,6 +192,8 @@ def execute(module: ModuleType) -> dict[str, Any]:
         driver = supervise(lambda: drive_stop(module, root, bin_directory), root / "requested", DEADLINE_SECONDS)
         status = driver.status
         state = json.loads((root / "group.json").read_text(encoding="utf-8"))
+        session_file = root / "session.json"
+        session = json.loads(session_file.read_text(encoding="utf-8")) if session_file.exists() else {}
         lines = (root / "report.txt").read_text(encoding="utf-8").splitlines() if (root / "report.txt").exists() else []
         started = time.monotonic()
         hung = supervise(hung_child(root / "hung_requested"), root / "hung_requested", HUNG_DEADLINE_SECONDS)
@@ -198,6 +203,7 @@ def execute(module: ModuleType) -> dict[str, Any]:
         "pid": driver.pid,
         "status": status,
         "state": state,
+        "session": session,
         "lines": lines,
         "hung_pid": hung.pid,
         "hung_status": hung.status,
@@ -215,11 +221,12 @@ def run(module: ModuleType) -> dict[str, bool]:
     """
     with observed_signals() as seen:
         facts = execute(module)
-    state, lines = facts["state"], facts["lines"]
+    state, lines, session = facts["state"], facts["lines"], facts["session"]
     return {
         "a SIGINT to the whole process group during the host-off request ends the stop within the deadline": facts["status"] is not None,
         "the stop does not fail after a group SIGINT": facts["status"] == 0,
         "the host reaches capacity zero after a group SIGINT": state["desired"] == 0,
+        "the host-off request leads a session of its own inside a launched command": bool(session) and session["sid"] == session["pid"],
         "no instance is left after a group SIGINT": not state["instances"],
         "the stop reports the host verified gone after a group SIGINT": any(line.startswith("host_off_verified") for line in lines),
         "the group SIGINT is reported as deferred": any("signal_deferred" in line and "SIGINT" in line for line in lines),

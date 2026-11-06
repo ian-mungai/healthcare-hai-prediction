@@ -2,7 +2,7 @@
 
     .tools/sqlfluff/bin/python -m scripts.lakehouse.run_duckdb_spill_cases
 
-DuckDB, dbt-core and dbt-duckdb are not in ``.venv``. The pinned set (the versions of services/analytics/requirements.txt) is in ``.tools/sqlfluff``.
+DuckDB, dbt-core and dbt-duckdb are not in ``.venv``. The pinned set (the versions of the analytics group of uv.lock) is in ``.tools/sqlfluff``.
 
 The adapter runs every ``settings`` entry of a profile as ``SET key = value`` on each new cursor. DuckDB refuses to switch its temporary directory once a
 query has spilled into it, even to the same path, so a ``temp_directory`` setting fails every model and test after the first spill. The fixture suites never

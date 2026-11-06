@@ -8,7 +8,7 @@
     "^config/quality/ci_groups\\.json$",
     "^\\.github/(workflows|actions)/",
     "^\\.pre-commit-config\\.yaml$",
-    "^requirements[^/]*\\.txt$",
+    "^uv\\.lock$",
     "^pyproject\\.toml$"
   ],
   "passive": [
@@ -53,7 +53,7 @@
       "^services/",
       "^features/",
       "^scripts/quality/(model_metadata|run_model_metadata_e2e|dbt_manifest_labels|label_guard_fixtures)\\.py$",
-      "^scripts/quality/(install_sqlfluff\\.py|sqlfluff/requirements\\.txt)$",
+      "^scripts/quality/(install_sqlfluff|lock_env)\\.py$",
       "^docker-compose\\.yaml$",
       "^scripts/ci/groups/lakehouse_bronze\\.sh$"
     ],
@@ -118,6 +118,30 @@
       "^scripts/process_group\\.py$",
       "^services/hai/(deadline_run\\.py$|bootstrap/)"
     ],
+    "orchestration_engine_e2e": [
+      "^scripts/orchestration/",
+      "^scripts/serving/",
+      "^data_contracts/serving/",
+      "^scripts/streamlit_app/",
+      "^services/streamlit/",
+      "^orchestration/",
+      "^dags/",
+      "^tests/orchestration/",
+      "^config/orchestration/",
+      "^data_contracts/orchestration/",
+      "^services/orchestration/",
+      "^services/lineage/",
+      "^scripts/quality/(docker_calls|repo_checks|typecheck)\\.py$",
+      "^config/quality/(docker_calls_reviewed|mypy_runtimes)\\.json$",
+      "^docker-compose\\.yaml$",
+      "^scripts/lakehouse/",
+      "^dbt/",
+      "^data_contracts/lakehouse/",
+      "^data_contracts/great_expectations/",
+      "^scripts/ci/groups/orchestration_engine_e2e\\.sh$",
+      "^scripts/process_group\\.py$",
+      "^services/hai/(deadline_run\\.py$|bootstrap/)"
+    ],
     "repository_code_checks": [
       "\\.(py|sh)$",
       "(^|/)Dockerfile$",
@@ -128,7 +152,7 @@
       "^\\.env\\.example$",
       "^dbt/(dbt_project|profiles)\\.yml$",
       "^dbt/models/silver/intermediate/_intermediate__models\\.yml$",
-      "^(README\\.md|docs/quality_checks\\.md)$",
+      "^README\\.md$",
       "^\\.(privacy|writing|cleanup)_allowlist$",
       "^\\.markdownlint-cli2\\.jsonc$",
       "^\\.sqlfluff$",
@@ -136,6 +160,25 @@
       "^config/quality_tools\\.json$",
       "^services/orchestration/egress_proxy\\.json$",
       "^scripts/ci/groups/repository_code_checks\\.sh$"
+    ],
+    "ci_tooling_checks": [
+      "\\.(py|sh)$",
+      "(^|/)Dockerfile$",
+      "^[^/]*compose[^/]*\\.ya?ml$",
+      "^(orchestration|services|config)/.*compose[^/]*\\.ya?ml$",
+      "^scripts/quality/",
+      "^config/quality/",
+      "^\\.env\\.example$",
+      "^dbt/(dbt_project|profiles)\\.yml$",
+      "^dbt/models/silver/intermediate/_intermediate__models\\.yml$",
+      "^README\\.md$",
+      "^\\.(privacy|writing|cleanup)_allowlist$",
+      "^\\.markdownlint-cli2\\.jsonc$",
+      "^\\.sqlfluff$",
+      "^\\.yamllint$",
+      "^config/quality_tools\\.json$",
+      "^services/orchestration/egress_proxy\\.json$",
+      "^scripts/ci/groups/ci_tooling_checks\\.sh$"
     ],
     "configuration_checks": [
       "^scripts/(infrastructure|quality|training)/",
@@ -151,7 +194,6 @@
       "^monitoring/",
       "^\\.env\\.example$",
       "^scripts/lakehouse/(aws_catalog_setup|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
-      "^docs/aws_broker\\.md$",
       "^scripts/ci/groups/configuration_checks\\.sh$"
     ],
     "sql_style": [
@@ -195,7 +237,7 @@
   "launcher_shards": 2,
   "launcher_shard_seconds": 1500,
   "feature_shards": {
-    "sources": 8,
+    "sources": 16,
     "columns": 4
   },
   "hook_groups": {
@@ -209,14 +251,17 @@
     "documentation": [
       "writing-check",
       "front-matter",
+      "docs-references",
       "markdownlint",
       "documentation-review-untracked",
       "test-documentation-review"
     ],
     "code": [
       "removed-names",
+      "temporary-code",
       "unused-code",
       "unused-dependencies",
+      "dependency-lock",
       "orphan-files",
       "terraform-unused",
       "sqlfluff",
@@ -230,7 +275,6 @@
       "container-mounts",
       "gofmt",
       "go-vet",
-      "model-metadata",
       "lint-settings",
       "suppressions",
       "subprocess-imports",
@@ -244,8 +288,12 @@
       "osv-scanner"
     ],
     "samples": [
-      "test-checks"
+      "test-checks",
+      "test-lock"
     ]
+  },
+  "hooks_run_by_groups": {
+    "model-metadata": "lakehouse_gold"
   },
   "reuse": {
     "never": [
@@ -282,5 +330,135 @@
       "range": 2700,
       "full": 3600
     }
+  },
+  "worker_limits": {
+    "python_lint": {
+      "job": "Core Static Checks",
+      "minutes": 12
+    },
+    "orchestration_checks": {
+      "job": "Core Orchestration Offline Checks",
+      "minutes": 30
+    },
+    "repository_code_checks": {
+      "job": "Core Code Rules",
+      "minutes": 10
+    },
+    "configuration_checks": {
+      "job": "Core Configuration Checks",
+      "minutes": 50
+    },
+    "sql_style": {
+      "job": "Core SQL and Terraform Checks",
+      "minutes": 40
+    },
+    "terraform_checks": {
+      "job": "Core SQL and Terraform Checks",
+      "minutes": 40
+    },
+    "reuse_gate_checks": {
+      "job": "CI Reuse and Gate E2E",
+      "minutes": 12
+    },
+    "lakehouse_bronze": {
+      "job": "Lakehouse Bronze Checks",
+      "minutes": 20
+    },
+    "lakehouse_silver": {
+      "job": "Lakehouse Silver Checks",
+      "minutes": 10
+    },
+    "lakehouse_gold_checks": {
+      "job": "Lakehouse Gold Checks",
+      "minutes": 25
+    },
+    "lakehouse_gold_writer_setup": {
+      "job": "Lakehouse Gold Checks",
+      "minutes": 25
+    },
+    "lakehouse_gold_model_metadata_e2e": {
+      "job": "Lakehouse Gold Model Metadata E2E",
+      "minutes": 30
+    },
+    "lakehouse_features_store": {
+      "job": "Lakehouse Features Checks",
+      "minutes": 15
+    },
+    "lakehouse_features_sources": {
+      "job": "Feature Sources (Shard 1 of 16)",
+      "minutes": 20
+    },
+    "lakehouse_features_columns": {
+      "job": "Feature Columns (Shard 1 of 4)",
+      "minutes": 30
+    },
+    "combine_feature_sources": {
+      "job": "Feature Combined Evidence",
+      "minutes": 10
+    },
+    "combine_feature_columns": {
+      "job": "Feature Combined Evidence",
+      "minutes": 10
+    },
+    "hook_privacy": {
+      "job": "Repository Hooks (privacy)",
+      "minutes": 12
+    },
+    "hook_documentation": {
+      "job": "Repository Hooks (documentation)",
+      "minutes": 30
+    },
+    "hook_code": {
+      "job": "Repository Hooks (code)",
+      "minutes": 40
+    },
+    "hook_samples": {
+      "job": "Repository Hooks (samples)",
+      "minutes": 20
+    },
+    "acquisition_shard": {
+      "job": "Acquisition Checks (Shard 1 of 4)",
+      "minutes": 30
+    },
+    "acquisition_combine": {
+      "job": "Acquisition Checks",
+      "minutes": 10
+    },
+    "ci_tooling_checks": {
+      "job": "Core CI Tooling Checks",
+      "minutes": 45
+    },
+    "orchestration_engine_e2e": {
+      "job": "Core Orchestration Engine Tests",
+      "minutes": 30
+    },
+    "orchestration_checks_sdk_runtime": {
+      "job": "Core Orchestration Offline Checks",
+      "minutes": 30
+    }
+  },
+  "parts": {
+    "core_static": [
+      "python_lint"
+    ],
+    "core_sql_terraform": [
+      "sql_style",
+      "terraform_checks"
+    ],
+    "core_configuration": [
+      "configuration_checks"
+    ],
+    "core_ci_tooling": [
+      "ci_tooling_checks"
+    ],
+    "core_code_rules": [
+      "repository_code_checks"
+    ],
+    "core_orchestration_engine": [
+      "orchestration_engine_e2e"
+    ],
+    "core_orchestration_offline": [
+      "orchestration_checks"
+    ]
   }
 }

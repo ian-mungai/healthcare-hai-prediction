@@ -11,12 +11,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse.catalog_migration_cases import CASES, MIGRATION_CASES, Scenario
+from scripts.lakehouse.catalog_journal_cases import CASES, Scenario
+from scripts.lakehouse.catalog_migration_cases import MIGRATION_CASES
 from scripts.process import TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SUBJECTS = (
     "scripts/lakehouse/migrate_aws_catalog.py",
+    "scripts/lakehouse/catalog_journal_cases.py",
     "scripts/lakehouse/catalog_migration_cases.py",
     "scripts/lakehouse/catalog_journal.py",
     "scripts/lakehouse/register_aws_catalog.py",

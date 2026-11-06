@@ -138,9 +138,6 @@
     "training": {
       "kind": "build",
       "context": "services/training",
-      "build_contexts": {
-        "dvc": "scripts/quality/dvc"
-      },
       "local_tag": "hai-training:3.17.0",
       "tag": "3.17.0-arm64",
       "arm64": "base pin lists linux/arm64 and the DVC lock lists Apple silicon, x86 Linux and Arm Linux hashes; the linux/arm64 build has not been run yet",
@@ -152,8 +149,8 @@
       "build_contexts": {
         "hai": "services/hai"
       },
-      "local_tag": "hai-feature-store:feast0.66.0",
-      "tag": "feast0.66.0-arm64",
+      "local_tag": "hai-feature-store:feast0.67.0",
+      "tag": "feast0.67.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "runs_as": "job task, extract step"
     },

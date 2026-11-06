@@ -78,7 +78,7 @@ def dag_mount_cases(cases: Cases, folder: Path) -> None:
     cases.check(
         "extract_image_matches_feature_store_build",
         lambda: require(
-            launcher.ComposeModel(ROOT / "services/training/docker-compose.training.yaml").image("feature-store") == "hai-feature-store:feast0.66.0",
+            launcher.ComposeModel(ROOT / "services/training/docker-compose.training.yaml").image("feature-store") == "hai-feature-store:feast0.67.0",
             "training extraction selects a tag absent from the feature-store build",
         ),
     )

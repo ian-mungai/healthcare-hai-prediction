@@ -1,5 +1,6 @@
 # Model API image: FastAPI under uvicorn serving the registered models, with Feast online reads from Redis and the prediction append to Iceberg.
-# Build from the repository root, for Apple silicon, after the owner compiles the lock with services/model_api/compile_lock.sh:
+# Build from the repository root, for Apple silicon. services/model_api/requirements.txt is generated from the lock before each build:
+# .venv/bin/python -m scripts.quality.lock_env images (the model_api group of uv.lock; Git ignores the file).
 #   docker build --platform linux/arm64 -f services/model_api/Dockerfile .
 # The base image is pinned by digest and the wheels by hash; nothing is fetched at run time. The image holds only the files the service imports. The models come
 # from MLflow at run time and carry their own code. It runs as an unprivileged user on a read-only root file system with a temporary folder mounted at /tmp.

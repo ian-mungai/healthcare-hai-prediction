@@ -195,7 +195,7 @@ services:
       - ./data/analytics/dbt:/workspace/build:ro
 
   feature-store:
-    image: hai-feature-store:feast0.66.0
+    image: hai-feature-store:feast0.67.0
     build:
       context: ./services/feature_store
       additional_contexts:

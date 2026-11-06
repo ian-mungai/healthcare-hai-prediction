@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -13,7 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import ProcessGroupSurvived, TimeoutExpired, run_command
+from scripts.quality import ci_groups, core_commands
 from scripts.quality.repo_checks import load_yaml
 
 
@@ -30,12 +32,44 @@ def groups(root: Path) -> dict[str, list[str]]:
         if "manual" in hook.get("stages", document.get("default_stages", ["pre-commit", "manual"])) and hook["id"] != "local_ci"
     ]
     partitions: dict[str, list[str]] = config["hook_groups"]
+    # A hook that a check group runs as the identical complete check is in no partition (``delegation_findings`` proves the group runs it).
+    expected = [hook for hook in expected if hook not in config.get("hooks_run_by_groups", {})]
     actual = [hook for hooks in partitions.values() for hook in hooks]
     if Counter(actual) != Counter(expected):
         missing = sorted((Counter(expected) - Counter(actual)).elements())
         extra = sorted((Counter(actual) - Counter(expected)).elements())
         raise ValueError(f"manual hook partition is incomplete: missing={missing}, repeated or unknown={extra}")
     return partitions
+
+
+def delegation_findings(root: Path, config: dict[str, Any] | None = None, document: Any = None, groups_directory: Path | None = None) -> list[str]:
+    """Why a hook in ``hooks_run_by_groups`` is not the same check as its group's command, or is skipped by a path that selects the hook.
+
+    The hook must take no file names and no arguments, the group's body file must run the identical command, and every tracked path that the hook's ``files``
+    pattern matches must select the group (so the group runs wherever the hook would). A hook that fails these stays in a partition.
+    """
+    config = config or ci_groups.load()
+    if document is None:
+        document = load_yaml((root / ".pre-commit-config.yaml").read_text())
+    folder = groups_directory or root / "scripts/ci/groups"
+    hooks = {hook["id"]: hook for repo in document["repos"] for hook in repo["hooks"]}
+    tracked = run_command("git", ["ls-files", "-z"], cwd=root, timeout=60, check=True).stdout.split("\0")
+    problems = []
+    for hook_id, group in config.get("hooks_run_by_groups", {}).items():
+        hook = hooks.get(hook_id)
+        if hook is None or "manual" not in hook.get("stages", document.get("default_stages", ["pre-commit", "manual"])):
+            problems.append(f"{hook_id}: no such manual hook")
+            continue
+        if hook.get("pass_filenames", True) or hook.get("args"):
+            problems.append(f"{hook_id}: the hook takes file names or arguments, so the complete run of group {group} is not the same check")
+        command = f'"$python_bin" {hook["entry"].removeprefix(".venv/bin/python ").strip()}'
+        if command not in core_commands.commands_of(folder / f"{group}.sh"):
+            problems.append(f"{hook_id}: group {group} does not run the identical command {command}")
+        pattern = re.compile(hook.get("files", ""))
+        missed = [path for path in tracked if path and pattern.search(path) and group not in ci_groups.plan("paths", "all", paths=[path], config=config)["run"]]
+        if missed:
+            problems.append(f"{hook_id}: group {group} is not selected by {len(missed)} paths that select the hook, for example {missed[0]}")
+    return problems
 
 
 def usable(root: Path, value: str) -> bool:
@@ -82,6 +116,8 @@ def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end:
                 if remaining <= 0
                 else f"hook {hook} exceeded the remaining {remaining:.3f} second budget for group {group}\n"
             )
+            if isinstance(error, ProcessGroupSurvived):
+                message += f"the stop of hook {hook} is not confirmed: {error}\n"
             (output / f"{hook}.log").write_text(stdout + stderr + message)
             sys.stdout.write(stdout)
             sys.stderr.write(stderr + message)

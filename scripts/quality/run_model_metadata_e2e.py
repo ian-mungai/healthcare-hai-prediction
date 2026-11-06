@@ -22,7 +22,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Collection
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from scripts.process import TimeoutExpired, clear_git_environment, run_command
+from scripts.process import LaunchCancelled, LaunchesNotStopped, LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
 from scripts.quality import dbt_manifest_labels, label_guard_fixtures
 from scripts.quality.hook_stage import hook_stage
 
@@ -175,7 +175,7 @@ BASE = {
 }
 ALL_FILES_SCOPE = "all"
 STAGED_SCOPE = "staged"
-CANNOT_RUN_DETAILS = ("Fix:", "ask the owner", "docs/quality_checks.md#model-metadata")
+CANNOT_RUN_DETAILS = ("Fix:", "ask the owner", "scripts/quality/model_metadata.py")
 
 
 @dataclass(frozen=True)
@@ -1580,7 +1580,9 @@ def judge(case: Case, exit_code: int, output: str, exact: bool) -> bool:
 def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = CASE_SECONDS) -> dict[str, Any]:
     """Run a synthetic case through the given hook and checker and return their assertions and diagnostic tails."""
     began = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="hai_model_metadata_") as scratch:
+    scratch = tempfile.mkdtemp(prefix="hai_model_metadata_")
+    survivors = False
+    try:
         repo = scratch_repo(Path(scratch), checker, hook_config)
         apply(repo, case)
         args = [
@@ -1613,6 +1615,13 @@ def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = C
             "direct_tail": direct_tail,
             "seconds": round(time.monotonic() - began, 2),
         }
+    except (ProcessGroupSurvived, LaunchesNotStopped):
+        # The survivors' files stay in the scratch folder for the owner to read; nothing else removes them.
+        survivors = True
+        raise
+    finally:
+        if not survivors:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def worker_count(value: str) -> int:
@@ -1656,21 +1665,32 @@ def run_cases(cases: list[Case], checker: Path, hook_config: Path, workers: int,
     """
     if workers == 1:
         results: list[dict[str, Any]] = []
-        for case in cases:
+        for number, case in enumerate(cases):
             try:
                 results.append(run_case(case, checker, hook_config, case_seconds))
+            except ProcessGroupSurvived as error:
+                results.append(
+                    failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds and its stop is not confirmed: {error}")
+                )
+                # A program may still be alive: no later case starts, and each is reported as not run.
+                results.extend(failed_case(later, f"not run: the stop of a program of case {case.name} is not confirmed") for later in cases[number + 1 :])
+                break
             except TimeoutExpired as error:
                 results.append(failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds"))
         return results
     deadline = -(-len(cases) // workers) * 2 * case_seconds + 60
-    pool = ThreadPoolExecutor(max_workers=workers)
-    futures = [pool.submit(run_case, case, checker, hook_config, case_seconds) for case in cases]
-    done, unfinished = wait(futures, timeout=deadline)
-    pool.shutdown(wait=False, cancel_futures=True)
+    with LaunchPool(max_workers=workers) as pool:
+        futures = [pool.submit(run_case, case, checker, hook_config, case_seconds) for case in cases]
+        done, unfinished = wait(futures, timeout=deadline)
+        pool.shutdown(wait=False, cancel_futures=True)
     results = []
     for case, future in zip(cases, futures, strict=True):
-        if future not in done:
+        if future.cancelled() or (future in done and isinstance(future.exception(), LaunchCancelled)):
+            results.append(failed_case(case, "not run: the stop of a program of an earlier case is not confirmed, or the pool was cancelled"))
+        elif future not in done:
             results.append(failed_case(case, f"deadline: not finished {deadline} seconds after the start of the pool ({len(unfinished)} cases unfinished)"))
+        elif isinstance(future.exception(), ProcessGroupSurvived):
+            results.append(failed_case(case, f"deadline: a program of this case ran longer than {case_seconds} seconds and its stop is not confirmed"))
         elif isinstance(future.exception(), TimeoutExpired):
             results.append(failed_case(case, f"deadline: a program of this case ran longer than {case_seconds} seconds"))
         else:
@@ -1883,7 +1903,7 @@ def main() -> int:
     args = parser.parse_args()
     clear_git_environment()
     if not PRE_COMMIT.exists():
-        sys.stderr.write("setup missing: create .venv from requirements.txt (README, Install)\n")
+        sys.stderr.write("setup missing: create .venv from the host group of uv.lock (README, Install)\n")
         return 1
     cases = [case for case in make_cases() if not args.case or case.name in args.case]
     unknown = sorted(set(args.case) - {case.name for case in cases})

@@ -529,8 +529,8 @@ def test_capture_cannot_promote_model_readiness(setup_capture: tuple, tmp_path: 
         captures.validate_receipt(receipt, setup_capture[2])
 
 
-def test_local_dependency_record_pins_the_original_schema() -> None:
-    dependency_path = captures.SCHEMA_PATH.with_name("runtime_dependencies.json")
+def test_snapshot_contract_pin_names_the_original_schema() -> None:
+    dependency_path = captures.SCHEMA_PATH.with_name("snapshot_contract_pin.json")
     check(
         read_json(dependency_path)["snapshot_contract_file_sha256"] == hashlib.sha256(captures.SCHEMA_PATH.read_bytes()).hexdigest(),
         'read_json(dependency_path)["snapshot_contract_file_sha256"] == hashlib.sha256(captures.SCHEMA_PATH.read_bytes()).hexdigest()',

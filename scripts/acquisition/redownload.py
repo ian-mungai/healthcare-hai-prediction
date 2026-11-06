@@ -119,7 +119,7 @@ def runtime_controls(run: Run) -> dict:
     """
     queue = load_queue(run)
     code_paths = sorted((REPO_ROOT / "scripts/acquisition").rglob("*.py"))
-    code_paths += [REPO_ROOT / "scripts/infrastructure/render_project_config.py", REPO_ROOT / "scripts/process.py", REPO_ROOT / "requirements.txt"]
+    code_paths += [REPO_ROOT / "scripts/infrastructure/render_project_config.py", REPO_ROOT / "scripts/process.py", REPO_ROOT / "uv.lock"]
     inputs = set((run.base / "config/acquisition").rglob("*.json"))
     from scripts.acquisition.collect_mmd_api import TEMPLATE
 

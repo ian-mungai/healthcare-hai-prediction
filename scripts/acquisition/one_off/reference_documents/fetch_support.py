@@ -12,7 +12,7 @@ from typing import Any
 from scripts.acquisition.process import run_command
 from scripts.acquisition.source_registry import REPO_ROOT
 from scripts.acquisition.transport import CaptureError, Download, Limits, inspect_payload, utc_now
-from scripts.process import TimeoutExpired
+from scripts.process import STOP_GRACE_SECONDS, TimeoutExpired
 
 LIMITS = Limits(attempts=2, timeout_seconds=30, max_seconds=180, max_bytes=64 * 1024**2)
 RECEIPT_NAME = "receipt.json"
@@ -54,7 +54,8 @@ def acceptance_reason(spec: dict[str, Any], media_type: str | None, path: Path, 
 def download_in_child(spec: dict[str, Any], captures: Path) -> Download:
     """Run one file's whole download (name lookup, connect, headers, body and retries) in its own process, ended after ``LIMITS.max_seconds``.
 
-    Raises ``TimeoutExpired`` when the process outlives the deadline; the launcher has ended it by then.
+    Raises ``TimeoutExpired`` when the process outlives the deadline; the launcher has ended it by then. The launcher's pause between TERM and KILL is at most a
+    quarter of the deadline, so a process that ignores TERM still ends well inside the deadline's own bound.
     """
     completed = run_command(
         sys.executable,
@@ -80,6 +81,7 @@ def download_in_child(spec: dict[str, Any], captures: Path) -> Download:
         ],
         cwd=REPO_ROOT,
         timeout=LIMITS.max_seconds,
+        grace_seconds=min(STOP_GRACE_SECONDS, LIMITS.max_seconds / 4),
     )
     if completed.returncode != 0:
         lines = completed.stderr.strip().splitlines()

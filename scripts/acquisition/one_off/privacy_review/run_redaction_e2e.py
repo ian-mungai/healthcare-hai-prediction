@@ -363,7 +363,7 @@ def main() -> int:
             "tool_sha256": fingerprint(TOOL)[0],
             "policy_sha256": fingerprint(POLICY)[0],
             "runner_sha256": fingerprint(Path(__file__).resolve())[0],
-            "requirements_sha256": fingerprint(Path("requirements.txt"))[0],
+            "requirements_sha256": fingerprint(Path("uv.lock"))[0],
             "cases": cases,
             "reproduce": "PYTHONPATH=. .venv/bin/python scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py",
             "tested_boundary": "Build command as a subprocess on synthetic CSV, TXT, long-format, JSON and XML files; upload in-process against a fake S3.",

@@ -5,7 +5,7 @@ Run from the repository root: ``.venv/bin/python -m scripts.quality.model_metada
 Model references come from a static evaluation of the
 Jinja in each model and in the macros it calls. SQLFluff parses compiled SQL to trace named confidential source columns into outputs.
 An unresolved reference blocks the check. Unsupported SQL retains every input column. The scan-personal-data subcommand scans explicit local exports. See
-``docs/quality_checks.md#model-metadata``.
+``scripts/quality/model_metadata.py --help``.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ yaml: Any = importlib.import_module("yaml")
 # but 225 to 265 s inside full local CI, where other groups run in parallel, and it passed 300 s there once.
 LINEAGE_WORKER_SECONDS = 600
 ROOT = Path(__file__).resolve().parents[2]
-DOCUMENT = "docs/quality_checks.md#model-metadata"
+DOCUMENT = "scripts/quality/model_metadata.py"
 DBT_DIRECTORY = "dbt"
 PROJECT_FILE = "dbt/dbt_project.yml"
 CONTRACT = "data_contracts/lakehouse/gold_contract.json"

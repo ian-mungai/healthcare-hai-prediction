@@ -8,7 +8,8 @@
     "dbt/packages.yml",
     "dbt/package-lock.yml",
     "orchestration",
-    "services/hai"
+    "services/hai",
+    "uv.lock"
   ],
   "ignored_reads": [
     {
@@ -1033,7 +1034,6 @@
     "dbt/tests/features/assert_validation_measures_overlap.sql",
     "docker-compose.yaml",
     "docs/analysis_plan.md",
-    "docs/feature_phase_saved.md",
     "feature_store/definitions.py",
     "feature_store/feature_store.yaml",
     "feature_store/feature_store_aws.yaml",
@@ -1302,6 +1302,7 @@
     "scripts/lakehouse/catalog.py",
     "scripts/lakehouse/catalog_authority_cases.py",
     "scripts/lakehouse/catalog_journal.py",
+    "scripts/lakehouse/catalog_journal_cases.py",
     "scripts/lakehouse/catalog_migration_cases.py",
     "scripts/lakehouse/checksums.py",
     "scripts/lakehouse/code_archive.py",
@@ -1330,6 +1331,7 @@
     "scripts/lakehouse/gold_reconcile.py",
     "scripts/lakehouse/gold_sql.py",
     "scripts/lakehouse/gold_writer_setup.py",
+    "scripts/lakehouse/host_ingress_cases.py",
     "scripts/lakehouse/identity_splits.py",
     "scripts/lakehouse/ipps_file_labels.py",
     "scripts/lakehouse/launcher_cleanup.py",
@@ -1355,6 +1357,7 @@
     "scripts/lakehouse/query.sh",
     "scripts/lakehouse/register_aws_catalog.py",
     "scripts/lakehouse/retired_objects.py",
+    "scripts/lakehouse/route_probe.py",
     "scripts/lakehouse/run_aws_bronze_writer_e2e.py",
     "scripts/lakehouse/run_aws_catalog_setup_e2e.py",
     "scripts/lakehouse/run_bridge_references_e2e.py",
@@ -1475,9 +1478,9 @@
     "services/lineage/provider_events.py",
     "services/mlflow/docker-compose.mlflow.yaml",
     "services/orchestration/Dockerfile",
-    "services/orchestration/constraints-3.12.txt",
     "services/orchestration/docker-compose.orchestration.yaml",
     "services/orchestration/egress_proxy.json",
-    "services/training/docker-compose.training.yaml"
+    "services/training/docker-compose.training.yaml",
+    "uv.lock"
   ]
 }

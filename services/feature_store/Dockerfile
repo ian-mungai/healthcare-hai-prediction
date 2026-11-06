@@ -1,7 +1,8 @@
-# Feature store image: Feast 0.66.0 with the DuckDB offline store (DuckDB 1.5.6), PyIceberg 0.12.0 reading the Iceberg features
+# Feature store image: Feast 0.67.0 with the DuckDB offline store (DuckDB 1.5.6), PyIceberg 0.12.0 reading the Iceberg features
 # namespace and the Redis online store (redis-py 7.4.1, hiredis 3.4.2). The `aws` extra only brings boto3 for the S3 registry.
 # The base image is pinned by digest and the wheels by hash; nothing is fetched at run time. Feast sends no usage data.
-# Build for Apple silicon: docker build --platform linux/arm64 (see services/feature_store/requirements.in for the lock).
+# Build for Apple silicon: docker build --platform linux/arm64
+# requirements.txt is generated from the lock before each build: .venv/bin/python -m scripts.quality.lock_env images (the feature_store group of uv.lock; Git ignores the file).
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
 # hai is the services/hai named build context passed by docker-compose.yaml additional_contexts.
 # hadolint ignore=DL3022

@@ -4,7 +4,7 @@ Run from the repository root:
 
     .venv/bin/python -m scripts.quality.install_sqlfluff
 
-The versions are pinned with hashes by ``scripts/quality/sqlfluff/requirements.txt``. They go into their own virtual
+The versions are pinned with hashes by the ``sqlfluff`` group of ``uv.lock`` (``scripts/quality/lock_env.py`` exports it). They go into their own virtual
 environment, ``.tools/sqlfluff``, because dbt-core caps pathspec below the version MyPy needs in ``.venv``. pip
 verifies every hash and installs wheels only. A rerun with the same requirements changes nothing; a failed install
 removes the copied requirements so the next run retries instead of looking current. It then installs the dbt packages
@@ -18,12 +18,15 @@ import filecmp
 import os
 import shutil
 import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from scripts.process import run_command
+from scripts.quality import lock_env
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "scripts/quality/sqlfluff/requirements.txt"
 DESTINATION = ROOT / ".tools/sqlfluff"
 INSTALLED = DESTINATION / "requirements.txt"
 SQLFLUFF = DESTINATION / "bin/sqlfluff"
@@ -31,15 +34,26 @@ DBT_PROJECT = ROOT / "dbt"
 DBT_WORK = ROOT / "data/analytics/dbt/deps"
 
 
+@contextmanager
+def exported() -> Iterator[Path]:
+    """Export the lock's sqlfluff group into a scratch folder and give its requirements file."""
+    with tempfile.TemporaryDirectory(prefix="hai_sqlfluff_lock_") as folder:
+        lock_env.write_files("sqlfluff", Path(folder))
+        yield Path(folder) / "requirements.txt"
+
+
 def pinned_version() -> str:
-    """Return the SQLFluff version the committed requirements pin."""
-    return next(line.split("==", 1)[1].split()[0] for line in SOURCE.read_text().splitlines() if line.startswith("sqlfluff=="))
+    """Return the SQLFluff version the lock pins."""
+    return next(
+        line.split("==", 1)[1].split()[0] for line in lock_env.export_files("sqlfluff")["requirements.txt"].splitlines() if line.startswith("sqlfluff==")
+    )
 
 
 def current() -> bool:
-    """Return whether the installed environment matches the committed requirements and runs the pinned version."""
-    if not (SQLFLUFF.exists() and INSTALLED.exists() and filecmp.cmp(SOURCE, INSTALLED, shallow=False)):
-        return False
+    """Return whether the installed environment matches the lock's sqlfluff group and runs the pinned version."""
+    with exported() as source:
+        if not (SQLFLUFF.exists() and INSTALLED.exists() and filecmp.cmp(source, INSTALLED, shallow=False)):
+            return False
     result = run_command(str(SQLFLUFF), ["--version"], timeout=60)
     return result.returncode == 0 and result.stdout.strip().endswith(pinned_version())
 
@@ -67,11 +81,12 @@ def install() -> str:
     if DESTINATION.exists():
         shutil.rmtree(DESTINATION)
     run_command(base_python(), ["-m", "venv", str(DESTINATION)], timeout=300, check=True)
-    pip = [str(DESTINATION / "bin/python"), "-m", "pip", "install", "--quiet", "--require-hashes", "--only-binary=:all:", "-r", str(SOURCE)]
-    result = run_command(pip[0], pip[1:], timeout=900)
-    if result.returncode:
-        raise SystemExit(f"pip install failed for sqlfluff {pinned}; nothing usable was installed:\n{result.stderr[-2000:]}")
-    shutil.copyfile(SOURCE, INSTALLED)
+    with exported() as source:
+        pip = [str(DESTINATION / "bin/python"), "-m", "pip", "install", "--quiet", "--require-hashes", "--only-binary=:all:", "-r", str(source)]
+        result = run_command(pip[0], pip[1:], timeout=900)
+        if result.returncode:
+            raise SystemExit(f"pip install failed for sqlfluff {pinned}; nothing usable was installed:\n{result.stderr[-2000:]}")
+        shutil.copyfile(source, INSTALLED)
     return f"installed  sqlfluff {pinned} with the dbt templater (hashes verified) in {DESTINATION.relative_to(ROOT)}"
 
 

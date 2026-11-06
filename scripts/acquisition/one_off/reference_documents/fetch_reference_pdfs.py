@@ -2,7 +2,7 @@
 
 AHRQ answers a path it does not have with HTTP 200 and an HTML page, so each file must arrive as ``application/pdf`` and start with ``%PDF-``.
 The run writes the originals, a transport record per attempt and one ``receipt.json`` with every file's SHA-256 into a new local folder.
-Storage in the project bucket is a separate step through ``history_routes`` (see ``docs/data_collection.md``, Publisher Data Dictionaries).
+Storage in the project bucket is a separate step through ``history_routes``.
 
     .venv/bin/python -m scripts.acquisition.one_off.reference_documents.fetch_reference_pdfs \
         --candidates config/acquisition/ahrq_psi_change_log_candidates.json --output data/reference_checks/<date>/ahrq_psi_change_logs

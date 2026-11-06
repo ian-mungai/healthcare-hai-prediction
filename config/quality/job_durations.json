@@ -1,5 +1,5 @@
 {
-  "note": "The longest hosted wall time of each job of .github/workflows/ci.yml and its timeout, in minutes, by expanded job name. A job whose basis says estimate has no hosted measurement yet: resize it from its first complete hosted run. scripts/quality/run_ci_groups_e2e.py (job_timeouts_match_the_measured_durations) requires each workflow job to have an entry, its timeout to equal timeout_minutes and timeout_minutes to lie between 1.5 and 2.6 times measured_minutes (at least 5 minutes). Update the entry with each CI change. This file replaces the Measured durations table of docs/quality_checks.md, which no check reads.",
+  "note": "The longest hosted wall time of each job of .github/workflows/ci.yml and its timeout, in minutes, by expanded job name. A job whose basis says estimate has no hosted measurement yet: resize it from its first complete hosted run. scripts/quality/run_ci_groups_e2e.py (job_timeouts_match_the_measured_durations) requires each workflow job to have an entry, its timeout to equal timeout_minutes and timeout_minutes to lie between 1.5 and 2.6 times measured_minutes (at least 5 minutes). Update the entry with each CI change.",
   "schema_version": 1,
   "jobs": [
     {
@@ -39,10 +39,46 @@
       "basis": "measured Oct 30 2026, the `test-checks` hook alone"
     },
     {
-      "job": "Local CI Core",
-      "measured_minutes": 38,
-      "timeout_minutes": 60,
-      "basis": "hosted, the longest recent passing run (38.2 min, Nov 4 2026); PR 76 ran past 45 twice on Nov 5 2026; temporary until the configuration checks move to their own job"
+      "job": "Core Static Checks",
+      "measured_minutes": 7.5,
+      "timeout_minutes": 12,
+      "basis": "estimate, typecheck 203 s from the hosted run 41521618599 plus about 4 minutes of setup and gates"
+    },
+    {
+      "job": "Core SQL and Terraform Checks",
+      "measured_minutes": 23.5,
+      "timeout_minutes": 40,
+      "basis": "estimate, SQL style 1169 s from the hosted run 41521618599 (the Terraform checks, 751 s, run beside it) plus about 4 minutes of setup and gates; local Mac run Nov 3 2026: 249 s for the whole part"
+    },
+    {
+      "job": "Core Configuration Checks",
+      "measured_minutes": 32,
+      "timeout_minutes": 50,
+      "basis": "estimate, 23 commands and 1692 s from the hosted run 41521618599 plus about 4 minutes of setup and gates; local Mac run Nov 3 2026: 826 s for the whole part"
+    },
+    {
+      "job": "Core CI Tooling Checks",
+      "measured_minutes": 30,
+      "timeout_minutes": 45,
+      "basis": "estimate, container import hook 874 s, group selection 387 s and the process stop E2Es about 275 s from the hosted run 41521618599 and local runs, plus about 4 minutes; local Mac run Nov 3 2026: about 13 minutes for the whole part"
+    },
+    {
+      "job": "Core Code Rules",
+      "measured_minutes": 5.5,
+      "timeout_minutes": 10,
+      "basis": "estimate, 106 s on the Mac (47 s of commands, 57 s of gates), about twice that hosted, plus about 1.5 minutes of setup"
+    },
+    {
+      "job": "Core Orchestration Engine Tests",
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "estimate, broker 502 s, stack 159 s and lean broker 58 s from the hosted run 41521618599 plus about 120 s for the supervisor and transform broker and about 4 minutes of setup and gates; local Mac run Nov 3 2026: 532 s for the whole part"
+    },
+    {
+      "job": "Core Orchestration Offline Checks",
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "estimate, 483 s measured in the hosted run 41521618599 (the SDK runtime cases alone 197 s) plus about 350 s for the offline checks that run was cut short before, and about 4 minutes of setup and gates; local Mac run Nov 3 2026 stopped at 340 s in the layer driver E2E (see the pending process fix), so its later commands have no local time yet"
     },
     {
       "job": "CI Reuse and Gate E2E",
@@ -75,76 +111,124 @@
       "basis": "estimate, offline feature store gates"
     },
     {
-      "job": "Feature Sources (Shard 1 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 1 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 2 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 2 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 3 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 3 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 4 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 4 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 5 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 5 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 6 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 6 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 7 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 7 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
-      "job": "Feature Sources (Shard 8 of 8)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "job": "Feature Sources (Shard 8 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 9 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 10 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 11 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 12 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 13 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 14 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 15 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+    },
+    {
+      "job": "Feature Sources (Shard 16 of 16)",
+      "measured_minutes": 12.8,
+      "timeout_minutes": 20,
+      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
     },
     {
       "job": "Feature Columns (Shard 1 of 4)",
       "measured_minutes": 14,
       "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
     },
     {
       "job": "Feature Columns (Shard 2 of 4)",
       "measured_minutes": 14,
       "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
     },
     {
       "job": "Feature Columns (Shard 3 of 4)",
       "measured_minutes": 14,
       "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
     },
     {
       "job": "Feature Columns (Shard 4 of 4)",
       "measured_minutes": 14,
       "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates"
+      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
     },
     {
       "job": "Feature Combined Evidence",

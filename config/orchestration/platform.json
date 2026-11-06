@@ -14,8 +14,10 @@
     },
     "constraints": {
       "path": "services/orchestration/constraints-3.12.txt",
+      "generated_from": "the orchestration group of uv.lock (python -m scripts.quality.lock_env images); Git ignores the file",
       "url": "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt",
-      "sha256": "821effd0f491975682f2774fca3427d7bc2f59ca6de68dcb413ad2c8f890e58c"
+      "upstream_sha256": "821effd0f491975682f2774fca3427d7bc2f59ca6de68dcb413ad2c8f890e58c",
+      "sha256": "063d35e224497df0729304dd412f54081e77df1eb612ce6555fc44e41bba71ba"
     },
     "user": "50000",
     "release_packages": {

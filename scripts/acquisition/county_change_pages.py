@@ -1,7 +1,7 @@
 """The change-list grammar of the Census county-change pages and the one reader that extracts their events.
 
-``page_problem`` refuses every page whose change list falls outside the closed grammar written in ``docs/acquisition_design.md`` (section "County-change page
-grammar"); acquisition applies it before a page is stored and whenever a stored page is used again. A page's section is its decade heading and the change list
+``page_problem`` refuses every page whose change list falls outside the closed grammar that this module implements;
+acquisition applies it before a page is stored and whenever a stored page is used again. A page's section is its decade heading and the change list
 after it; the section is the part of a page that the repository commits, and ``analyze_section`` gives its events and its digest from one text. The events
 become the reviewed dbt seed through ``scripts/lakehouse/county_change_seed.py``. The warehouse reads that seed and never the pages.
 This file sits at the top level of ``scripts/acquisition`` so the collector code fingerprints cover it.

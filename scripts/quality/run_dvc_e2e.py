@@ -26,7 +26,7 @@ from typing import Any
 
 from scripts.infrastructure.render_project_config import ConfigurationError, build_configuration, dvc_local_config
 from scripts.process import SubprocessError, TimeoutExpired, run_command
-from scripts.quality import install_dvc
+from scripts.quality import install_dvc, lock_env
 
 ROOT = Path(__file__).resolve().parents[2]
 DVC_HOME = ROOT / ".tools/dvc"
@@ -80,7 +80,7 @@ def pinned_versions() -> Problems:
     """The real environment runs the pinned dvc and dvc-s3 and a rerun of the installer changes nothing."""
     problems: Problems = []
     if not install_dvc.current():
-        return [".tools/dvc does not match scripts/quality/dvc/requirements.txt; run python -m scripts.quality.install_dvc"]
+        return [".tools/dvc does not match the dvc group of uv.lock; run python -m scripts.quality.install_dvc"]
     dvc = run_command(str(DVC_HOME / "bin/dvc"), ["--version"], timeout=60).stdout.strip()
     s3 = run_command(str(DVC_HOME / "bin/python"), ["-m", "pip", "show", "dvc-s3"], timeout=60).stdout
     if dvc != install_dvc.pinned_version("dvc") or f"Version: {install_dvc.pinned_version('dvc-s3')}" not in s3:
@@ -94,14 +94,22 @@ def pinned_versions() -> Problems:
 
 def mutated_source(base: Path, name: str, change: Callable[[str], str]) -> Path:
     path = base / name
-    path.write_text(change(install_dvc.SOURCE.read_text()))
+    path.write_text(change(lock_env.export_files("dvc")["requirements.txt"]))
     return path
 
 
 def flip_first_hash(text: str) -> str:
+    """Change the first digit of every hash of the first package (pip accepts a package when any one of its hashes matches the file)."""
+    lines = text.splitlines()
+    first = next(index for index, line in enumerate(lines) if line and not line.startswith(("#", " ")))
     marker = "--hash=sha256:"
-    start = text.index(marker) + len(marker)
-    return text[:start] + ("0" if text[start] != "0" else "1") + text[start + 1 :]
+    for index in range(first, len(lines)):
+        if index > first and not lines[index].startswith("    --hash="):
+            break
+        if marker in lines[index]:
+            start = lines[index].index(marker) + len(marker)
+            lines[index] = lines[index][:start] + ("0" if lines[index][start] != "0" else "1") + lines[index][start + 1 :]
+    return "\n".join(lines) + "\n"
 
 
 def drop_first_hashes(text: str) -> str:
@@ -116,10 +124,12 @@ def failed_install_then_retry(top: Path) -> Problems:
     """A wrong hash and a missing hash both abort with no marker left; the good file then installs into the same destination."""
     problems: Problems = []
     destination = top / "env"
+    build_source = top / "build_requirements.txt"
+    build_source.write_text(lock_env.export_files("dvc")["build_requirements.txt"])
     for label, change in (("wrong_hash", flip_first_hash), ("missing_hash", drop_first_hashes)):
         source = mutated_source(top, f"{label}.txt", change)
         try:
-            install_dvc.install(source=source, destination=destination)
+            install_dvc.install(source=source, build_source=build_source, destination=destination)
             problems.append(f"{label}: the install did not fail")
         except SystemExit as error:
             if "pip install failed" not in str(error):
@@ -141,7 +151,7 @@ def other_platform_hashes(top: Path) -> Problems:
         return [f"no cross-platform check is defined for {platform.system()}"]
     kept: list[str] = []
     skip = False
-    for line in install_dvc.SOURCE.read_text().splitlines():
+    for line in lock_env.export_files("dvc")["requirements.txt"].splitlines():
         skip = line.startswith("antlr4-python3-runtime==") or (skip and line.startswith("    --hash="))
         if not skip:
             kept.append(line)

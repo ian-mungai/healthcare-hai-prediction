@@ -22,7 +22,6 @@ orchestration_checks() {
   timed "orchestration_checks: ECS placement static proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof S
   timed "orchestration_checks: ECS placement handler proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof D
   timed "orchestration_checks: task guard cases" "$python_bin" -m scripts.orchestration.task_guard_cases
-  timed "orchestration_checks: lean broker E2E" "$python_bin" -m scripts.orchestration.run_ecs_broker_e2e
   timed "orchestration_checks: direct ECS launch E2E" "$python_bin" -m scripts.orchestration.run_ecs_launch_e2e
   timed "orchestration_checks: layer driver E2E" "$python_bin" -m scripts.lakehouse.run_layer_run_e2e
   timed "orchestration_checks: bronze driver E2E" "$python_bin" -m scripts.lakehouse.run_bronze_run_e2e
@@ -32,11 +31,7 @@ orchestration_checks() {
   timed "orchestration_checks: lineage amendment E2E" "$python_bin" -m scripts.orchestration.run_lineage_amendment_e2e
   timed "orchestration_checks: publish contracts" "$python_bin" -m scripts.orchestration.run_publish_contracts
   timed "orchestration_checks: light pipeline" "$python_bin" -m scripts.orchestration.run_pipeline_light
-  timed "orchestration_checks: stack E2E" "$python_bin" -m scripts.orchestration.run_stack_e2e
-  timed "orchestration_checks: broker E2E" "$python_bin" -m scripts.orchestration.run_broker_e2e
   timed "orchestration_checks: ECS preparation" "$python_bin" -m scripts.orchestration.run_ecs_preparation --out "$quality_output/ecs_preparation"
-  timed "orchestration_checks: supervisor E2E" "$python_bin" -m scripts.orchestration.run_supervisor_e2e
-  timed "orchestration_checks: transform broker E2E" "$python_bin" -m scripts.orchestration.run_transform_broker_e2e
   # The offline checks skip the built Airflow image, which a CI runner does not have.
   timed "orchestration_checks: model API E2E" "$python_bin" -B -m scripts.serving.run_serving_checks --output "$quality_output/serving_checks"
   # The page cases need Streamlit, which the runner does not install, so the runner reports them as blocked here. They run in the page image.

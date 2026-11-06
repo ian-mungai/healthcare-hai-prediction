@@ -29,6 +29,10 @@ groups: scripts/run_ci.sh runs them in every scope.
 
 The plan prints as JSON, or with ``--format shell`` as lines: ``reason``, ``run <group>`` and ``skip <group> <reason>``.
 
+The part ``core`` is the union of the seven hosted Core parts named in ``parts`` (core_static, core_sql_terraform, core_configuration, core_ci_tooling,
+core_code_rules, core_orchestration_engine and core_orchestration_offline); every group of ``core`` is in exactly one of them, and loading the configuration
+refuses one where a group is in none or in two.
+
 E2E: ``.venv/bin/python -m scripts.quality.run_ci_groups_e2e``.
 """
 
@@ -56,7 +60,7 @@ LAYER_PARTS = {
     "feature_store": "lakehouse_features",
     "reuse_gate": "reuse_gate_checks",
 }
-PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
+BASE_PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
 # The inventory_reads pattern of a module whose reads are not reviewed. It selects the launcher group for every changed path, but never classifies a path:
 # it stays out of the group lists, so a path that no list names still selects every group.
 ALWAYS_PATTERN = "."
@@ -83,14 +87,27 @@ def load() -> dict[str, Any]:
         *(f"^{re.escape(folder)}/" for folder in inputs["folders"]),
         *(f"^{re.escape(path)}$" for path in inputs["files"]),
     ]
+    held_elsewhere = {"launcher", *config["layers"], *LAYER_PARTS.values()}
+    core = [group for group in config["groups"] if group not in held_elsewhere]
+    placed = [group for groups in config.get("parts", {}).values() for group in groups]
+    unplaced, repeated = sorted(set(core) - set(placed)), sorted({group for group in placed if placed.count(group) > 1 or group not in core})
+    if config.get("parts") and (unplaced or repeated):
+        raise ValueError(f"parts in {CONFIG} must place every group of the part core in exactly one part: in none {unplaced}, in several or unknown {repeated}")
     if [layer for layer in order(config) if layer in config["layers"]] != config["layers"] or set(config["layers"]) - set(config["groups"]):
         raise ValueError(f"layers in {CONFIG} must be groups listed from upstream to downstream in the order of the groups in the file")
     return config
 
 
+def valid_parts(config: dict[str, Any]) -> set[str]:
+    """The parts of the dispatcher: the fixed ones and the hosted parts of the former Core job, which the configuration names in ``parts``."""
+    return {*BASE_PARTS, *config.get("parts", {})}
+
+
 def groups_of(part: str, config: dict[str, Any]) -> list[str]:
     known = set(config["groups"]) | set(config["full_only"])
-    if part == "launcher":
+    if part in config.get("parts", {}):
+        wanted = set(config["parts"][part])
+    elif part == "launcher":
         wanted = {"launcher"}
     elif part == "gates":
         wanted = set()
@@ -188,8 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--path", dest="paths", action="append", default=[])
     command.add_argument("--format", choices=("json", "shell"), default="json")
     args = parser.parse_args(argv)
-    if args.scope not in SCOPES or args.part not in PARTS:
-        sys.stderr.write(f"scope must be one of {', '.join(SCOPES)} and part one of {', '.join(sorted(PARTS))}; got {args.scope}, {args.part}\n")
+    parts = valid_parts(load())
+    if args.scope not in SCOPES or args.part not in parts:
+        sys.stderr.write(f"scope must be one of {', '.join(SCOPES)} and part one of {', '.join(sorted(parts))}; got {args.scope}, {args.part}\n")
         return 2
     result = plan(args.scope, args.part, args.start, args.end, args.paths)
     if args.format == "json":

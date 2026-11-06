@@ -184,7 +184,7 @@ def case_names() -> list[str]:
 def run(output: Path, only: list[str] | None = None, shard: str = "") -> dict[str, Any]:
     """Run the selected cases and return their report with exact shard membership."""
     inventory = case_names()
-    selected = feature_shards.select(inventory, shard, only)
+    selected = feature_shards.select(inventory, shard, only, "columns")
     before = feature_shards.snapshot("columns")
     results: list[dict[str, Any]] = []
     models = columns.sql_models(columns.REPO_ROOT)
@@ -291,7 +291,7 @@ def main() -> int:
     parser.add_argument("--list-cases", action="store_true", help="print the selected case names as JSON without running them")
     args = parser.parse_args()
     try:
-        selected = feature_shards.select(case_names(), args.shard, args.only)
+        selected = feature_shards.select(case_names(), args.shard, args.only, "columns")
     except ValueError as error:
         parser.error(str(error))
     if args.list_cases:

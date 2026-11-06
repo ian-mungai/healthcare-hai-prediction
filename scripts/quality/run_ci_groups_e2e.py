@@ -18,7 +18,7 @@ data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the
 the run fails when a file under test changes while it runs.
 
 The reuse, shard and gate stage cases are the check group reuse_gate_checks (hosted job CI Reuse and Gate E2E): ``--reuse-only`` and ``--gate-stage-only``
-run them, ``--selection-only`` (Local CI Core) leaves them out and a run without a mode runs all.
+run them, ``--selection-only`` (the Core CI tooling job) leaves them out and a run without a mode runs all.
 
 Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim check)
 and ``acquisition-checks``, every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is
@@ -55,8 +55,9 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from scripts.lakehouse import feature_shards
 from scripts.process import clear_git_environment, find_program, run_command
-from scripts.quality import ci_groups
+from scripts.quality import ci_groups, ci_hooks, core_commands, scratch_marker
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
@@ -87,7 +88,6 @@ COPIED = (
     "config/quality/mypy_runtimes.json",
     "config/quality_tools.json",
     "dbt/models/silver/intermediate/_intermediate__models.yml",
-    "docs/quality_checks.md",
     "scripts/acquisition/run_checks.sh",
     "scripts/acquisition/run_checks_pushed.sh",
     "scripts/quality/pre_push.py",
@@ -104,6 +104,9 @@ COPIED = (
     "orchestration/network_policy.py",
     "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/core_commands.py",
+    "config/quality/core_commands.json",
+    "config/quality/feature_case_costs.json",
     "scripts/quality/ci_main_passes.py",
     "scripts/quality/launcher_inputs.py",
     "scripts/quality/source_reads.py",
@@ -164,8 +167,27 @@ REQUIREMENTS = "7a967b2"
 ZERO = "0" * 40
 MISSING = "0123456789abcdef0123456789abcdef01234567"
 MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
+FEATURE_COUNTS = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))["feature_shards"]
 LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold", "lakehouse_features"]
-CORE = ["python_lint", "orchestration_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
+CORE = [
+    "python_lint",
+    "orchestration_checks",
+    "orchestration_engine_e2e",
+    "repository_code_checks",
+    "ci_tooling_checks",
+    "configuration_checks",
+    "sql_style",
+    "terraform_checks",
+]
+# The groups split from another group select on the same paths, apart from their own body file: a path that selects the origin selects the split group too.
+SPLIT_FROM = {"orchestration_engine_e2e": "orchestration_checks", "ci_tooling_checks": "repository_code_checks"}
+
+
+def with_split_groups(wanted: list[str]) -> list[str]:
+    """The groups a path selects: those of ``wanted`` and the groups split from them."""
+    return [*wanted, *(group for group, origin in SPLIT_FROM.items() if origin in wanted and group not in wanted)]
+
+
 WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
     "core": CORE,
@@ -234,9 +256,11 @@ def select(work: Path, *args: str) -> tuple[int, dict[str, Any] | None, str]:
     return result.returncode, plan, result.stderr.strip()
 
 
-def selection_case(work: Path, name: str, args: list[str], want_run: list[str], want_reason: str = "") -> dict[str, Any]:
+def selection_case(work: Path, name: str, args: list[str], want_run: list[str], want_reason: str = "", split: bool = True) -> dict[str, Any]:
     part = args[args.index("--part") + 1] if "--part" in args else "all"
     scope = args[args.index("--scope") + 1] if "--scope" in args else ""
+    if split:
+        want_run = with_split_groups(want_run)
     if part != "launcher":
         unconditional = {"sql_style"} if scope in {"full", "range"} and "sql_style" in PART_GROUPS[part] else set()
         want_run = [group for group in PART_GROUPS[part] if group in {*want_run, *unconditional}]
@@ -264,8 +288,85 @@ def install_copies(work: Path) -> None:
 
 
 def restore(work: Path) -> None:
+    scratch_marker.require(work, "restore")
     git(work, "reset", "--quiet", "--hard", "HEAD")
     install_copies(work)
+
+
+def foreign_repository(scratch: Path, name: str) -> tuple[Path, str]:
+    """A repository that no runner made, created apart from the run, with a committed file and an uncommitted edit of it; the edit's text comes back too."""
+    folder = scratch / name
+    folder.mkdir()
+    git(folder, "init", "--quiet")
+    git(folder, "config", "user.name", "foreign owner")
+    git(folder, "config", "user.email", "foreign@example.invalid")
+    (folder / "notes.txt").write_text("committed\n", encoding="utf-8")
+    git(folder, "add", "notes.txt")
+    git(folder, "commit", "--quiet", "--message", "chore: foreign notes")
+    edit = "an edit that its owner has not committed\n"
+    (folder / "notes.txt").write_text(edit, encoding="utf-8")
+    return folder, edit
+
+
+def refusal_of(action: Callable[[], object], folder: Path, edit: str) -> dict[str, Any]:
+    """Run ``action`` on a foreign folder: whether it was refused with the folder named, and whether the folder's edit survived."""
+    refusal: Exception | None = None
+    try:
+        action()
+    except Exception as failure:
+        refusal = failure
+    kept = (folder / "notes.txt").read_text(encoding="utf-8") == edit
+    return {"refused": refusal is not None and str(folder) in str(refusal), "edit_kept": kept, "error": str(refusal)[-300:]}
+
+
+def restore_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
+    """restore() resets the scratch worktree that this run made and refuses any other folder: a folder it refuses keeps its uncommitted edit.
+
+    The scratch worktree of the run carries the marker, a marker copied from it into another folder does not make that folder the run's, and the same
+    refusal holds for the reset helpers of the checks and lint tools runners. Two planted defects (the check removed, a marker written into every folder)
+    must each make the refusal case fail."""
+    from scripts.quality import run_checks_e2e, run_lint_tools_e2e
+
+    foreign, edit = foreign_repository(scratch, "foreign_repository")
+    refused = refusal_of(lambda: restore(foreign), foreign, edit)
+    tracked = work / "pyproject.toml"
+    original = tracked.read_text(encoding="utf-8")
+    tracked.write_text(original + "\n# an edit of this run\n", encoding="utf-8")
+    restore(work)
+    copied, copied_edit = foreign_repository(scratch, "foreign_with_copied_marker")
+    shutil.copy2(
+        Path(git(work, "rev-parse", "--absolute-git-dir").strip()) / scratch_marker.MARKER, Path(git(copied, "rev-parse", "--absolute-git-dir").strip())
+    )
+    copied_result = refusal_of(lambda: restore(copied), copied, copied_edit)
+    checks_runner, checks_edit = foreign_repository(scratch, "foreign_for_the_checks_runner")
+    checks_result = refusal_of(lambda: run_checks_e2e.reset_hard(checks_runner, "HEAD"), checks_runner, checks_edit)
+    lint_runner, lint_edit = foreign_repository(scratch, "foreign_for_the_lint_tools_runner")
+    lint_result = refusal_of(lambda: run_lint_tools_e2e.restore(lint_runner), lint_runner, lint_edit)
+    unchecked, unchecked_edit = foreign_repository(scratch, "planted_check_removed")
+    with mock.patch.object(scratch_marker, "require", lambda folder, action: None):
+        check_removed = refusal_of(lambda: restore(unchecked), unchecked, unchecked_edit)
+    marked, marked_edit = foreign_repository(scratch, "planted_marker_everywhere")
+    scratch_marker.mark(marked, "planted defect")
+    marker_everywhere = refusal_of(lambda: restore(marked), marked, marked_edit)
+    return [
+        {"case": "restore_refuses_a_folder_the_runner_did_not_create", "passed": refused["refused"] and refused["edit_kept"], **refused},
+        {"case": "restore_resets_the_scratch_worktree_of_the_run", "passed": tracked.read_text(encoding="utf-8") == original},
+        {"case": "restore_refuses_a_folder_with_a_copied_marker", "passed": copied_result["refused"] and copied_result["edit_kept"], **copied_result},
+        {"case": "checks_runner_reset_refuses_a_foreign_folder", "passed": checks_result["refused"] and checks_result["edit_kept"], **checks_result},
+        {"case": "lint_tools_runner_restore_refuses_a_foreign_folder", "passed": lint_result["refused"] and lint_result["edit_kept"], **lint_result},
+        {
+            "case": "planted_check_removed_is_reported",
+            "passed": not (check_removed["refused"] and check_removed["edit_kept"]),
+            "refused": check_removed["refused"],
+            "edit_kept": check_removed["edit_kept"],
+        },
+        {
+            "case": "planted_marker_everywhere_is_reported",
+            "passed": not (marker_everywhere["refused"] and marker_everywhere["edit_kept"]),
+            "refused": marker_everywhere["refused"],
+            "edit_kept": marker_everywhere["edit_kept"],
+        },
+    ]
 
 
 def staged_case(work: Path, name: str, setup: list[list[str]], want_run: list[str], unstaged: str = "") -> dict[str, Any]:
@@ -302,27 +403,46 @@ def run_entry(work: Path, out: Path, label: str, extra: dict[str, str]) -> tuple
     return result.returncode, log, summary.read_text(encoding="utf-8") if summary.exists() else ""
 
 
+def tooling_suites() -> list[str]:
+    """The modules that the ci_tooling_checks group file runs as its E2E suites."""
+    return re.findall(r"-m (scripts\.quality\.run_\w+_e2e)\b", (ROOT / GROUP_FILES / "ci_tooling_checks.sh").read_text(encoding="utf-8"))
+
+
+def install_tooling_filter(work: Path) -> Path:
+    """An interpreter stand-in that replaces the E2E suites of ci_tooling_checks, which start nested CI runs (this runner among them) and last about 15 minutes,
+    by a marker line and runs every other command for real. It lies outside the checkout, because the gates lint every untracked file in it."""
+    path = work.parent / "tooling_filter.sh"
+    patterns = "|".join(f"*{module}*" for module in tooling_suites())
+    path.write_text(
+        f'#!/usr/bin/env bash\ncase "$*" in\n  {patterns}) printf \'stand-in for %s\\n\' "$*" >&2; exit 0 ;;\nesac\nexec {PYTHON} "$@"\n', encoding="utf-8"
+    )
+    path.chmod(0o755)
+    return path
+
+
 def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     name = "docs_only_runs_gates" if part == "core" else f"docs_only_runs_gates_{part}_part"
     stage_readme(work)
+    tooling = install_tooling_filter(work)
     # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
     launcher_part = "launcher" in PART_GROUPS[part]
     marker = (install_launcher_group_stub(work) if "repository_code_checks" in PART_GROUPS[part] else install_launcher_stub(work)) if launcher_part else None
     try:
-        code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part})
+        code, log, text = run_entry(work, out, name, {"CI_SCOPE": "staged", "CI_PART": part, "PYTHON_BIN": str(tooling)})
     finally:
         restore(work)
+        tooling.unlink(missing_ok=True)
+    required = ["repository_code_checks", "ci_tooling_checks"]
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "conditional_groups_skipped_with_reason": all(
-            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "launcher"}
-        ),
+        "conditional_groups_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {*required, "launcher"}),
+        "tooling_suites_stood_in": all(f"stand-in for -m {module}" in log for module in tooling_suites()) == (part in {"core", "all"}),
         "launcher_selected_and_started": (marker is not None and "run launcher" in log and marker.exists()) if launcher_part else "run launcher" not in log,
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
         # sql_style is selected by path in the staged scope (always_except_commits), so a README-only change skips it with a reason.
-        "required_groups_only": re.findall(r"^== (\w+) ==$", log, re.MULTILINE) == (["repository_code_checks"] if part in {"core", "all"} else []),
+        "required_groups_only": sorted(re.findall(r"^== (\w+) ==$", log, re.MULTILINE)) == (sorted(required) if part in {"core", "all"} else []),
         "summary_has_durations": "| Step | Seconds |" in text and re.search(r"^\| gates \| \d+ \|$", text, re.MULTILINE) is not None,
     }
     return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code}
@@ -504,6 +624,21 @@ def list_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
         "nothing_ran": not marker.exists() and "gates:" not in log and "\n== " not in log and all(line not in log for line in set(PASS_LINES.values())),
     }
     return {"case": f"list_only_prints_plan_{part}", "passed": all(checks.values()), "checks": checks, "exit": code}
+
+
+def admission_case(work: Path, out: Path) -> dict[str, Any]:
+    """Every worker that the full run creates has a limit in worker_limits: the run stops at its admission, before any worker starts, and names the workers."""
+    code, log, _ = run_entry(work, out, "admission_all", {"CI_SCOPE": "full", "CI_PART": "all", "CI_ADMISSION_ONLY": "1"})
+    listed = re.search(r"^admitted workers: (.*)$", log, re.MULTILINE)
+    workers = listed.group(1).split() if listed else []
+    checks = {
+        "exit_zero": code == 0,
+        "no_worker_without_a_limit": "has no limit" not in log,
+        "workers_named": bool(workers),
+        "feature_store_worker_admitted": "lakehouse_features_store" in workers,
+        "no_worker_ran": "\n== " not in log,
+    }
+    return {"case": "every_worker_has_a_limit", "passed": all(checks.values()), "checks": checks, "exit": code, "workers": workers}
 
 
 def write_markdown_probes(work: Path) -> list[Path]:
@@ -836,7 +971,6 @@ LAUNCHER_IMPORTED = (
 LAUNCHER_ALWAYS_SELECTED = (
     "infra/main.tf",
     "config/quality/mypy_runtimes.json",
-    "docs/data_collection.md",
     ".github/pull_request_template.md",
 )
 # The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
@@ -1431,7 +1565,6 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
                     "dbt/models/silver/intermediate/_intermediate__models.yml",
                     [*LAYERS[1:], "orchestration_checks", "repository_code_checks", "sql_style"],
                 ),
-                ("docs/quality_checks.md", ["repository_code_checks"]),
             )
         ),
         selection_case(
@@ -1442,9 +1575,10 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         ),
         selection_case(
             work,
-            "sqlfluff_pins_select_sql_style",
-            ["--scope", "paths", "--path", "scripts/quality/sqlfluff/requirements.txt", "--part", "core+layers"],
-            [*LAYERS, "repository_code_checks", "configuration_checks", "sql_style"],
+            "lock_selects_every_group",
+            ["--scope", "paths", "--path", "uv.lock", "--part", "core+layers"],
+            WITH_LAYERS,
+            "selects every group",
         ),
         selection_case(
             work,
@@ -1521,7 +1655,10 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         acquisition_selection_case(work, "scripts/quality/typecheck.py", True),
         acquisition_selection_case(work, "config/quality/mypy_runtimes.json", True),
         acquisition_selection_case(work, "config/lakehouse/bronze_tables.json", True),
-        acquisition_selection_case(work, "docs/quality_checks.md", False),
+        acquisition_selection_case(work, "uv.lock", True),
+        acquisition_selection_case(work, "pyproject.toml", True),
+        acquisition_selection_case(work, "requirements.txt", False),
+        acquisition_selection_case(work, "docs/analysis_plan.md", False),
     ]
     return cases
 
@@ -1534,6 +1671,7 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
         cases.append(docs_only_case(work, out, part))
     for part in ("core", "all", "launcher", "silver", "features", "feature_sources", "feature_columns"):
         cases.append(gate_failure_case(work, out, part))
+    cases.append(admission_case(work, out))
     cases.append(layer_skip_case(work, out))
     cases.append(gates_before_launcher_case(work, out, "launcher", gate_fails=False))
     cases += [gates_before_launcher_case(work, out, part, gate_fails=True) for part in ("launcher", "all")]
@@ -1810,7 +1948,7 @@ def feature_split_cases() -> list[dict[str, Any]]:
                 and definition.get("if") == "${{ needs.plan.outputs.reuse != 'true' }}"
                 and len(steps) == 1
                 and steps[0].get("env", {}).get("CI_PART") == f"feature_{suite}"
-                and steps[0].get("env", {}).get("CI_SCOPE") == "range"
+                and steps[0].get("env", {}).get("CI_SCOPE") == "${{ needs.plan.outputs.scope }}"
                 and steps[0].get("env", {}).get("RANGE_START") == "${{ needs.plan.outputs.range_start }}"
                 and steps[0].get("env", {}).get("RANGE_END") == "${{ needs.plan.outputs.range_end }}"
                 and plan_outputs.get("range_start") == "${{ steps.range.outputs.start }}"
@@ -1912,6 +2050,7 @@ def timeout_cases() -> list[dict[str, Any]]:
     off = {name: (recorded[name], timeouts.get(name)) for name in recorded if timeouts.get(name) != recorded[name][1]}
     ratio = {name: round(timeout / measured, 2) for name, (measured, timeout) in recorded.items() if not (1.5 * measured <= timeout <= max(2.6 * measured, 5))}
     return [
+        *worker_limit_cases(timeouts),
         {
             "case": "job_timeouts_match_the_measured_durations",
             "passed": set(recorded) == set(timeouts) and not off and not ratio and len(recorded) >= 10,
@@ -1919,6 +2058,161 @@ def timeout_cases() -> list[dict[str, Any]]:
             "not_in_the_workflow": sorted(set(recorded) - set(timeouts)),
             "different_timeout": off,
             "outside_the_ratio": ratio,
+        },
+    ]
+
+
+def core_scratch(root: Path) -> Path:
+    """A copy of what the Core command guard reads: the configuration, the inventory and the group body files."""
+    for name in ("config/quality/ci_groups.json", "config/quality/core_commands.json"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, root / name)
+    shutil.copytree(ROOT / "scripts/ci/groups", root / "scripts/ci/groups")
+    return root
+
+
+def core_command_cases() -> list[dict[str, Any]]:
+    """Every Core command runs once, in one of the seven hosted Core parts, and the guard fails on a dropped or a duplicated command."""
+    cases: list[dict[str, Any]] = [
+        {"case": "core_commands_run_exactly_once", "passed": not core_commands.findings(ROOT), "findings": core_commands.findings(ROOT)}
+    ]
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    jobs = workflow_document()["jobs"]
+    hosted = []
+    for definition in jobs.values():
+        for step in definition.get("steps", []):
+            value = str(step.get("env", {}).get("CI_PART", ""))
+            if value == "${{ matrix.part }}":
+                hosted += [str(entry["part"]) for entry in matrix_entries(definition)]
+            elif value:
+                hosted.append(value)
+    hosted = sorted(part for part in hosted if part.startswith("core_"))
+    cases.append(
+        {
+            "case": "seven_hosted_core_jobs_run_the_seven_parts",
+            "passed": len(config.get("parts", {})) == 7 and hosted == sorted(config.get("parts", {})),
+            "parts": sorted(config.get("parts", {})),
+            "hosted": hosted,
+        }
+    )
+    first_group = next(iter(core_commands.inventory(ROOT)))
+    plants = {
+        "dropped_command_is_found": ("dropped command", lambda root: drop_first_command(root, first_group)),
+        "duplicated_command_is_found": ("duplicated command", lambda root: duplicate_first_command(root, first_group)),
+        "unplaced_group_is_found": ("is in no hosted Core part", lambda root: change_parts(root, remove=first_group)),
+        "group_in_two_parts_is_found": ("hosted Core parts", lambda root: change_parts(root, repeat=first_group)),
+    }
+    for name, (marker_text, plant) in plants.items():
+        with tempfile.TemporaryDirectory(prefix="core_commands.") as folder:
+            root = core_scratch(Path(folder))
+            plant(root)
+            problems = core_commands.findings(root)
+        cases.append({"case": f"core_commands_guard_{name}", "passed": any(marker_text in problem for problem in problems), "findings": problems[:3]})
+    return cases
+
+
+def drop_first_command(root: Path, group: str) -> None:
+    path = root / "scripts/ci/groups" / f"{group}.sh"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}")
+    path.write_text("".join(lines[:index] + lines[index + 1 :]), encoding="utf-8")
+
+
+def duplicate_first_command(root: Path, group: str) -> None:
+    path = root / "scripts/ci/groups" / f"{group}.sh"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}")
+    path.write_text("".join(lines[: index + 1] + [lines[index]] + lines[index + 1 :]), encoding="utf-8")
+
+
+def change_parts(root: Path, remove: str = "", repeat: str = "") -> None:
+    path = root / "config/quality/ci_groups.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    parts = config.get("parts", {})
+    for name, groups in parts.items():
+        if remove in groups:
+            parts[name] = [group for group in groups if group != remove]
+    if repeat and parts:
+        first, second = list(parts)[:2]
+        parts[second] = [*parts[second], *(group for group in parts[first][:1] if group not in parts[second])]
+    config["parts"] = parts
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
+# The saved cost of each feature case in seconds (config/quality/feature_case_costs.json) and the shard counts it is balanced for (owner decision 163).
+FEATURE_SHARD_PLAN = {"sources": (16, 450.0), "columns": (4, 100.0)}
+
+
+def feature_weight_cases() -> list[dict[str, Any]]:
+    """The feature shards balance the saved case costs: each case runs in one shard, a case without a cost still runs once, and no shard is over the bound."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))["feature_shards"]
+    results: list[dict[str, Any]] = []
+    for suite, (count, bound) in FEATURE_SHARD_PLAN.items():
+        name = f"feature_{suite}_shards_are_weighted_by_the_saved_costs"
+        try:
+            costs = json.loads((ROOT / "config/quality/feature_case_costs.json").read_text(encoding="utf-8"))[suite]
+            names = feature_shards.names_of(suite)
+            shards = [feature_shards.select(names, f"{index}/{count}", suite=suite) for index in range(1, count + 1)]
+            flat = [case for shard in shards for case in shard]
+            loads = [round(sum(costs[case] for case in shard), 1) for shard in shards]
+            extra = [*names, "a_new_case_without_a_saved_cost"]
+            with_new = [case for index in range(1, count + 1) for case in feature_shards.select(extra, f"{index}/{count}", suite=suite)]
+            expensive = [index for index, shard in enumerate(shards) if any(costs[case] >= 30 for case in shard)]
+            heavy = [case for case in names if costs[case] >= 30]
+            results.append(
+                {
+                    "case": name,
+                    "passed": config[suite] == count
+                    and sorted(flat) == sorted(names)
+                    and sorted(with_new) == sorted(extra)
+                    and set(costs) == set(names)
+                    and max(loads) <= bound
+                    and (suite != "columns" or (len(heavy) == 4 and len(expensive) == 4)),
+                    "configured_count": config[suite],
+                    "cases": len(names),
+                    "heaviest_shard_seconds": max(loads),
+                    "lightest_shard_seconds": min(loads),
+                }
+            )
+        except Exception as error:
+            results.append({"case": name, "passed": False, "error": f"{type(error).__name__}: {error}"})
+    return results
+
+
+WORKER_KINDS = (
+    # The SDK runtime commands of the offline orchestration group run alone before the other items (pull request 72 splits them from the group's own item).
+    "orchestration_checks_sdk_runtime",
+    "lakehouse_gold_checks",
+    "lakehouse_gold_writer_setup",
+    "lakehouse_gold_model_metadata_e2e",
+    "lakehouse_features_store",
+    "lakehouse_features_sources",
+    "lakehouse_features_columns",
+    "combine_feature_sources",
+    "combine_feature_columns",
+    "hook_privacy",
+    "hook_documentation",
+    "hook_code",
+    "hook_samples",
+    "acquisition_shard",
+    "acquisition_combine",
+)
+
+
+def worker_limit_cases(timeouts: dict[str, int]) -> list[dict[str, Any]]:
+    """Each worker kind of the dispatcher has a deadline in ``worker_limits`` that equals the timeout of the hosted job that runs the same work."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    limits = config.get("worker_limits", {})
+    groups = [group for group in config["groups"] if group not in ("launcher", "lakehouse_gold", "lakehouse_features")]
+    expected = {*groups, *WORKER_KINDS}
+    different = {kind: (entry["minutes"], timeouts.get(entry["job"])) for kind, entry in limits.items() if timeouts.get(entry["job"]) != entry["minutes"]}
+    return [
+        {
+            "case": "worker_limits_match_the_hosted_jobs",
+            "passed": set(limits) == expected and not different,
+            "missing_kind": sorted(expected - set(limits)),
+            "unknown_kind": sorted(set(limits) - expected),
+            "different_from_the_job_timeout": different,
         }
     ]
 
@@ -1935,7 +2229,7 @@ def unit_refusal_case(work: Path, out: Path) -> dict[str, Any]:
 def feature_combination_cases(scratch: Path) -> list[dict[str, Any]]:
     """Use synthetic case outcomes to exercise the real combiner's complete membership and candidate checks."""
     results = []
-    for suite, count in (("sources", 8), ("columns", 4)):
+    for suite, count in FEATURE_COUNTS.items():
         plan = run_command(str(PYTHON), ["-m", "scripts.lakehouse.feature_shards", "plan", "--suite", suite, "--count", str(count)], cwd=ROOT, timeout=60)
         if plan.returncode != 0:
             results.append({"case": f"feature_{suite}_combine_plan", "passed": False, "error": plan.stderr[-400:]})
@@ -2083,9 +2377,9 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
         ("bronze", "bronze", "", False),
         ("silver", "silver", "", False),
         ("gold", "gold", "", False),
-        ("source_shard", "feature_sources", "2/8", False),
+        ("source_shard", "feature_sources", "2/16", False),
         ("column_shard", "feature_columns", "2/4", False),
-        ("failed_shard", "feature_sources", "2/8", True),
+        ("failed_shard", "feature_sources", "2/16", True),
         ("parallel", "features", "", False),
     ):
         tree = scratch / f"output_{label}"
@@ -2280,6 +2574,59 @@ def feature_case_timing_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+def hook_delegation_cases(scratch: Path) -> list[dict[str, Any]]:
+    """A manual hook that a check group already runs as the identical complete check leaves the hook partitions, and only then (owner decision 163)."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(".pre-commit-config.yaml must contain a mapping")
+    delegated = config.get("hooks_run_by_groups", {})
+    partitioned = [hook for hooks in config["hook_groups"].values() for hook in hooks]
+    entries: list[dict[str, Any]] = workflow_document()["jobs"]["lakehouse"]["strategy"]["matrix"]["include"]
+    gold = next((entry for entry in entries if entry.get("part") == "gold"), {})
+    results: list[dict[str, Any]] = [
+        {
+            "case": "model_metadata_hook_runs_once_in_the_gold_group",
+            "passed": delegated == {"model-metadata": "lakehouse_gold"}
+            and "model-metadata" not in partitioned
+            and "checks" in str(gold.get("units", "")).split(),
+            "delegated": delegated,
+        },
+        {
+            "case": "delegated_hook_is_the_identical_check_on_every_path_that_selects_it",
+            "passed": not ci_hooks.delegation_findings(ROOT),
+            "findings": ci_hooks.delegation_findings(ROOT)[:5],
+        },
+    ]
+    plants = {
+        "group_without_the_command_is_found": "does not run the identical command",
+        "group_not_selected_by_a_matching_path_is_found": "is not selected by",
+        "hook_with_file_names_is_found": "takes file names or arguments",
+    }
+    for label, marker in plants.items():
+        root = scratch / f"delegation_{label}"
+        shutil.copytree(ROOT / "scripts/ci/groups", root / "scripts/ci/groups")
+        (root / "config/quality").mkdir(parents=True)
+        damaged_config = copy.deepcopy(ci_groups.load())
+        damaged_document = copy.deepcopy(document)
+        if label.startswith("group_without"):
+            body = root / "scripts/ci/groups/lakehouse_gold.sh"
+            body.write_text(
+                body.read_text(encoding="utf-8").replace("-m scripts.quality.model_metadata\n", "-m scripts.quality.model_metadata --fast\n"), encoding="utf-8"
+            )
+        if label.startswith("group_not_selected"):
+            damaged_config["groups"]["lakehouse_gold"] = ["^never_matches$"]
+            damaged_config["groups"]["lakehouse_bronze"] = ["^never_matches$"]
+        if label.startswith("hook_with_file_names"):
+            next(hook for repo in damaged_document["repos"] for hook in repo["hooks"] if hook["id"] == "model-metadata")["pass_filenames"] = True
+        try:
+            problems = ci_hooks.delegation_findings(ROOT, damaged_config, damaged_document, root / "scripts/ci/groups")
+        except Exception as error:
+            problems = [f"{type(error).__name__}: {error}"]
+        results.append({"case": f"hook_delegation_{label}", "passed": any(marker in problem for problem in problems), "findings": problems[:3]})
+    return results
+
+
 def hook_partition_cases(scratch: Path) -> list[dict[str, Any]]:
     """The real hook runner rejects missing and repeated gates and preserves hook-stage and range arguments."""
     root = scratch / "hook_partition"
@@ -2411,7 +2758,7 @@ def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
         shutil.copytree(base, tree)
         if label == "feature_shard_failure":
             path = tree / GROUP_FILES / "lakehouse_features.sh"
-            text = path.read_text().replace('  local shard="${1:?}"', '  local shard="${1:?}"\n  if [[ "$shard" == 2/8 ]]; then return 3; fi', 1)
+            text = path.read_text().replace('  local shard="${1:?}"', '  local shard="${1:?}"\n  if [[ "$shard" == 2/16 ]]; then return 3; fi', 1)
             path.write_text(text)
         if label == "hook_failure":
             path = tree / "scripts/run_ci.sh"
@@ -2464,12 +2811,72 @@ def feature_listing(suite: str, *arguments: str) -> tuple[int, list[str], str]:
     return result.returncode, names, result.stderr
 
 
+def feature_count_drifts(workflow: dict[str, Any]) -> dict[str, list[str]]:
+    """What differs between the feature jobs of a workflow and the shard counts of the configuration: the shard argument of each job and the combining count."""
+    plan = github_plan_of(workflow)
+    shards = {f"{suite}:{index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)}
+    combines = {f"{suite}:{count}" for suite, count in FEATURE_COUNTS.items()}
+    return {
+        "shard_arguments": sorted(plan["feature_shards"] ^ shards),
+        "combine_counts": sorted(plan["feature_combines"] ^ combines),
+    }
+
+
+# The shard counts of the feature suites come from feature_shards in config/quality/ci_groups.json. A runner or script that writes a count as a literal
+# next to the suite name drifts from the configuration the next time the count changes. The patterns are put together from parts so that this file does not
+# match them itself.
+COUNT_LITERALS = (
+    re.compile(r"features_combine (?:sources|columns)" + r"/\d+"),
+    re.compile(r"\(\"(?:sources|columns)\"" + r", \d+\)"),
+)
+# The workflow cannot read the configuration; feature_workflow_counts_equal_the_configuration compares its counts with it.
+COUNT_LITERAL_FILES = ("scripts/run_ci.sh", "scripts/quality/*.py", "scripts/ci/**/*.sh", "scripts/lakehouse/feature_shards.py")
+
+
+def feature_count_literal_case() -> dict[str, Any]:
+    """No runner, script or workflow writes a feature suite's shard count as a literal: the count is read from feature_shards in the configuration."""
+    found: list[str] = []
+    for pattern in COUNT_LITERAL_FILES:
+        for path in sorted(ROOT.glob(pattern)):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if any(literal.search(line) for literal in COUNT_LITERALS):
+                    found.append(f"{path.relative_to(ROOT)}:{number}")
+    return {"case": "feature_shard_counts_are_not_literals", "passed": not found, "literals": found}
+
+
+def feature_count_cases() -> list[dict[str, Any]]:
+    """The hosted feature jobs pass the configured shard count in the shard argument and to the combiner (a count left at 8 skipped half the cases)."""
+    real = feature_count_drifts(workflow_document())
+    argument = copy.deepcopy(workflow_document())
+    for entry in argument["jobs"]["feature_sources"]["steps"]:
+        if "FEATURE_SHARD" in entry.get("env", {}):
+            entry["env"]["FEATURE_SHARD"] = str(entry["env"]["FEATURE_SHARD"]).replace(f"/{FEATURE_COUNTS['sources']}", "/8")
+    combiner = copy.deepcopy(workflow_document())
+    for definition in combiner["jobs"].values():
+        for entry in definition.get("steps", []):
+            if "feature_shards combine --suite sources" in str(entry.get("run", "")):
+                entry["run"] = str(entry["run"]).replace(f"--suite sources --count {FEATURE_COUNTS['sources']}", "--suite sources --count 8")
+    planted = {"shard_argument": feature_count_drifts(argument), "combine_count": feature_count_drifts(combiner)}
+    return [
+        feature_count_literal_case(),
+        {"case": "feature_workflow_counts_equal_the_configuration", "passed": not any(real.values()), "differences": real},
+        {
+            "case": "feature_workflow_count_drift_is_reported",
+            "passed": bool(planted["shard_argument"]["shard_arguments"])
+            and not planted["shard_argument"]["combine_counts"]
+            and bool(planted["combine_count"]["combine_counts"])
+            and not planted["combine_count"]["shard_arguments"],
+            "differences": planted,
+        },
+    ]
+
+
 def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     """List the real feature runners without builds and verify complete, disjoint hosted shards and manual hooks."""
     inventory = json.loads((ROOT / "config/quality/feature_cases.json").read_text())
     workflow = workflow_document()
     results: list[dict[str, Any]] = []
-    for suite, count in (("sources", 8), ("columns", 4)):
+    for suite, count in FEATURE_COUNTS.items():
         all_code, names, all_error = feature_listing(suite)
         shards: list[list[str]] = []
         for index in range(1, count + 1):
@@ -2504,11 +2911,15 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
                     "error": refused_error[-300:],
                 }
             )
+    results += feature_count_cases()
     hook_document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text())
     if not isinstance(hook_document, dict):
         raise ValueError(".pre-commit-config.yaml must contain a mapping")
     hooks = hook_document["repos"][0]["hooks"]
-    expected = sorted(hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci")
+    delegated = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8")).get("hooks_run_by_groups", {})
+    expected = sorted(
+        hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci" and hook["id"] not in delegated
+    )
     actual: list[str] = []
     exits = []
     for group in ("privacy", "documentation", "code", "samples"):
@@ -2527,7 +2938,14 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
             "exits": exits,
         }
     )
-    return [*results, *feature_combination_cases(scratch), *hook_partition_cases(scratch), hook_timeout_case(scratch), *feature_case_timing_cases(scratch)]
+    return [
+        *results,
+        *feature_combination_cases(scratch),
+        *hook_partition_cases(scratch),
+        *hook_delegation_cases(scratch),
+        hook_timeout_case(scratch),
+        *feature_case_timing_cases(scratch),
+    ]
 
 
 def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
@@ -2539,6 +2957,8 @@ def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
         *feature_split_cases(),
         *acquisition_script_cases(),
         *timeout_cases(),
+        *core_command_cases(),
+        *feature_weight_cases(),
     ]
 
 
@@ -2618,7 +3038,6 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.run_ecs_target_e2e", "--proof", "S"),
     ("scripts.orchestration.run_ecs_target_e2e", "--proof", "D"),
     ("scripts.orchestration.task_guard_cases",),
-    ("scripts.orchestration.run_ecs_broker_e2e",),
     ("scripts.orchestration.run_ecs_launch_e2e",),
     ("scripts.lakehouse.run_layer_run_e2e",),
     ("scripts.lakehouse.run_bronze_run_e2e",),
@@ -2628,11 +3047,7 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.run_lineage_amendment_e2e",),
     ("scripts.orchestration.run_publish_contracts",),
     ("scripts.orchestration.run_pipeline_light",),
-    ("scripts.orchestration.run_stack_e2e",),
-    ("scripts.orchestration.run_broker_e2e",),
     ("scripts.orchestration.run_ecs_preparation", "--out", "@quality@/ecs_preparation"),
-    ("scripts.orchestration.run_supervisor_e2e",),
-    ("scripts.orchestration.run_transform_broker_e2e",),
     ("scripts.serving.run_serving_checks", "-B", "--output", "@quality@/serving_checks"),
     ("scripts.streamlit_app.run_streamlit_checks", "-B", "--output", "@quality@/streamlit_checks"),
     ("scripts.orchestration.offline_checks", "--no-image"),
@@ -2723,11 +3138,15 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
         wanted.append([str(PYTHON), *flags, "-m", module, *expanded])
     actual = [row["argv"] for row in rows if row["label"].startswith("orchestration_checks:")]
     labels = [row["label"].strip() for row in rows if not row["label"].startswith(("gates:", "orchestration_checks:"))]
-    expected = [f"probe: {entry}" for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "configuration_checks"])]
+    expected = [
+        f"probe: {entry}"
+        for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "ci_tooling_checks", "configuration_checks"])
+    ]
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
-        expected += ["probe: lakehouse_features_store", "probe: lakehouse_features_combine sources/8", "probe: lakehouse_features_combine columns/4"]
-        expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in (("sources", 8), ("columns", 4)) for index in range(1, count + 1)]
+        expected += ["probe: lakehouse_features_store"]
+        expected += [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
+        expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)]
         expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "samples")]
         expected += [f"launcher E2E shard {index}/2" for index in (1, 2)]
         expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)] + ["probe: acquisition combine"]
@@ -2956,28 +3375,32 @@ def speed_real_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 
 
 BODY_SELECTION = {
-    "python_lint": ["python_lint", "repository_code_checks"],
-    "lakehouse_bronze": [*LAYERS, "repository_code_checks"],
-    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks"],
-    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks"],
-    "lakehouse_features": ["lakehouse_features", "repository_code_checks"],
-    "orchestration_checks": ["orchestration_checks", "repository_code_checks"],
-    "repository_code_checks": ["repository_code_checks"],
-    "configuration_checks": ["configuration_checks", "repository_code_checks"],
-    "sql_style": ["repository_code_checks", "sql_style"],
-    "terraform_checks": ["repository_code_checks", "terraform_checks"],
-    "launcher": ["repository_code_checks", "launcher"],
-    "reuse_gate_checks": ["repository_code_checks", "launcher", "reuse_gate_checks"],
+    "python_lint": ["python_lint", "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_bronze": [*LAYERS, "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks", "ci_tooling_checks"],
+    "lakehouse_features": ["lakehouse_features", "repository_code_checks", "ci_tooling_checks"],
+    "orchestration_checks": ["orchestration_checks", "repository_code_checks", "ci_tooling_checks"],
+    "orchestration_engine_e2e": ["orchestration_engine_e2e", "repository_code_checks", "ci_tooling_checks"],
+    "repository_code_checks": ["repository_code_checks", "ci_tooling_checks"],
+    "ci_tooling_checks": ["repository_code_checks", "ci_tooling_checks"],
+    "configuration_checks": ["configuration_checks", "repository_code_checks", "ci_tooling_checks"],
+    "sql_style": ["repository_code_checks", "ci_tooling_checks", "sql_style"],
+    "terraform_checks": ["repository_code_checks", "ci_tooling_checks", "terraform_checks"],
+    "launcher": ["repository_code_checks", "ci_tooling_checks", "launcher"],
+    "reuse_gate_checks": ["repository_code_checks", "ci_tooling_checks", "launcher", "reuse_gate_checks"],
 }
 
 
-def staged_edit_case(work: Path, name: str, path: str, want_run: list[str], part: str = "core+layers", want_reason: str = "") -> dict[str, Any]:
+def staged_edit_case(
+    work: Path, name: str, path: str, want_run: list[str], part: str = "core+layers", want_reason: str = "", split: bool = True
+) -> dict[str, Any]:
     """Stage a one-line edit of ``path`` and check which groups the staged scope selects."""
     target = work / path
     try:
         target.write_text(target.read_text(encoding="utf-8") + "\n# staged edit\n", encoding="utf-8")
         git(work, "add", path)
-        return selection_case(work, name, ["--scope", "staged", "--part", part], want_run, want_reason)
+        return selection_case(work, name, ["--scope", "staged", "--part", part], want_run, want_reason, split)
     finally:
         restore(work)
 
@@ -2995,7 +3418,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
     ]
     for group, wanted in BODY_SELECTION.items():
         part = "all" if group in {"launcher", "reuse_gate_checks"} else "core+layers"
-        cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
+        cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part, split=False))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
     cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
@@ -3476,9 +3899,10 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     local = local_plan_of(log)
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
-        "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["repository_code_checks", "sql_style"],
+        "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["ci_tooling_checks", "repository_code_checks", "sql_style"],
         # Every path selects the launcher while a followed module carries the inventory_reads pattern ".", so the dry run starts it too.
-        "launcher_selected_by_every_path": "TIMED launcher E2E" in log and local["groups"] == {"launcher", "repository_code_checks", "sql_style"},
+        "launcher_selected_by_every_path": "TIMED launcher E2E" in log
+        and local["groups"] == {"launcher", "ci_tooling_checks", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }
     cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
@@ -3531,6 +3955,7 @@ STAND_IN_ENTRIES = {
     "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
     "launcher": ["launcher_e2e"],
     "lakehouse_features": ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine", "lakehouse_features_store"],
+    "orchestration_checks": ["orchestration_checks_sdk_runtime", "orchestration_checks"],
 }
 # A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
 STAND_IN_BODY = """#!/usr/bin/env bash
@@ -3541,7 +3966,8 @@ STAND_IN_BODY = """#!/usr/bin/env bash
 """
 PYTHON_FILTER = """#!/usr/bin/env bash
 # Stand-in for the interpreter of the gates: only the group selection runs for real.
-if [[ "$*" == *scripts.quality.ci_groups* || "$*" == *config/quality/ci_groups.json* ]]; then
+# The step that starts a worker in its own session and the step that stops the sessions import scripts.process: they run for real too.
+if [[ "$*" == *scripts.quality.ci_groups* || "$*" == *config/quality/ci_groups.json* || "$*" == *"from scripts.process import"* ]]; then
   exec {python} "$@"
 fi
 exit 0
@@ -3625,13 +4051,17 @@ def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 
 FAST_COMMIT_HOOKS = frozenset(
     {
+        "check-head",
+        "check-tools",
         "gitleaks",
         "credential-files",
         "data-files",
         "removed-names",
+        "temporary-code",
         "privacy-scan",
         "writing-check",
         "front-matter",
+        "docs-references",
         "markdownlint",
         "ruff",
         "shell-syntax",
@@ -3665,6 +4095,7 @@ MANUAL_FINGERPRINTS = {
     "data-files": "1681a06bc29d",
     "env-example": "30d8bdad529c",
     "removed-names": "acffa6ea5eac",
+    "temporary-code": "9ee83ad12203",
     "unused-code": "b94f09bd9190",
     "unused-dependencies": "66cd9ab1759e",
     "orphan-files": "517c80728999",
@@ -3672,8 +4103,9 @@ MANUAL_FINGERPRINTS = {
     "privacy-scan": "ce896f9743dd",
     "writing-check": "107b4e7bb1d7",
     "front-matter": "82a03c2777b3",
+    "docs-references": "6546547e6ece",
     "markdownlint": "28a824e49edc",
-    "sqlfluff": "7e868c7c452f",
+    "sqlfluff": "27f53eb77481",
     "ruff": "5f2147654150",
     "shell-syntax": "f63508f2a1fc",
     "shellcheck": "f0e1e106ec2c",
@@ -3684,7 +4116,7 @@ MANUAL_FINGERPRINTS = {
     "container-mounts": "8be103fa11d5",
     "gofmt": "de0cf2f5169c",
     "go-vet": "5bcd441b4c87",
-    "model-metadata": "50f5ae35844c",
+    "model-metadata": "0c3e9bd37b2b",
     "documentation-review-untracked": "f6fa8c87e0d3",
     "lint-settings": "60a35b84518b",
     "suppressions": "eda6794008b9",
@@ -3696,8 +4128,10 @@ MANUAL_FINGERPRINTS = {
     "import-linter": "5409790957ac",
     "check-jsonschema": "3b0e5a36602c",
     "typos": "61801f4f88b0",
-    "osv-scanner": "a3e0e7a4f358",
-    "test-checks": "0328ad4bb1bd",
+    "osv-scanner": "6cccadc5d95b",
+    "test-checks": "587d4d8d14b5",
+    "dependency-lock": "161d1011d863",
+    "test-lock": "54d78b27f865",
     "test-documentation-review": "db426284e54a",
 }
 
@@ -3710,7 +4144,9 @@ def stage_set(document: dict[str, Any], hook: dict[str, Any]) -> set[str]:
     return set(hook.get("stages", document.get("default_stages", [])))
 
 
-def hook_config_problems(document: dict[str, Any], push_plan_groups: list[str], partitions: dict[str, list[str]]) -> dict[str, Any]:
+def hook_config_problems(
+    document: dict[str, Any], push_plan_groups: list[str], partitions: dict[str, list[str]], delegated: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Every way the hook configuration can leave the fast commit stage, the pre-push run or the hosted manual stage wrong."""
     hooks = hook_table(document)
     commit = {name for name, hook in hooks.items() if "pre-commit" in stage_set(document, hook)}
@@ -3719,7 +4155,7 @@ def hook_config_problems(document: dict[str, Any], push_plan_groups: list[str], 
         name: hashlib.sha256(json.dumps({key: hooks[name].get(key) for key in FINGERPRINT_KEYS}, sort_keys=True).encode()).hexdigest()[:12] for name in manual
     }
     moved = sorted(set(MANUAL_FINGERPRINTS) - commit)
-    partitioned = {name for names in partitions.values() for name in names}
+    partitioned = {name for names in partitions.values() for name in names} | set(delegated or {})
     return {
         "heavy_in_commit_stage": sorted(commit - FAST_COMMIT_HOOKS),
         "fast_missing_from_commit_stage": sorted(FAST_COMMIT_HOOKS - commit),
@@ -3732,6 +4168,25 @@ def hook_config_problems(document: dict[str, Any], push_plan_groups: list[str], 
     }
 
 
+ROOT_MANIFESTS = ("uv.lock", "pyproject.toml")
+
+
+def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """The root dependency manifest and lock select every hook that depends on the locked environment; the retired requirements.txt selects none."""
+    hooks = hook_table(document)
+    wanted = ("acquisition-checks", "model-metadata", "dependency-lock", "test-lock", "osv-scanner")
+    cases = []
+    for name in wanted:
+        pattern = re.compile(str(hooks[name]["files"])) if name in hooks and hooks[name].get("files") else None
+        missed = [path for path in ROOT_MANIFESTS if pattern is None or not pattern.search(path)]
+        if name == "osv-scanner":
+            missed = [path for path in missed if path != "pyproject.toml"]
+        cases.append({"case": f"hook_{name}_selects_the_lock_and_manifest", "passed": not missed, "missed": missed})
+    acquisition = re.compile(str(hooks["acquisition-checks"]["files"]))
+    cases.append({"case": "hook_acquisition_checks_ignores_the_retired_requirements_file", "passed": acquisition.search("requirements.txt") is None})
+    return cases
+
+
 def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
     """The commit stage holds only the fast hooks, the push stage holds the pre-push run, the manual stage is what hosted CI ran before."""
     document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text())
@@ -3741,7 +4196,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
     partitions = config["hook_groups"]
     plan = pre_push_plan(pre_push_repo(scratch, "fast_hook_plan"))
     groups = [step["name"].removeprefix("hooks_") for step in plan["steps"] if step["name"].startswith("hooks_")]
-    real = hook_config_problems(document, groups, partitions)
+    real = hook_config_problems(document, groups, partitions, config.get("hooks_run_by_groups", {}))
     names = {
         "commit_stage_holds_only_fast_hooks": ("heavy_in_commit_stage", "fast_missing_from_commit_stage", "local_ci_affected_present"),
         "pre_push_hooks_declared": ("install_types", "push_hooks_not_in_push_stage"),
@@ -3749,12 +4204,13 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
         "moved_hooks_run_before_push": ("moved_not_run_before_push",),
     }
     results = [{"case": case, "passed": not any(real[key] for key in keys), **{key: real[key] for key in keys}} for case, keys in names.items()]
+    results += hook_path_cases(document)
 
     def planted(label: str, mutate: Callable[[dict[str, Any], dict[str, list[str]]], None], key: str, case: str) -> dict[str, Any]:
         damaged = copy.deepcopy(document)
         damaged_partitions = copy.deepcopy(partitions)
         mutate(damaged, damaged_partitions)
-        found = hook_config_problems(damaged, groups, damaged_partitions)
+        found = hook_config_problems(damaged, groups, damaged_partitions, config.get("hooks_run_by_groups", {}))
         return {"case": f"planted_{label}_caught_by_{case}", "passed": bool(found[key]), "caught": found[key]}
 
     def add_stage(name: str, stage: str) -> Callable[[dict[str, Any], dict[str, list[str]]], None]:
@@ -3820,7 +4276,6 @@ ESCALATING_PATHS = (
 )
 ORDINARY_PATHS = (
     "README.md",
-    "docs/quality_checks.md",
     "scripts/lakehouse/silver.py",
     "dbt/models/gold/fact_example.sql",
     "scripts/acquisition/s3_store.py",
@@ -3982,6 +4437,8 @@ def pre_push_repo(
     (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
     (root / "scripts/quality/lint_tools.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "osv_scanner", "OSV_SCANNER"))
+    for checked in ("check_head", "check_tools"):  # The worktree checks have their own E2E; the push gate cases only need them to pass.
+        (root / f"scripts/quality/{checked}.py").write_text("raise SystemExit(0)\n")
     for package in ("scripts", "scripts/quality", "orchestration"):
         (root / package / "__init__.py").write_text("")
     (root / "orchestration/launcher.py").write_text(STUB_LAUNCHER % INHERITED_PATTERN)
@@ -4421,7 +4878,7 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
             "case": "run_ci_finish_releases_after_the_scratch_folder_and_the_trap_keeps_its_rule",
             "passed": "release_docker" in finish
             and ci.index("ci_started=") < ci.index("trap 'finish;")
-            and "trap 'finish; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
+            and "trap 'finish; end_unconfirmed; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
         }
     )
     planted = release_docker_run(
@@ -4465,7 +4922,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
     )
     root = pre_push_repo(scratch, "pre_push_range_matches_hosted", "README.md")
     plan = pre_push_plan(root)
-    hosted = workflow_document()["jobs"]["local_ci"]["steps"]
+    hosted = workflow_document()["jobs"]["core"]["steps"]
     hosted_env = next(step["env"] for step in hosted if isinstance(step.get("env"), dict) and "CI_SCOPE" in step["env"])
     base = probe_git(root, "rev-parse", "origin/main")
     head = probe_git(root, "rev-parse", "HEAD")
@@ -4477,7 +4934,9 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
         "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
         "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
         "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
-        "env_values": local.get("env", {}).get("CI_SCOPE") == hosted_env["CI_SCOPE"]
+        # The hosted jobs read the scope from the plan job: range for a pull request, which is the scope of a push range.
+        "env_values": local.get("env", {}).get("CI_SCOPE") == "range"
+        and hosted_env["CI_SCOPE"] == "${{ needs.plan.outputs.scope }}"
         and local.get("env", {}).get("RANGE_START") == base
         and local.get("env", {}).get("RANGE_END") == head,
         "no_part": "CI_PART" not in local.get("env", {}),
@@ -5103,6 +5562,7 @@ def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
     ]
     body = (ROOT / GROUP_FILES / "reuse_gate_checks.sh").read_text(encoding="utf-8")
     core = (ROOT / GROUP_FILES / "repository_code_checks.sh").read_text(encoding="utf-8")
+    tooling = (ROOT / GROUP_FILES / "ci_tooling_checks.sh").read_text(encoding="utf-8")
     jobs = workflow_document()["jobs"]
     steps = [step.get("env", {}) for step in jobs["reuse_gate"]["steps"] if step.get("env", {}).get("CI_PART") == "reuse_gate"]
     required = json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8"))["required_pull_request_jobs"]
@@ -5110,7 +5570,8 @@ def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
         {
             "case": "reuse_and_gate_stage_cases_run_in_their_own_group_and_hosted_job",
             "passed": all(f"run_ci_groups_e2e {flag}" in body and f"run_ci_groups_e2e {flag}" not in core for flag in REUSE_GATE_CASES)
-            and "run_ci_groups_e2e --selection-only" in core
+            and "run_ci_groups_e2e --selection-only" in tooling
+            and "run_ci_groups_e2e" not in core
             and len(steps) == 1
             and jobs["reuse_gate"]["name"] == "CI Reuse and Gate E2E"
             and "CI Reuse and Gate E2E" in required,
@@ -5385,6 +5846,107 @@ def deletions_case(scratch: Path, mutate: Callable[[str], str] | None = None) ->
     }
 
 
+def temp_branch_refused_case(
+    scratch: Path,
+    case: str,
+    name: str,
+    setup: Callable[[Path], None],
+    arguments: tuple[str, ...],
+    refused_ref: str,
+    mutate: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """A push that names a ``temp/`` branch as its local or its remote reference is refused whole: nothing is pushed and no check runs."""
+
+    def check(root: Path, code: int, text: str) -> dict[str, bool]:
+        return {
+            "refused": code != 0 and "temp/" in text,
+            "nothing_pushed": not any(ref.startswith("refs/heads/") and ref != "refs/heads/main" for ref in remote_refs(root)),
+            "no_check_ran": runs_of(root) == 0,
+            "names_the_reference": refused_ref in text,
+        }
+
+    return push_case(scratch, case, name, setup, arguments, check, mutate)
+
+
+def temp_local_branch(root: Path) -> None:
+    probe_git(root, "checkout", "--quiet", "-b", "temp/work")
+
+
+def temp_branch_at_head_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch, "pre_push_temp_branch_at_head_is_refused", "gate_temp_head", temp_local_branch, ("origin", "temp/work"), "refs/heads/temp/work", mutate
+    )
+
+
+def temp_local_name_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_temp_branch_pushed_under_another_remote_name_is_refused",
+        "gate_temp_local_name",
+        temp_local_branch,
+        ("origin", "temp/work:refs/heads/feature"),
+        "refs/heads/temp/work",
+        mutate,
+    )
+
+
+def temp_remote_name_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_branch_pushed_to_a_temp_remote_name_is_refused",
+        "gate_temp_remote_name",
+        lambda root: None,
+        ("origin", "topic:refs/heads/temp/other"),
+        "refs/heads/temp/other",
+        mutate,
+    )
+
+
+def temp_known_commit_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    def seed(root: Path) -> None:
+        probe_git(root, "branch", "temp/known", "main")
+
+    return temp_branch_refused_case(
+        scratch, "pre_push_temp_branch_at_origin_main_is_refused", "gate_temp_known", seed, ("origin", "temp/known"), "refs/heads/temp/known", mutate
+    )
+
+
+def temp_head_alias_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_head_on_a_temp_branch_is_refused",
+        "gate_temp_head_alias",
+        temp_local_branch,
+        ("origin", "HEAD:refs/heads/feature"),
+        "refs/heads/temp/work",
+        mutate,
+    )
+
+
+def temp_with_head_ref_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    def seed(root: Path) -> None:
+        probe_git(root, "branch", "temp/work", "HEAD")
+
+    return temp_branch_refused_case(
+        scratch,
+        "pre_push_temp_branch_with_the_head_ref_refuses_both",
+        "gate_temp_with_head",
+        seed,
+        ("origin", "topic", "temp/work"),
+        "refs/heads/temp/work",
+        mutate,
+    )
+
+
+def temp_deletion_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Deleting a temp/ branch on the remote publishes nothing, so it stays allowed (the cleanup of a branch that was pushed before the rule)."""
+    root = gate_repo(scratch, "gate_temp_deletion", mutate=mutate)
+    probe_git(root, "push", "--quiet", "--no-verify", "origin", "main:refs/heads/temp/old")
+    code, text = git_push(root, ("origin", ":temp/old"))
+    checks = {"deletion_allowed": code == 0, "remote_branch_removed": "refs/heads/temp/old" not in remote_refs(root), "no_check_ran": runs_of(root) == 0}
+    return {"case": "pre_push_temp_branch_deletion_is_allowed", "passed": all(checks.values()), "checks": checks, "exit": code, "output": text[-300:]}
+
+
 def tree_tag_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
     def tag_a_tree(root: Path) -> None:
         probe_git(root, "tag", "--annotate", "--message", "tree", "treetag", "main^{tree}")
@@ -5537,6 +6099,9 @@ EXPECTED_CONTROLS = (
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
+    "CI_ADMISSION_ONLY",
+    "CI_WORKER_LIMIT_SECONDS",
+    "CI_WORKER_GRACE_SECONDS",
     "RANGE_START",
     "RANGE_END",
     "LAUNCHER_SHARD",
@@ -5738,38 +6303,18 @@ def wrapper_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> d
     return {"case": "acquisition_wrapper_skips_the_native_push", "passed": ran == [False, True], "ran": ran}
 
 
-def stale_docs_problems(text: str) -> dict[str, bool]:
-    flat = " ".join(text.split())
-    return {
-        "no_staged_commit_hook": "commit hook (`CI_SCOPE=staged`)" not in flat and "local_ci_affected" not in flat,
-        "release_requirement": "before every release" in flat,
-        "shim_documented": "install-shim" in flat,
-        "no_first_ref_only": "Only the first pushed reference" not in flat,
-        "gate_is_the_shim": "pre_push run --hook" in flat and "check-shim" in flat,
-        "no_captured_input": "keeps the whole push input" not in flat,
-        "skip_cleared": "`SKIP`" in flat,
-    }
-
-
 def runner_doc_describes_range(text: str) -> bool:
     flat = " ".join(text.split())
     return "skips once after a passing full run" not in flat and "runs once over the computed range" in flat
 
 
 def docs_cases() -> list[dict[str, Any]]:
-    text = (ROOT / "docs/quality_checks.md").read_text()
-    found = stale_docs_problems(text)
-    stale = stale_docs_problems(text + "\nThe commit hook\n(`CI_SCOPE=staged`) always runs the groups the staged paths select.\n")
-    captured = stale_docs_problems(text + "\nA Git config hook keeps the whole push input for the pre-push hook.\n")
     return [
-        {"case": "quality_docs_match_the_hooks", "passed": all(found.values()), "checks": found},
-        {"case": "planted_stale_paragraph_caught_by_quality_docs_match_the_hooks", "passed": not stale["no_staged_commit_hook"], "caught": stale},
         {"case": "runner_describes_the_computed_range", "passed": runner_doc_describes_range(__doc__ or "")},
         {
             "case": "planted_marker_description_caught_by_runner_describes_the_computed_range",
             "passed": not runner_doc_describes_range((__doc__ or "") + " The acquisition hook skips once after a passing full run."),
         },
-        {"case": "planted_capture_paragraph_caught_by_quality_docs_match_the_hooks", "passed": not captured["no_captured_input"], "caught": captured},
     ]
 
 
@@ -5786,6 +6331,13 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         known_then_unknown_case,
         several_refs_case,
         deletions_case,
+        temp_branch_at_head_case,
+        temp_local_name_case,
+        temp_remote_name_case,
+        temp_known_commit_case,
+        temp_head_alias_case,
+        temp_with_head_ref_case,
+        temp_deletion_case,
         tree_tag_case,
         up_to_date_case,
         tracked_change_ref_case,
@@ -5802,11 +6354,22 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
     results = [case(scratch) for case in real]
     planted = [
         ("shim_without_the_gate", unknown_ref_case, SHIM_COMMAND_LINE, SHIM_COMMAND_LINE.replace("run --hook", "check-shim")),
-        ("first_ref_only", known_then_unknown_case, "for ref, sha in updates:", "for ref, sha in updates[:1]:"),
+        ("first_ref_only", known_then_unknown_case, "for ref, sha, local in updates:", "for ref, sha, local in updates[:1]:"),
         ("known_rule_dropped", new_branch_known_case, 'if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:', "if False:"),
         ("known_rule_for_tags_dropped", annotated_tag_known_case, 'if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:', "if False:"),
         ("any_commit_checked", unknown_ref_case, 'return "refused", f"is neither in origin/main nor', 'return "checked", f"is neither in origin/main nor'),
         ("deletion_refused", deletions_case, 'if not sha.strip("0"):', "if False:"),
+        ("temp_check_dropped", temp_branch_at_head_case, "if named:", "if False:"),
+        ("temp_known_commit_allowed", temp_known_commit_case, "if named:", 'if named and decision != "known":'),
+        ("temp_remote_name_unchecked", temp_remote_name_case, "for name in (remote_ref, local_ref):", "for name in (local_ref,):"),
+        ("temp_local_name_unchecked", temp_local_name_case, "for name in (remote_ref, local_ref):", "for name in (remote_ref,):"),
+        ("temp_head_alias_unresolved", temp_head_alias_case, 'if local_ref == "HEAD":', "if False:"),
+        (
+            "temp_deletion_refused",
+            temp_deletion_case,
+            'named = temporary(root, ref, local) if decision != "deleted" else ""',
+            "named = temporary(root, ref, local)",
+        ),
         ("tag_not_peeled", annotated_tag_head_case, 'f"{name}^{{commit}}"', "name"),
         ("nothing_to_check_still_checks", up_to_date_case, 'if not any(row["decision"] == "checked" for row in decisions):', "if False:"),
         ("known_ref_not_recorded", new_branch_known_case, "record(output, None, [], decisions)", "pass"),
@@ -5826,6 +6389,7 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         ("running_legacy_kept", inherited_controls_case, '    "PRE_COMMIT_RUNNING_LEGACY",\n', ""),
         ("post_checkout_skip_kept", inherited_controls_case, '    "_PRE_COMMIT_SKIP_POST_CHECKOUT",\n', ""),
         ("list_only_control_kept", inherited_controls_case, '"CI_LIST_ONLY",', ""),
+        ("admission_control_kept", inherited_controls_case, '"CI_ADMISSION_ONLY",', ""),
         ("native_ref_variable_kept", inherited_controls_case, '"PRE_COMMIT_FROM_REF",', ""),
         ("hosted_marker_variable_kept", inherited_controls_case, '"GITHUB_ACTIONS",', ""),
     ]
@@ -5949,6 +6513,7 @@ def main() -> int:
             results += reuse_cases(work, out, scratch)
         else:
             results.append(scratch_cleanup_interrupt_case(scratch))
+            results += restore_cases(work, scratch)
             results += selection_cases(work)
             results += fast_hook_cases(scratch)
             results += pre_push_cases(work, scratch, gate_stage=not selection_only)

@@ -8,15 +8,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from orchestration.ecs_launch_operator import JobFailed, LaunchGuarantees
 from scripts.orchestration.ecs_launch_cases import CLUSTER, RUN, Interrupted, Rig, refuses, require, spec
 from scripts.orchestration.ecs_launch_standin import MIRRORED_PROVIDER_VERSION, OPERATORS_CONFIG, Deferred, StandInEcsRunTaskOperator
-
-CONSTRAINTS = Path(__file__).resolve().parents[2] / "services" / "orchestration" / "constraints-3.12.txt"
+from scripts.quality.lock_env import pin_text
 
 
 class StandInLaunchOperator(LaunchGuarantees, StandInEcsRunTaskOperator):
@@ -151,7 +149,8 @@ def explicit_deferral_is_refused_even_when_configured() -> None:
 
 
 def provider_pin() -> None:
-    match = re.search(r"^apache-airflow-providers-amazon==(\S+)$", CONSTRAINTS.read_text(), re.MULTILINE)
+    # The pin list comes from the lock, as services/orchestration/constraints-3.12.txt does, so a fresh checkout without that generated file runs the case.
+    match = re.search(r"^apache-airflow-providers-amazon==(\S+)$", pin_text("orchestration"), re.MULTILINE)
     require(
         match is not None and match.group(1) == MIRRORED_PROVIDER_VERSION,
         f"the stand-in mirrors {MIRRORED_PROVIDER_VERSION}, the image pins {match and match.group(1)}: re-read the operator source",

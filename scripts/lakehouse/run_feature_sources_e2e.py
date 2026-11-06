@@ -1081,7 +1081,7 @@ def case_names() -> list[str]:
 def run(output: Path, only: list[str] | None = None, shard: str = "") -> dict[str, Any]:
     """Run the selected cases on fresh scratch copies and persist exact shard membership."""
     inventory = case_names()
-    selected = feature_shards.select(inventory, shard, only)
+    selected = feature_shards.select(inventory, shard, only, "sources")
     before = feature_shards.snapshot("sources")
     results: list[dict[str, Any]] = []
     needs_base = {name for name, _, _ in [*admission_cases(), *resolved_cases()]} | {"all_feature_views_have_checksums"}
@@ -1227,7 +1227,7 @@ def main() -> int:
     parser.add_argument("--list-cases", action="store_true", help="print the selected case names as JSON without running them")
     args = parser.parse_args()
     try:
-        selected = feature_shards.select(case_names(), args.shard, args.only)
+        selected = feature_shards.select(case_names(), args.shard, args.only, "sources")
     except ValueError as error:
         parser.error(str(error))
     if args.list_cases:

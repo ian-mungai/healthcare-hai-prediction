@@ -103,8 +103,13 @@ def host_tools(binary: Path, *, mac_gib: int, vm_gib: int, host_cpus: str) -> No
     """Synthetic host readings: CPU count, the Mac's free memory and the Docker VM's resident memory."""
     binary.mkdir(parents=True, exist_ok=True)
     executable(binary / "sysctl", response(host_cpus))
+    # The next session listing of a launch stop (`ps -A ...`) waits as many seconds as the file `ps.delay` next to this script says and removes the file, so
+    # one listing is slow: a case makes the stop of a killed command end after the reply to its caller.
     executable(
-        binary / "ps", f'if [ "$1" = "-axo" ]; then {response(f"{vm_gib * GIB // 1024} com.apple.Virtualization.VirtualMachine")}; else exec /bin/ps "$@"; fi'
+        binary / "ps",
+        f'if [ "$1" = "-axo" ]; then {response(f"{vm_gib * GIB // 1024} com.apple.Virtualization.VirtualMachine")}; '
+        'else if [ -f "$0.delay" ]; then wait_seconds=$(cat "$0.delay" 2>/dev/null || echo 0); rm -f "$0.delay"; sleep "$wait_seconds"; fi; '
+        'exec /bin/ps "$@"; fi',
     )
     executable(
         binary / "vm_stat",
@@ -3330,6 +3335,665 @@ def docker_release_quit_deadlines(env: Env) -> dict[str, bool]:
     }
 
 
+def slow_next_listing(env: Env, seconds: float) -> None:
+    """Make the next session listing of a launch stop wait ``seconds`` (the ``ps`` stand-in reads and removes the file)."""
+    (env.work / "bin" / "ps.delay").write_text(str(seconds))
+
+
+@case("docker_desktop_stale_stop", timings={"start_wait": 6, "quit_wait": 8})
+def docker_desktop_stale_stop(env: Env) -> dict[str, bool]:
+    """A hung Docker Desktop command is answered at the deadline while its stop still runs. The next call starts its own command and ends at its own
+    deadline: the result of the earlier command's stop must not fail it at once. The ``ps`` stand-in makes the first listing of the stop slow, so the
+    stop ends after the next call began, for the quit of docker_release and for desktop_start."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def timed(method: str, name: str, mode: str, deadline: int, delayed: bool) -> tuple[BaseException | None, float, list[tuple[int, str]]]:
+        """One call of ``method`` with its command in ``mode``: the error, the seconds it took and the runs of the command so far."""
+        set_mode(env, name, mode)
+        if delayed:
+            slow_next_listing(env, 1.5)
+        began = time.monotonic()
+        error = expect_error(lambda: client.call(method, {"owner": True, "deadline": deadline}, owner, timeout=60))
+        return error, time.monotonic() - began, command_runs(env, name)
+
+    hung_release, _, _ = timed("docker_release", "quit", "hang", 3, True)
+    quit_returns, quit_seconds, quit_runs = timed("docker_release", "quit", "noop", 3, False)
+    env.wait(lambda: not env.alive(quit_runs[0][0]), 10, "the hung quit command is gone")
+    quit_state = env.state()["launcher"]["restart"]
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    hung_start, _, _ = timed("desktop_start", "start", "hang", 3, True)
+    start_returns, start_seconds, start_runs = timed("desktop_start", "start", "noop", 3, False)
+    env.wait(lambda: not env.alive(start_runs[0][0]), 10, "the hung start command is gone")
+    return {
+        "a hanging quit command fails the release at the deadline": refused(hung_release, "degraded", "quit command did not end within 3 s"),
+        "the next release runs its own command and ends at its own deadline": refused(quit_returns, "degraded", "still answers 3 s after the quit command")
+        and 3 <= quit_seconds < 10
+        and [mode for _, mode in quit_runs] == ["hang", "noop"],
+        "no release record is left": quit_state is None,
+        "a hanging start command fails the start at the deadline": refused(hung_start, "degraded", "did not answer within 3 s"),
+        "the next start runs its own command and ends at its own deadline": refused(start_returns, "degraded", "did not answer within 3 s")
+        and 3 <= start_seconds < 10
+        and [mode for _, mode in start_runs] == ["hang", "noop"],
+        "no start record is left": env.state()["launcher"]["desktop"] is None,
+    }
+
+
+@case("docker_release_stale_list", timings={"quit_wait": 8})
+def docker_release_stale_list(env: Env) -> dict[str, bool]:
+    """A docker_release whose container listing is slow ends at its deadline while the listing is still pending. The next release lists for itself: the late
+    answer of the earlier listing, which named a foreign container that is gone by then, must not refuse it. The fake daemon holds the first listing."""
+    env.settings["quit_command"] = desktop_command(env, "quit", "/_test/stop")
+    env.write_settings()
+    env.start()
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    set_mode(env, "quit", "noop")
+    rogue = env.daemon.create_rogue("rogue-late", {"com.docker.compose.project": "other"}, running=True)
+
+    def unfiltered(context: dict[str, Any]) -> bool:
+        """The release's listing: running containers only, no label filter."""
+        return not context["all"] and not context["labels"]
+
+    # The first gate holds the first release's listing, the second one the next release's own listing, so the late answer arrives while that one waits.
+    gate = env.daemon.add_gate("list", "after", match=unfiltered)
+    own_gate = env.daemon.add_gate("list", "after", match=unfiltered)
+
+    def timed_release() -> tuple[BaseException | None, float]:
+        began = time.monotonic()
+        error = expect_error(lambda: client.call("docker_release", {"owner": True, "deadline": 3}, owner, timeout=60))
+        return error, time.monotonic() - began
+
+    held, held_seconds = timed_release()
+    listing_was_held = gate.reached.is_set()
+    env.daemon.containers.pop(rogue)
+    for seconds, held_gate in ((0.5, gate), (1.5, own_gate)):
+        timer = threading.Timer(seconds, held_gate.release)
+        timer.start()
+        env.threads.append(timer)
+    next_release, next_seconds = timed_release()
+    state = env.state()["launcher"]
+    return {
+        "a release whose listing is slow fails at its deadline": listing_was_held
+        and refused(held, "degraded", "did not reach the quit within its deadline of 3 s")
+        and 3 <= held_seconds < 10,
+        "the next release is not refused by the earlier listing, which arrived while its own listing was held": own_gate.reached.is_set()
+        and not refused(next_release, "refused"),
+        "the next release lists for itself, runs its quit command and ends at its own deadline": refused(
+            next_release, "degraded", "still answers 3 s after the quit command"
+        )
+        and 3 <= next_seconds < 10
+        and [mode for _, mode in command_runs(env, "quit")] == ["noop"],
+        "no release record is left": state["release"] is None and state["restart"] is None,
+    }
+
+
+@case("event_stream_idle")
+def event_stream_idle(env: Env) -> dict[str, bool]:
+    """The Docker events stream waits for events without a time limit once it is open: a launcher that sees no Docker event for longer than the 30 s open
+    timeout of the stream stays serving on the same stream. The fake daemon closes the events connection after its reply, so http.client drops its own socket
+    reference, and the limit change after the reply was skipped: the stream dropped 30 s after the last event (method_matrix, which runs longer than that)."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    time.sleep(2)
+    opened = len(env.daemon.calls_matching("GET", "/events"))
+    statuses: set[object] = set()
+    end = time.monotonic() + 34
+    while time.monotonic() < end:
+        statuses.add(env.ping().get("status"))
+        time.sleep(0.5)
+    reopened = len(env.daemon.calls_matching("GET", "/events")) - opened
+    return {
+        "the launcher opened an events stream": opened >= 1,
+        "the launcher stays serving while no Docker event arrives for 34 s": statuses == {"serving"},
+        "the launcher opens no second events stream": reopened == 0,
+    }
+
+
+@case("docker_restart_stale_ping", timings={"restart_answer": 3})
+def docker_restart_stale_ping(env: Env) -> dict[str, bool]:
+    """A docker_restart that ends at its answer deadline while its ping is still pending must not let that ping finish the next restart. The fake daemon
+    holds the ping of the first restart and releases it when the next restart waits for its own answer, which only its own ping, a second after its command,
+    may give."""
+    env.settings["restart_command"] = desktop_command(env, "restart", "/_test/restart?down=1")
+    env.write_settings()
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    set_mode(env, "restart", "noop")
+    gate = env.daemon.add_gate("ping", "after")
+
+    def restart() -> tuple[Any, BaseException | None, float]:
+        began = time.monotonic()
+        result: Any = None
+        error = expect_error(lambda: client.call("docker_restart", {"owner": True}, owner, timeout=60))
+        if error is None:
+            result = {}
+        return result, error, time.monotonic() - began
+
+    _, first_error, _ = restart()
+    ping_was_held = gate.reached.is_set()
+
+    def release_when_waiting() -> None:
+        env.wait(lambda: (env.state()["launcher"].get("restart") or {}).get("phase") == "wait", 10, "the next restart waits for its answer")
+        gate.release()
+
+    releaser = threading.Thread(target=release_when_waiting)
+    releaser.start()
+    env.threads.append(releaser)
+    outcome: list[Any] = []
+    began = time.monotonic()
+    try:
+        outcome.append(client.call("docker_restart", {"owner": True}, owner, timeout=60))
+    except launcher.ClientError as error:
+        outcome.append(error)
+    seconds = time.monotonic() - began
+    return {
+        "a restart whose ping is held fails at its answer deadline": ping_was_held
+        and refused(first_error, "degraded", "did not answer within 3 s after the restart"),
+        "the next restart is done, with the catalog stopped": bool(outcome) and isinstance(outcome[0], dict) and outcome[0].get("phase") == "done",
+        "the next restart waits for its own ping, a second after its command": seconds >= 1.0,
+        "no restart record is left": env.state()["launcher"]["restart"] is None,
+        "the restart command ran twice": [mode for _, mode in command_runs(env, "restart")] == ["noop", "noop"],
+    }
+
+
+def label_listings(env: Env, label: str) -> int:
+    """How many container listings the fake daemon served for one label filter."""
+    return sum(1 for call in env.daemon.calls_matching("GET", "/containers/json") if label in json.loads(call["query"].get("filters", "{}")).get("label", []))
+
+
+def write_launcher_record(env: Env, key: str, record: dict[str, Any]) -> None:
+    """Replace one record of the launcher section of the registry, as the end of a record and the start of a newer one would."""
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        state["launcher"][key] = record
+
+
+def record_phase(env: Env, key: str) -> Any:
+    """The phase of one record of the launcher section of the registry."""
+    return (env.state()["launcher"].get(key) or {}).get("phase")
+
+
+def stale_result_checks(
+    env: Env, label: str, begin_older: Callable[[], None], begin_newer: Callable[[], None], phase_key: str, single_flight: bool = False
+) -> dict[str, bool]:
+    """A worker of a record that ended is still running when a newer record begins: its late result must not settle the newer record. The fake daemon holds the
+    older worker's first container listing and the newer worker's, so the older result arrives while the newer record waits for its own. With
+    ``single_flight`` only one worker runs at a time: the newer record waits for the older worker and runs its own worker once the older one returned."""
+
+    def listing(context: dict[str, Any]) -> bool:
+        return label in context["labels"]
+
+    older_gate = env.daemon.add_gate("list", "after", match=listing)
+    newer_gate = env.daemon.add_gate("list", "after", match=listing)
+    begin_older()
+    older_running = older_gate.wait_reached(15)
+    begin_newer()
+    newer_ran_while_older_held = newer_gate.wait_reached(2 if single_flight else 5)
+    older_gate.release()
+    newer_ran_its_own = newer_ran_while_older_held or (single_flight and newer_gate.wait_reached(10))
+    time.sleep(1.5)
+    settled_by_the_older = record_phase(env, phase_key) == "down"
+    newer_gate.release()
+    with contextlib.suppress(CaseFailure):
+        env.wait(lambda: record_phase(env, phase_key) == "down", 10, "the newer record is down")
+    started_by = {
+        "the newer record did not run a second worker while the older one was held": not newer_ran_while_older_held,
+        "the newer record ran its own worker once the older one returned": newer_ran_its_own,
+    }
+    return {
+        "the worker of the older record was running": older_running,
+        **(started_by if single_flight else {"the newer record ran its own worker while the older one was held": newer_ran_its_own}),
+        "the late result of the older record did not settle the newer record": newer_ran_its_own and not settled_by_the_older,
+        "the newer record is down once its own worker answered": record_phase(env, phase_key) == "down",
+        "two listings served": label_listings(env, label) == 2,
+    }
+
+
+def stack_family_case(env: Env, key: str, label: str, extra: dict[str, Any]) -> dict[str, bool]:
+    """The teardown of a stack record (catalog, orchestration, lineage or online store) at its confirmation step, replaced by a newer record in the registry
+    (a handler-contract test: the launcher itself never leaves a teardown before its own confirmation result)."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+
+    def record(identity: str) -> dict[str, Any]:
+        return {"id": identity, "phase": "tearing_down", "after": "down", "stop_step": "confirm", "services": {}, "error": "", **extra}
+
+    return stale_result_checks(
+        env, label, partial(write_launcher_record, env, key, record("older")), partial(write_launcher_record, env, key, record("newer")), key
+    )
+
+
+@case("catalog_stale_confirm")
+def catalog_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of a catalog teardown that ended must not settle the teardown of a newer catalog record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, "catalog", launcher.LABEL_SERVICE, {"network": None})
+
+
+@case("orchestration_stale_confirm")
+def orchestration_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of an orchestration stack teardown that ended must not settle the teardown of a newer record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, "orchestration", f"{launcher.LABEL_STACK}={launcher.ORCHESTRATION_STACK}", {"network": None})
+
+
+@case("lineage_stale_confirm")
+def lineage_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of a lineage stack teardown that ended must not settle the teardown of a newer record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, "lineage", f"{launcher.LABEL_STACK}={launcher.LINEAGE_STACK}", {"networks": {}})
+
+
+@case("online_store_stale_confirm")
+def online_store_stale_confirm(env: Env) -> dict[str, bool]:
+    """The confirmation worker of an online store teardown that ended must not settle the teardown of a newer record.
+    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
+    return stack_family_case(env, online_store.STACK, f"{launcher.LABEL_STACK}={online_store.STACK}", {"service": None, "network": None})
+
+
+@case("mlflow_stale_stop")
+def mlflow_stale_stop(env: Env) -> dict[str, bool]:
+    """The stop worker of an MLflow teardown that ended at its deadline (cleanup_failed) must not settle the teardown that the owner starts again. Only one
+    MLflow stop worker runs at a time: the retry waits for the older worker, the older result is dropped by its key and the retry settles by its own worker."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+
+    def begin_older() -> None:
+        write_launcher_record(env, "mlflow", {"phase": "tearing_down", "services": {}, "error": "", "stop_deadline": time.time() + 120})
+
+    def begin_newer() -> None:
+        # The older teardown passes its deadline while its stop worker is held; the owner then asks for the shutdown again.
+        with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+            state["launcher"]["mlflow"]["stop_deadline"] = time.time() - 1
+        env.wait(lambda: record_phase(env, "mlflow") == "cleanup_failed", 10, "the older teardown has passed its deadline")
+        client.call("mlflow_down", {"owner": True}, owner)
+
+    return stale_result_checks(env, f"{launcher.LABEL_STACK}={mlflow_service.STACK}", begin_older, begin_newer, "mlflow", single_flight=True)
+
+
+@case("mlflow_stop_overlap")
+def mlflow_stop_overlap(env: Env) -> dict[str, bool]:
+    """Only one MLflow stop worker runs at a time. The first stop worker is late (the fake daemon holds its container listing) when the teardown passes its
+    deadline and the owner asks for the shutdown again. The retry must wait for that worker and must not publish down while it runs; a network of a newer start
+    that appears once the stack is down must survive the late worker, which would otherwise list networks by the shared stack label and remove it."""
+    env.start()
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
+    client = env.client()
+    owner = {"kind": "any", "owner": True}
+    label = f"{launcher.LABEL_STACK}={mlflow_service.STACK}"
+
+    def stack_listing(context: dict[str, Any]) -> bool:
+        return label in context["labels"]
+
+    older_gate = env.daemon.add_gate("list", "after", match=stack_listing)
+    write_launcher_record(env, "mlflow", {"phase": "tearing_down", "services": {}, "error": "", "stop_deadline": time.time() + 120})
+    older_running = older_gate.wait_reached(15)
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        state["launcher"]["mlflow"]["stop_deadline"] = time.time() - 1
+    env.wait(lambda: record_phase(env, "mlflow") == "cleanup_failed", 10, "the older teardown has passed its deadline")
+    client.call("mlflow_down", {"owner": True}, owner)
+    down_while_older_runs = False
+    with contextlib.suppress(CaseFailure):
+        down_while_older_runs = bool(env.wait(lambda: record_phase(env, "mlflow") == "down", 4, "down while the older stop worker is held"))
+    if not down_while_older_runs:
+        older_gate.release()
+        env.wait(lambda: record_phase(env, "mlflow") == "down", 15, "the retry is down once the older stop worker returned")
+    network = os.urandom(16).hex()
+    env.daemon.networks[network] = {
+        "Id": network,
+        "Name": "network-of-a-newer-start",
+        "Labels": {launcher.LABEL_REGISTRY: env.registry_id(), launcher.LABEL_STACK: mlflow_service.STACK},
+        "Internal": True,
+    }
+    older_gate.release()
+    time.sleep(2)
+    survived = network in env.daemon.networks
+    env.daemon.networks.pop(network, None)  # the case planted it: the check that nothing of the case is left over must not find it
+    return {
+        "the older stop worker was running": older_running,
+        "the retry does not publish down while the older stop worker runs": not down_while_older_runs,
+        "the retry is down once the older stop worker returned": record_phase(env, "mlflow") == "down",
+        "the network of a newer start survives the older stop worker": survived,
+    }
+
+
+@contextlib.contextmanager
+def recording_launcher(env: Env) -> Iterator[tuple[launcher.Launcher, list[tuple[str, str]]]]:
+    """A launcher object on the case's registry that serves nothing and runs no worker. Its ``spawn`` keeps the rule of the real one (a key that is in
+    flight starts no second worker) and records the (key, tag) of each worker it would run; ``deliver`` returns a result as the message loop does."""
+    with compactor(env) as instance:
+        spawned: list[tuple[str, str]] = []
+
+        def spawn(key: str, tag: str, function: Callable[..., Any], *arguments: Any) -> None:
+            if key in instance.inflight:
+                return
+            instance.inflight.add(key)
+            spawned.append((key, tag))
+
+        instance.docker_ok, instance.status = True, "serving"
+        with mock.patch.object(instance, "spawn", spawn):
+            yield instance, spawned
+
+
+def deliver(instance: launcher.Launcher, worker: tuple[str, str], outcome: str, value: Any) -> None:
+    """Return one worker's result to its handler, as ``drain_messages`` does."""
+    key, tag = worker
+    instance.inflight.discard(key)
+    instance.message_handlers[tag](key, outcome, value)
+
+
+def registry_state(env: Env) -> dict[str, Any]:
+    """A copy of the registry state, read by this process."""
+    state: dict[str, Any] = json.loads(json.dumps(env.state()))
+    return state
+
+
+def started_attempt(identity: str) -> dict[str, Any]:
+    """The part of a started service attempt that the health steps read."""
+    return {"id": identity, "phase": "started", "container_id": f"container-{identity}", "reason": ""}
+
+
+def limit_error(identity: str) -> launcher.LauncherError:
+    """A failed limit worker whose text names the record that asked for it."""
+    return launcher.LauncherError(f"limit of the {identity} record", "refused")
+
+
+def stale_limits_checks(
+    env: Env,
+    family: tuple[str, str, dict[str, Any]],
+    begin: Callable[[launcher.Launcher, dict[str, Any], str], None],
+    error_prefix: str,
+) -> dict[str, bool]:
+    """The limit worker of a start record that was stopped is still running when the owner starts the stack again: its late result must not settle the newer
+    record, and the newer record must run its own worker. ``begin`` runs the launcher's own start method for one record; the older record ends as a finished
+    teardown leaves it (a handler-contract step, as in the confirmation cases)."""
+    record_key, tag, down = family
+    with recording_launcher(env) as (instance, spawned):
+        with instance.tx() as state:
+            begin(instance, state, "older")
+        older = spawned[-1] if spawned else ("", "")
+        write_launcher_record(env, record_key, dict(down))
+        with instance.tx() as state:
+            begin(instance, state, "newer")
+        newer = spawned[-1]
+        newer_ran_its_own = len(spawned) == 2 and spawned[0] != spawned[1] and spawned[1][1] == tag
+        deliver(instance, older, "docker", limit_error("older"))
+        after_older = dict(env.state()["launcher"][record_key])
+        deliver(instance, newer, "docker", limit_error("newer"))
+        after_newer = dict(env.state()["launcher"][record_key])
+    return {
+        "the newer record ran its own limit worker while the older one was in flight": newer_ran_its_own,
+        "the late result of the older record did not settle the newer record": newer_ran_its_own
+        and after_older["phase"] == "starting"
+        and after_older["step"] == "limits"
+        and not after_older["error"],
+        "the newer record settles by its own result": newer_ran_its_own
+        and after_newer["phase"] == "tearing_down"
+        and after_newer["error"] == f"{error_prefix}: limit of the newer record",
+    }
+
+
+@contextlib.contextmanager
+def stack_folder(env: Env, *names: str) -> Iterator[Path]:
+    """A state folder of a stack start, named as an allowed root of the test registry."""
+    folder = Path(tempfile.mkdtemp(prefix="hai-stack-", dir=env.temp)).resolve()
+    for name in names:
+        (folder / name).mkdir()
+    env.settings["allowed_roots"] = [str(folder)]
+    env.write_settings()
+    try:
+        yield folder
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def start_ctx(method: str, params: dict[str, Any], identity: str, state: dict[str, Any], principal: dict[str, Any] | None = None) -> launcher.Ctx:
+    """The context of one start request."""
+    return launcher.Ctx(cast(Any, None), method, f"request-{identity}", params, principal or {"kind": "any", "owner": True}, identity, state)
+
+
+@case("orchestration_stale_limits")
+def orchestration_stale_limits(env: Env) -> dict[str, bool]:
+    """The limit worker of an orchestration start that the owner stopped must not settle the next start, which runs its own worker."""
+    with stack_folder(env, "session") as folder:
+        params = {"state": str(folder), "api_port": 18180, "checkout": str(ROOT)}
+
+        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
+            instance.m_orchestration_up(start_ctx("orchestration_up", params, identity, state))
+
+        return stale_limits_checks(
+            env, ("orchestration", "orchlimits", {"phase": "down", "services": {}}), begin, "no memory limit for the orchestration services"
+        )
+
+
+@case("lineage_stale_limits")
+def lineage_stale_limits(env: Env) -> dict[str, bool]:
+    """The limit worker of a lineage start that the owner stopped must not settle the next start, which runs its own worker."""
+    with stack_folder(env, "postgres", "config") as folder:
+        params = {"state": str(folder), "api_port": 18181, "web_port": 18182, "checkout": str(ROOT)}
+
+        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
+            instance.m_lineage_up(start_ctx("lineage_up", params, identity, state))
+
+        return stale_limits_checks(
+            env, ("lineage", "lineagelimits", {"phase": "down", "services": {}, "networks": {}}), begin, "the lineage services cannot start"
+        )
+
+
+@case("online_store_stale_limits")
+def online_store_stale_limits(env: Env) -> dict[str, bool]:
+    """The limit worker of an online store start that ended must not settle the next start, which runs its own worker."""
+    run_id = "limits_run"
+    online_store.test_password(env.registry)
+    try:
+
+        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
+            state["runs"][run_id] = {"run_id": run_id, "state": "held"}
+            instance.m_pipeline_online_store_up(start_ctx("pipeline_online_store_up", {}, identity, state, {"run_id": run_id}))
+
+        return stale_limits_checks(env, (online_store.STACK, "onlinelimits", {"phase": "down", "service": None}), begin, "the online store cannot start")
+    finally:
+        online_store.forget_test_password(env.registry)
+
+
+def stale_health_checks(
+    env: Env,
+    record_key: str,
+    tag: str,
+    down: dict[str, Any],
+    begin: Callable[[dict[str, Any], str], None],
+    advance: Callable[[launcher.Launcher, dict[str, Any], list[Callable[[], None]]], None],
+    health: Callable[[dict[str, Any]], Any],
+) -> dict[str, bool]:
+    """A health worker of a start record that ended is still running when a newer record waits for the same service: its late result must not be taken
+    for the newer record's, the newer record must read the health itself, and a result that arrives after the record was removed must change nothing.
+    ``begin`` writes a starting record (its id and a started service attempt) and ``advance`` is the launcher's own step that spawns the health worker."""
+
+    def step(instance: launcher.Launcher, identity: str) -> tuple[str, str]:
+        with instance.tx() as state:
+            begin(state, identity)
+            actions: list[Callable[[], None]] = []
+            advance(instance, state, actions)
+        for action in actions:
+            action()
+        return spawned[-1] if spawned else ("", "")
+
+    with recording_launcher(env) as (instance, spawned):
+        older = step(instance, "older")
+        write_launcher_record(env, record_key, dict(down))
+        newer = step(instance, "newer")
+        newer_read_for_itself = len(spawned) == 2 and spawned[0] != spawned[1] and spawned[1][1] == tag
+        deliver(instance, older, "ok", "healthy")
+        after_older = dict(env.state()["launcher"][record_key])
+        deliver(instance, newer, "ok", "healthy")
+        after_newer = dict(env.state()["launcher"][record_key])
+        last = step(instance, "last")
+        write_launcher_record(env, record_key, dict(down))
+        deliver(instance, last, "ok", "healthy")
+        after_removal = env.state()["launcher"].get(record_key)
+    return {
+        "the newer record ran its own health worker while the older one was in flight": newer_read_for_itself,
+        "the late result of the older record did not mark the newer record healthy": newer_read_for_itself and health(after_older) in (None, "", {}),
+        "the newer record is healthy by its own result": newer_read_for_itself and health(after_newer) == "healthy",
+        "a result that arrives after the record was removed changes nothing": after_removal == down,
+    }
+
+
+@case("catalog_stale_health")
+def catalog_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of a catalog start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+    service = "polaris-db"
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["catalog"] = {
+            "id": identity,
+            "phase": "starting",
+            "step": "db",
+            "services": {service: f"{identity}-attempt"},
+            "health": {},
+            "error": "",
+        }
+
+    return stale_health_checks(
+        env,
+        "catalog",
+        "health",
+        {"phase": "down", "services": {}},
+        begin,
+        lambda instance, state, actions: instance.advance_catalog(state, actions),
+        lambda record: record.get("health", {}).get(service),
+    )
+
+
+@case("orchestration_stale_health")
+def orchestration_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of an orchestration start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["orchestration"] = {
+            "id": identity,
+            "phase": "starting",
+            "step": "postgres",
+            "services": {"postgres": f"{identity}-attempt"},
+            "health": {},
+            "error": "",
+            "checkout": str(ROOT),
+        }
+
+    return stale_health_checks(
+        env,
+        "orchestration",
+        "orchhealth",
+        {"phase": "down", "services": {}},
+        begin,
+        lambda instance, state, actions: instance.advance_orchestration(state, actions),
+        lambda record: record.get("health", {}).get("postgres"),
+    )
+
+
+@case("lineage_stale_health")
+def lineage_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of a lineage start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["lineage"] = {
+            "id": identity,
+            "phase": "starting",
+            "step": "postgres",
+            "services": {"postgres": f"{identity}-attempt"},
+            "health": {},
+            "error": "",
+            "checkout": str(ROOT),
+            "start_deadline": time.time() + 3600,
+        }
+
+    return stale_health_checks(
+        env,
+        "lineage",
+        "lineagehealth",
+        {"phase": "down", "services": {}, "networks": {}},
+        begin,
+        lambda instance, state, actions: instance.advance_lineage(state, actions),
+        lambda record: record.get("health", {}).get("postgres"),
+    )
+
+
+@case("online_store_stale_health")
+def online_store_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of an online store start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+    online_store.test_password(env.registry)
+    try:
+
+        def begin(state: dict[str, Any], identity: str) -> None:
+            state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+            state["launcher"][online_store.STACK] = {
+                "id": identity,
+                "phase": "starting",
+                "step": "service",
+                "service": f"{identity}-attempt",
+                "network": "network-id",
+                "error": "",
+                "settings": {},
+                "health": "",
+                "checkout": str(ROOT),
+                "start_deadline": time.time() + 3600,
+            }
+
+        return stale_health_checks(
+            env,
+            online_store.STACK,
+            "onlinehealth",
+            {"phase": "down", "service": None},
+            begin,
+            lambda instance, state, actions: instance.advance_online_store(state, actions),
+            lambda record: record.get("health"),
+        )
+    finally:
+        online_store.forget_test_password(env.registry)
+
+
+@case("mlflow_stale_health")
+def mlflow_stale_health(env: Env) -> dict[str, bool]:
+    """The health worker of an MLflow start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
+    service = mlflow_service.SERVICES[0]
+
+    def begin(state: dict[str, Any], identity: str) -> None:
+        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
+        state["launcher"]["mlflow"] = {
+            "id": identity,
+            "phase": "starting",
+            "checkout": str(ROOT),
+            "services": {service: f"{identity}-attempt"},
+            "health": {},
+            "settings": {},
+            "networks": {"internal": "network-id"},
+            "deadline": time.time() + 3600,
+            "error": "",
+        }
+
+    return stale_health_checks(
+        env,
+        "mlflow",
+        "mlflow_health",
+        {"phase": "down"},
+        begin,
+        lambda instance, state, actions: instance.advance_mlflow(state, actions),
+        lambda record: record.get("health", {}).get(service),
+    )
+
+
 def launcher_cli(*arguments: str) -> tuple[int, str, str]:
     """Run the launcher's command line in this process: (exit code, standard output, standard error)."""
     saved = sys.argv
@@ -3663,7 +4327,7 @@ probes = {"transient": config.get("transient_eperm_probes", 0), "gone": False}
 
 def killpg(group, number):
     if number in (signal.SIGTERM, signal.SIGKILL):
-        signals.append({"signal": int(number), "host": real_time()})
+        signals.append({"signal": int(number), "host": real_time(), "group": int(group)})
         if int(number) in denied:
             raise PermissionError(1, "Operation not permitted")
     if number == 0 and probes["transient"]:
@@ -3716,9 +4380,20 @@ def setpgid(pid, group):
 os.setpgid = setpgid
 time.sleep(config.get("start_delay", 0))
 code = module.run(config["command"], deadline, wall=wall, mono=mono)
+ended = real_time()
+# A group whose signal was denied is probed here, before this wrapper exits: a top-level scripts.process launch stops the members that its program left
+# in its session as soon as the program ends (a hosted job runs the case outside a CI worker session), so the harness cannot see them afterwards.
+alive_at_exit = False
+for sent in signals:
+    if sent["signal"] in denied:
+        try:
+            original(sent["group"], 0)
+            alive_at_exit = True
+        except (ProcessLookupError, PermissionError):
+            pass
 json.dump(
     {"exit": code, "deadline": deadline, "signals": signals, "mono_calls": calls["mono"], "wall_calls": calls["wall"],
-     "ended": real_time(), "startup_seconds": startup_seconds},
+     "ended": ended, "alive_at_exit": alive_at_exit, "startup_seconds": startup_seconds},
     open(config["result"], "w"),
 )
 sys.exit(code)
@@ -3792,7 +4467,8 @@ def run_deadline_case(
     output = (folder / "wrapper_stderr.txt").read_text()
     result = json.loads((folder / "result.json").read_text()) if (folder / "result.json").is_file() else {}
     started = json.loads(record.read_text()) if record.is_file() else None
-    leftover_before_cleanup = False
+    # The wrapper's own probe at its exit is the proof that the group was alive: the launch above may already have stopped what the wrapper left.
+    leftover_before_cleanup = bool(result.get("alive_at_exit"))
     if started and deny_signals:
         # The wrapper was refused its signals: the harness (which may signal the group) ends what the wrapper could not.
         try:
@@ -4483,16 +5159,29 @@ def method_matrix(env: Env) -> dict[str, bool]:
     }
     bad = {"run_wrong_token", "run_unknown", "alloc_unknown"}
     results: dict[str, bool] = {}
+    unexpected: dict[str, list[str]] = {}
+
+    def refused_as_principal(method: str, label: str, principal: dict[str, Any]) -> bool:
+        """Call ``method`` with ``principal``; True when the launcher refuses it as a principal error. Any other answer is kept for the evidence."""
+        error = expect_error(partial(client.call, method, {}, principal))
+        if refused(error, "principal"):
+            return True
+        code = getattr(error, "code", None)
+        unexpected.setdefault(method, []).append(f"{label}: {'accepted' if error is None else f'{type(error).__name__} {code}: {error}'}")
+        return False
+
     for method, spec in launcher.METHODS.items():
         outcomes = []
         for label, principal in principals.items():
             if principal["kind"] not in spec.kinds or label in bad:
-                error = expect_error(partial(client.call, method, {}, principal))
-                outcomes.append(refused(error, "principal"))
+                outcomes.append(refused_as_principal(method, label, principal))
         if spec.owner_flag:
-            valid = next(p for label, p in principals.items() if p["kind"] in spec.kinds and label not in bad)
-            outcomes.append(refused(expect_error(partial(client.call, method, {}, valid)), "principal"))
+            valid_label, valid = next((label, p) for label, p in principals.items() if p["kind"] in spec.kinds and label not in bad)
+            outcomes.append(refused_as_principal(method, f"{valid_label} without the owner flag", valid))
         results[f"{method}: every wrong principal is refused"] = bool(outcomes) and all(outcomes)
+    if unexpected:
+        # The check names say which method failed; this file says what the launcher answered instead of a principal refusal (and its status then).
+        (env.report / "unexpected_answers.json").write_text(json.dumps({"answers": unexpected, "launcher": env.ping()}, indent=2))
     # Valid principals of another owner: the target is named in the request, the credentials are good, the owner is not theirs.
     hold_forever(env)
     run_b = env.acquire_run("run_b", "training")
@@ -10165,9 +10854,27 @@ ALL_CASES = (
     docker_restart_command_and_client,
     docker_restart_answer_deadline,
     desktop_start,
+    docker_desktop_stale_stop,
     docker_release_skips_and_refusals,
     docker_release_quit,
     docker_release_quit_deadlines,
+    docker_release_stale_list,
+    event_stream_idle,
+    docker_restart_stale_ping,
+    catalog_stale_confirm,
+    orchestration_stale_confirm,
+    lineage_stale_confirm,
+    online_store_stale_confirm,
+    mlflow_stale_stop,
+    orchestration_stale_limits,
+    lineage_stale_limits,
+    online_store_stale_limits,
+    catalog_stale_health,
+    orchestration_stale_health,
+    lineage_stale_health,
+    online_store_stale_health,
+    mlflow_stale_health,
+    mlflow_stop_overlap,
     docker_desktop_defaults,
     docker_release_deadline_covers_the_catalog_stop,
     docker_release_client_deadline,

@@ -1,44 +1,39 @@
-# Exceptions to the linters in scripts/quality/lint_tools.py: <check> <key> -- <reason> (docs/quality_checks.md, Linters beside lint_sources).
+# Exceptions to the linters in scripts/quality/lint_tools.py: <check> <key> -- <reason>.
 # A key is path:rule (tflint, trivy-config, zizmor) or path:package==version (osv-scanner); it may use * as a wildcard. An entry that matches nothing is a finding.
 tflint infra/services/tests/flow/main.tf:terraform_required_version -- test-only stand-in network that the jobs stack tests load as a module; it never plans or applies on its own, so it needs no Terraform version constraint
-osv-scanner requirements-review.txt:pillow==12.3.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner requirements-review.txt:pypdf==6.10.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner scripts/quality/sqlfluff/requirements.txt:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner scripts/quality/sqlfluff/requirements.txt:opentelemetry-api==1.45.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/analytics/requirements.txt:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/analytics/requirements.txt:opentelemetry-api==1.45.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/lakehouse/spark/requirements.txt:pillow==12.3.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:aiohttp==3.14.3 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:apache-airflow-providers-google==22.5.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:apache-airflow-providers-snowflake==6.17.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:authlib==1.8.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:black==26.5.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:dnspython==2.8.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:filelock==3.32.6 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:gitpython==3.1.62 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:litellm==1.85.7 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:mako==1.4.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:msgpack==1.2.2 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:multidict==6.8.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:nbconvert==7.17.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:oauthlib==3.3.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:opentelemetry-api==1.44.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:pydantic-ai-slim==2.43.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:pyjwt==2.14.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:pymongo==4.18.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:setuptools==84.0.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:tornado==6.5.8 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:urllib3==2.7.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:uv==0.12.13 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:virtualenv==21.7.9 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/orchestration/constraints-3.12.txt:werkzeug==3.1.8 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-osv-scanner services/quality/requirements.txt:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:pillow==12.3.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:pypdf==6.10.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:opentelemetry-api==1.45.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:aiohttp==3.14.3 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:apache-airflow-providers-google==22.5.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:apache-airflow-providers-snowflake==6.17.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:authlib==1.8.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:black==26.5.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:dnspython==2.8.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:filelock==3.32.6 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:gitpython==3.1.62 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:litellm==1.85.7 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:mako==1.4.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:msgpack==1.2.2 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:multidict==6.8.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:nbconvert==7.17.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:oauthlib==3.3.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:opentelemetry-api==1.44.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:pydantic-ai-slim==2.43.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:pyjwt==2.14.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:pymongo==4.18.1 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:setuptools==84.0.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:tornado==6.5.8 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:urllib3==2.7.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:uv==0.12.13 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:virtualenv==21.7.9 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
+osv-scanner uv.lock:werkzeug==3.1.8 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
 zizmor .github/workflows/ci.yml:self-repository -- style suggestion to write the local setup action as $/.github/actions/setup; workflow edits belong to the CI change, so revisit it there
-osv-scanner scripts/quality/dvc/requirements.txt:diskcache==5.6.3 -- no fixed release exists and dvc-data requires it, so the project accepts the advisory while it uses DVC
-osv-scanner services/orchestration/constraints-3.12.txt:joserfc==1.7.5 -- pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
-osv-scanner services/mlflow/requirements.txt:mlflow==3.17.0 -- fixed in 3.17.2 (GHSA-wqmh-qccw-pqwf, FileStore only) and the server uses a Postgres backend store, so it moves to 3.17.2 at the owner's next compile, before any MLflow image is pushed
-osv-scanner services/training/requirements.txt:mlflow==3.17.0 -- fixed in 3.17.2 (GHSA-wqmh-qccw-pqwf, FileStore only) and training uses a client, so it moves to 3.17.2 at the owner's next compile, before any MLflow image is pushed
-osv-scanner services/orchestration/constraints-3.12.txt:pyasn1==0.6.4 -- fixed in 0.6.5, pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
-osv-scanner services/feature_store/requirements.txt:feast==0.66.0 -- critical GHSA-gg2p-37pv-v7fq is fixed in feast 0.67.0; the registry is written only by project roles and no Feast server is deployed, so the upgrade happens in the single lock before any Feast or model API image is built or pushed
-osv-scanner services/model_api/requirements.txt:feast==0.66.0 -- critical GHSA-gg2p-37pv-v7fq is fixed in feast 0.67.0; the registry is written only by project roles and no Feast server is deployed, so the upgrade happens in the single lock before any Feast or model API image is built or pushed
+osv-scanner uv.lock:diskcache==5.6.3 -- no fixed release exists and dvc-data requires it, so the project accepts the advisory while it uses DVC
+osv-scanner uv.lock:joserfc==1.7.5 -- pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
+osv-scanner uv.lock:mlflow==3.17.0 -- fixed in 3.17.2 (GHSA-wqmh-qccw-pqwf, FileStore only); the server uses a Postgres backend store and training uses a client, so it moves to 3.17.2 at the owner's next lock update, before any MLflow image is pushed
+osv-scanner uv.lock:pyasn1==0.6.4 -- fixed in 0.6.5, pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
+osv-scanner uv.lock:asteval==1.0.6 -- checkov 3.3.19 pins this exact version, so it cannot move while checkov stays; checkov reads only the project's own Terraform files offline -- expires 2026-11-15
+osv-scanner uv.lock:virtualenv==21.14.5 -- checkov 3.3.19 caps packaging below 24 and the fixed virtualenv releases need a newer packaging, which holds virtualenv at this version; it is used in development and tool environments only -- expires 2026-11-15
+osv-scanner uv.lock:ecdsa==0.19.2 -- no fixed release exists; checkov uses it and reads only the project's own Terraform files offline -- expires 2026-11-15

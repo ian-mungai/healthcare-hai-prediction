@@ -16,10 +16,10 @@
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
         "scripts/acquisition/collector_state.py": "sha256:9879b4137b41ef3e2adb95d371637a8f38752043d3dfe1749b21213d24856dcd",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
-        "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",
+        "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "aws_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and aws_runner runs run_command(command[0], ...)",
       "lines": [
@@ -41,10 +41,10 @@
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
         "scripts/acquisition/data_paths.py": "sha256:2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
-        "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",
+        "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "aws_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -68,10 +68,10 @@
         "scripts/acquisition/hud_api_contract.py": "sha256:a71873027da11e196c7042fef9d786e6294ac68960235b337fb4b53e265c1fbd",
         "scripts/acquisition/hud_api_transport.py": "sha256:c0d7ebb64aed1c78a4cb7bc800a7481a994af85a251c2b5ba7223aafe3561c63",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
-        "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",
+        "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "aws_runner (imported from the Census collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -84,7 +84,7 @@
       "code_sha256": "1f9cde2b11b126d85b0a497a720ed502098d56b9be95ecc5ee818a47b3260b0d",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "7fa200cfeba696a59ef007386b8e6e7be015538b057f812ebe4d657b6d0ff8e0",
+      "file_sha256": "b99fcf0730faa687c4db8969272cc0ceab60d73443fce038d1c3299d9a37bb00",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:dfcadc91607e2e3f55322da38c02e951c990d8a8224e9a856067e3599f4a8620",
         "scripts/acquisition/collect_bls_api.py": "sha256:07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
@@ -100,7 +100,7 @@
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/acquisition/wonder_export_contract.py": "sha256:68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "imports a plan module named in the PLANNED table (scripts.acquisition collector contracts); the plan loaders read and validate plans and start no process",
       "lines": [
@@ -113,7 +113,7 @@
       "code_sha256": "465341b9818d9470082c277fe541dde751a8de546e5d0df64cc7b3e909e87322",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "7fa200cfeba696a59ef007386b8e6e7be015538b057f812ebe4d657b6d0ff8e0",
+      "file_sha256": "b99fcf0730faa687c4db8969272cc0ceab60d73443fce038d1c3299d9a37bb00",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:dfcadc91607e2e3f55322da38c02e951c990d8a8224e9a856067e3599f4a8620",
         "scripts/acquisition/collect_bls_api.py": "sha256:07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4",
@@ -129,7 +129,7 @@
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/acquisition/wonder_export_contract.py": "sha256:68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
       },
       "reason": "aws_runner (imported from the BLS collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -145,8 +145,8 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
@@ -168,8 +168,8 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
@@ -186,8 +186,8 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
@@ -203,8 +203,8 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
@@ -221,8 +221,8 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
@@ -249,8 +249,8 @@
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/storage_controls.py": "sha256:587735aad5325b294459974a95d65d65d461c2141c3f34a85de35775c38a327f",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "AwsCli keeps cli_tools.run_argv as its default runner; every AwsCli.call builds a list that starts with the literal aws",
       "lines": [
@@ -265,7 +265,7 @@
       "occurrences": 1,
       "file_sha256": "c1304afc43816561700d2606c25fe41cd47131eb450241729ee2611de8d8ab27",
       "dependencies": {
-        "scripts/acquisition/redownload.py": "sha256:7fa200cfeba696a59ef007386b8e6e7be015538b057f812ebe4d657b6d0ff8e0",
+        "scripts/acquisition/redownload.py": "sha256:b99fcf0730faa687c4db8969272cc0ceab60d73443fce038d1c3299d9a37bb00",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
       },
       "reason": "imports a plan module named in the PLANNED table; the plan loaders read and validate plans and start no process",
@@ -293,14 +293,14 @@
     },
     {
       "path": "scripts/infrastructure/run_e2e.py",
-      "line": 463,
+      "line": 465,
       "code_sha256": "6528e3517932d758564fcd8f1945878372a41b8c0340ba088741c4e3fefb5996",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "e77d8db85b91a631fef19bc8a291b08c4b3c283663171433c4d67e8e1a0f41be",
+      "file_sha256": "bcdd6a8a19396412645befb4d1345ece1001c930151e03b18b2578f9e4dad3ab",
       "dependencies": {
         "scripts/infrastructure/systemd_model.py": "sha256:e0824402fae8dce41af8951237254490b35178bd5a42bab3c80e27091de7b40d",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "Evidence.run receives the Python configuration-renderer and Bash-wrapper commands that run_suite builds",
       "lines": [
@@ -309,28 +309,29 @@
     },
     {
       "path": "scripts/lakehouse/run_bronze_cutover_e2e.py",
-      "line": 1533,
+      "line": 1435,
       "code_sha256": "8b5da4909c1eebcd42416e8cf0ea10c01c9bfd0c9d0f3603b6f870adf3fea76c",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d4bec8618b69c79fa2fc6f38f3513474b88a1ccfe0f875ce3693eab2b0f2baad",
+      "file_sha256": "f6a9143a252062d6b546e35e61472e1d7e8ace84fbfccb988b10607eb9efaee7",
       "dependencies": {
         "orchestration/catalog_authority.py": "sha256:d95f4d288a2e775fda4a1514ba91cf01db12950df93e3f601a6485dcfc066bf4",
         "orchestration/catalog_transport.py": "sha256:33d043e4a3e526824b73108c290429958fc2fc016bde30ca82a7640fa2ce98f8",
-        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
+        "orchestration/launcher.py": "sha256:e38403b02eee90289e087772ef7e7bff33352943f3dea68bedcaa63654d82051",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/infrastructure/secret_store.py": "sha256:1277023c1e131650b699694a7e9d46c218168e804b4ac527ac81f46cdcccbcf0",
         "scripts/lakehouse/bronze_cutover.py": "sha256:8c2283eb3baf8d8fa6e7fb6b6f7b411f37b5cf9ac759494874f5f8b6569f6827",
         "scripts/lakehouse/bronze_inventory.py": "sha256:6a7507d5855c4f24a20ab22c8c39d99020626e38c66648d05179126cd4470fa8",
         "scripts/lakehouse/bronze_scan.py": "sha256:044793d737982ea35c29802849a6ac4b052691297a7b6ad12a748fca8a7b9380",
-        "scripts/lakehouse/cutover_route.py": "sha256:c61da0d4b6585c2f6358b0e58ec2aaf235b4a4966fda74ca2125c24e69032299",
-        "scripts/lakehouse/mac_route_probe.py": "sha256:32233ee8f47f7fa2933c3b6a9c11e3d86c8619666bb509b6120a3ac421d08b52",
+        "scripts/lakehouse/cutover_route.py": "sha256:38de693703e94cb45a60c8efc04504f8d2360899a29dd6ada1ce1f0a37433e5d",
+        "scripts/lakehouse/host_ingress_cases.py": "sha256:5e7a48707a1be434f85f58a73afe223a774409f83ef9b8270c0c57a259ed7dfd",
+        "scripts/lakehouse/mac_route_probe.py": "sha256:f8e3e7f6b63d8fa6ea4ffe039b71e1e2ba64794ae90e31f5dd704a7db7e4731f",
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
         "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:e2638d0e9b634a1828f62d7ccbae152f7abd756fd1ba1d20af68c9a3141dabf2",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0db7c8aa8470704e410d7a8b5f311f7876b92a178f504b32acbeba612bb09985",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:ee2fec2c4500c91abb140acef4c7ff3b34907e3800bb1d13b1c0404ce4f9f8a9",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
     },
@@ -342,12 +343,12 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
+        "orchestration/launcher.py": "sha256:e38403b02eee90289e087772ef7e7bff33352943f3dea68bedcaa63654d82051",
         "scripts/infrastructure/secret_store.py": "sha256:1277023c1e131650b699694a7e9d46c218168e804b4ac527ac81f46cdcccbcf0",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "the duckdb helper passes DuckDB SQL text to scripts/lakehouse/query.sh after -c (SQL, not a shell command); query.sh asks the launcher's query template",
       "lines": [
@@ -363,12 +364,12 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
+        "orchestration/launcher.py": "sha256:e38403b02eee90289e087772ef7e7bff33352943f3dea68bedcaa63654d82051",
         "scripts/infrastructure/secret_store.py": "sha256:1277023c1e131650b699694a7e9d46c218168e804b4ac527ac81f46cdcccbcf0",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "the duckdb helper passes DuckDB SQL text to scripts/lakehouse/query.sh after -c (SQL, not a shell command); query.sh asks the launcher's query template",
       "lines": [
@@ -384,12 +385,12 @@
       "occurrences": 1,
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
+        "orchestration/launcher.py": "sha256:e38403b02eee90289e087772ef7e7bff33352943f3dea68bedcaa63654d82051",
         "scripts/infrastructure/secret_store.py": "sha256:1277023c1e131650b699694a7e9d46c218168e804b4ac527ac81f46cdcccbcf0",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "the duckdb helper passes DuckDB SQL text to scripts/lakehouse/query.sh after -c (SQL, not a shell command); query.sh asks the launcher's query template",
       "lines": [
@@ -399,14 +400,14 @@
     },
     {
       "path": "scripts/lakehouse/run_launcher_e2e.py",
-      "line": 2618,
+      "line": 2623,
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "0db7c8aa8470704e410d7a8b5f311f7876b92a178f504b32acbeba612bb09985",
+      "file_sha256": "ee2fec2c4500c91abb140acef4c7ff3b34907e3800bb1d13b1c0404ce4f9f8a9",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
-        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
+        "orchestration/launcher.py": "sha256:e38403b02eee90289e087772ef7e7bff33352943f3dea68bedcaa63654d82051",
         "orchestration/mlflow_service.py": "sha256:56c24c4f1bbb4c9679f6cede9e7648a910bd7e7223dbe14df3f6435aa8dee368",
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
@@ -417,16 +418,16 @@
         "scripts/infrastructure/sts_stand_in.py": "sha256:bb2056c3f1ae31fe80cf91d1a58e3241e3afdee3bcaf0fd4e3fca19b3e8939cb",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:b5eeba5e5ae835b219c5f866ebc990b8ceff4429dab31ae1eb8c5bbc8117e5ca",
-        "scripts/lakehouse/fake_docker.py": "sha256:6a7a65d2f0973746904b425eef1e7e7aea4c2fbda9f945b3b99008f6ad35fb05",
+        "scripts/lakehouse/fake_docker.py": "sha256:407ed4a3578abc30e504233a703473c3f77b7ddd8f84cddfbe84bb77052acb4e",
         "scripts/lakehouse/launcher_cleanup.py": "sha256:271cbf7f0a014802fb8d517775b145de61c0a19473c49e6cfde8be0add9bce68",
         "scripts/lakehouse/package_fixture.py": "sha256:8c59389957cc35b8187f70b5de53bd014e706755e3db21693d04b83b070fa223",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:6a84c3114ae00474955712af5821fdf32aae972a6b1671e7033fc9e2992a59f2",
         "scripts/lakehouse/run_silver_e2e.py": "sha256:42b24cb4912f8b9b83e0a218822b93f67ac244ee4bb17732ed0a2b4d485ebbf4",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
         "scripts/quality/docker_calls.py": "sha256:d58514ae36132e0a013e132d3f5d54f7aeb364a81e250032b471fdf61068b34e",
         "scripts/training/lane_b_cases.py": "sha256:ddffa06a3dd6734765d39f69db90cbf3060e2725d34bc732438130230091ee91",
         "scripts/training/step_records.py": "sha256:ebf3160636fefcd3584ed3dc3a9d9eea39cef87e325e1e14e409bfa954544c4d"
@@ -445,10 +446,10 @@
       "occurrences": 1,
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:f10acc5f70856f4b6bf32a2d53a8d268fd409414df720c7e6de09140873cca10",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0db7c8aa8470704e410d7a8b5f311f7876b92a178f504b32acbeba612bb09985",
+        "orchestration/launcher.py": "sha256:e38403b02eee90289e087772ef7e7bff33352943f3dea68bedcaa63654d82051",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:ee2fec2c4500c91abb140acef4c7ff3b34907e3800bb1d13b1c0404ce4f9f8a9",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "the shell line is the quoted sys.executable and run_lock CLI arguments followed by true, from internal callers only",
       "lines": [
@@ -458,13 +459,14 @@
     },
     {
       "path": "scripts/quality/install_sqlfluff.py",
-      "line": 69,
+      "line": 83,
       "code_sha256": "4b3e907727fad53bb32e3c17ddfa8ae7f9b084bfde2aeff926e840c1aff42d4b",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "27073843f1c14f6ce42f8292e485d79ecac342fe13d4236a89059b89620734d4",
+      "file_sha256": "c31c80fe93806e0e9091308099c26b435a4365af580d95f2a541660fcf99061a",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a"
       },
       "reason": "base_python() is the interpreter recorded in pyvenv.cfg or sys.executable; it creates the sqlfluff virtual environment",
       "lines": [
@@ -479,8 +481,8 @@
       "occurrences": 1,
       "file_sha256": "e8249c9a2df7855ce65237b478b9ade3593b63b7ad8b85ae4e4165ff425dbbf4",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073"
       },
       "reason": "runs the Terraform check table built in the same function: terraform, tflint, checkov through sys.executable -m and trivy",
       "lines": [
@@ -489,14 +491,14 @@
     },
     {
       "path": "tests/test_project_config.py",
-      "line": 239,
+      "line": 242,
       "code_sha256": "fafe3fdef33731c7736790b263e816db40768e724710f8b527400d4ef3a701c9",
       "problem": "whose program the check cannot prove",
       "occurrences": 3,
-      "file_sha256": "1cd8bcd1ac9c114344434c9ee4ded97002b1e5411cd4c9c9c13ef492543f8bf8",
+      "file_sha256": "ce8641d0ad7c01d355f41e167ff7ffec07e57cefb4f779f29889750cccf9e8ef",
       "dependencies": {
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
         "tests/support.py": "sha256:d94c83009e222255d9076939b6826d80dcf6face84d56e9efdcd86fb14bbd11f"
       },
       "reason": "/bin/bash runs scripts/infrastructure/terraform.sh (checked by the shell rules) with test arguments and synthetic tool commands",
@@ -512,10 +514,10 @@
       "code_sha256": "f358f8cea2df557bf32cdaf6b4dc0246232da9aa20916194c11c4bbbbe384b12",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint, named from config/quality_tools.json) with its version flag"
     },
@@ -525,88 +527,88 @@
       "code_sha256": "965b2fb24fba80e1b4dc15abfb79a40639337d8a6bd307be3a3d50b9a3338de1",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs a declared shell interpreter (sh, bash, dash, zsh or ksh only, from the source's shebang or extension) with -n to check syntax"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 192,
+      "line": 190,
       "code_sha256": "39a3afa6a0a69adcc9cb15d6c7b7105112f89071c6180fb66ce1a850a3f83d82",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned SQLFluff from .tools/sqlfluff/bin with lint arguments"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 207,
+      "line": 205,
       "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
       "problem": "whose program the check cannot prove",
       "occurrences": 2,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "two calls whose first line is the same code: line 258 runs pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 327 runs pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 303,
+      "line": 301,
       "code_sha256": "d75274826882b437b689d5b81193a2f97388dbc7fe9fa2dfe757f94933685050",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs gofmt from the folder of the verified Go 1.27.3 program with -l"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 490,
+      "line": 488,
       "code_sha256": "cff80cdc4d10023eadcab151ee1587c2fa228a6a33f7ddf690876b575403b4b5",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint --version"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 494,
+      "line": 492,
       "code_sha256": "1893430c33b623d1bbcc9424e6727d2ca17af3dc51718382c93583a4e8bbdef9",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint on the selected sources"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 498,
+      "line": 496,
       "code_sha256": "5a40e40360800053230faed6c6757add11e7596eff8d6184c10034c5b8532ec0",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
+      "file_sha256": "c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint) on the selected sources"
     },
@@ -616,9 +618,9 @@
       "code_sha256": "04c06b7303d92911d832b3b9c112a8f64085320728d615867f21063678745014",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
+      "file_sha256": "22dc1e291bda4a8deb40b3616401ef9e4db273a4d5d94e62f986eadf897d05e0",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with a raw-binary manifest"
     },
@@ -628,9 +630,9 @@
       "code_sha256": "37e86a837af86f100fc191ac9c394a5b53ca706deedc0e337748466a7a55d7e6",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
+      "file_sha256": "22dc1e291bda4a8deb40b3616401ef9e4db273a4d5d94e62f986eadf897d05e0",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with a raw-binary manifest"
     },
@@ -640,9 +642,9 @@
       "code_sha256": "5153c28e335132f17886d69826d733a4fac8f775b179e97ae4d1ad1e0ba2528e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
+      "file_sha256": "22dc1e291bda4a8deb40b3616401ef9e4db273a4d5d94e62f986eadf897d05e0",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with a nested-member manifest"
     },
@@ -652,9 +654,9 @@
       "code_sha256": "31f8dd394225de0536b48c47435e8da927c12e7a0021123867cb07b1fd01e48e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
+      "file_sha256": "22dc1e291bda4a8deb40b3616401ef9e4db273a4d5d94e62f986eadf897d05e0",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) selecting one tool"
     },
@@ -664,9 +666,9 @@
       "code_sha256": "d40b7f65cacfada8124817951806e3a41dbd8b6aa8454118024581749e2bb2ff",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "deee772f1129f12f73c07a6e315764ec86cf7800eab08d961d2da57530cadc44",
+      "file_sha256": "22dc1e291bda4a8deb40b3616401ef9e4db273a4d5d94e62f986eadf897d05e0",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with an unsafe archive"
     },
@@ -677,7 +679,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -686,9 +688,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 109,
@@ -707,7 +709,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -716,9 +718,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 110,
@@ -737,7 +739,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -746,9 +748,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 114,
@@ -767,7 +769,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -776,9 +778,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 718,
@@ -798,7 +800,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -807,9 +809,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 721,
@@ -828,7 +830,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -837,9 +839,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 772,
@@ -858,7 +860,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -867,9 +869,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 774,
@@ -888,7 +890,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -897,9 +899,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 777,
@@ -918,7 +920,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -927,9 +929,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 786,
@@ -948,7 +950,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -957,9 +959,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 788,
@@ -978,7 +980,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -987,9 +989,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 834,
@@ -1008,7 +1010,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1017,9 +1019,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 918,
@@ -1038,7 +1040,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1047,9 +1049,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 944,
@@ -1068,7 +1070,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1077,9 +1079,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 947,
@@ -1098,7 +1100,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1107,9 +1109,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 976,
@@ -1128,7 +1130,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1137,9 +1139,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 1011,
@@ -1160,7 +1162,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1169,9 +1171,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 1092,
@@ -1190,7 +1192,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1199,9 +1201,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 1101,
@@ -1220,7 +1222,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1229,9 +1231,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 1202,
@@ -1250,7 +1252,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1259,9 +1261,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 1292,
@@ -1280,7 +1282,7 @@
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
         "scripts/acquisition/tests/test_s3_store.py": "sha256:ef6128bce38471c67b9df1620a0a92363ebed0910ad01215446c9add5a61b450",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
@@ -1289,9 +1291,9 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:e0f3441f42f9f8a8fd1bb9a8ddba1222c1f9fe30de35ba57e9a5cc79c929d50d",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:c2f5e2b3749325ab134142b1d9ef5dd351315a8093a3d572c70256b685188a98",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "fdb657e13679306329de99dedbd822919baca37b04e407b48e3d79d4f9aa93f1",
       "line": 1293,
@@ -1308,7 +1310,7 @@
       "dependencies": {
         "scripts/lakehouse/bronze_metadata.py": "sha256:7997ab8c5fe80e2237e059014110cd3286ba68bab9df938299b0b8c50ff8e7c8",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "file_sha256": "941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
       "line": 40,
@@ -1322,36 +1324,48 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2295,
+      "line": 2642,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ec226ac829b7b313b21f36e679fb1266cf8287273727bf4ebeeaa027f49b76cc",
+      "file_sha256": "8d7daa198cf0d6390048d0a2cdf7ffb0d561215cc21d8bca696596162a3327c1",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/ci_groups.py": "sha256:744f41bdaa240935706eb40203b3a2cda180fd47c6fc59d0a89b27f056cd488e",
+        "scripts/lakehouse/feature_shards.py": "sha256:d1511aeaa0f939016bd765d2d9b79165ac9936892287c5a7f56b084ea683241c",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/ci_groups.py": "sha256:7f87685acf79ef0e7d817166029c3f127dbd6f95f94e336df56bcca07ac778a7",
+        "scripts/quality/ci_hooks.py": "sha256:655aab230cb34d91ab45c5f319257c7fbb8bf7d73b8458b3497a90bc5cee4042",
+        "scripts/quality/core_commands.py": "sha256:7921fbc79a922cf1320afe23ef40c830ca884bbe7b7c385af75ccd5da9d45dea",
         "scripts/quality/launcher_inputs.py": "sha256:1aa85bd54b2d0b2dbf1c61128f20f50e0d2a1be053fe8447305f459ad378834a",
-        "scripts/quality/pre_push.py": "sha256:e986205532c7e3de5f6351ac70f06a36483e2ecb80863d6d4e30fec1903181e9",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409",
-        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347",
+        "scripts/quality/pre_push.py": "sha256:c925eb4eb82ea0aa790110b01f50ffa9fc388af3555926984e1db7bbd812f847",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323",
+        "scripts/quality/run_checks_e2e.py": "sha256:405e840afc1d05d124b8222bd5e23a1386de56df304d8c72256c4f69442d97d5",
+        "scripts/quality/run_lint_tools_e2e.py": "sha256:d4f269c56470bf56c4f26e9fc027ccd3dfbaac0f31e45d60cdedd930e2ac11bc",
+        "scripts/quality/scratch_marker.py": "sha256:79a0ce7d5cdad4c208a592d9b66553ae03cb2b96e8362fc6ea56b194fc04a278",
+        "scripts/quality/scratch_worktree.py": "sha256:631affb50d8605581c849829fa444948b436db5b29538c93fc05fc1c5fc99f5b",
         "scripts/quality/source_reads.py": "sha256:a75832c95797a070247cd5e14dfd8324f6c22948e2e474e17b738d34ccd5e211"
       },
       "reason": "Runs the first hooks workflow step with Bash in a scratch folder. That step writes the current epoch to GITHUB_ENV through date and echo. It does not call Docker."
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2347,
+      "line": 2694,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ec226ac829b7b313b21f36e679fb1266cf8287273727bf4ebeeaa027f49b76cc",
+      "file_sha256": "8d7daa198cf0d6390048d0a2cdf7ffb0d561215cc21d8bca696596162a3327c1",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/ci_groups.py": "sha256:744f41bdaa240935706eb40203b3a2cda180fd47c6fc59d0a89b27f056cd488e",
+        "scripts/lakehouse/feature_shards.py": "sha256:d1511aeaa0f939016bd765d2d9b79165ac9936892287c5a7f56b084ea683241c",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/ci_groups.py": "sha256:7f87685acf79ef0e7d817166029c3f127dbd6f95f94e336df56bcca07ac778a7",
+        "scripts/quality/ci_hooks.py": "sha256:655aab230cb34d91ab45c5f319257c7fbb8bf7d73b8458b3497a90bc5cee4042",
+        "scripts/quality/core_commands.py": "sha256:7921fbc79a922cf1320afe23ef40c830ca884bbe7b7c385af75ccd5da9d45dea",
         "scripts/quality/launcher_inputs.py": "sha256:1aa85bd54b2d0b2dbf1c61128f20f50e0d2a1be053fe8447305f459ad378834a",
-        "scripts/quality/pre_push.py": "sha256:e986205532c7e3de5f6351ac70f06a36483e2ecb80863d6d4e30fec1903181e9",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409",
-        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347",
+        "scripts/quality/pre_push.py": "sha256:c925eb4eb82ea0aa790110b01f50ffa9fc388af3555926984e1db7bbd812f847",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323",
+        "scripts/quality/run_checks_e2e.py": "sha256:405e840afc1d05d124b8222bd5e23a1386de56df304d8c72256c4f69442d97d5",
+        "scripts/quality/run_lint_tools_e2e.py": "sha256:d4f269c56470bf56c4f26e9fc027ccd3dfbaac0f31e45d60cdedd930e2ac11bc",
+        "scripts/quality/scratch_marker.py": "sha256:79a0ce7d5cdad4c208a592d9b66553ae03cb2b96e8362fc6ea56b194fc04a278",
+        "scripts/quality/scratch_worktree.py": "sha256:631affb50d8605581c849829fa444948b436db5b29538c93fc05fc1c5fc99f5b",
         "scripts/quality/source_reads.py": "sha256:a75832c95797a070247cd5e14dfd8324f6c22948e2e474e17b738d34ccd5e211"
       },
       "reason": "Runs the literal HOOK_DEADLINE_PROGRAM with the project Python. It records calls to the shared process launcher and invokes ci_hooks against a scratch pre-commit stand-in that only records arguments and exits. It does not call Docker."
@@ -1367,8 +1381,8 @@
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
         "scripts/infrastructure/render_platform_config.py": "sha256:22347b27c8463106ea61905607a38d33add5d0eb49dcd42a021f351f69f334a8",
-        "scripts/infrastructure/render_project_config.py": "sha256:93536f84e83ecf684d3f7b46b5ad40599e8f521cb51136f322f176cc8b71d497",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/infrastructure/render_project_config.py": "sha256:f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd",
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "tolerant_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",
       "lines": [
@@ -1394,7 +1408,7 @@
       "file_sha256": "ed591205bc0436437b616a1656ae0d589ab6fcc924aad0f0796bdc5b89a202da",
       "dependencies": {
         "orchestration/worker_stderr.py": "sha256:b789fbb6d329adf6e571344079066028bb80b9a78be9e9f0700dbdac855898d1",
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "spawn_owned refuses any program that does not resolve to the running Python or the project .venv Python, so it starts only Python with the caller's script (WorkerPool and CatalogTransport); reviewed by the lead on Oct 24 2026; never Docker"
     },
@@ -1416,8 +1430,8 @@
       "occurrences": 1,
       "file_sha256": "88a26edf954fd75951e8e3fc7fa6fcdca839e844b760e3197d585eaf2f68bb5b",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/scratch_worktree.py": "sha256:631affb50d8605581c849829fa444948b436db5b29538c93fc05fc1c5fc99f5b"
       },
       "reason": "The literal bash program runs SHELL_HARNESS, which extracts only scratch declarations and cleanup from scripts/acquisition/run_checks_ci_e2e.sh. Its fixed actions use Git, chmod and removal in throwaway repositories and start no container."
     },
@@ -1429,145 +1443,147 @@
       "occurrences": 1,
       "file_sha256": "b6a664cdd1f7707457e8f5732408066fdb684598e620b78f6e6cf98c3a199864",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0"
       },
       "reason": "Report.command runs sys.executable -m <module> --check with its arguments; every caller passes the literal module scripts.training.guards or scripts.training.locks, and the check cannot follow the module because the list is built from the parameter"
     },
     {
       "path": "scripts/quality/install_lint_tools.py",
-      "line": 56,
+      "line": 70,
       "code_sha256": "62480e63ed1f0b78c7260c0d225b456c363e92252561765fd3d7f8edcf21e73a",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "1828309298be6f911328c43958dc391d960af6264ea4413cef21917c831d0316",
+      "file_sha256": "47e22447fff5d351380a4abdaddf7223db245a41b20332868ac4ae285c31ae8d",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/install_sqlfluff.py": "sha256:27073843f1c14f6ce42f8292e485d79ecac342fe13d4236a89059b89620734d4"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/install_sqlfluff.py": "sha256:c31c80fe93806e0e9091308099c26b435a4365af580d95f2a541660fcf99061a",
+        "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a"
       },
       "reason": "creates a virtual environment for a pinned lint tool with the interpreter the running environment was made from"
     },
     {
       "path": "scripts/quality/install_lint_tools.py",
-      "line": 43,
+      "line": 57,
       "code_sha256": "65d96f1f2077158032cd264f1555ce9c2a58a6cd1e124572f4839b241a021453",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "1828309298be6f911328c43958dc391d960af6264ea4413cef21917c831d0316",
+      "file_sha256": "47e22447fff5d351380a4abdaddf7223db245a41b20332868ac4ae285c31ae8d",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/install_sqlfluff.py": "sha256:27073843f1c14f6ce42f8292e485d79ecac342fe13d4236a89059b89620734d4"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/install_sqlfluff.py": "sha256:c31c80fe93806e0e9091308099c26b435a4365af580d95f2a541660fcf99061a",
+        "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a"
       },
       "reason": "runs the pinned lint tool named in config/quality_tools.json with --version to check its version"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 135,
+      "line": 134,
       "code_sha256": "3c1db58758fa280711417fd7eea03b1ee88c5a1ea273e2052fee5273122552ab",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned trivy config scan over infra/ with its skip flags and a throwaway cache"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 210,
+      "line": 207,
       "code_sha256": "478caea49b5dd93154bf67735409e484acfec34b75d8ecf9b33f87afc7d307f0",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned typos with _typos.toml over the given files"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 233,
+      "line": 230,
       "code_sha256": "831f64d116d631a36a334c8f75c6233ccefce5da6a9f9c687e17968e1590a9d4",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned check-jsonschema over mapped files"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 114,
+      "line": 113,
       "code_sha256": "9f88f77491fde0080d2298e91d17d0b5340fbece7f221e626d6d9929b1afcadc",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned .tools/bin/tflint with the project's .tflint.hcl over one Terraform folder"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 201,
+      "line": 198,
       "code_sha256": "a1100cb9424da73e39c705ef806304231e3beaba326329e2e7bfaf7e74c49007",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned import-linter with .importlinter"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 64,
+      "line": 63,
       "code_sha256": "a4736163dd24a98efbc0a8995774f6408df81be0bd71fe2e6d41c1476095bf44",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned lint tool named in config/quality_tools.json with --version to check its version"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 181,
+      "line": 178,
       "code_sha256": "a4f1d6bc19e5785326a616a20679827641615f37b9fe86b9a8813006cf2eea08",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned zizmor in offline mode over .github/workflows"
     },
     {
       "path": "scripts/quality/lint_tools.py",
-      "line": 158,
+      "line": 155,
       "code_sha256": "fb77582ae6d93075c1388387ffe73ec7cbd55170287f2d665c472e1b3b2112d0",
       "problem": "a process start (scripts.process.run_command) whose program the check cannot prove is not Docker",
       "occurrences": 1,
-      "file_sha256": "359fb0471373b14d6ab309800b7ff9ec1051eb85430c5cb15a56c31a3644da24",
+      "file_sha256": "1cee9e240d2161f2f85c2f786abd8af2a0dbbc11c5674957745e27bf40fcc666",
       "dependencies": {
-        "scripts/process.py": "sha256:a069175f605864808ede5d2bedec24ece775299eb8e9c1c3f307cf8b721715ce",
-        "scripts/quality/lint_sources.py": "sha256:a4497c9883a8cf6cfd62a45f2904d8c62d16feb748c592901495ff7030e10bf1",
-        "scripts/quality/repo_checks.py": "sha256:a453a8d393d3f48d57775e0d70186e4e9cff43f9d9a8fe656f315770b7d4a409"
+        "scripts/process.py": "sha256:5185fb1f4319646c9cc9a2ce6cdaf8818936f36ab2f90fa64a047bf49bf768d0",
+        "scripts/quality/lint_sources.py": "sha256:c816fe68d6b2d06eca38c95b5a6e7406cb02d37f2e8578330494de36a0756073",
+        "scripts/quality/repo_checks.py": "sha256:6f4ed5d2a060c3f74dbe7946a633b575dcab8a9cbc8469941f862eb73b89c323"
       },
       "reason": "runs the pinned OSV-Scanner over the tracked requirements files"
     }

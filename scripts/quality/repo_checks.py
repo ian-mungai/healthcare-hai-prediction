@@ -3,7 +3,7 @@
 Run from the repository root: ``.venv/bin/python -m scripts.quality.repo_checks <check> [paths ...]``. Each finding
 names the file and line, the rule, how to fix it and what to do when the rule seems wrong; any finding exits 1. A check
 that cannot run raises and exits non-zero, so it fails closed. There are no bypasses. Markers the checks look for are
-assembled from fragments, so this file does not flag itself. The rules are listed in docs/quality_checks.md.
+assembled from fragments, so this file does not flag itself. The rules are the check functions below.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from typing import Any
 
 from scripts.process import run_command
 
-POLICY = "docs/quality_checks.md"
+POLICY = "scripts/quality/repo_checks.py"
 ASK = "if the rule seems wrong here, stop and ask the repository owner; there are no bypasses (no SKIP= or --no-verify)"
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
@@ -53,6 +53,8 @@ RUFF_LINE_LENGTH = 160
 RUFF_LOOSENING_KEYS = {"ignore", "extend-ignore", "per-file-ignores", "extend-per-file-ignores", "exclude", "extend-exclude"}
 MYPY_FLAGS = ("--check-untyped-defs", "--disallow-untyped-defs")
 MYPY_LOOSENING_KEYS = {"ignore_errors", "ignore_missing_imports", "follow_imports", "disable_error_code", "allow_untyped_defs", "allow_incomplete_defs"}
+TEMPORARY_LIST = "config/quality/temporary_code.json"
+TEMPORARY_RULE = "the bundle's git_and_ci rules: main never imports, calls or reads temporary code"
 CI_SCRIPT = "scripts/run_ci.sh"
 CI_GROUP_FILES = "scripts/ci/groups"
 
@@ -63,7 +65,7 @@ FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 CLEANUP_ALLOWLIST = ".cleanup_allowlist"
 CLEANUP_RULE = f"{POLICY}: removed and unused code"
 REMOVED_KINDS = ["script", "flag", "env", "python", "config", "terraform", "dbt", "airflow", "dependency"]
-UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused"]
+UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused", "docs-path"]
 CODE_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts", ".sql", ".tf", ".yaml", ".yml", ".toml", ".json", ".ini", ".cfg", ".j2", ".jinja"}
 CODE_NAMES = {"Dockerfile", "Makefile", ".env.example"}
 CONFIG_SUFFIXES = {".yaml", ".yml", ".toml", ".json", ".ini", ".cfg"}
@@ -88,8 +90,10 @@ MODULE_NAMES = {
 }
 VULTURE_CONFIDENCE = 60  # Unused functions, classes and variables; lower levels flag dynamic uses vulture cannot see.
 DEPTRY_CODES = {"DEP001", "DEP002", "DEP003"}  # Missing, unused and transitive-only dependencies.
-RUNTIME_MAP = "config/quality/dependency_runtimes.json"  # Each runtime's requirements files, the code it runs and what it provides.
-TOOL_COMMENT = re.compile(r"#\s*(?:tool|dynamic):\s*\S")  # A requirement used as a command or imported dynamically, with why.
+RUNTIME_MAP = "config/quality/dependency_runtimes.json"  # Each runtime's dependency groups, the code it runs and what it provides.
+PYPROJECT_REQUIREMENT = re.compile(
+    r"""^\s*"([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*[=<>!~;@]"""
+)  # A quoted requirement line of a pyproject.toml group.
 # Files every repository may hold without another file naming them.
 WELL_KNOWN_FILES = {
     "README.md",
@@ -105,6 +109,7 @@ WELL_KNOWN_FILES = {
     "VERSION",
     "requirements.txt",
     "pyproject.toml",
+    "uv.lock",
     "package.json",
     "package-lock.json",
     "ruff.toml",
@@ -273,10 +278,10 @@ class Finding:
 
 @dataclass
 class Runtime:
-    """One place code runs: its requirements files, the tracked Python files it runs and the modules it gets outside pip."""
+    """One place code runs: its dependency groups, the tracked Python files it runs and the modules it gets outside pip."""
 
     name: str
-    requirements: list[str]
+    groups: list[str]
     files: list[str]
     provided: dict[str, str]
 
@@ -567,11 +572,13 @@ def config_key(line: str) -> str | None:
 
 
 def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
-    """Return the lower-case package names in requirements files."""
+    """Return the canonical package names in requirements files and in the quoted requirement lines of pyproject.toml."""
     names = set()
     for path, lines in lines_by_file.items():
         if re.search(r"(^|/)requirements[^/]*\.(txt|in)$", path):
-            names |= {match.group(1).lower() for line in lines if (match := REQUIREMENT.match(line))}
+            names |= {re.sub(r"[-_.]+", "-", match.group(1).lower()) for line in lines if (match := REQUIREMENT.match(line))}
+        elif Path(path).name == "pyproject.toml":
+            names |= {re.sub(r"[-_.]+", "-", match.group(1).lower()) for line in lines if (match := PYPROJECT_REQUIREMENT.match(line))}
     return names
 
 
@@ -649,21 +656,29 @@ def unused_code() -> list[Finding]:
     return findings
 
 
-def load_runtimes(python_files: list[str], requirements: list[str]) -> tuple[list[Runtime], list[Finding]]:
-    """Read the runtime map: each runtime's requirements files, the code it runs and the packages it gets outside pip.
+def load_runtimes(python_files: list[str], groups: list[str]) -> tuple[list[Runtime], list[Finding], dict[str, str], set[str]]:
+    """Read the runtime map: each runtime's dependency groups, the code it runs and the packages it gets outside pip.
 
-    The host runtime takes every tracked Python file no other runtime claims. Without a map, one host runtime reads
-    every requirements file. A malformed map, or a requirements file that does not exist, stops the check.
+    The host runtime takes every tracked Python file no other runtime claims. Without a map, one host runtime reads every group, each as declared
+    directly. The map also names the ``tools`` (requirements used as commands or imported dynamically, with why) and the ``direct_groups`` whose
+    dependencies are declared directly in pyproject.toml; every other group is a lock, so its transitive packages count as declared and only its
+    missing imports are reported. A malformed map, or a group pyproject.toml does not declare, stops the check.
     """
+    from scripts.quality import lock_env
+
     if not Path(RUNTIME_MAP).is_file():
-        return [Runtime("host", requirements, python_files, {})], []
+        return [Runtime("host", groups, python_files, {})], [], {}, set(groups)
     config = json.loads(Path(RUNTIME_MAP).read_text())
-    if set(config) - {"host", "runtimes"} or not isinstance(config.get("runtimes", {}), dict) or "requirements" not in config.get("host", {}):
-        raise SystemExit(f"{RUNTIME_MAP}: expected 'host' with 'requirements' and an optional 'runtimes' object")
+    if (
+        set(config) - {"host", "runtimes", "tools", "direct_groups"}
+        or not isinstance(config.get("runtimes", {}), dict)
+        or "groups" not in config.get("host", {})
+    ):
+        raise SystemExit(f"{RUNTIME_MAP}: expected 'host' with 'groups', an optional 'runtimes' object, 'tools' and 'direct_groups'")
     runtimes, findings, claimed = [], [], set()
     for name, entry in config.get("runtimes", {}).items():
-        if set(entry) - {"requirements", "code", "provided", "reason"} or not entry.get("requirements") or "code" not in entry:
-            raise SystemExit(f"{RUNTIME_MAP}: runtime {name} needs 'requirements' and 'code' and allows only 'provided' and 'reason'")
+        if set(entry) - {"groups", "code", "provided", "reason"} or not entry.get("groups") or "code" not in entry:
+            raise SystemExit(f"{RUNTIME_MAP}: runtime {name} needs 'groups' and 'code' and allows only 'provided' and 'reason'")
         files = []
         for pattern in entry["code"]:
             matched = [path for path in python_files if fnmatch.fnmatch(path, pattern)]
@@ -672,28 +687,53 @@ def load_runtimes(python_files: list[str], requirements: list[str]) -> tuple[lis
                 findings.append(Finding(RUNTIME_MAP, f"runtime {name}: {pattern} matches no tracked Python file", CLEANUP_RULE, fix))
             files += [path for path in matched if path not in files]
         claimed |= set(files)
-        runtimes.append(Runtime(name, entry["requirements"], files, entry.get("provided", {})))
+        runtimes.append(Runtime(name, entry["groups"], files, entry.get("provided", {})))
     host = config["host"]
-    if set(host) - {"requirements", "provided"}:
-        raise SystemExit(f"{RUNTIME_MAP}: host allows only 'requirements' and 'provided'")
-    runtimes.insert(0, Runtime("host", host["requirements"], [path for path in python_files if path not in claimed], host.get("provided", {})))
+    if set(host) - {"groups", "provided"}:
+        raise SystemExit(f"{RUNTIME_MAP}: host allows only 'groups' and 'provided'")
+    runtimes.insert(0, Runtime("host", host["groups"], [path for path in python_files if path not in claimed], host.get("provided", {})))
     for runtime in runtimes:
-        for path in runtime.requirements:
-            if not Path(path).is_file():
-                raise SystemExit(f"{RUNTIME_MAP}: runtime {runtime.name} names {path}, which does not exist")
-    return runtimes, findings
+        for group in runtime.groups:
+            if group not in groups:
+                raise SystemExit(f"{RUNTIME_MAP}: runtime {runtime.name} names group {group}, which pyproject.toml does not declare")
+    return runtimes, findings, {lock_env.normalize(name): why for name, why in config.get("tools", {}).items()}, set(config.get("direct_groups", []))
 
 
-def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> list[dict[str, Any]]:
-    """Run deptry on one runtime's files only, copied into a scratch folder, against that runtime's requirements."""
+def direct_names(group: str) -> list[str]:
+    """The package names a group of pyproject.toml declares itself, with no transitive package."""
+    from scripts.quality import lock_env
+
+    specs = tomllib.loads(Path("pyproject.toml").read_text())["dependency-groups"][group]
+    return sorted({lock_env.normalize(match.group(0)) for spec in specs if isinstance(spec, str) and (match := re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", spec))})
+
+
+def group_names(group: str, direct: set[str]) -> list[str]:
+    """The names deptry reads for one group: its own declarations when it is direct, else every package the lock pins for it."""
+    from scripts.quality import lock_env
+
+    return direct_names(group) if group in direct else sorted(lock_env.versions(lock_env.export(group, Path.cwd())))
+
+
+def write_listings(folder: Path, groups: list[str], direct: set[str]) -> dict[str, str]:
+    """Write one package-name file per group for deptry; return each file's path with the source it reports (pyproject.toml or uv.lock)."""
+    written: dict[str, str] = {}
+    for group in groups:
+        listing = folder / f"requirements-{group}.txt"
+        listing.write_text("\n".join(group_names(group, direct)) + "\n")
+        written[listing.resolve().as_posix()] = "pyproject.toml" if group in direct else "uv.lock"
+    return written
+
+
+def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str], direct: set[str]) -> list[dict[str, Any]]:
+    """Run deptry on one runtime's files only, copied into a scratch folder, against the packages of that runtime's groups."""
     with tempfile.TemporaryDirectory(prefix="deptry_") as scratch:
         root = Path(scratch) / "code"
         for path in runtime.files:
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             (root / path).write_bytes(Path(path).read_bytes())
         report_path = Path(scratch) / "deptry.json"
-        requirement_files = ",".join(str(Path(path).resolve()) for path in runtime.requirements)
-        args = [str(root), "--requirements-files", requirement_files, "--json-output", str(report_path), "--no-ansi"]
+        names = write_listings(Path(scratch), runtime.groups, direct)
+        args = [str(root), "--requirements-files", ",".join(names), "--json-output", str(report_path), "--no-ansi"]
         args += [flag for name in first_party for flag in ("--known-first-party", name)]
         ignores = [f"DEP002={'|'.join(sorted(exempt))}"] if exempt else []
         if runtime.provided:
@@ -704,8 +744,7 @@ def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> li
         if not report_path.exists():
             raise SystemExit(f"deptry failed for runtime {runtime.name} ({result.returncode}): {result.stderr[-2000:]}")
         issues: list[dict[str, Any]] = json.loads(report_path.read_text())
-        names = {str(Path(path).resolve()): path for path in runtime.requirements}
-        for issue in issues:  # Report repository paths: requirements files by name, code relative to the scratch copy.
+        for issue in issues:  # Report repository paths: the dependency lists by their source, code relative to the scratch copy.
             location = Path(issue["location"]["file"])
             absolute = location if location.is_absolute() else root / location
             if str(absolute.resolve()) in names:
@@ -718,43 +757,42 @@ def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> li
 def unused_dependencies() -> list[Finding]:
     """Every declared dependency is imported and every imported package is declared by the runtime that runs it (deptry).
 
-    Each runtime in the runtime map is checked on its own code with its own requirements files. A requirement used as
-    a command or imported dynamically carries ``# tool: <use>`` or ``# dynamic: <where>``. A lock file (``--hash=``
-    pins) also pins transitive packages, so only its missing imports are reported. A requirements file two runtimes
-    share reports a package as unused only when every one of them leaves it unused.
+    Each runtime in the runtime map is checked on its own code with the dependency groups it names. A requirement used as
+    a command or imported dynamically is listed under ``tools`` in the map. A lock group pins transitive packages too, so only its
+    missing imports are reported. A direct group two runtimes share reports a package as unused only when every one of them leaves it unused.
     """
+    from scripts.quality import lock_env
+
     globs, findings = allowed_paths("unused-dependencies")
-    requirements = [p for p in git("ls-files").splitlines() if re.search(r"(^|/)requirements[^/]*\.txt$", p) and Path(p).is_file()]
     python_files = [p for p in git("ls-files", "*.py").splitlines() if not re.match(r"(e2e|data)/", p) and Path(p).is_file()]
-    if not requirements:
+    groups = lock_env.groups(Path.cwd()) if Path("pyproject.toml").is_file() else []
+    if not groups:
         return findings
-    runtimes, map_findings = load_runtimes(python_files, requirements)
+    runtimes, map_findings, tools, direct = load_runtimes(python_files, groups)
     findings += map_findings
-    exempt = {
-        m.group(1).lower() for p in requirements for line in Path(p).read_text().splitlines() if TOOL_COMMENT.search(line) and (m := REQUIREMENT.match(line))
-    }
+    exempt = set(tools)
     # Module names, package folders and top-level folders (scripts is a namespace package with no __init__.py).
     first_party = sorted({Path(p).stem for p in python_files} | {part for p in python_files for part in Path(p).parts[:-1]})
-    locked = {path for runtime in runtimes for path in runtime.requirements if "--hash=" in Path(path).read_text()}
     unused: dict[tuple[str, str], int] = {}
-    readers = {path: sum(1 for runtime in runtimes if path in runtime.requirements and runtime.files) for path in requirements}
+    readers = sum(1 for runtime in runtimes if runtime.files and direct & set(runtime.groups))
     for runtime in runtimes:
         if not runtime.files:
             continue  # A tool environment with no project code, such as the SQLFluff tools.
-        for issue in run_deptry(runtime, first_party, exempt):
+        for issue in run_deptry(runtime, first_party, exempt, direct):
             code, module, location = issue["error"]["code"], issue["module"], issue["location"]
             if code not in DEPTRY_CODES or any(fnmatch.fnmatch(location["file"], glob) for glob in globs):
                 continue
             if code == "DEP002":
-                if location["file"] not in locked:
+                if location["file"] == "pyproject.toml":
                     unused[(location["file"], module)] = unused.get((location["file"], module), 0) + 1
                 continue
-            fix = f"pin it in {runtime.requirements[-1]} (runtime {runtime.name}), list it under provided in {RUNTIME_MAP}, or replace the import"
+            group = runtime.groups[-1]
+            fix = f"declare it in the {group} group of pyproject.toml and lock it, list it under provided in {RUNTIME_MAP}, or replace the import"
             problem = f"{module} is imported but runtime {runtime.name} does not declare it"
             findings.append(Finding(f"{location['file']}:{location['line']}", problem, f"{POLICY}: declared dependencies", fix))
     for (path, module), count in sorted(unused.items()):
-        if count == readers.get(path, 1):
-            fix = "remove it, or mark the line '# tool: <use>' or '# dynamic: <where>' when it is not imported directly"
+        if count == readers:
+            fix = f"remove it, or list it under tools in {RUNTIME_MAP} when it is not imported directly"
             findings.append(Finding(path, f"{module} is declared but nothing imports it", CLEANUP_RULE, fix))
     return findings
 
@@ -785,6 +823,114 @@ def orphan_files() -> list[Finding]:
         if not any(other != path and pattern.search(text) for other, text in texts.items()):
             fix = f"delete it, link it from the file that uses it, or add 'orphan {path} -- <why it stays>' to {CLEANUP_ALLOWLIST}"
             findings.append(Finding(path, "no other tracked file references it", CLEANUP_RULE, fix))
+    return findings
+
+
+DOCS_RULE = f"{POLICY}: a document reference names a tracked file"
+# A docs/ path in tracked text, also written ./docs/: not preceded by a path character, so a URL or an absolute path is not read, and not followed by a glob
+# or an f-string brace.
+DOCS_PATH = re.compile(r"(?<![\w./~$-])(?:\./)?docs/([\w.-]+(?:/[\w.-]+)*)")
+
+
+def docs_references() -> list[Finding]:
+    """No tracked text file names a docs/ path that is not tracked (a deleted or never committed document)."""
+    globs, findings = allowed_paths("docs-path")
+    tracked = git("ls-files").splitlines()
+    known = {*tracked, *(parent.as_posix() for path in tracked for parent in Path(path).parents)}
+    for path in tracked:
+        if any(fnmatch.fnmatch(path, glob) for glob in globs):
+            continue
+        try:
+            text = Path(path).read_text()
+        except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            for match in DOCS_PATH.finditer(line):
+                # Only a sentence's closing full stop is dropped; any other trailing character is part of the name it checks.
+                target = "docs/" + match.group(1).rstrip(".")
+                if target not in known:
+                    fix = f"point it at a tracked file, remove the reference, or add 'docs-path {path} -- <why it stays>' to {CLEANUP_ALLOWLIST}"
+                    findings.append(Finding(f"{path}:{number}", f"{target} is not a tracked file", DOCS_RULE, fix))
+    return findings
+
+
+def temporary_list() -> tuple[list[str], list[Finding]]:
+    """The paths in the list of temporary files; an unreadable or malformed list is a finding."""
+    try:
+        entries = json.loads(Path(TEMPORARY_LIST).read_text(encoding="utf-8"))["files"]
+        return [entry["path"] for entry in entries], []
+    except (OSError, ValueError, KeyError, TypeError):
+        fix = 'restore it: {"files": [{"path": "<file>", "why": "<reason>"}]}'
+        return [], [Finding(TEMPORARY_LIST, "the list of temporary files cannot be read", TEMPORARY_RULE, fix)]
+
+
+def imported_modules(path: str, tree: ast.AST) -> list[tuple[int, str]]:
+    """The (line, dotted module) pairs a Python file imports, relative imports resolved from the file's package."""
+    package = path.removesuffix(".py").split("/")[:-1]
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found += [(node.lineno, alias.name) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - node.level + 1] if node.level else []
+            module = ".".join([*base, *([node.module] if node.module else [])])
+            found += [(node.lineno, module)] + [(node.lineno, f"{module}.{alias.name}") for alias in node.names]
+    return found
+
+
+def string_values(tree: ast.AST) -> list[tuple[int, str]]:
+    """The (line, text) pairs of every string in a Python file except the docstrings, which only describe."""
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+    }
+    return [
+        (node.lineno, node.value) for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
+    ]
+
+
+def temporary_uses(path: str, text: str, listed: list[str]) -> list[tuple[int, str]]:
+    """The (line, listed file) pairs a permanent Python or shell file uses: an import, or a string or shell line that names the file."""
+    modules = {item.removesuffix(".py").replace("/", "."): item for item in listed if item.endswith(".py")}
+    named = {item: re.compile(rf"(?<![\w./-]){re.escape(item)}(?![\w-])|(?<![\w./-]){re.escape(Path(item).name)}(?![\w-])") for item in listed}
+    dotted = {item: re.compile(rf"(?<![\w.]){re.escape(module)}(?![\w])") for module, item in modules.items()}
+    found: list[tuple[int, str]] = []
+    if path.endswith(".py"):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return []
+        found += [(line, modules[module]) for line, module in imported_modules(path, tree) if module in modules]
+        for line, value in string_values(tree):
+            found += [(line, item) for item, pattern in named.items() if pattern.search(value)]
+            found += [(line, item) for item, pattern in dotted.items() if pattern.search(value)]
+    else:
+        for number, text_line in enumerate(text.splitlines(), 1):
+            found += [(number, item) for item, pattern in named.items() if pattern.search(text_line)]
+    return sorted(set(found))
+
+
+def temporary_code() -> list[Finding]:
+    """Permanent Python and shell files never import, call or read a file in the list of temporary files, and every listed file is tracked."""
+    listed, findings = temporary_list()
+    tracked = git("ls-files").splitlines()
+    for item in listed:
+        if item not in tracked:
+            findings.append(Finding(TEMPORARY_LIST, f"temporary file {item} is listed but not tracked", TEMPORARY_RULE, f"remove {item} from the list"))
+    for path in tracked:
+        if path in listed or not path.endswith((".py", ".sh")):
+            continue
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line, item in temporary_uses(path, text, listed):
+            fix = f"move what {path} needs from {item} into a permanent module that {item} imports (temporary code may use permanent code, not the reverse)"
+            findings.append(Finding(f"{path}:{line}", f"permanent code uses the temporary file {item}", TEMPORARY_RULE, fix))
     return findings
 
 
@@ -1246,9 +1392,9 @@ def warn(findings: list[Finding]) -> int:
 def main() -> int:
     """Run the named check and report its findings."""
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
-    checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused"]
+    checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter"])
+    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references"])
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
@@ -1278,7 +1424,9 @@ def main() -> int:
         "unused-dependencies": unused_dependencies,
         "orphan-files": orphan_files,
         "terraform-unused": terraform_unused,
+        "temporary-code": temporary_code,
         "front-matter": front_matter,
+        "docs-references": docs_references,
         "commit-msg": lambda: commit_message(args.paths[0]),
         "commit-range": lambda: commit_range(args.paths[0], args.paths[1]),
     }

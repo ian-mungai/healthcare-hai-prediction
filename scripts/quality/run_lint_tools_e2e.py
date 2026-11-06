@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.process import clear_git_environment, run_command
+from scripts.quality import scratch_marker
 
 ROOT = Path(__file__).resolve().parents[2]
 BUCKET = 'resource "aws_s3_bucket" "probe" {\n  bucket = "probe-bucket"\n}\n'
@@ -65,6 +66,7 @@ def build_repository(base: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, target, follow_symlinks=False)
     git(repo, "init", "--quiet")
+    scratch_marker.mark(repo, "scripts.quality.run_lint_tools_e2e")
     for key, value in (("user.name", "lint tools e2e"), ("user.email", "lint-tools-e2e@example.invalid")):
         git(repo, "config", key, value)
     git(repo, "add", "--all")
@@ -93,6 +95,7 @@ def plant(repo: Path, files: dict[str, str]) -> None:
 
 
 def restore(repo: Path) -> None:
+    scratch_marker.require(repo, "restore")
     git(repo, "reset", "--quiet", "--hard")
     git(repo, "clean", "--quiet", "-fd")
 

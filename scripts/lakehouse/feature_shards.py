@@ -34,8 +34,34 @@ def timed_case(suite: str, name: str) -> Iterator[float]:
         sys.stdout.flush()
 
 
-def select(names: list[str], shard: str = "", only: list[str] | None = None) -> list[str]:
-    """Select every Nth case for one-based K/N after applying the optional substring filter."""
+def case_costs(suite: str) -> dict[str, float]:
+    """The saved cost in seconds of each case of the suite (config/quality/feature_case_costs.json)."""
+    costs: dict[str, float] = json.loads((ROOT / "config/quality/feature_case_costs.json").read_text(encoding="utf-8"))[suite]
+    return costs
+
+
+def weighted_shards(names: list[str], costs: dict[str, float], count: int) -> list[list[str]]:
+    """Pack the cases into ``count`` shards: heaviest first, each into the lightest shard so far (ties: the earlier case, the lower shard).
+
+    A case without a saved cost counts as the median cost. Every case is in exactly one shard, and each shard lists its cases in inventory order.
+    """
+    known = sorted(costs[name] for name in names if name in costs)
+    fallback = known[len(known) // 2] if known else 1.0
+    weight = [costs.get(name, fallback) for name in names]
+    loads = [0.0] * count
+    members: list[list[int]] = [[] for _ in range(count)]
+    for index in sorted(range(len(names)), key=lambda position: (-weight[position], position)):
+        target = min(range(count), key=lambda shard: (loads[shard], shard))
+        members[target].append(index)
+        loads[target] += weight[index]
+    return [[names[index] for index in sorted(shard)] for shard in members]
+
+
+def select(names: list[str], shard: str = "", only: list[str] | None = None, suite: str = "") -> list[str]:
+    """Select the cases of one-based K/N after applying the optional substring filter.
+
+    With a ``suite`` the shards are packed by the saved case costs over the whole inventory and the filter then applies to the shard; without one, every Nth.
+    """
     if len(names) != len(set(names)) or not names:
         raise ValueError("feature case inventory must be nonempty and contain unique names")
     filtered = [name for name in names if not only or any(part in name for part in only)]
@@ -47,7 +73,11 @@ def select(names: list[str], shard: str = "", only: list[str] | None = None) -> 
     if match is None or int(match[1]) > int(match[2]):
         raise ValueError(f"--shard must be K/N with 1 <= K <= N, not {shard!r}")
     index, count = int(match[1]), int(match[2])
-    selected = filtered[index - 1 :: count]
+    if suite:
+        wanted = set(filtered)
+        selected = [name for name in weighted_shards(names, case_costs(suite), count)[index - 1] if name in wanted]
+    else:
+        selected = filtered[index - 1 :: count]
     if not selected:
         raise ValueError(f"shard {shard} has no feature cases")
     return selected
@@ -70,17 +100,17 @@ def snapshot(suite: str) -> dict[str, str]:
     files = [
         ROOT / f"scripts/lakehouse/run_feature_{suite}_e2e.py",
         ROOT / "scripts/lakehouse/feature_shards.py",
+        ROOT / "config/quality/feature_case_costs.json",
         ROOT / "scripts/lakehouse/feature_sources.py",
         ROOT / "scripts/lakehouse/feature_columns.py",
         ROOT / "scripts/lakehouse/feature_allowlist.py",
         ROOT / "data_contracts/lakehouse/gold_contract.json",
-        ROOT / "requirements.txt",
+        ROOT / "uv.lock",
         ROOT / "pyproject.toml",
         ROOT / "scripts/process.py",
         ROOT / "scripts/lakehouse/pipeline_build.py",
         ROOT / "scripts/lakehouse/run_gold_e2e.py",
         ROOT / "config/orchestration/broker_templates.json",
-        ROOT / "scripts/quality/sqlfluff/requirements.txt",
         ROOT / "config/lakehouse/dbt_package_archive.json",
     ]
     files += [
@@ -125,7 +155,7 @@ def combine(suite: str, count: int, directory: Path) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError) as error:
             problems.append(f"missing or invalid shard {shard}: {error}")
             continue
-        expected = select(inventory, shard)
+        expected = select(inventory, shard, suite=suite)
         if not isinstance(report, dict):
             problems.append(f"invalid shard {shard}: report is not an object")
             continue
@@ -176,7 +206,7 @@ def main() -> int:
                 "suite": args.suite,
                 "case_inventory": names,
                 "source_hashes": snapshot(args.suite),
-                "shards": {f"{index}/{args.count}": select(names, f"{index}/{args.count}") for index in range(1, args.count + 1)},
+                "shards": {f"{index}/{args.count}": select(names, f"{index}/{args.count}", suite=args.suite) for index in range(1, args.count + 1)},
             }
         else:
             if args.directory is None:

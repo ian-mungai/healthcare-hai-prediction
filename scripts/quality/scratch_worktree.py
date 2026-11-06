@@ -32,6 +32,7 @@ from types import FrameType
 from typing import Any
 
 from scripts.process import SubprocessError, run_command
+from scripts.quality import scratch_marker
 
 GIT_TIMEOUT_SECONDS = 600
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGALRM)
@@ -77,6 +78,7 @@ class ScratchWorktrees:
             timeout=GIT_TIMEOUT_SECONDS,
             check=True,
         )
+        scratch_marker.mark(resolved, "scripts.quality.scratch_worktree")
         return resolved
 
     def listing(self, when: str) -> list[str]:

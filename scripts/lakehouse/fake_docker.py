@@ -295,6 +295,7 @@ class FakeDocker:
     def dispatch(self, handler: Handler, method: str, parts: list[str], query: dict[str, str], body: Any) -> None:
         """Route by path."""
         if parts == ["_ping"]:
+            self.checkpoint("ping", "after", {})
             handler.reply(200, None)
         elif parts == ["info"]:
             handler.reply(200, {"MemTotal": self.mem_total, "NCPU": self.cpus})

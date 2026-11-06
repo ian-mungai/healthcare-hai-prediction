@@ -386,7 +386,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": bls_contract.code_hashes(),
-        "dependency_sha256": bls_contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": bls_contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_wonder_export_e2e --output {args.output}",
         "boundary": "Synthetic exports (102 counties a year, floor 100, not 3,100) with real macOS origins; fake versioned S3; no live WONDER or AWS access.",
         "cleanup": "Temporary folder removed on exit.",

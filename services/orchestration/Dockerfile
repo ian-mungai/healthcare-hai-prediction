@@ -1,7 +1,7 @@
 # The Airflow image of the orchestration stack: the official apache/airflow 3.3.2 (Python 3.12) image pinned by digest, plus the deadline
 # entrypoint of every finite job (D1 section 5 item 1) and its two labels. Nothing is installed: no package, no pip or uv call. The offline
-# check (scripts/orchestration/offline_checks.py) compares every distribution in the built image with constraints-3.12.txt and the image's
-# layers with this file. The entrypoint is the static Go program services/hai/deadline_run.go (standard library only), built here in a
+# check (scripts/orchestration/offline_checks.py) compares every distribution in the built image with constraints-3.12.txt, which it generates from the orchestration group of
+# uv.lock (Git ignores that file), and the image's layers with this file. The entrypoint is the static Go program services/hai/deadline_run.go (standard library only), built here in a
 # pinned golang stage, as services/lakehouse/polaris_admin/Dockerfile does for the Polaris admin tool.
 #
 # Build once from the repository root, with the base and builder images present (the digests below):

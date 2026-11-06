@@ -404,7 +404,7 @@ def main() -> None:
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": platform.python_version(),
         "code_sha256": contract.collector_code_hashes(),
-        "dependency_sha256": contract.digest(Path("requirements.txt").read_bytes()),
+        "dependency_sha256": contract.digest(Path("uv.lock").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_bls_api_e2e --output {args.output}",
         "scenarios": scenarios,
         "passed": all(s["passed"] for s in scenarios),

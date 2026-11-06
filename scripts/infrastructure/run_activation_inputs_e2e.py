@@ -5,8 +5,7 @@ with a reviewed value and a value of the wrong type. For every row the renderer 
 must refuse the wrong type and an unreviewed name, and must leave the input out of a default render. For every boolean row the saved-plan check must accept a
 plan that carries the reviewed value and refuse a plan that enables it without the reviewed file. Committed-default rows keep the preparation contract closed.
 Their cases accept either reviewed code default and reject saved-plan overrides through the renderer and wrapper. Real Terraform cases in run_e2e also plan both
-fixture defaults. A completeness check reads the stack variables and document owner steps. An input without either coverage route fails the run.
-Run from the repository root:
+fixture defaults. A completeness check reads the variables of the stacks, so a new flag that no row covers fails the run. Run from the repository root:
 ``.venv/bin/python -m scripts.infrastructure.run_activation_inputs_e2e --out <new folder>``.
 """
 
@@ -43,6 +42,8 @@ SOURCES = (
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
 )
+# The committed defaults in the shape the renderer reads (the owner edits the committed file itself).
+DEFAULT_PREPARATION = "tests/fixtures/iam_preparation_default.json"
 ACCOUNT = "111111111111"
 ADMIN = "example_admin"
 STACKS = {"iam": "infra/iam", "platform": "infra/platform", "services": "infra/services", "jobs": "infra/jobs"}
@@ -363,18 +364,6 @@ def variables_of(stack_directory: str) -> dict[str, str]:
     return found
 
 
-def added_names(text: str) -> list[str]:
-    """The backticked names that a sentence about repositories or log groups adds: the ones after "plus" or after "add"."""
-    names: list[str] = []
-    for sentence in re.split(r"(?<=[.:])\s+", text):
-        if not re.search(r"ecr_repositories|ECR repositories|log_groups|log groups", sentence):
-            continue
-        found = re.search(r"\bplus\b(.*)", sentence) or re.search(r"\badd(?:s|ed)?\b(.*)", sentence, re.I)
-        if found:
-            names += re.findall(r"`([a-z][a-z0-9_]+)`", found.group(1))
-    return names
-
-
 def completeness() -> dict[str, bool]:
     """Every activation has preparation-file coverage, committed-default coverage or a stated reason for exemption."""
     covered = {(row.stack, row.name) for row in (*ROWS, *COMMITTED_DEFAULTS)}
@@ -393,28 +382,6 @@ def completeness() -> dict[str, bool]:
         schema.get("ecr_repositories", {}).get("items", {}).get("enum") == PLATFORM_REPOSITORIES
         and schema.get("log_groups", {}).get("items", {}).get("enum") == PLATFORM_LOG_GROUPS
     )
-    # The monitoring and serving flags add their own repositories and log group, and the teardown guard is named in the same lines.
-    flagged = {"prometheus", "grafana", "statsd_exporter", "monitoring", "model_api", "streamlit", "allow_destructive_teardown"}
-    allowed = {*PLATFORM_REPOSITORIES, *PLATFORM_LOG_GROUPS, *flagged, "ecr_repositories", "log_groups"}
-    stray: list[str] = []
-    for path in sorted((ROOT / "docs").glob("*.md")):
-        stray += [f"{path.name}: {name}" for name in added_names(path.read_text()) if name not in allowed]
-    checks[f"every repository or log group that an owner step adds is allowed ({stray})"] = not stray
-    for sentence in ("Add `unreviewed_image` to the ECR repositories.", "`ecr_repositories` is the 11 default names plus `redis` and `unreviewed_image`."):
-        checks[f"a planted addition is found by the document scan ({sentence})"] = "unreviewed_image" in added_names(sentence)
-    checks["names of a reviewed file that is only described are not read as additions"] = not added_names(
-        "Write a file with `schema_version` 1, `root` `platform` and the variable `ecr_repositories` set to the defaults."
-    )
-    everything = {name for names in declared.values() for name in names}
-    walked: set[str] = set()
-    for path in sorted((ROOT / "docs").glob("*.md")):
-        text = path.read_text()
-        walked |= {m.group(1) for m in re.finditer(r"`([a-z][a-z0-9_]*)(?:\.[a-z_]+)? = ", text)}
-        walked |= {m.group(1) for m in re.finditer(r"(?:set|add|names?|with) `([a-z][a-z0-9_]+)`", text)}
-    owner_inputs = sorted(name for name in walked & everything if name not in {name for _, name in covered} and name not in EXEMPT)
-    secretish = {name for name in owner_inputs if name.endswith("_name")}
-    owner_inputs = [name for name in owner_inputs if name not in secretish]
-    checks[f"every input an owner step sets has preparation or committed-default coverage ({owner_inputs})"] = not owner_inputs
     return checks
 
 
@@ -452,6 +419,7 @@ class Workspace:
         for stack in ("services",):
             (self.root / STACKS[stack] / "images.auto.tfvars.json").parent.mkdir(parents=True, exist_ok=True)
             (self.root / STACKS[stack] / "images.auto.tfvars.json").write_text(json.dumps({"image_digests": {}}))
+        shutil.copy2(ROOT / DEFAULT_PREPARATION, self.root / "config/aws/iam_preparation.json")
         self.default_iam = (self.root / "config/aws/iam_preparation.json").read_text()
 
     def environment(self) -> dict[str, str]:

@@ -183,7 +183,7 @@ models:
     # Gold stores atomic facts, dimensions and bridges as tables.
     gold:
       +materialized: table
-    # The feature phase: research joins built from gold, never stored beside it (docs/feature_phase_saved.md). The gold selections
+    # The feature phase: research joins built from gold, never stored beside it. The gold selections
     # exclude this tag, and the tag also reaches the folder's singular tests (data_tests below).
     features:
       +materialized: view

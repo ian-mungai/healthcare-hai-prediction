@@ -1,0 +1,37 @@
+{
+  "note": "Temporary migration code that is still on main and leaves at hardening. Permanent code never imports, calls or reads these files (scripts.quality.repo_checks temporary-code); temporary code may import permanent code. Remove an entry when its file is deleted.",
+  "files": [
+    {
+      "path": "scripts/lakehouse/bronze_cutover.py",
+      "why": "the Mac-to-AWS bronze cutover owner command and its route exception"
+    },
+    {
+      "path": "scripts/lakehouse/bronze_inventory.py",
+      "why": "the bronze cutover inventory of the frozen Mac catalog"
+    },
+    {
+      "path": "scripts/lakehouse/mac_route_probe.py",
+      "why": "the bronze cutover's name for the container route probe (the probe itself is permanent in route_probe.py)"
+    },
+    {
+      "path": "scripts/lakehouse/run_bronze_cutover_e2e.py",
+      "why": "the E2E runner of the bronze cutover"
+    },
+    {
+      "path": "scripts/lakehouse/migrate_aws_catalog.py",
+      "why": "the Mac-to-AWS catalog migration"
+    },
+    {
+      "path": "scripts/lakehouse/catalog_migration_cases.py",
+      "why": "the cases of the catalog migration"
+    },
+    {
+      "path": "scripts/lakehouse/run_catalog_migration_e2e.py",
+      "why": "the E2E runner of the catalog migration"
+    },
+    {
+      "path": "scripts/lakehouse/run_catalog_migration_defects.py",
+      "why": "the planted-defect runner of the catalog migration"
+    }
+  ]
+}

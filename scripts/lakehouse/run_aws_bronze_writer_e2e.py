@@ -76,7 +76,7 @@ def snapshot() -> dict[str, str]:
         "config/lakehouse/aws_bronze_templates.json",
         "config/lakehouse/aws_bronze_grants.json",
         "config/lakehouse/bronze_tables.json",
-        "requirements.txt",
+        "uv.lock",
         "pyproject.toml",
         "scripts/infrastructure/policy_evaluator.py",
         "infra/iam/bronze_writer.tf",

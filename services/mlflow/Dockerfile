@@ -1,6 +1,7 @@
 # MLflow tracking server image: MLflow 3.17.0 with the PostgreSQL driver for the backend store and boto3 for the S3 artifact destination.
 # The base image is pinned by digest and the wheels by hash; nothing is fetched at run time. Telemetry stays off.
-# Build for Apple silicon: docker build --platform linux/arm64 (see services/mlflow/compile_lock.sh for the lock).
+# Build for Apple silicon: docker build --platform linux/arm64
+# requirements.txt is generated from the lock before each build: .venv/bin/python -m scripts.quality.lock_env images (the mlflow group of uv.lock; Git ignores the file).
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
 COPY requirements.txt /opt/mlflow/requirements.txt

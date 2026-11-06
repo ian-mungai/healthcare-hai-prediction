@@ -348,7 +348,7 @@ def main() -> None:
         report["finished_at_utc"] = datetime.now(UTC).isoformat()
         report["cleanup"] = "Temporary synthetic workspace removed; local evidence retained. No cloud resources created."
         report["source_sha256"] = {p.name: digest(p) for p in [*sorted(Path(__file__).parent.glob("*.py")), ROOT / "scripts/process.py"]}
-        report["requirements_sha256"] = digest(ROOT / "requirements.txt")
+        report["requirements_sha256"] = digest(ROOT / "uv.lock")
         report["configuration_sha256"] = {name: digest(ROOT / name) for name in ("config/quality_tools.json", ".pre-commit-config.yaml")}
         report["native_tool_sha256"] = {
             name: digest(ROOT / ".tools/bin" / name) for name in ("duckdb", "gitleaks", "tflint", "trivy") if (ROOT / ".tools/bin" / name).is_file()

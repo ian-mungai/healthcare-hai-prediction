@@ -301,7 +301,7 @@ def startup_admission() -> None:
                 patch.object(subject, "growth_reserve_map", return_value={}),
                 patch.object(subject, "spawn"),
             ):
-                subject.m_lineage_up(SimpleNamespace(params=params, state=state))
+                subject.m_lineage_up(SimpleNamespace(params=params, state=state, key="synthetic-request"))
 
         with patch.object(launcher.time, "time", side_effect=lambda: clock[0]), patch.object(run_lock, "write_atomic", counted_write):
             with bare_launcher("serving", True, registry).tx():
@@ -348,6 +348,7 @@ def startup_cleanup() -> None:
     """After a startup timeout a refused removal keeps the network, the limits and the error and reports nothing released, then cleanup completes."""
     subject, state, stack = startup_subject("network", time.time() - 1)
     stack["networks"] = {"backend": "synthetic-backend"}
+    stack["id"] = "synthetic-record"
     state["services"] = {"lineage-postgres": 1}
     subject.advance_lineage(state, [])
     timeout = stack["error"]
@@ -358,7 +359,7 @@ def startup_cleanup() -> None:
         subject.advance_lineage(state, actions)
         removal = next(op for op in state["operations"].values() if op["kind"] == "lineage_network_remove")
         subject.on_lineagenetremove(f"op:{removal['op_id']}", "error", RuntimeError("synthetic refusal"))
-        subject.on_lineageconfirm("lineage:confirm", "ok", False)
+        subject.on_lineageconfirm("lineage:confirm:synthetic-record", "ok", False)
         retained = stack["phase"] == "tearing_down" and stack["networks"] == {"backend": "synthetic-backend"} and state["services"] == {"lineage-postgres": 1}
         if not retained or stack["error"] != timeout:
             raise AssertionError("a refused cleanup was reported as released or lost the timeout error")
@@ -369,7 +370,7 @@ def startup_cleanup() -> None:
         retried = next(op for op in state["operations"].values() if op["state"] == "open")
         subject.on_lineagenetremove(f"op:{retried['op_id']}", "ok", None)
         subject.advance_lineage(state, [])
-        subject.on_lineageconfirm("lineage:confirm", "ok", True)
+        subject.on_lineageconfirm("lineage:confirm:synthetic-record", "ok", True)
     down = state["launcher"]["lineage"]
     if down["phase"] != "down" or down["error"] != timeout or state["services"]:
         raise AssertionError("completed cleanup did not record the release with the timeout error")

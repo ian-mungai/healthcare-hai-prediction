@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse.catalog_migration_cases import CASES, Scenario
+from scripts.lakehouse.catalog_journal_cases import CASES, Scenario
 from scripts.process import TimeoutExpired, run_command
 
 REPO = Path(__file__).resolve().parents[2]
@@ -22,7 +22,7 @@ def fingerprints(subject: Path) -> dict[str, str | None]:
     paths = [
         subject / "scripts/lakehouse/catalog_journal.py",
         Path(__file__),
-        Path(__file__).with_name("catalog_migration_cases.py"),
+        Path(__file__).with_name("catalog_journal_cases.py"),
         REPO / "scripts/process.py",
     ]
     return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}

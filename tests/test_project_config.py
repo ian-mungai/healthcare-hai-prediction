@@ -13,6 +13,9 @@ from scripts.infrastructure.render_project_config import ConfigurationError, bui
 from scripts.process import CompletedProcess, TimeoutExpired, run_command
 from tests.support import check
 
+# The committed defaults in the shape the renderer reads; config/aws/iam_preparation.json is the owner's file.
+DEFAULT_PREPARATION = Path(__file__).parent / "fixtures" / "iam_preparation_default.json"
+
 TEST_PROJECT_NAME = "example_project"
 TEST_ENVIRONMENT = "dev"
 # The project profile and its IAM user are named <project>_<environment>.
@@ -303,6 +306,8 @@ def test_cli_checks_identity_before_writing_inputs(
     path = tmp_path / ".env"
     path.write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
     monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
+    committed = renderer.load_preparation
+    monkeypatch.setattr(renderer, "load_preparation", lambda bucket: committed(bucket, DEFAULT_PREPARATION))
     monkeypatch.setattr(sys, "argv", ["renderer", "--verify-identity"])
     if not matches:
         caller_identity["Account"] = "222222222222"
@@ -324,7 +329,9 @@ def test_cli_checks_selected_saved_plan(environment: dict[str, Any], tmp_path: P
     storage, iam = build_configuration(environment, "example_admin")
     values = storage if stack == "storage" else iam
     # The IAM stack also carries the four committed preparation inputs.
-    preparation = json.loads(renderer.PREPARATION_PATH.read_text(encoding="utf-8")) if stack == "iam" else {}
+    committed = renderer.load_preparation
+    preparation = committed(storage["data_bucket_name"], DEFAULT_PREPARATION) if stack == "iam" else {}
+    monkeypatch.setattr(renderer, "load_preparation", lambda bucket: committed(bucket, DEFAULT_PREPARATION))
     plan: dict[str, Any] = {"complete": True, "variables": {key: {"value": value} for key, value in {**values, **preparation}.items()}}
     if change:
         plan["variables"][change] = {"value": "example_unapproved"}
@@ -364,7 +371,7 @@ def test_cli_rejects_unreadable_plan_without_echoing_output(
 
 
 def preparation_file(tmp_path: Path, **extra: Any) -> Path:
-    document = json.loads(renderer.PREPARATION_PATH.read_text(encoding="utf-8")) | extra
+    document = json.loads(DEFAULT_PREPARATION.read_text(encoding="utf-8")) | extra
     path = tmp_path / "iam_preparation.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     return path

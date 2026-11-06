@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from scripts.process import clear_git_environment, run_command
+from scripts.quality import scratch_marker
 from scripts.quality.hook_stage import hook_stage
 from scripts.quality.repo_checks import load_yaml
 
@@ -93,14 +94,13 @@ OLD_CLASS = "Legacy" + "Loader"
 OLD_KEY = "retention" + "_days"
 OLD_VARIABLE = "bucket" + "_label"
 OLD_MODEL = "stg" + "_orders"
-# Not pinned by any runtime's requirements file that the scratch repository copies.
+# Not pinned by any dependency group that the scratch repository copies.
 OLD_PACKAGE = "hum" + "anize"
 OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
 FOLDER_NAME = "run" + "books"
 OLD_NOTES = "old" + "_notes.md"
-# No requirements file under scripts/ may pin this name, even as a transitive pin: the scratch repository copies those files and would then
-# count the sample import as declared.
+# No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
@@ -113,24 +113,72 @@ COPIED_ALLOWED = (
     "unused-code scripts/* -- check scripts copied into the scratch repository\n"
     "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
 )
+SIX = "si" + "x"
+
+
+def lock_files(groups: dict[str, tuple[dict[str, str], dict[str, str]]]) -> dict[str, str]:
+    """A pyproject.toml and a hand-written uv.lock for groups of ``(declared pins, transitive pins)``: uv export reads them with no network."""
+    names = sorted(groups)
+    declared = "".join(f"{group} = [{', '.join(f'"{name}=={version}"' for name, version in groups[group][0].items())}]\n" for group in names)
+    conflicts = ", ".join(f'{{ group = "{group}" }}' for group in names)
+    pyproject = f'[project]\nname = "hai-prediction"\nversion = "0.0.0"\nrequires-python = "==3.12.*"\ndependencies = []\n\n[dependency-groups]\n{declared}'
+    pyproject += f"\n[tool.uv]\npackage = false\nconflicts = [[{conflicts}]]\n"
+    lock = 'version = 1\nrevision = 3\nrequires-python = "==3.12.*"\nconflicts = [[\n'
+    lock += "".join(f'    {{ package = "hai-prediction", group = "{group}" }},\n' for group in names)
+    lock += ']]\n\n[[package]]\nname = "hai-prediction"\nversion = "0.0.0"\nsource = { virtual = "." }\n\n[package.dev-dependencies]\n'
+    for group in names:
+        lock += f"{group} = [\n" + "".join(f'    {{ name = "{name}" }},\n' for name in groups[group][0]) + "]\n"
+    lock += "\n[package.metadata]\n\n[package.metadata.requires-dev]\n"
+    for group in names:
+        lock += f"{group} = [" + ", ".join(f'{{ name = "{name}", specifier = "=={version}" }}' for name, version in groups[group][0].items()) + "]\n"
+    pins = {name: version for group in names for name, version in {**groups[group][1], **groups[group][0]}.items()}
+    for name in sorted(pins):
+        links = [other for group in names if name in groups[group][0] for other in groups[group][1]]
+        lock += f'\n[[package]]\nname = "{name}"\nversion = "{pins[name]}"\nsource = {{ registry = "https://pypi.org/simple" }}\n'
+        lock += "dependencies = [\n" + "".join(f'    {{ name = "{other}" }},\n' for other in sorted(set(links))) + "]\n" if links else ""
+        lock += (
+            f'wheels = [\n    {{ url = "https://files.pythonhosted.org/packages/aa/{name}-{pins[name]}-py3-none-any.whl", hash = "sha256:{"a" * 64}" }},\n]\n'
+        )
+    return {"pyproject.toml": pyproject, "uv.lock": lock}
+
+
+# A runtime map with an image whose lock group pins a package and a transitive pin, and a package the image provides. The host provides
+# jsonschema as the real map does, because the scratch repository holds the launcher, which imports it. The map names the dependency
+# groups, the one direct group and the tools; a tool is used as a command, so nothing imports it.
+# The scratch repository holds this repository's scripts, whose fixtures name docs/ paths of their own.
+DOCS_ALLOWED = (
+    COPIED_ALLOWED
+    + "docs-path scripts/* -- check scripts copied into the scratch repository\n"
+    + "docs-path config/quality/launcher_inputs.json -- the copied input list names the analysis plan, which the scratch repository lacks\n"
+)
 # A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
 # jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
 RUNTIME_MAP = "config/quality/dependency_runtimes.json"
 PROVIDED_MODULE = "spark" + "lib"
 RUNTIME_MAP_SOURCE = (
-    '{"host": {"requirements": ["requirements.txt"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}, '
-    '"runtimes": {"image": {"requirements": ["image/requirements.txt"], '
+    '{"tools": {"ruff": "tool: formatter run by pre-commit"}, "direct_groups": ["host"], '
+    '"host": {"groups": ["host"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}, '
+    '"runtimes": {"image": {"groups": ["image"], '
     f'"code": ["image/*.py"], "provided": {{"{PROVIDED_MODULE}": "the image\'s own distribution"}}}}}}}}\n'
 )
+HOST_MAP = '{"direct_groups": ["host"], "host": {"groups": ["host"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}}\n'
 RUNTIME_SAMPLE = {
     RUNTIME_MAP: RUNTIME_MAP_SOURCE,
-    "requirements.txt": "ruff==0.16.3  # tool: formatter run by pre-commit\n",
-    "image/requirements.txt": f"{UNUSED_PACKAGE}==0.9.0 \\\n    --hash=sha256:{'a' * 64}\nsix==1.17.0 \\\n    --hash=sha256:{'b' * 64}\n",
+    **lock_files({"host": ({"ruff": "0.16.3"}, {}), "image": ({UNUSED_PACKAGE: "0.9.0"}, {SIX: "1.17.0"})}),
     ".cleanup_allowlist": COPIED_ALLOWED,
 }
 # Cleanup checks: a sample that must block must also print its finding, so a failure for another reason cannot pass.
 CLEANUP_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terraform-unused"}
 WHITELIST = "scripts/quality/vulture_whitelist.py"
+
+
+TEMPORARY_LIST = "config/quality/temporary_code.json"
+# The sample names are assembled so this file, which the scratch repositories copy, never names a listed file itself.
+TEMPORARY_MODULE = "tmp" + "_one"
+TEMPORARY_FILE = f"scripts/lakehouse/{TEMPORARY_MODULE}.py"
+TEMPORARY_USE = f"permanent code uses the temporary file {TEMPORARY_FILE}"
+TEMPORARY_LIST_SOURCE = json.dumps({"note": "sample list", "files": [{"path": TEMPORARY_FILE, "why": "sample temporary file"}]})
+TEMPORARY_BASE = {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE, TEMPORARY_FILE: "VALUE = 1\n"}
 
 
 @dataclass
@@ -146,7 +194,7 @@ class Case:
     message: str | None = None
 
 
-POLICY_DOCUMENT = "docs/quality_checks.md"
+POLICY_DOCUMENT = "scripts/quality/repo_checks.py"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
 
 CASES = [
@@ -316,8 +364,8 @@ CASES = [
         "dependency removed, import remains",
         "removed-names",
         False,
-        committed={"requirements.txt": f"{OLD_PACKAGE}==2.9.0\n", "app/dates.py": f"import {OLD_MODULE}\n"},
-        files={"requirements.txt": "\n"},
+        committed={"pyproject.toml": f'[dependency-groups]\nhost = [\n  "{OLD_PACKAGE}==2.9.0",\n]\n', "app/dates.py": f"import {OLD_MODULE}\n"},
+        files={"pyproject.toml": "[dependency-groups]\nhost = []\n"},
     ),
     Case(
         "cleanup allowlist entry without a reason",
@@ -358,7 +406,8 @@ CASES = [
         "unused-dependencies",
         True,
         {
-            "requirements.txt": f"{UNUSED_PACKAGE}==0.9.0\nruff==0.16.3  # tool: formatter run by pre-commit\n",
+            **lock_files({"host": ({UNUSED_PACKAGE: "0.9.0"}, {})}),
+            RUNTIME_MAP: HOST_MAP,
             "app/table.py": f"import {UNUSED_PACKAGE}\n",
             ".cleanup_allowlist": COPIED_ALLOWED,
         },
@@ -367,13 +416,13 @@ CASES = [
         "dependency nothing imports",
         "unused-dependencies",
         False,
-        {"requirements.txt": f"{UNUSED_PACKAGE}==0.9.0\n", ".cleanup_allowlist": COPIED_ALLOWED},
+        {**lock_files({"host": ({UNUSED_PACKAGE: "0.9.0"}, {})}), RUNTIME_MAP: HOST_MAP, ".cleanup_allowlist": COPIED_ALLOWED},
     ),
     Case(
         "import missing from requirements",
         "unused-dependencies",
         False,
-        {"requirements.txt": "\n", "app/table.py": f"import {UNUSED_PACKAGE}\n", ".cleanup_allowlist": COPIED_ALLOWED},
+        {**lock_files({"host": ({}, {})}), RUNTIME_MAP: HOST_MAP, "app/table.py": f"import {UNUSED_PACKAGE}\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
     Case(
         "image package imported by image code",
@@ -406,6 +455,93 @@ CASES = [
         True,
         {"README.md": f"Run `python -m tools.{DASH_M_MODULE}`.\n", f"tools/{DASH_M_MODULE}.py": "print(1)\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
+    Case(
+        "docs reference to a tracked file",
+        "docs-references",
+        True,
+        {"README.md": "Read [the guide](docs/guide.md).\n", "docs/guide.md": "# Guide\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs reference to a missing file",
+        "docs-references",
+        False,
+        {"README.md": "Read [the guide](docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs reference kept by an allowlist entry",
+        "docs-references",
+        True,
+        {"README.md": "Read [the guide](docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED + "docs-path README.md -- quotes a deleted guide\n"},
+    ),
+    Case(
+        "docs reference with a ./ prefix to a missing file",
+        "docs-references",
+        False,
+        {"README.md": "Read [the guide](./docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs reference that extends a tracked file name",
+        "docs-references",
+        False,
+        {"README.md": "Read docs/guide.md- for the old steps.\n", "docs/guide.md": "# Guide\n", ".cleanup_allowlist": DOCS_ALLOWED},
+    ),
+    Case(
+        "docs words that are not references",
+        "docs-references",
+        True,
+        {
+            "README.md": "Edit docs/*.md or the docs/ folder; see https://example.invalid/geo/docs/reference/page.html and ../docs.\n",
+            ".cleanup_allowlist": DOCS_ALLOWED,
+        },
+    ),
+    Case("permanent file with no temporary code", "temporary-code", True, {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": "VALUE = 2\n"}),
+    Case(
+        "temporary file imports permanent code",
+        "temporary-code",
+        True,
+        {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE, TEMPORARY_FILE: "from scripts.lakehouse import perm\n", "scripts/lakehouse/perm.py": "VALUE = 2\n"},
+    ),
+    Case(
+        "permanent docstring names a temporary file",
+        "temporary-code",
+        True,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f'"""Prose may name {TEMPORARY_FILE} without using it."""\n'},
+    ),
+    Case(
+        "import of a temporary module from its package",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"from scripts.lakehouse import {TEMPORARY_MODULE}\n"},
+    ),
+    Case(
+        "import of a name from a temporary module",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"from scripts.lakehouse.{TEMPORARY_MODULE} import VALUE\n"},
+    ),
+    Case(
+        "plain import of a temporary module",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"import scripts.lakehouse.{TEMPORARY_MODULE}\n"},
+    ),
+    Case(
+        "relative import of a temporary module", "temporary-code", False, {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f"from . import {TEMPORARY_MODULE}\n"}
+    ),
+    Case(
+        "permanent file reads a temporary file by name",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": f'from pathlib import Path\nTEXT = Path(__file__).with_name("{TEMPORARY_MODULE}.py").read_text()\n'},
+    ),
+    Case(
+        "shell script pipes a temporary file",
+        "temporary-code",
+        False,
+        {**TEMPORARY_BASE, "scripts/lakehouse/run_probe.sh": f"#!/usr/bin/env bash\ndocker run -i image < {TEMPORARY_FILE}\n"},
+    ),
+    Case("list names a file that is not tracked", "temporary-code", False, {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE}),
+    Case("list is missing", "temporary-code", False, {"scripts/lakehouse/perm.py": "VALUE = 2\n"}),
     Case("used Terraform variable", "terraform-unused", True, {"infra/main.tf": USED_TF}),
     Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
     # Only folders that hold a tracked .tf file are checked; an ignored folder is out of scope, as in CI.
@@ -668,10 +804,19 @@ CASES = [
 ]
 # Privacy cases must be blocked for their intended cause, shown by file, line and type.
 BLOCK_REASONS = {
+    "import of a temporary module from its package": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "import of a name from a temporary module": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "plain import of a temporary module": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "relative import of a temporary module": f"scripts/lakehouse/perm.py:1: {TEMPORARY_USE}",
+    "permanent file reads a temporary file by name": f"scripts/lakehouse/perm.py:2: {TEMPORARY_USE}",
+    "shell script pipes a temporary file": f"scripts/lakehouse/run_probe.sh:2: {TEMPORARY_USE}",
+    "list names a file that is not tracked": f"config/quality/temporary_code.json: temporary file {TEMPORARY_FILE} is listed but not tracked",
+    "list is missing": "config/quality/temporary_code.json: the list of temporary files cannot be read",
     "function nothing calls": f"app/util.py:4: unused function '{STALE_HELPER}'",
-    "dependency nothing imports": f"requirements.txt: {UNUSED_PACKAGE} is declared but nothing imports it",
+    "dependency nothing imports": f"pyproject.toml: {UNUSED_PACKAGE} is declared but nothing imports it",
     "import missing from requirements": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "file nothing references": f"docs/{OLD_NOTES}: no other tracked file references it",
+    "docs reference to a missing file": "README.md:1: docs/missing_guide.md is not a tracked file",
     "unused Terraform variable": f'infra/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
     "unused variable in a nested folder": f'infra/iam/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
     "image package imported by host code": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
@@ -716,6 +861,12 @@ def git(repo: Path, *args: str) -> str:
     return run_command("git", args, cwd=repo, check=True).stdout
 
 
+def reset_hard(repo: Path, target: str) -> None:
+    """Reset a scratch repository that this runner made to ``target``; any other folder is refused and left as it is."""
+    scratch_marker.require(repo, "reset")
+    git(repo, "reset", "-q", "--hard", target)
+
+
 def write(repo: Path, files: dict[str, str | bytes] | dict[str, str]) -> None:
     """Write files into the scratch repository, creating folders as needed."""
     for relative, content in files.items():
@@ -732,6 +883,7 @@ def scratch_repo(root: Path, case: Case) -> Path:
     repo = root / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
+    scratch_marker.mark(repo, "scripts.quality.run_checks_e2e")
     git(repo, "config", "user.name", "check test")
     git(repo, "config", "user.email", "test@example.invalid")
     # No background garbage collection or maintenance: a detached run can still be writing into .git when the scratch
@@ -794,7 +946,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
-        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", *CLEANUP_HOOKS):
+        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
             reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"
@@ -812,7 +964,7 @@ def run_range_case() -> tuple[bool, str]:
         git(repo, "commit", "--allow-empty", "-qm", f"fix: bad credit\n\n{SCISSORS}\n{CREDIT}: Claude <{VENDOR_ADDRESS}>")
         bad = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         invalid = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", "missing-ref", "HEAD"], cwd=repo)
-        git(repo, "reset", "-q", "--hard", "HEAD~1")
+        reset_hard(repo, "HEAD~1")
         git(repo, "commit", "--allow-empty", "-qm", "fix: handle retries\n\nAccepted at recheck 2 of lane A.")
         plan = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "commit-range", base, "HEAD"], cwd=repo)
         ok = good.returncode == 0 and bad.returncode == 1 and "AI attribution in commit message" in bad.stderr and invalid.returncode != 0
@@ -862,6 +1014,41 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
     for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
         if "steps.range.outputs." in value:
             context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
+    # The scope step and the check range step of the plan job run for real: the scope is range for a pull request and full for every other event, and the
+    # file based checks get an empty range outside a pull request.
+    scope_exits = {}
+    for step_id in ("scope", "checkrange"):
+        plan_step = next((step for step in steps if step.get("id") == step_id), None)
+        scope_exits[step_id] = 1
+        if plan_step:
+            step_env = {name: workflow_value(value, context) for name, value in plan_step.get("env", {}).items()}
+            step_output = repo / ".git" / f"{label}_{step_id}_output"
+            script = repo / ".git" / "plan_step.sh"
+            script.write_text("set -eo pipefail\n" + plan_step["run"])
+            result = run_command("bash", [str(script)], cwd=repo, env={**environment, "GITHUB_OUTPUT": str(step_output), **step_env}, timeout=120)
+            scope_exits[step_id] = result.returncode
+            if step_output.exists():
+                context.update(
+                    {f"steps.{step_id}.outputs.{key}": value for line in step_output.read_text().splitlines() for key, value in [line.split("=", 1)]}
+                )
+    for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
+        if "steps.scope.outputs." in value or "steps.checkrange.outputs." in value:
+            context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
+    file_based = {
+        f"{job}.{index}"
+        for job, definition in workflow["jobs"].items()
+        if job != "plan"
+        for index, step in enumerate(definition.get("steps", []))
+        if "check_start" in str(step.get("env", {}).get("RANGE_START", ""))
+    }
+    scopes = {
+        f"{job}.{index}": workflow_value(str(step["env"]["CI_SCOPE"]), context)
+        for job, definition in workflow["jobs"].items()
+        if job != "plan"
+        for index, step in enumerate(definition.get("steps", []))
+        if "CI_SCOPE" in step.get("env", {})
+    }
+    wanted_scope = "range" if event == "pull_request" else "full"
     consumers = {
         f"{job}.{index}": {name: workflow_value(step["env"][name], context) for name in ("RANGE_START", "RANGE_END")}
         for job, definition in workflow["jobs"].items()
@@ -887,12 +1074,27 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
     selected = json.loads(result.stdout) if result.returncode == 0 else {}
     checks = {
         "plan_passes": plan_exit == 0,
-        "all_consumers_use_the_expected_range": bool(consumers) and all(env == {"RANGE_START": want_start, "RANGE_END": head} for env in consumers.values()),
+        "scope_and_check_range_steps_pass": all(code == 0 for code in scope_exits.values()),
+        "commit_checks_use_the_real_range": bool(consumers)
+        and all(env == {"RANGE_START": want_start, "RANGE_END": head} for name, env in consumers.items() if name not in file_based),
+        # The hook partitions and the acquisition tests read the files of the range in a pull request and every file in a full run.
+        "file_based_checks_use_the_check_range": len(file_based) == 3
+        and all(
+            consumers[name] == ({"RANGE_START": want_start, "RANGE_END": head} if event == "pull_request" else {"RANGE_START": "", "RANGE_END": ""})
+            for name in file_based
+        ),
+        # Pull requests are path selected; a push to main and a manual run are full runs, and no run is scheduled.
+        "every_group_job_runs_the_scope_of_the_event": len(scopes) >= 8 and all(value == wanted_scope for value in scopes.values()),
+        "no_scheduled_trigger": "schedule" not in (workflow.get(True) or workflow.get("on") or {}),
         "check_has_the_expected_result": check_exit == want_exit and want_marker in log,
         "selector_passes": result.returncode == 0,
     }
     if label == "branch_behind_main":
-        checks["main_only_paths_do_not_select_groups"] = selected.get("changed") == 1 and selected.get("run") == ["repository_code_checks", "sql_style"]
+        checks["main_only_paths_do_not_select_groups"] = selected.get("changed") == 1 and selected.get("run") == [
+            "repository_code_checks",
+            "ci_tooling_checks",
+            "sql_style",
+        ]
         checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
         checks["plan_fetches_full_history"] = checkout.get("with", {}).get("fetch-depth") == 0
     if not want_start or want_start == "missing-ref":
@@ -939,7 +1141,7 @@ def run_workflow_range_case() -> tuple[bool, str]:
         git(repo, "commit", "-qm", "refactor: remove a branch function")
         deleted = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "pull_request", base, deleted, ancestor, 1, f"{removed} was removed"))
-        git(repo, "reset", "--hard", head)
+        reset_hard(repo, head)
         git(repo, "commit", "--allow-empty", "-qm", "Invalid subject")
         invalid = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "branch_commit_message_is_rejected", "pull_request", base, invalid, ancestor, 1, "not a Conventional Commit"))
@@ -1054,7 +1256,7 @@ SLASH_LINE = "Read and/or write the file.\n"
 ALL_KINDS = DASH_LINE + SEMICOLON_LINE + SLASH_LINE
 PUNCTUATION_PROSE = (
     "Rules help when they are checked. Read `a/b;c`, see [the log](https://example.invalid/a;b-c) &amp; write it.\n"
-    "Open docs/quality_checks.md or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
+    "Open scripts/quality/timing.sh or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
 )
 CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
 BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
@@ -1514,6 +1716,11 @@ def run_lint_coverage_case() -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
+def run_worktree_checks_case() -> tuple[bool, str]:
+    result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.run_worktree_checks_e2e"], cwd=ROOT, timeout=1200)
+    return result.returncode == 0, result.stdout + result.stderr
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1522,7 +1729,7 @@ def main() -> int:
     clear_git_environment()
     cases = CASES[:1] if args.hook_probe else CASES
     if not PRE_COMMIT.exists() or not (ROOT / ".tools" / "bin" / "gitleaks").exists():
-        sys.stderr.write("setup missing: create .venv from requirements.txt and run scripts/quality/install_tools.py (README, Install)\n")
+        sys.stderr.write("setup missing: create .venv from the host group of uv.lock and run scripts/quality/install_tools.py (README, Install)\n")
         return 1
     failures = 0
     for case in cases:
@@ -1545,6 +1752,7 @@ def main() -> int:
             ("typecheck pending manifest", run_typecheck_manifest_case),
             ("typecheck cold caches", run_typecheck_cold_case),
             ("source lint coverage", run_lint_coverage_case),
+            ("head and pinned-tools checks", run_worktree_checks_case),
         ):
             extra += 1
             ok, output = runner()

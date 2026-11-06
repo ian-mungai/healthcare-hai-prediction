@@ -6,25 +6,15 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 
 ## Install
 
-The project needs these tools:
+Prerequisites: macOS on Apple silicon, Python 3.12, Git, Terraform 1.16.1, AWS CLI v2, Node.js 22 or later and Docker Desktop.
 
-- macOS on Apple silicon or Linux AMD64
-- Python 3.12
-- Git
-- Terraform 1.16.1
-- AWS CLI v2
-- Node.js 22 or later, for the Markdown checks
-- Google Chrome, which renders the architecture diagram
-- Docker Desktop, which runs the lakehouse
-
-The launcher (`orchestration/launcher.py`) computes a memory plan for every job from the memory that Docker and the Mac have free. An allocation takes 75% of that memory. It stops a launch whose container budget is below 4 GiB. Native quality tools install into the ignored `.tools/` directory. Their versions and publisher SHA-256 values are pinned in `config/quality_tools.json`.
-
-1. Create the environment and install the tools and hooks:
+1. Create the environment, install the pinned tools and the hash-locked host dependencies and install the hooks:
 
    ```sh
    python3.12 -m venv .venv
-   .venv/bin/python -m pip install -r requirements.txt
    .venv/bin/python scripts/quality/install_tools.py
+   .venv/bin/python -m scripts.quality.lock_env export host --output "$TMPDIR/host_lock"
+   .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r "$TMPDIR/host_lock/requirements.txt"
    .venv/bin/python -m scripts.quality.install_markdownlint
    .venv/bin/python -m scripts.quality.install_sqlfluff
    .venv/bin/python -m scripts.quality.install_dvc
@@ -34,164 +24,31 @@ The launcher (`orchestration/launcher.py`) computes a memory plan for every job 
    cp .env.example .env
    ```
 
-2. Fill every value in `.env`. Git ignores the file. `AWS_PROFILE` is the project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM user. IAM changes use a separate administrator profile that is never stored in `.env`.
-3. Store no secret in `.env` or in any other file on the host. Every project secret lives in AWS Systems Manager Parameter Store. The four shared API keys live in AWS Secrets Manager (`docs/install_details.md`).
+2. Fill every value in `.env`. Git ignores the file. `.env.example` lists the settings:
 
-The `install_dvc` command in step 1 puts the pinned Data Version Control (DVC 3.67.1 with its S3 remote, dvc-s3 3.3.0) into its own environment, `.tools/dvc`, from `scripts/quality/dvc/requirements.txt`. It records a hash for every package on Apple silicon and Linux AMD64 and verifies each one at install. Only `antlr4-python3-runtime`, a dependency of DVC, is published as a source archive. Its build tool is pinned in `build_requirements.txt` and installed first, so the build downloads nothing unpinned. The project owner accepted this one source build as the only exception to wheels only. A rerun changes nothing and a failed install leaves nothing that looks current.
+   | Setting | Value |
+   | --- | --- |
+   | `AWS_REGION` | The AWS Region of the project |
+   | `AWS_PROFILE` | The project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM user |
+   | `AWS_ACCOUNT_ID` | The AWS account ID |
+   | `PROJECT_NAME` | The project name |
+   | `ENVIRONMENT` | The environment name (`dev`) |
+   | `S3_BUCKET` | The project data bucket |
 
-The repository tracks DVC's `.dvc/config` (analytics and autostage off, `core.no_scm` on, no remote) and `.dvcignore`. DVC runs without Git because the training matrix and its metafile live under the ignored `data/`. The metafile is stored in the MLflow run, not in Git. The remote is the `dvc/` prefix of the private data bucket. It exists only in the ignored `.dvc/config.local`, which the renderer writes from `.env` without printing it. Run the renderer again after a `.env` change. Its `--check` option reports a stale file:
-
-```sh
-bash scripts/infrastructure/render_project_config.sh --stack dvc
-```
-
-A training run versions its exact matrix (a Parquet file inside the project) with `scripts.training.dvc_baseline.record(matrix, run, snapshots)`. It runs `dvc add` and `dvc push`, logs the `.dvc` metafile as an MLflow artifact of the run and sets the metafile's SHA-256 as a run tag beside the Iceberg snapshot ID of every source feature table. `load(run)` reads the metafile from the run, checks the tag, fetches the file and refuses one that does not match the metafile. Every DVC step has a deadline and a failure raises `BaselineError`.
-
-The project profile holds only the permissions of the approved list. The list is one policy file per AWS service in `infra/iam/policies/`. Each file is named `healthcare_hai_prediction_<service>_policy.json` and uses the placeholders `${AWS_REGION}`, `${AWS_ACCOUNT_ID}`, `${PROJECT_NAME}`, `${ENVIRONMENT}` and `${DATA_BUCKET_NAME}`. The owner applies the policies with the administrator profile. The policy scripts read the placeholder values from `.env`. The files do not contain the secret and parameter names. Those names are the defaults of the secret-name root variables in `infra/iam/variables.tf`, which `render_policy` reads.
-
-1. Render the policies to review them, plan the apply (the plan changes nothing), then apply with the confirmation word:
-
-   ```sh
-   .venv/bin/python -m infra.iam.scripts.render_policy --output-directory <REVIEW_DIRECTORY>
-   .venv/bin/python -m infra.iam.scripts.manage_policies plan --admin-profile <ADMIN_PROFILE>
-   CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies .venv/bin/python -m infra.iam.scripts.manage_policies apply --admin-profile <ADMIN_PROFILE>
-   ```
-
-The apply creates or updates the policies, attaches them to two groups and adds the project user to both. It also removes the earlier grouped policies. `infra.iam.scripts.export_policies` writes the policies in IAM back as templates, so that you can see drift.
-
-Before an attended AWS step, `.venv/bin/python -m scripts.infrastructure.iam_preflight` simulates the grants that each project role needs and prints one `PASS` or `FAIL` line per check. It reads from IAM only. The project profile needs the `SimulateProjectPrincipals` statement of the IAM policy first. `--scope silver` checks only the calls of the first silver run. The check is described in `docs/infrastructure_controls.md`.
-
-The IAM Terraform stack holds the roles, the network, the host launch template, the Auto Scaling group and the cost budget. The owner applies it first with `bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`. The project profile then applies the platform stack with `--platform`. The order and the checks are in `docs/infrastructure_controls.md`.
-
-After the owner applies the foundation and the image digests are recorded, create a services plan with the project profile. The wrapper renders `infra/services/deployment.auto.tfvars.json` from `.env` and the platform outputs. It prints no values. The image digests stay in the separate file `infra/services/images.auto.tfvars.json`, which `push_images record` writes.
-
-1. Create the plan from the repository root. Relative plan paths are inside `infra/services/`:
-
-   ```sh
-   bash scripts/infrastructure/terraform.sh --services plan -out=services.tfplan
-   ```
-
-2. The owner reviews the saved plan. The wrapper refuses changed inputs, image digests or defaults. Then apply the plan:
-
-   ```sh
-   bash scripts/infrastructure/terraform.sh --services apply services.tfplan
-   ```
-
-The first-start order and the one-shot tasks are in `docs/aws_control_plane.md`.
-
-`docker-compose.yaml` defines the services. The launcher reads it as its service model. The launcher, not Compose, starts every container. These images run the services:
-
-- PostgreSQL and Apache Polaris 1.8.0 use digest-pinned images.
-- The Spark 4.1.2 (Iceberg 1.11.0), DuckDB 1.5.6 analytics, Great Expectations quality and Polaris bootstrap images are built from `services/`. Their Python packages are hash-pinned. Each job image carries the deadline entrypoint.
-
-The launcher uses local images only and never pulls or builds one. Before the first catalog command, pull the two pinned images and build the others once:
-
-1. Pull and build the images:
-
-   ```sh
-   docker pull postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
-   docker pull apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b
-   docker build -t hai-polaris-admin:1.8.0 --build-context hai=./services/hai services/lakehouse/polaris_admin
-   docker build -t hai-lakehouse-spark:4.1.2-iceberg1.11.0 --build-context hai=./services/hai services/lakehouse/spark
-   docker build -t hai-analytics:duckdb1.5.6-dbt1.11.15 --build-context hai=./services/hai services/analytics
-   docker build -t hai-quality:gx1.23.2-duckdb1.5.6 --build-context hai=./services/hai services/quality
-   ```
-
-2. Start the catalog from the main checkout. A launcher that runs in another checkout refuses the start:
-
-   ```sh
-   .venv/bin/python -m scripts.lakehouse.catalog up
-   ```
-
-The `up` command is idempotent. It first starts Docker Desktop when Docker does not answer, with a 240 second deadline. On first use it generates the catalog credentials straight into AWS Parameter Store, so no file on the host holds them. It never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the project bucket. The `down` command stops the containers and keeps the catalog database.
+3. Store no secret in `.env` or in any other file on the host. Project secrets live in AWS Systems Manager Parameter Store and the shared API keys in AWS Secrets Manager.
 
 ## Usage
 
-### Load bronze tables
-
-With owner approval, load named bronze tables while creating the complete metadata generation:
+Run the full local checks without AWS credentials. Each run writes its report under `data/e2e/`.
 
 ```sh
-.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all --repair-tables "<TABLE_A>,<TABLE_B>"
+env PYTHON_BIN="$PWD/.venv/bin/python" TF_PLUGIN_CACHE_DIR="$PWD/infra/.terraform/providers" /bin/bash scripts/run_ci.sh
 ```
 
-This command validates the metadata for the full table map before it loads the named tables. It does not prune source rows. Every table must pass verification before the command publishes metadata. The command rebuilds only the dictionaries of the named tables.
-
-A failed run can leave loaded partitions committed. A failed verification writes a report. A failed load prints only its error. After you fix the cause, rerun the same command. Without `--repair-tables`, `--bootstrap-all` updates the metadata and loads no source files.
-
-### Cut over the bronze tables
-
-The bronze cutover registers the bronze metadata on the AWS catalog and switches write authority. The owner runs one step at a time: `dry-run`, `freeze`, `fence`, `capture`, `refresh`, `route-check`, `register`, `verify`, `switch` or `rollback`. The steps, their checks and the rollback are in `docs/lakehouse_usage.md` under "Bronze cutover to the AWS catalog". Check the current state with:
+Run one end-to-end (E2E) check on its own. A runner that takes an output directory needs a new one:
 
 ```sh
-.venv/bin/python -m scripts.lakehouse.bronze_cutover status
-```
-
-### Run the checks
-
-1. Install the hooks once with `.venv/bin/pre-commit install` and `.venv/bin/python -m scripts.quality.pre_push install-shim`. The shim is the Git config hook that gates every push.
-2. Commit. A commit runs only the fast checks, which take about two minutes.
-3. Push. A push runs the check groups of the pushed range once, with the same selector as GitHub Actions. `.venv/bin/python -m scripts.quality.pre_push plan` shows the scope and the steps without running them. A push runs the full scope when the selector or the CI scripts change.
-4. Run the full local CI on demand without AWS credentials. Run it also when the CI scripts change or when GitHub Actions is unavailable:
-
-   ```sh
-   env PYTHON_BIN="$PWD/.venv/bin/python" \
-     TF_PLUGIN_CACHE_DIR="$PWD/infra/.terraform/providers" \
-     /bin/bash scripts/run_ci.sh
-   ```
-
-The E2E runners can also run on their own. Each runner that takes an output directory needs a new one:
-
-```sh
-.venv/bin/python -m scripts.infrastructure.run_e2e --output-directory <new_directory>
-.venv/bin/python -m scripts.infrastructure.run_policy_e2e --output-directory <new_directory>
-.venv/bin/python -m scripts.quality.run_e2e --output-directory <new_directory>
 .venv/bin/python -m scripts.quality.run_checks_e2e
-.venv/bin/python -m scripts.quality.run_documentation_review_e2e
-.venv/bin/python -m scripts.quality.run_dvc_e2e
-.venv/bin/python -m scripts.training.run_dvc_baseline_e2e
-.venv/bin/python -m monitoring.run_drift_e2e
-.venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
-.venv/bin/python -m scripts.infrastructure.run_host_session_e2e
-.venv/bin/python -m scripts.infrastructure.run_aws_tasks_e2e
-.venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e
-.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations
-.venv/bin/python -m scripts.lakehouse.run_glue_mirror_e2e --out <new_directory>
 ```
 
-Each run writes its report under `data/e2e/`. The configuration E2E writes under `data/e2e/configuration/`, the policy E2E under `data/e2e/policies/` and the quality E2E under `data/e2e/quality/`.
-
-### Find the detail documents
-
-- `docs/quality_checks.md`: how the checks run and what each one blocks.
-- `docs/lakehouse_usage.md`: the lakehouse commands.
-- `docs/aws_control_plane.md`: the AWS catalog setup (`scripts.lakehouse.aws_catalog_setup` with `catalog`, `principal`, `check` and `inspect`).
-- `docs/monitoring.md`: the Prometheus, Grafana and StatsD stack on the AWS host, its memory limits, retention and the owner steps.
-- `docs/install_details.md`: the resource limits, the pinned tools and the manual setup steps behind Install.
-- `docs/aws_training_run.md`: how the owner applies the training pieces on AWS, starts one training run and stops the MLflow service.
-- `docs/aws_broker.md`: how the owner applies the lean job broker, signs the first publishes and starts the bronze-triggered chain.
-- `docs/infrastructure_controls.md`: the environments, the AWS stacks and project policies, the bucket lifecycle rules and the deferred controls.
-- `docs/architecture_rendering.md`: how to render the architecture diagram.
-- `docs/model_api.md`: the private model API, its canary rollout, the deploy DAG, the owner's steps and what is not yet proven.
-- `docs/streamlit_app.md`: the private Streamlit page that asks the model API for a prediction, its failure handling, the owner's steps and what is not yet proven.
-- `docs/ecs_target_contract.md`: the proposed ECS read target contract.
-- `docs/drift_monitoring.md`: what the drift check compares, its configuration and the minimum of current rows that the owner will review.
-
-## Data layers
-
-| Layer | Stored form | Build and publication |
-| --- | --- | --- |
-| Bronze | Source tables in Iceberg | Acquisition jobs load the approved source files. |
-| Silver | Validated atomic tables in Iceberg namespace `silver`, under `lakehouse/silver/` | Trigger `silver_transform_dag` by hand (`scripts.orchestration.trigger_dag`) to pin bronze, build and validate silver, then publish a snapshot set. |
-| Gold | Atomic facts, dimensions and bridges in Iceberg | Trigger `gold_transform_dag` by hand (`scripts.orchestration.trigger_dag`) to select a committed silver snapshot set, build and validate gold, then publish it. |
-| Features | Models in `dbt/models/features/` and formula recipes in `dbt/seeds/features/` | Build research joins, alignments and derived ratios from gold as views when the feature phase needs them. |
-
-The features layer is published to Iceberg namespace `features` (`features_e2e` for fixture runs) by `features_transform_dag` and registered with Feast. See [docs/lakehouse_usage.md](docs/lakehouse_usage.md#feature-store). Its wide tables and Feast definitions are generated by `scripts/features/feature_schema.py`.
-
-Publication verification is pending. Fixture runs use a test registry and a local Iceberg catalog. Silver, gold and features writes follow the run mode. `publish_fixture` runs write only under `lakehouse/silver_e2e/`, `lakehouse/gold_e2e/` and `lakehouse/features_e2e/`. `real` runs write only under `lakehouse/silver/`, `lakehouse/gold/` and `lakehouse/features/`. The launcher refuses any other silver, gold or features write.
-
-Local builds use DuckDB. Athena reads every published gold table, for the owner's review, through read-only AWS Glue registrations that each publish updates after its commit. Polaris stays the catalog (`config/lakehouse/athena_mirror.json`, off until the owner applies the Athena mirror stack). Asset scheduling stays disabled. `gold_maintenance_dag` retains the registered snapshot sets when it maintains gold.
-
-## License
-
-MIT. See [LICENSE](LICENSE). It covers the code and configuration in this repository, not the third-party source data.
+Install the push gate once with `.venv/bin/python -m scripts.quality.pre_push install-shim`.
