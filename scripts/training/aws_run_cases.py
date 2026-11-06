@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import contextlib
 import hashlib
+import importlib
 import importlib.util
 import io
 import json
@@ -12,6 +13,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tarfile
 import tomllib
 from collections.abc import Callable, Iterator, Sequence
@@ -24,7 +26,7 @@ from scripts.features import publication_reads, training_extract
 from scripts.orchestration.ecs_broker_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
-from scripts.training import guards, promote_receipt, promotion_check, run_tracking
+from scripts.training import guards, mlflow_alias_stand_in, promote_receipt, promotion_check
 from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
 from scripts.training.job_cases import COMMIT, DIGEST
 from scripts.training.lane_b_cases import RUN
@@ -693,20 +695,85 @@ def mlflow_restart(service: MlflowService) -> Iterator[None]:
         yield
 
 
-def owner_command(fixture: Fixture, bucket: ListingBucket, service: MlflowService, *arguments: str) -> tuple[int, str, str]:
-    """Run ``promote_owner`` as the owner does: the receipt bucket, the registry and the MLflow ECS service are the stand-ins."""
-    from scripts.training import promote_owner
+class MlflowBlocker:
+    """A meta-path finder that makes every ``import mlflow`` fail, as in the host environment, and records each attempt."""
+
+    def __init__(self) -> None:
+        self.attempts: list[str] = []
+
+    def find_spec(self, name: str, path: Any = None, target: Any = None) -> None:
+        if name == "mlflow" or name.startswith("mlflow."):
+            self.attempts.append(name)
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+
+@contextlib.contextmanager
+def without_mlflow() -> Iterator[MlflowBlocker]:
+    """Run a block in an interpreter where the mlflow package cannot be imported."""
+    blocker, kept = MlflowBlocker(), {name: module for name, module in sys.modules.items() if name == "mlflow" or name.startswith("mlflow.")}
+    for name in kept:
+        del sys.modules[name]
+    sys.meta_path.insert(0, blocker)
+    try:
+        yield blocker
+    finally:
+        sys.meta_path.remove(blocker)
+        sys.modules.update(kept)
+
+
+OWNER_LOGIN = "-".join(("synthetic", "owner", "login", "9876543210"))
+
+
+def alias_lookup(fixture: Fixture) -> Callable[[str, str], str | None]:
+    """The version a registered model alias names in the registry stand-in, read without counting as a registry call."""
+
+    def lookup(model: str, alias: str) -> str | None:
+        found = fixture.tracking.models.get(model, {"aliases": {}})["aliases"].get(alias)
+        return None if found is None else str(found)
+
+    return lookup
+
+
+def owner_run(
+    fixture: Fixture,
+    bucket: ListingBucket,
+    service: MlflowService,
+    arguments: Sequence[str],
+    *,
+    fault: str = "",
+    login: str | None = OWNER_LOGIN,
+    timeout: float | None = None,
+    lookup: Callable[[str, str], str | None] | None = None,
+) -> tuple[int, str, str, list[dict[str, Any]], list[str]]:
+    """Run ``promote_owner`` as the owner does, in an interpreter without mlflow.
+
+    The receipt bucket and the MLflow ECS service are the stand-ins. The registry is the local alias endpoint stand-in. ``login`` is the password the command is
+    given, and the stand-in accepts ``OWNER_LOGIN`` only. Returns the exit code, standard output and standard error, the alias requests and the failed imports.
+    """
+    from scripts.training import mlflow_alias_read, promote_owner
 
     out, err = io.StringIO(), io.StringIO()
-    with (
-        mock.patch.object(promote_receipt, "s3_client", return_value=bucket),
-        mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
-        mlflow_restart(service),
-        contextlib.redirect_stdout(out),
-        contextlib.redirect_stderr(err),
-    ):
-        code = promote_owner.main(list(arguments), {"DATA_BUCKET_NAME": BUCKET, "MLFLOW_TRACKING_URI": TRACKING})
-    return code, out.getvalue(), err.getvalue()
+    with mlflow_alias_stand_in.AliasServer(lookup or alias_lookup(fixture), "admin", OWNER_LOGIN) as server, without_mlflow() as blocker:
+        server.fault = fault
+        environ = {"DATA_BUCKET_NAME": BUCKET, "MLFLOW_TRACKING_URI": server.uri, "MLFLOW_TRACKING_USERNAME": "admin"}
+        if login is not None:
+            environ["MLFLOW_TRACKING_PASSWORD"] = login
+        with (
+            mock.patch.object(promote_receipt, "s3_client", return_value=bucket),
+            mock.patch.object(mlflow_alias_read, "TIMEOUT_SECONDS", timeout if timeout is not None else mlflow_alias_read.TIMEOUT_SECONDS),
+            mlflow_restart(service),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            code = promote_owner.main(list(arguments), environ)
+    return code, out.getvalue(), err.getvalue(), server.requests, blocker.attempts
+
+
+def owner_command(
+    fixture: Fixture, bucket: ListingBucket, service: MlflowService, *arguments: str, lookup: Callable[[str, str], str | None] | None = None
+) -> tuple[int, str, str]:
+    """Run ``promote_owner`` as the owner does and return its exit code, standard output and standard error."""
+    return owner_run(fixture, bucket, service, arguments, lookup=lookup)[:3]
 
 
 def promote_in(
@@ -1169,6 +1236,70 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code == 2 and "stored its receipt" in error.getvalue(), f"{code} {error.getvalue()}")
         require(promote_receipt.key_of(RUN, "abandoned.json") not in bucket.objects, "a completed run was fenced")
 
+    def stuck_run(name: str) -> tuple[Fixture, ListingBucket, MlflowService]:
+        """A registry where run A moved production to version 2 and stopped before it closed its lease, and the owner's stand-ins."""
+        fixture, bucket = registry_fixture(folder / name), receipt_bucket()
+        bucket.put_faults["promote.json"] = [client_error("AccessDenied", "put_object")]
+        require(promote_in(fixture, folder / f"{name}_a", bucket)[0] != 0 and alias(fixture) == "2", "run A did not stop after the move")
+        return fixture, bucket, MlflowService(fixture.tracking)
+
+    resolve = ("resolve", "--model", MODEL, "--run", RUN, "--owner", "owner", "--reason", "the task was lost")
+
+    def owner_reads_the_alias_without_the_mlflow_package() -> None:
+        fixture, bucket, service = stuck_run("rest_read")
+        with without_mlflow():
+            try:
+                importlib.import_module("mlflow")
+            except ImportError:
+                pass
+            else:
+                raise ValueError("the blocker let mlflow import")
+        code, out, error, requests, imports = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and "abandoned" in out and lease_closed(1) in lease_keys(bucket), f"the owner could not resolve without mlflow: {code} {out} {error}")
+        require(not imports, f"the command tried to import mlflow: {imports}")
+        require(len(requests) == 1 and requests[0]["path"] == mlflow_alias_stand_in.ENDPOINT, f"the alias was not read once from the REST endpoint: {requests}")
+        require(requests[0]["query"] == {"name": MODEL, "alias": "production"} and requests[0]["authorized"], f"the request is wrong: {requests}")
+        fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
+        require(fence["production_alias"] == "2", f"the fence does not record version 2: {fence}")
+        require(OWNER_LOGIN not in out + error + json.dumps(fence), "the MLflow login reached the output or the fence")
+
+    def owner_reads_a_missing_alias_as_none() -> None:
+        fixture, bucket, service = stuck_run("rest_none")
+        del fixture.tracking.models[MODEL]["aliases"]["production"]
+        code, out, error, requests, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and "abandoned" in out and lease_closed(1) in lease_keys(bucket), f"a missing alias was not read as none: {code} {out} {error}")
+        require(len(requests) == 1 and requests[0]["authorized"], f"the alias was not read once with the login: {requests}")
+        fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
+        require(fence["production_alias"] == "none", f"the fence does not record no production alias: {fence}")
+
+    def owner_alias_read_failures_keep_the_lease_held() -> None:
+        fixture, bucket, service = stuck_run("rest_failures")
+        wrong = "-".join(("synthetic", "wrong", "login", "1357924680"))
+        failures = (
+            ("wrong_login", {"login": wrong}, "HTTP 401", 1),
+            ("no_login", {"login": None}, "MLFLOW_TRACKING_PASSWORD", 0),
+            ("server_error", {"fault": "server_error"}, "HTTP 500", 1),
+            ("other_404", {"fault": "other_404"}, "HTTP 404", 1),
+            ("redirect", {"fault": "redirect"}, "HTTP 302", 1),
+            ("malformed", {"fault": "malformed"}, "not JSON", 1),
+            ("wrong_shape", {"fault": "wrong_shape"}, "no version", 1),
+            ("stall", {"fault": "stall", "timeout": 0.5}, "did not answer within", 1),
+        )
+        for name, options, expected, sent in failures:
+            code, out, error, requests, _ = owner_run(fixture, bucket, service, resolve, **options)
+            require(code == 2 and expected in error, f"{name}: the failure was not reported with its cause: {code} {error}")
+            require(len(requests) == sent, f"{name}: {len(requests)} alias requests: {requests}")
+            require("The lease is still held" in error, f"{name}: the lease state is not reported: {error}")
+            require(
+                promote_receipt.key_of(RUN, "abandoned.json") not in bucket.objects and lease_closed(1) not in lease_keys(bucket), f"{name}: the run was closed"
+            )
+            require(wrong not in out + error and OWNER_LOGIN not in out + error, f"{name}: a MLflow login reached the output")
+        require(
+            service.restarts == sum(sent for *_, sent in failures), f"a resolution restarts MLflow once, and one without a login does not: {service.restarts}"
+        )
+        code, out, error, _, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and lease_closed(1) in lease_keys(bucket), f"the repeat after the failures did not close the lease: {code} {out} {error}")
+
     def attempt_reply_lost_fails_closed() -> None:
         fixture, bucket = registry_fixture(folder / "attempt_lost"), receipt_bucket()
         bucket.write_hook = lambda key: setattr(bucket, "lose_reply_once", key.endswith("attempt.json"))
@@ -1196,14 +1327,13 @@ def promote_cases(cases: Any, folder: Path) -> None:
         code, out, error = owner_command(fixture, bucket, service, "show", "--model", MODEL)
         require(code == 0 and "attempt.json" in json.loads(out)["held"]["records"], f"show does not list the attempt: {code} {out} {error}")
         seen: list[bool] = []
-        original = fixture.tracking.get_model_version_by_alias
+        original = alias_lookup(fixture)
 
-        def read_after_restart(name: str, alias_name: str) -> Any:
+        def read_after_restart(name: str, alias_name: str) -> str | None:
             seen.append(service.restart_done)
             return original(name, alias_name)
 
-        with mock.patch.object(fixture.tracking, "get_model_version_by_alias", side_effect=read_after_restart):
-            code, out, error = owner_command(fixture, bucket, service, *resolve)
+        code, out, error = owner_command(fixture, bucket, service, *resolve, lookup=read_after_restart)
         require(code == 0 and service.restarts == 1 and not fixture.tracking.pending, f"the owner resolution did not restart MLflow: {code} {out} {error}")
         require(seen == [True], f"the alias was read before the restart finished: {seen}")
         fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
@@ -1255,6 +1385,9 @@ def promote_cases(cases: Any, folder: Path) -> None:
     cases.check("promote_completed_run_returns_its_receipt_while_another_holds_the_lease", completed_run_returns_its_receipt_while_another_holds_the_lease)
     cases.check("promote_owner_resolution_closes_a_stuck_lease_and_fences_the_run", owner_resolution_closes_a_stuck_lease_and_fences_the_run)
     cases.check("promote_owner_cannot_resolve_a_run_that_stored_its_receipt", owner_cannot_resolve_a_run_that_stored_its_receipt)
+    cases.check("promote_owner_reads_the_alias_without_the_mlflow_package", owner_reads_the_alias_without_the_mlflow_package)
+    cases.check("promote_owner_reads_a_missing_production_alias_as_none", owner_reads_a_missing_alias_as_none)
+    cases.check("promote_owner_alias_read_failures_keep_the_lease_held", owner_alias_read_failures_keep_the_lease_held)
     cases.check("promote_records_the_intent_before_the_alias_moves", records_the_intent_first)
     interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_with_a_champion", True)
     interrupted_after_the_move("promote_keeps_the_predecessor_after_a_crash_without_a_champion", False)

@@ -1,8 +1,24 @@
-"""The owner command for the promotion lease of a model: show the lease and resolve a run that will never finish.
+r"""The owner command for the promotion lease of a model: show the lease and resolve a run that will never finish.
 
-Run from the repository root with the project profile in .env, DATA_BUCKET_NAME, MLFLOW_TRACKING_URI and the MLflow login set:
+Run from the repository root with the project profile in .env (AWS_PROFILE and AWS_REGION), DATA_BUCKET_NAME (the project data bucket) and, for resolve, the
+MLflow address and login in the shell:
 .venv/bin/python -m scripts.training.promote_owner show --model <model> and
 .venv/bin/python -m scripts.training.promote_owner resolve --model <model> --run <run> --owner <name> --reason <text>.
+Resolve reads the production alias through the MLflow REST API with the Python standard library, so the host environment needs no MLflow package.
+
+Reach MLflow from the owner's machine through the Session Manager port forward that the project profile may start. The host must be running (host_session
+start). The server allows the Host header localhost:5100. Keep the forward open in a second terminal while resolve runs. It finds the instance ID of the
+host, which the Auto Scaling group of the project lists, and forwards port 5100 (the commands are for the dev environment):
+
+INSTANCE=$(aws autoscaling describe-auto-scaling-groups --profile healthcare_hai_prediction_dev --region us-west-2 \
+  --auto-scaling-group-names healthcare_hai_prediction_host_dev --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ssm start-session --profile healthcare_hai_prediction_dev --region us-west-2 --target "$INSTANCE" \
+  --document-name AWS-StartPortForwardingSession --parameters portNumber=5100,localPortNumber=5100
+
+Then set MLFLOW_TRACKING_URI=http://localhost:5100, MLFLOW_TRACKING_USERNAME=admin and MLFLOW_TRACKING_PASSWORD in the shell of the owner command. The password
+is the value of the SecureString parameter /healthcare_hai_prediction/mlflow_admin_password. The project profile has no grant on it, so read it with the
+administrator profile and never print it or write it to a file. Show reads only the data bucket and needs none of this. If the forward drops, open it again
+and run resolve again.
 
 A run that sent its alias request and did not see it commit cannot be retried. Its retry fails with promotion_needs_resolution and keeps the lease,
 because the MLflow server can still commit the earlier request after the task that sent it ended (promote has the rule). Automatic promotions of the
@@ -30,20 +46,23 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
 
-from scripts.training import promote_lease, promote_receipt, registry, run_tracking
+from scripts.training import mlflow_alias_read, promote_lease, promote_receipt, registry
 from scripts.training.promote_receipt import ReceiptError
 
 MLFLOW_SERVICE = "mlflow"
+
+
+LOGIN_NAMES = ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")
 
 
 def mlflow_restarter(environ: Mapping[str, str]) -> Callable[[], None]:
     """The restart of the MLflow ECS service through the host session of the project profile. A failure raises ReceiptError."""
 
     def restart() -> None:
-        if not environ.get("MLFLOW_TRACKING_URI"):
-            raise ReceiptError("MLFLOW_TRACKING_URI is not set, so the production alias cannot be read after the restart. The lease is still held")
+        missing = [name for name in ("MLFLOW_TRACKING_URI", *LOGIN_NAMES) if not environ.get(name)]
+        if missing:
+            raise ReceiptError(f"{', '.join(missing)} is not set, so the production alias cannot be read after the restart. The lease is still held")
         from scripts.infrastructure import host_session
         from scripts.infrastructure.render_project_config import ConfigurationError
 
@@ -56,15 +75,19 @@ def mlflow_restarter(environ: Mapping[str, str]) -> Callable[[], None]:
 
 
 def alias_reader(model: str, environ: Mapping[str, str]) -> Callable[[], str | None]:
-    """The read of the version production names, from the MLflow service at MLFLOW_TRACKING_URI. A failure raises ReceiptError."""
+    """The read of the version production names, through the MLflow REST API at MLFLOW_TRACKING_URI. A failure raises ReceiptError."""
 
     def read() -> str | None:
         try:
-            store: Any = run_tracking.open_store(environ.get("MLFLOW_TRACKING_URI", ""))
-            version = registry.champion(store, model)
-        except Exception as error:
-            raise ReceiptError(f"the production alias of {model} cannot be read: {type(error).__name__}: {error}. The lease is still held") from None
-        return None if version is None else str(version.version)
+            return mlflow_alias_read.read_alias(
+                environ.get("MLFLOW_TRACKING_URI", ""),
+                model,
+                registry.CHAMPION_ALIAS,
+                environ.get("MLFLOW_TRACKING_USERNAME", ""),
+                environ.get("MLFLOW_TRACKING_PASSWORD", ""),
+            )
+        except mlflow_alias_read.AliasReadError as error:
+            raise ReceiptError(f"the production alias of {model} cannot be read: {error}. The lease is still held") from None
 
     return read
 
