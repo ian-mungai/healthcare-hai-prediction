@@ -5,11 +5,12 @@
 Each ECS container of a job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/ecs_broker_jobs.json``):
 
 - silver: ``pin``, ``build``, ``validate``, ``verify``, ``export``, ``publish``, ``upload``
-- gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``
+- gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``maintain``
 - features: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``feast``
 
 The first container of the task (``fetch``) has already downloaded and unpacked ``code.tar.gz``. ``pin`` checks its SHA-256 again, records the code
-identity and pins the input layer: bronze for silver, the silver run ``--input-run`` for gold, the gold run for features. Every later digest comes
+identity and pins the input layer: bronze for silver, the silver run ``--input-run`` for gold, the gold run for features (only the newest committed gold
+run: the chain reads what its gold job just published, ``features_input --newest-only``). Every later digest comes
 from run folder files, so a phase runs only on the exact output of the phase before. The code is the unpacked archive in ``<work>/code``, the working
 folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/runs/<run ID>``.
 
@@ -17,9 +18,13 @@ folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/r
 its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). Before any catalog
 write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin, and the pin must name exactly the
 configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold) or the gold publish contract (features). Two extra
-checks run beside them: the staged code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload`` and ``feast``
-run only for a run that passed them. Any failed check exits 1 and names the phase. Features uploads its run records before ``feast``, because the commit is
-already done and a Feast failure must not lose its evidence. ``feast`` then adds the records of its own two steps.
+checks run beside them: the staged code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload``, ``maintain``
+and ``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. Features uploads its run records before ``feast``, because the
+commit is already done and a Feast failure must not lose its evidence. ``feast`` then adds the records of its own two steps.
+
+``maintain`` is the last gold phase, on every gold run: Iceberg snapshot expiry and orphan-file removal on gold (``scripts.lakehouse.gold_maintenance``)
+under the chain rule, so it reads no reader record. It keeps the newest ``retain_sets`` committed sets, branch and tag heads, snapshots newer than the
+cutoff and orphans younger than a day.
 
 A run ID is used once. The first real pin writes ``lakehouse/layer_runs/<layer>/<run>/state/pinned.json`` only if it does not exist. A second pin of the
 same run ID fails with a named error before it writes anything shared. An interrupted run is not resumed: it restarts under a new run ID after the owner has
@@ -31,7 +36,7 @@ The whole task has a deadline, the one the broker table gives the job, counted f
 it passes. The driver then stops the phase module and every process that module started, so nothing goes on writing while the task shuts down.
 
 With ``--dry-run`` or ``LAYER_DRY_RUN=1`` the phases up to ``export`` run as usual, because they write only the task's own working folder. ``publish``
-then reads the catalog without writing, prints and saves the plan of the real publish, ``upload`` uploads nothing and ``feast`` does nothing. The
+then reads the catalog without writing, prints and saves the plan of the real publish, ``upload`` uploads nothing and ``maintain`` and ``feast`` do nothing. The
 first dry phase marks the run folder, so a later phase without the flag stays dry. A new ``pin`` clears the mark."""
 
 from __future__ import annotations
@@ -61,7 +66,7 @@ from scripts.process import TimeoutExpired, run_command
 
 PHASES = {
     "silver": ("pin", "build", "validate", "verify", "export", "publish", "upload"),
-    "gold": ("pin", "build", "validate", "export", "publish", "upload"),
+    "gold": ("pin", "build", "validate", "export", "publish", "upload", "maintain"),
     "features": ("pin", "build", "validate", "export", "publish", "upload", "feast"),
 }
 STEP_SECONDS = 4 * 3600
@@ -421,7 +426,7 @@ def pin(job: Job) -> None:
         ]
         run_module(job, "scripts.lakehouse.silver_input", arguments)
         return
-    run_module(job, "scripts.features.features_input", ["pin", *common, "--folder", job.folder, "--record", record, *job.local_flags])
+    run_module(job, "scripts.features.features_input", ["pin", *common, "--newest-only", "--folder", job.folder, "--record", record, *job.local_flags])
     run_module(
         job,
         "scripts.features.features_input",
@@ -698,6 +703,13 @@ def upload_dbt_artifacts(job: Job, bucket: str, client: Any) -> list[str]:
     return sent
 
 
+def maintain(job: Job) -> None:
+    """Gold only, after the upload: expire and remove orphans under the chain rule, bound to this gold run."""
+    accepted_publish(job)
+    arguments = ["--run", job.run, "--mode", job.mode, "--protection", "chain", "--publish-dir", job.publish_folder, *job.local_flags]
+    run_module(job, "scripts.lakehouse.gold_maintenance", arguments)
+
+
 def feast(job: Job, bucket: str, client: Any) -> None:
     """Apply and materialize the committed publication, then add the records of the two steps to the run's upload, which ran before this phase."""
     accepted_publish(job)
@@ -854,6 +866,8 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
         pin(job)
     elif phase == "upload" and job.dry_run:
         sys.stdout.write(json.dumps({"dry_run": True, "uploaded": 0, "would_upload": len(uploadable(job))}) + "\n")
+    elif phase == "maintain" and job.dry_run:
+        sys.stdout.write(json.dumps({"dry_run": True, "maintenance": "not run"}) + "\n")
     elif phase == "feast" and job.dry_run:
         sys.stdout.write(json.dumps({"dry_run": True, "feast": "not applied"}) + "\n")
     elif phase == "publish" and job.dry_run:
@@ -871,7 +885,7 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     elif phase == "publish":
         publish(job, args.bucket, s3_client() if job.mode == "real" and job.local is None else None)
     else:
-        {"build": build, "validate": validate, "verify": verify, "export": export}[phase](job)
+        {"build": build, "validate": validate, "verify": verify, "export": export, "maintain": maintain}[phase](job)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -892,7 +906,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--bucket", default=os.environ.get("DATA_BUCKET_NAME", ""))
     parser.add_argument(
-        "--dry-run", action="store_true", help=f"publish: print and save the plan and write nothing; upload and feast do nothing (also set by {DRY_ENV}=1)"
+        "--dry-run",
+        action="store_true",
+        help=f"publish: print and save the plan and write nothing; upload, maintain and feast do nothing (also set by {DRY_ENV}=1)",
     )
     args = parser.parse_args(argv)
     if args.phase not in PHASES[args.layer]:

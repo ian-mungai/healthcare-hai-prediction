@@ -1669,7 +1669,6 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     checks["supervisor_dags"] = {
         "silver_transform_dag",
         "gold_transform_dag",
-        "gold_maintenance_dag",
         FEATURES_DAG,
         STORE_DAG,
         "training_dag",
