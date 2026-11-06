@@ -6,7 +6,9 @@ Two protection sources exist, and the caller names one (``--protection``):
 - ``chain`` (the last container of the AWS gold job): no reader record at all. The AWS DAGs run as one chain, and the features job pins only the gold run
   its chain has just published, which is the newest committed set (``scripts/features/features_input.py``, ``--newest-only``). The newest ``retain_sets``
   sets are always kept, so the chain rule protects every set a reader of the chain can name. The source is empty by rule and bound to this run; it is
-  not a missing file, and a protected file beside it is refused.
+  not a missing file, and a protected file beside it is refused. Chain mode therefore protects no registration: a reader registered on an older set
+  loses it once ``retain_sets`` newer sets exist and its snapshots pass the cutoff (owner rule). To keep an older set, tag each table's snapshot of
+  that set (``ALTER TABLE ... CREATE TAG ... AS OF VERSION ...``); maintenance keeps every tag head.
 
 A reader that wants a published set takes a reservation first, then reads the newest ``publish_runs`` row, then pins the set (a registration). Maintenance
 never expires a snapshot of a set that a reservation or a registration names.
