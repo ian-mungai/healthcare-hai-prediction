@@ -2150,15 +2150,20 @@ def proc_stat(pid: int, name: str, state: str, parent: int, group: int, session:
     return f"{pid} ({name}) " + PROC_TAIL.format(state=state, parent=parent, group=group, session=session, start=start)
 
 
-def stand_in_proc(folder: Path, records: Mapping[int, str | None], self_pid: int | None = None) -> Path:
-    """A process table in a folder: ``self/stat`` and, per pid, a ``stat`` file (a None record is a process folder without one: the process ended).
+def stand_in_proc(folder: Path, records: Mapping[int, str | None], self_pid: int | None = None, nstgid: str | None = None) -> Path:
+    """A process table in a folder: ``self/stat``, ``self/status`` and, per pid, a ``stat`` file (a None record is a process folder without one: the
+    process ended).
 
-    ``self_pid`` is the pid ``self/stat`` names (the caller's by default): another pid is the table of another pid namespace, which can show the caller's
-    pid number for an unrelated process."""
+    ``self_pid`` is the pid ``self/stat`` names (the caller's by default). ``nstgid`` is the ``NStgid`` line of ``self/status``: the caller's pid in the
+    table's namespace and then in each namespace inward (the caller's pid alone by default, a table of the caller's own namespace). More than one entry is
+    the table of an ancestor pid namespace, even when the numbers are equal. An empty string leaves the line out."""
     root = folder / "proc"
     (root / "self").mkdir(parents=True)
     own = os.getpid() if self_pid is None else self_pid
     (root / "self" / "stat").write_text(proc_stat(own, "python", "R", os.getppid(), os.getpgrp(), os.getsid(0)), encoding="utf-8")
+    vector = str(own) if nstgid is None else nstgid
+    status = f"Name:\tpython\nTgid:\t{own}\n" + (f"NStgid:\t{vector}\n" if vector else "") + f"Pid:\t{own}\n"
+    (root / "self" / "status").write_text(status, encoding="utf-8")
     (root / "version").write_text("stand-in\n", encoding="utf-8")
     for pid, text in records.items():
         (root / str(pid)).mkdir()
@@ -2280,7 +2285,15 @@ def proc_listing_failure(base: Path) -> dict[str, Any]:
             # Another pid namespace's table: it shows an unrelated process with the caller's pid number, and self/stat names another pid.
             "other_namespace": {**own_record(), 4001: proc_stat(4001, "a", "S", 1, 4001, 4001)},
         }
-        roots = {key: stand_in_proc(scratch.folder / key, records, self_pid=4001 if key == "other_namespace" else None) for key, records in tables.items()}
+        own = os.getpid()
+        # Another pid namespace's table that also shows the caller with its own pid number (a child namespace can take the same number): only the
+        # namespace list in self/status tells it apart. A table without that list, or with one that is not a pid list, cannot be proven the caller's.
+        vectors = {"other_namespace_same_pid": f"{own}\t{own}", "no_namespace_list": "", "garbled_namespace_list": "x"}
+        tables.update({key: {**own_record(), 4001: proc_stat(4001, "a", "S", 1, 4001, 4001)} for key in vectors})
+        roots = {
+            key: stand_in_proc(scratch.folder / key, records, self_pid=4001 if key == "other_namespace" else None, nstgid=vectors.get(key))
+            for key, records in tables.items()
+        }
         (roots["record_that_is_a_folder"] / "4001" / "stat").mkdir()
         outcomes: dict[str, bool] = {}
         for key, root in roots.items():
