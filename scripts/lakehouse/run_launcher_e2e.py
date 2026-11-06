@@ -4327,7 +4327,7 @@ probes = {"transient": config.get("transient_eperm_probes", 0), "gone": False}
 
 def killpg(group, number):
     if number in (signal.SIGTERM, signal.SIGKILL):
-        signals.append({"signal": int(number), "host": real_time()})
+        signals.append({"signal": int(number), "host": real_time(), "group": int(group)})
         if int(number) in denied:
             raise PermissionError(1, "Operation not permitted")
     if number == 0 and probes["transient"]:
@@ -4380,9 +4380,20 @@ def setpgid(pid, group):
 os.setpgid = setpgid
 time.sleep(config.get("start_delay", 0))
 code = module.run(config["command"], deadline, wall=wall, mono=mono)
+ended = real_time()
+# A group whose signal was denied is probed here, before this wrapper exits: a top-level scripts.process launch stops the members that its program left
+# in its session as soon as the program ends (a hosted job runs the case outside a CI worker session), so the harness cannot see them afterwards.
+alive_at_exit = False
+for sent in signals:
+    if sent["signal"] in denied:
+        try:
+            original(sent["group"], 0)
+            alive_at_exit = True
+        except (ProcessLookupError, PermissionError):
+            pass
 json.dump(
     {"exit": code, "deadline": deadline, "signals": signals, "mono_calls": calls["mono"], "wall_calls": calls["wall"],
-     "ended": real_time(), "startup_seconds": startup_seconds},
+     "ended": ended, "alive_at_exit": alive_at_exit, "startup_seconds": startup_seconds},
     open(config["result"], "w"),
 )
 sys.exit(code)
@@ -4456,7 +4467,8 @@ def run_deadline_case(
     output = (folder / "wrapper_stderr.txt").read_text()
     result = json.loads((folder / "result.json").read_text()) if (folder / "result.json").is_file() else {}
     started = json.loads(record.read_text()) if record.is_file() else None
-    leftover_before_cleanup = False
+    # The wrapper's own probe at its exit is the proof that the group was alive: the launch above may already have stopped what the wrapper left.
+    leftover_before_cleanup = bool(result.get("alive_at_exit"))
     if started and deny_signals:
         # The wrapper was refused its signals: the harness (which may signal the group) ends what the wrapper could not.
         try:
