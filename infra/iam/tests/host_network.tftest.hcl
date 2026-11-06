@@ -112,19 +112,20 @@ variables {
 # - the new table replaces or edits the metadata rule, or a reload loads the table twice or not at all;
 # - the host joins the cluster without the scratch volume, so job files fill the data volume;
 # - a resized volume keeps its old file system size;
-# - the root volume cannot hold the images.
+# - the root volume cannot hold the images;
+# - the launch template carries more user data than EC2 accepts, so no new template version can start the host.
 
 run "job_firewall_is_a_second_table_beside_the_unchanged_metadata_rule" {
   command = plan
 
   assert {
     condition = (
-      length(regexall("(?m)^table inet platform_[a-z]+ \\{", base64decode(aws_launch_template.host.user_data))) == 2 &&
+      length(regexall("(?m)^table inet platform_[a-z]+ \\{", local.host_user_data)) == 2 &&
       alltrue([
         for text in [
           "table inet platform_imds\ndelete table inet platform_imds\ntable inet platform_imds {\n  chain output {\n    type filter hook output priority -10; policy accept;\n    ip daddr 169.254.169.254 meta skuid != 0 drop\n  }\n}\n",
           "table inet platform_jobs\ndelete table inet platform_jobs\ntable inet platform_jobs {"
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ])
     )
     error_message = "The job firewall is its own table, deleted and added again in one transaction, and the metadata table keeps its exact text."
@@ -133,9 +134,9 @@ run "job_firewall_is_a_second_table_beside_the_unchanged_metadata_rule" {
   # One file, one transaction: the guard, the firewall service include and a reload load both tables together.
   assert {
     condition = (
-      strcontains(split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0], "table inet platform_imds {") &&
-      strcontains(split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0], "table inet platform_jobs {") &&
-      !strcontains(base64decode(aws_launch_template.host.user_data), "iptables")
+      strcontains(split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0], "table inet platform_imds {") &&
+      strcontains(split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0], "table inet platform_jobs {") &&
+      !strcontains(local.host_user_data, "iptables")
     )
     error_message = "Both tables sit in the one rules file that the guard and the firewall configuration load."
   }
@@ -159,7 +160,7 @@ run "job_firewall_rules_cover_the_bridge_and_nothing_else" {
           "iifname \"docker0\" fib daddr type local tcp dport { 5100, 6379, 8181, 8585 } accept",
           "iifname \"docker0\" tcp dport 443 accept",
           "iifname \"docker0\" drop"
-        ] : strcontains(split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0], text)
+        ] : strcontains(split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0], text)
       ])
     )
     error_message = "The bridge may reach DNS, the task credential endpoint, Polaris, Redis, MLflow, the catalog and port 443, and nothing else."
@@ -168,7 +169,7 @@ run "job_firewall_rules_cover_the_bridge_and_nothing_else" {
   # Every accept and drop of the job table names the bridge, so the host's own traffic (ECS agent, Session Manager, Docker) keeps its policy.
   assert {
     condition = alltrue([
-      for line in split("\n", split("table inet platform_jobs {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1]) :
+      for line in split("\n", split("table inet platform_jobs {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1]) :
       strcontains(line, "iifname \"docker0\"") if endswith(trimspace(line), "accept") && !strcontains(line, "policy") || endswith(trimspace(line), "drop") && !strcontains(line, "policy")
     ])
     error_message = "A job firewall rule that does not name the container bridge would reach the host's own traffic."
@@ -176,8 +177,8 @@ run "job_firewall_rules_cover_the_bridge_and_nothing_else" {
 
   assert {
     condition = (
-      !strcontains(split("table inet platform_jobs {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1], "policy drop") &&
-      length(regexall("iifname \"docker0\" drop", split("table inet platform_jobs {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1])) == 2
+      !strcontains(split("table inet platform_jobs {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1], "policy drop") &&
+      length(regexall("iifname \"docker0\" drop", split("table inet platform_jobs {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1])) == 2
     )
     error_message = "Both chains end in a bridge-scoped drop and neither sets a drop policy."
   }
@@ -185,10 +186,10 @@ run "job_firewall_rules_cover_the_bridge_and_nothing_else" {
   # The metadata address is dropped in the forward chain before port 443 is accepted, and each chain ends with the drop.
   assert {
     condition = (
-      length(split("tcp dport 443 accept", split("chain forward {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1])[0]) >
-      length(split("ip daddr 169.254.169.254 drop", split("chain forward {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1])[0]) &&
-      endswith(trimspace(split("\n  }", split("chain forward {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1])[0]), "iifname \"docker0\" drop") &&
-      endswith(trimspace(split("\n  }", split("chain input {", split("\nRULES\n", split("<<'RULES'\n", base64decode(aws_launch_template.host.user_data))[1])[0])[1])[0]), "iifname \"docker0\" drop")
+      length(split("tcp dport 443 accept", split("chain forward {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1])[0]) >
+      length(split("ip daddr 169.254.169.254 drop", split("chain forward {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1])[0]) &&
+      endswith(trimspace(split("\n  }", split("chain forward {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1])[0]), "iifname \"docker0\" drop") &&
+      endswith(trimspace(split("\n  }", split("chain input {", split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0])[1])[0]), "iifname \"docker0\" drop")
     )
     error_message = "The metadata address is dropped before port 443 is accepted, and each chain ends with the bridge drop."
   }
@@ -198,8 +199,25 @@ run "the_job_firewall_file_is_the_text_boot_writes" {
   command = plan
 
   assert {
-    condition     = strcontains(base64decode(aws_launch_template.host.user_data), file("${path.module}/host_job_firewall.nft"))
+    condition     = strcontains(local.host_user_data, file("${path.module}/host_job_firewall.nft"))
     error_message = "Boot writes the tracked job firewall file as it is, so the syntax check of that file checks what the host loads."
+  }
+}
+
+# EC2 accepts at most 16,384 raw bytes of user data before base64 encoding. The text is larger, so the template sends it gzip
+# compressed, which cloud-init on the Amazon Linux 2023 image expands before it runs the script. Base64 gives 4 characters for
+# every 3 raw bytes, so the encoded length bounds the raw size.
+run "the_launch_template_sends_the_boot_script_gzip_compressed_within_the_ec2_limit" {
+  command = plan
+
+  assert {
+    condition     = aws_launch_template.host.user_data == base64gzip(local.host_user_data) && startswith(aws_launch_template.host.user_data, "H4sI")
+    error_message = "The launch template sends the boot script as gzip data, which cloud-init expands: ${length(aws_launch_template.host.user_data)} encoded characters."
+  }
+
+  assert {
+    condition     = length(aws_launch_template.host.user_data) * 3 / 4 <= 14336
+    error_message = "The raw user data stays at least 2,048 bytes under the 16,384 bytes EC2 accepts: ${length(aws_launch_template.host.user_data) * 3 / 4} bytes now."
   }
 }
 
@@ -230,14 +248,14 @@ run "boot_mounts_the_scratch_volume_and_grows_both_file_systems_before_joining" 
           "run_within 120 \"Growing the data volume file system\" xfs_growfs \"$mount_path\"",
           "run_within 120 \"Growing the scratch volume file system\" xfs_growfs \"$scratch_path\"",
           "run_within 30 \"Checking the scratch mount\" mountpoint -q \"$scratch_path\""
-        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+        ] : strcontains(local.host_user_data, text)
       ]) &&
       alltrue([
         for text in [
           "Mounting the scratch volume", "Growing the data volume file system", "Growing the scratch volume file system", "Checking the scratch mount"
-        ] : length(split("ECS_CLUSTER=", base64decode(aws_launch_template.host.user_data))[0]) > length(split(text, base64decode(aws_launch_template.host.user_data))[0])
+        ] : length(split("ECS_CLUSTER=", local.host_user_data)[0]) > length(split(text, local.host_user_data)[0])
       ]) &&
-      length(split("Mounting the data volume", base64decode(aws_launch_template.host.user_data))[0]) < length(split("Mounting the scratch volume", base64decode(aws_launch_template.host.user_data))[0])
+      length(split("Mounting the data volume", local.host_user_data)[0]) < length(split("Mounting the scratch volume", local.host_user_data)[0])
     )
     error_message = "Boot finds, attaches, formats and mounts the scratch volume under the data mount after the data volume, grows both file systems and checks the scratch mount, all before ECS_CLUSTER is written."
   }
@@ -285,7 +303,7 @@ run "docker_and_the_agent_require_the_scratch_mount_and_the_watchdog_checks_both
         "mountpoint_command=$(command -v mountpoint)\nfor unit in docker.service ecs.service; do\n  cat >\"$systemd_directory/$unit.d/platform_scratch_mount.conf\" <<UNIT\n[Unit]\nRequiresMountsFor=$scratch_path\n\n[Service]\nExecStartPre=$mountpoint_command -q $scratch_path\nUNIT\ndone\n",
         "run_within 60 \"Reloading systemd units for the new mounts\" systemctl daemon-reload",
         "nft list table inet platform_imds >/dev/null \\\n    && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \\\n    && probe_blocked\n"
-      ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+      ] : strcontains(local.host_user_data, text)
     ])
     error_message = "Docker and the ECS agent require the scratch mount at every start, systemd reloads the new fstab lines and the watchdog checks the job table beside the metadata table."
   }

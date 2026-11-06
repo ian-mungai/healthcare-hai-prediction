@@ -74,7 +74,9 @@ resource "aws_launch_template" "host" {
   image_id               = data.aws_ssm_parameter.ecs_ami.insecure_value
   instance_type          = local.host_instance_type
   update_default_version = true
-  user_data              = base64encode(local.host_user_data)
+  # EC2 accepts 16,384 raw bytes of user data. The boot script is larger as text, so it is sent gzip compressed, which
+  # cloud-init expands before it runs the script.
+  user_data = base64gzip(local.host_user_data)
 
   iam_instance_profile {
     arn = aws_iam_instance_profile.ecs_host.arn
