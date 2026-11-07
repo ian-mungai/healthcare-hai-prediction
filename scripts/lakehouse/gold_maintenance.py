@@ -58,7 +58,7 @@ MARGIN_SECONDS = 60
 MIN_ORPHAN_AGE = timedelta(days=1)
 LIST_SNAPSHOTS = "SELECT snapshot_id, committed_at FROM {table}.snapshots ORDER BY committed_at"
 EXPIRE = "CALL {catalog}.system.expire_snapshots(table => '{namespace}.{name}', older_than => TIMESTAMP '1970-01-01 00:00:00', snapshot_ids => ARRAY({ids}))"
-ORPHANS = "CALL {catalog}.system.remove_orphan_files(table => '{namespace}.{name}', older_than => TIMESTAMP '{older_than}')"
+ORPHANS = "CALL {catalog}.system.remove_orphan_files(table => '{namespace}.{name}', older_than => TIMESTAMP '{older_than}', prefix_listing => true)"
 
 
 @dataclass(frozen=True)
