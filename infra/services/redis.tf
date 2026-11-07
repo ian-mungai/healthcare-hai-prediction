@@ -1,9 +1,11 @@
 locals {
+  # Redis saves no snapshots and keeps no data on the host: a save forks the server and can need up to twice the data's memory under writes. The online
+  # store is rebuilt by materialize from the offline features, so after a restart it is empty until the next materialize.
   redis_script = <<-EOT
     pw=$${REDIS_PASSWORD//\\/\\\\}
     pw=$${pw//\"/\\\"}
     exec redis-server - < <(
-      printf '%s\n' 'bind 0.0.0.0' 'port 6379' 'dir /data' 'save 900 1' 'save 300 100' 'maxmemory 640mb' 'maxmemory-policy noeviction'
+      printf '%s\n' 'bind 0.0.0.0' 'port 6379' 'dir /data' 'save ""' 'maxmemory 2048mb' 'maxmemory-policy noeviction'
       printf 'requirepass "%s"\n' "$pw"
     )
   EOT
@@ -19,7 +21,7 @@ locals {
     mp=$${mp//\"/\\\"}
     rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2'
     exec redis-server - < <(
-      printf '%s\n' 'bind 0.0.0.0' 'port 6379' 'dir /data' 'save 900 1' 'save 300 100' 'maxmemory 640mb' 'maxmemory-policy noeviction'
+      printf '%s\n' 'bind 0.0.0.0' 'port 6379' 'dir /data' 'save ""' 'maxmemory 2048mb' 'maxmemory-policy noeviction'
       printf 'requirepass "%s"\n' "$pw"
       printf 'user model_api on "\076%s" %s\n' "$mp" "$rules"
     )
@@ -43,7 +45,8 @@ locals {
         var.model_api_enabled ? [{ name = "MODEL_API_REDIS_PASSWORD", valueFrom = local.secret_arn["model_api_redis_password"] }] : []
       )
       portMappings = [{ containerPort = 6379, hostPort = 6379, protocol = "tcp" }]
-      mountPoints  = [{ sourceVolume = "redis_data", containerPath = "/data", readOnly = false }]
+      # /data lives in task memory: a start never loads a dump left by an earlier task, so the store is empty until the next materialize.
+      linuxParameters = { tmpfs = [{ containerPath = "/data", size = 64, mountOptions = ["nosuid", "nodev", "noexec"] }] }
       healthCheck = {
         command     = ["CMD-SHELL", "redis-cli -h 127.0.0.1 ping | grep -q PONG"]
         interval    = 10

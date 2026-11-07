@@ -12,8 +12,8 @@ locals {
   # Polaris bootstrap) take the lowered values below when the flag is on and the deployed ones when it is off. A peak sample under load on the new host sets the final limits.
   memory_profile = {
     postgres = { limit = 2048, reservation = 128 }
-    # Redis keeps maxmemory 640mb with noeviction, so its limit stays above that.
-    redis             = { limit = 1024, reservation = 64 }
+    # Redis keeps maxmemory 2048mb with noeviction for the online feature store, so its limit is that plus 256 MiB.
+    redis             = { limit = 2304, reservation = 64 }
     polaris           = { limit = 2048, reservation = 320 }
     airflow_migrate   = { limit = local.om_on ? 512 : 640, reservation = 256 }
     airflow_apiserver = { limit = 1536, reservation = 256 }

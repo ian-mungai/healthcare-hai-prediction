@@ -88,7 +88,7 @@ run "flag_off_plans_nothing_new_and_keeps_every_limit" {
       polaris               = { polaris = [2048, 320] }
       polaris_bootstrap     = { polaris_bootstrap = [1024, 512] }
       postgres              = { postgres = [2048, 128], postgres_databases = [128, 64] }
-      redis                 = { redis = [1024, 64] }
+      redis                 = { redis = [2304, 64] }
     }
     error_message = "With the flag off every hard limit is the deployed one and every reservation is the measured one of the services stack (D19)."
   }
@@ -392,8 +392,8 @@ run "memory_fits_r7g_xlarge_with_marquez_running" {
   assert {
     condition = sum(flatten([
       for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : [for container in jsondecode(definition.container_definitions) : container.memory]
-    ])) == 17600
-    error_message = "Recorded figure: with Marquez and OpenMetadata the hard limits total 17600 MiB of the 30720 MiB allowed on r7g.xlarge."
+    ])) == 18880
+    error_message = "Recorded figure: with Marquez and OpenMetadata the hard limits total 18880 MiB of the 30720 MiB allowed on r7g.xlarge."
   }
 }
 
@@ -414,7 +414,7 @@ run "measured_services_keep_their_measured_reservations_with_the_flag_on" {
       airflow_triggerer     = { airflow_triggerer = [768, 256] }
       polaris               = { polaris = [2048, 320] }
       postgres              = { postgres = [2048, 128] }
-      redis                 = { redis = [1024, 64] }
+      redis                 = { redis = [2304, 64] }
     }
     error_message = "With the flag on the seven measured services keep their measured reservations and their deployed limits (D19)."
   }
