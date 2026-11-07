@@ -87,7 +87,7 @@ run "containers_follow_the_broker_table_in_order" {
   assert {
     condition = (
       [for container in jsondecode(output.layer_phase_containers["silver"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload"] &&
-      [for container in jsondecode(output.layer_phase_containers["gold"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload"] &&
+      [for container in jsondecode(output.layer_phase_containers["gold"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload", "maintain"] &&
       [for container in jsondecode(output.layer_phase_containers["features"]) : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload", "feast"]
     )
     error_message = "Each layer runs the table's containers in pipeline order after the volume ownership step."
@@ -205,6 +205,33 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
   }
 }
 
+run "gold_maintenance_is_the_last_gold_container" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled = true
+  }
+
+  assert {
+    condition = (
+      jsondecode(output.layer_phase_containers["gold"])[8].name == "maintain" && jsondecode(output.layer_phase_containers["gold"])[8].essential &&
+      jsondecode(output.layer_phase_containers["gold"])[8].dependsOn == [{ containerName = "upload", condition = "SUCCESS" }] &&
+      jsondecode(output.layer_phase_containers["gold"])[8].command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run maintain --layer gold --run \"$RUN_ID\""] &&
+      jsondecode(output.layer_phase_containers["gold"])[8].image == var.images.spark &&
+      toset([for item in jsondecode(output.layer_phase_containers["gold"])[8].environment : item.name if item.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"])
+    )
+    error_message = "Gold maintenance runs last on every gold run, after the upload, in the Spark image, with the catalog address and no input run."
+  }
+
+  assert {
+    condition = (
+      !contains([for container in jsondecode(output.layer_phase_containers["silver"]) : container.name], "maintain") &&
+      !contains([for container in jsondecode(output.layer_phase_containers["features"]) : container.name], "maintain")
+    )
+    error_message = "Only the gold job maintains gold."
+  }
+}
+
 run "every_layer_uploads_and_only_features_applies_feast" {
   command = plan
 
@@ -240,13 +267,13 @@ run "secrets_reach_only_the_phases_that_need_them" {
           ] : (layer == "silver" && container.name == "build" ? [
             { name = "DBT_ENV_SECRET_POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
             { name = "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
-            ] : container.name == "publish" ? [
+            ] : container.name == "publish" || (layer == "gold" && container.name == "maintain") ? [
             { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_id" },
             { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_secret" },
         ] : [])
       )
     ])])
-    error_message = "The reader pair reaches the pin, verify and feast phases and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and no other phase holds a credential."
+    error_message = "The reader pair reaches the pin, verify and feast phases and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and gold maintenance, and no other phase holds a credential."
   }
 
   assert {
@@ -255,7 +282,7 @@ run "secrets_reach_only_the_phases_that_need_them" {
   }
 
   assert {
-    condition     = toset(output.layer_secret_flow.containers_checked) == toset(["layer_silver/pin", "layer_silver/build", "layer_silver/verify", "layer_silver/publish", "layer_gold/pin", "layer_gold/publish", "layer_features/pin", "layer_features/publish", "layer_features/feast"])
+    condition     = toset(output.layer_secret_flow.containers_checked) == toset(["layer_silver/pin", "layer_silver/build", "layer_silver/verify", "layer_silver/publish", "layer_gold/pin", "layer_gold/publish", "layer_gold/maintain", "layer_features/pin", "layer_features/publish", "layer_features/feast"])
     error_message = "The shared check follows every container that receives a secret."
   }
 }

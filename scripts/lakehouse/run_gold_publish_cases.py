@@ -824,6 +824,9 @@ def maintenance_cases(h: Harness) -> Check:
     }
     none = maintenance.Protected()
     checks["with no reservation the newest retain_sets runs stay"] = maintenance.kept_runs(synthetic, none, 2) == {run_id(4), run_id(5)}
+    checks["orphan removal lists through the table file IO, which has no Hadoop s3 filesystem on the Spark image"] = (
+        "prefix_listing => true" in maintenance.ORPHANS
+    )
     return checks
 
 
@@ -1021,6 +1024,34 @@ def maintenance_protection(h: Harness) -> Check:
     except Exception:
         parsed = True
     checks["the maintenance command refuses to start without --protected"] = not parsed
+
+    def parses(arguments: list[str]) -> bool:
+        try:
+            maintenance.main(arguments)
+        except SystemExit:
+            return False
+        except Exception:
+            return True
+        return True
+
+    checks["the chain rule refuses a protected file beside it"] = not parses(
+        ["--run", run_id(9), "--mode", MODE, "--protection", "chain", "--protected", str(folder / "valid.json")]
+    )
+    checks["an unknown protection source is refused"] = not parses(["--run", run_id(9), "--mode", MODE, "--protection", "none"])
+
+    def run_chain(bound_to: str) -> dict[str, Any]:
+        return maintenance.maintain(maint(), maintenance.chain_protection(bound_to), now=future, orphan_now=datetime.now(UTC))
+
+    h.restore("four")
+    result = run_chain(run_id(9))
+    checks["the chain rule reads no reader record: the newest sets stay and the older ones go"] = (
+        result["kept_runs"] == sorted([run_id(3), run_id(4)]) and result["protection"] == "chain" and survivors() == 2
+    )
+    h.restore("four")
+    checks["a chain source bound to another run stops maintenance before any expiry"] = refuses(lambda: run_chain(run_id(8))) and survivors() == 4
+    checks["the chain source holds no item and no fence attempt"] = maintenance.chain_protection(run_id(9))() == maintenance.Protected(
+        (), run_id(9), None, "chain"
+    )
 
     h.restore("four")
     path = write("moving", protected_doc([]))

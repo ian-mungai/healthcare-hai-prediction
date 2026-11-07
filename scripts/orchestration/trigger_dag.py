@@ -28,7 +28,7 @@ from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, A
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
-DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag", *TRAINING_DAGS)
+DAGS = ("silver_transform_dag", "gold_transform_dag", *TRAINING_DAGS)
 MODES = ("fixture", "publish_fixture", "real")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 MAX_WAIT_SECONDS = 4 * 3600

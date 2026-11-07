@@ -1,7 +1,17 @@
 """Gold maintenance: snapshot expiry and orphan-file removal that keep every protected snapshot set.
 
-A reader that wants a published set takes a reservation first, then reads the newest ``publish_runs`` row, then pins the set (a registration). Maintenance
-never expires a snapshot of a set that a reservation or a registration names.
+Two protection sources exist, and the caller names one (``--protection``):
+
+- ``registry`` (local runs, the default): the launcher registry's fenced protected file described below.
+- ``chain`` (the last container of the AWS gold job): no reader record at all. The AWS DAGs run as one chain, and the features job pins only the gold run
+  its chain has just published, which is the newest committed set (``scripts/features/features_input.py``, ``--newest-only``). The newest ``retain_sets``
+  sets are always kept, so the chain rule protects every set a reader of the chain can name. The source is empty by rule and bound to this run; it is
+  not a missing file, and a protected file beside it is refused. Chain mode therefore protects no registration: a reader registered on an older set
+  loses it once ``retain_sets`` newer sets exist and its snapshots pass the cutoff (owner rule). To keep an older set, tag each table's snapshot of
+  that set (``ALTER TABLE ... CREATE TAG ... AS OF VERSION ...``); maintenance keeps every tag head.
+
+In registry mode, a reader that wants a published set takes a reservation first, then reads the newest ``publish_runs`` row, then pins the set (a
+registration). Maintenance never expires a snapshot of a set that a reservation or a registration names.
 
 The launcher registry owns the protection and the fence around it. At the admission of a maintenance job it writes the protected file this module reads
 and, in the same registry transaction, takes the maintenance fence; the fence refuses every new reservation and registration until the attempt of the job
@@ -48,7 +58,7 @@ MARGIN_SECONDS = 60
 MIN_ORPHAN_AGE = timedelta(days=1)
 LIST_SNAPSHOTS = "SELECT snapshot_id, committed_at FROM {table}.snapshots ORDER BY committed_at"
 EXPIRE = "CALL {catalog}.system.expire_snapshots(table => '{namespace}.{name}', older_than => TIMESTAMP '1970-01-01 00:00:00', snapshot_ids => ARRAY({ids}))"
-ORPHANS = "CALL {catalog}.system.remove_orphan_files(table => '{namespace}.{name}', older_than => TIMESTAMP '{older_than}')"
+ORPHANS = "CALL {catalog}.system.remove_orphan_files(table => '{namespace}.{name}', older_than => TIMESTAMP '{older_than}', prefix_listing => true)"
 
 
 @dataclass(frozen=True)
@@ -61,13 +71,19 @@ class Item:
     since: datetime | None = None
 
 
+PROTECTIONS = ("registry", "chain")
+
+
 @dataclass(frozen=True)
 class Protected:
-    """The registry's protected file: the items and the fence (the maintenance run and the attempt that holds it) they were written under."""
+    """The registry's protected file: the items and the fence (the maintenance run and the attempt that holds it) they were written under.
+
+    ``rule`` names the source: ``registry`` for the file, ``chain`` for the empty set of the AWS chain (``chain_protection``)."""
 
     items: tuple[Item, ...] = ()
     fence_run: str | None = None
     fence_attempt: str | None = None
+    rule: str = "registry"
 
 
 @dataclass
@@ -127,6 +143,13 @@ def load_protected(path: Path | None) -> Protected:
         else:
             items.append(Item("pending", raw["id"], since=timestamp(raw["since"], "reservation time")))
     return Protected(tuple(items), str(fence["run_id"]), str(fence["attempt_id"]))
+
+
+def chain_protection(run_id: str) -> Callable[[], Protected]:
+    """The source of the AWS chain: no item, bound to the maintenance run ``run_id`` (the gold run whose job runs it)."""
+    if not RUN_ID.fullmatch(run_id):
+        raise PublishError("the chain protection needs the gold run ID of its job")
+    return lambda: Protected((), run_id, None, "chain")
 
 
 def kept_runs(runs: Sequence[Mapping[str, Any]], protected: Protected, retain_sets: int) -> set[str]:
@@ -214,6 +237,7 @@ def maintain(
     return {
         "step": "maintenance",
         "run_id": ctx.run_id,
+        "protection": protected.rule,
         "fence_attempt": protected.fence_attempt,
         "expired": expired,
         "orphans_removed": orphans,
@@ -222,16 +246,21 @@ def maintain(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """The maintenance job: ``--run`` names this maintenance run, ``--protected`` the registry's fenced file (required)."""
+    """The maintenance job: ``--run`` names this maintenance run. ``--protection registry`` needs ``--protected``, the registry's fenced file;
+    ``--protection chain`` (the AWS gold job) takes none."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True)
     parser.add_argument("--mode", required=True, choices=MODES)
-    parser.add_argument("--protected", required=True)
+    parser.add_argument("--protection", default="registry", choices=PROTECTIONS)
+    parser.add_argument("--protected", help="registry: the registry's fenced protected file")
     parser.add_argument("--publish-dir", default="/workspace/out/publish")
     parser.add_argument("--local-warehouse", type=Path)
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.protection == "registry" and not args.protected:
+        parser.error("the registry protection needs --protected: maintenance runs only under the registry's fence")
+    if args.protection == "chain" and args.protected:
+        parser.error("the chain protection reads no protected file; --protected is refused")
     plan = load_plan()
-    protected_path = Path(args.protected)
     try:
         from scripts.lakehouse.session import spark_session
 
@@ -240,7 +269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         spark = spark_session("gold_maintenance", warehouse=args.local_warehouse)
         try:
             ctx = Context(spark, plan, args.run, args.mode, Path(args.publish_dir), "", needs_sealed=False)
-            result = maintain(ctx, lambda: load_protected(protected_path))
+            source = chain_protection(args.run) if args.protection == "chain" else (lambda: load_protected(Path(args.protected)))
+            result = maintain(ctx, source)
             write_record(ctx.path(f"maintenance_{args.run}.json"), result)
             sys.stdout.write(json.dumps(result) + "\n")
         finally:

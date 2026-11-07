@@ -1,4 +1,4 @@
-"""Run shipped silver, gold and maintenance DAGs through Airflow on a test registry and local Iceberg."""
+"""Run shipped silver and gold DAGs through Airflow on a test registry and local Iceberg."""
 
 from __future__ import annotations
 
@@ -33,12 +33,10 @@ CASES = (
     "bronze_head_changed",
     *INTERRUPTED,
     "gold",
-    "maintenance",
-    "maintenance_reader",
     "tampered_build",
     "tampered_result",
 )
-NEEDS = {**{name: ("silver", "gold") for name in (*INTERRUPTED, "maintenance_reader")}, "bronze_head_changed": ("silver",)}
+NEEDS = {**{name: ("silver", "gold") for name in INTERRUPTED}, "bronze_head_changed": ("silver",)}
 BARRIERS = {
     "publish_candidates": "candidates:after_merge:",
     "reconcile_candidates": "reconcile:after_table:",
@@ -51,8 +49,6 @@ MUTANTS = (
     "no_interruption",
     "candidates_visible",
     "row_before_fast_forward",
-    "maintenance_ignores_registrations",
-    "maintenance_ignores_pending",
 )
 BARRIER_SECONDS = 900
 EVIDENCE_SECONDS = 30
@@ -62,8 +58,6 @@ SETTLE_SECONDS = 120
 RUN_SECONDS = 5400
 NOT_RUNNING = ("creating", "created", "exiting", "ended")
 SILVER_PUBLISH_STEPS = ("seal_silver", "silver_export", "silver_candidates", "silver_reconcile", "silver_backup", "silver_commit", "record_silver_snapshot")
-ANY = {"kind": "any"}
-FENCE = "maintenance fence"
 
 
 class InterruptionControlError(RuntimeError):
@@ -348,86 +342,6 @@ def interrupted_publish(stack: PipelineStack, step: str, run_id: str, artifact: 
     return observed, checks
 
 
-def maintenance_reader(stack: PipelineStack, artifact: Path, producer: str, committed: list[str]) -> tuple[dict[str, Any], dict[str, bool]]:
-    """A reader reserves, a second set commits, maintenance runs beside the reader's discovery, then beside its registered set."""
-    if not committed:
-        raise RuntimeError("maintenance_reader needs a gold set committed by the gold case")
-    first = committed[0]
-    reader = f"a3-reader-{harness.new_run_id()[-8:]}"
-    late = f"{reader}-late"
-    fence: dict[str, str] = {}
-    registered_after = ""
-    late_after = ""
-    late_left = ""
-
-    def reader_call(method: str, params: dict[str, str]) -> str:
-        try:
-            stack.client.call(method, params, ANY)
-        except launcher.ClientError as error:
-            return str(error)
-        return "accepted"
-
-    def reserve(name: str) -> str:
-        return reader_call("reserve", {"reader": name, "domain": "transform", "publish_run": "latest"})
-
-    def register() -> str:
-        return reader_call("register_set", {"reader": reader, "snapshot_set": first})
-
-    def leave(name: str) -> str:
-        return reader_call("deregister_set", {"reader": name})
-
-    def probe(_: dict[str, Any]) -> None:
-        fence["reserve"] = reserve(late)
-        fence["register"] = register()
-
-    def maintain() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        run_id = harness.new_run_id()
-        observed = execute(stack, "gold_maintenance_dag", run_id, artifact)
-        folder = stack.run_folder(run_id) / "publish"
-        return observed, read_json(folder / "protected.json"), read_json(folder / f"maintenance_{run_id}.json")
-
-    checks: dict[str, bool] = {}
-    published_before = stack.visible("gold")["published_runs"]
-    try:
-        reserved = reserve(reader)
-        if reserved != "accepted":
-            raise RuntimeError(f"the reader reservation was refused: {reserved[:200]}")
-        second_id = harness.new_run_id()
-        second = execute(stack, "gold_transform_dag", second_id, artifact, producer)
-        committed.append(second_id)
-        checks["second_publish_committed"] = all(terminal(second, True).values()) and stack.visible("gold")["published_runs"] == published_before + 1
-        harness.HOOKS.on_line("gold_maintenance", "started", probe)
-        pending_run, pending_protected, pending_result = maintain()
-        harness.HOOKS.reset()
-        registered_after = register()
-        late_after = reserve(late)
-        late_left = leave(late)
-        if late_after != "accepted" or late_left != "accepted":
-            raise RuntimeError(f"the late reservation control failed: reserve {late_after[:120]!r}, leave {late_left[:120]!r}")
-        registered_run, registered_protected, registered_result = maintain()
-        leave(reader)
-        control_run, _, control_result = maintain()
-    finally:
-        harness.HOOKS.reset()
-        for name in (reader, late):
-            leave(name)
-    both = sorted([first, second_id])
-    checks |= {
-        "maintenance_runs_succeeded": all(all(terminal(run, True).values()) for run in (pending_run, registered_run, control_run)),
-        "fence_probe_ran": set(fence) == {"reserve", "register"},
-        "fence_refused_reservation": FENCE in fence.get("reserve", ""),
-        "fence_refused_registration": FENCE in fence.get("register", ""),
-        "pending_listed_alone": [(entry.get("kind"), entry.get("id")) for entry in pending_protected.get("items", [])] == [("pending", reader)],
-        "pending_set_kept": pending_result.get("kept_runs") == both,
-        "registration_accepted_after_attempt": registered_after == "accepted",
-        "late_reservation_accepted_and_left_after_attempt": late_after == "accepted" and late_left == "accepted",
-        "protected_lists_only_the_registration": registered_protected.get("items") == [{"kind": "registration", "id": reader, "run_id": first}],
-        "registered_set_kept": registered_result.get("kept_runs") == both,
-        "control_keeps_only_newest": control_result.get("kept_runs") == [second_id],
-    }
-    return control_run, checks
-
-
 def main() -> int:
     """Run the selected scheduler cases and return failure for any check or cleanup error."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -450,21 +364,16 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="a3dag_", dir=harness.TEMP_ROOT)).resolve()
     stack = PipelineStack(work)
     stack.mutant = args.mutant
-    stack.retain_sets = 1 if "maintenance_reader" in selected else None
     stack.barrier = bool(selected & INTERRUPTED.keys())
     report: dict[str, Any] = {
         "scope": "synthetic, real scheduler, local Iceberg; no AWS",
         "cases": [],
         "mutant": args.mutant,
-        "test_parameters": {"retain_sets": stack.retain_sets, "barrier_overlay": stack.barrier},
+        "test_parameters": {"barrier_overlay": stack.barrier},
         "pending": [],
     }
     if selected & INTERRUPTED.keys():
         report["pending"].append("retained_run_resubmission: an interrupted run is not resumed; the retry is a new run after the owner's release")
-    if "maintenance_reader" in selected:
-        report["pending"].append(
-            "expiry_preservation: proven are the protected file and the keep decision; an eligible old snapshot surviving actual expiry is not"
-        )
     host_mutation = contextlib.ExitStack()
     if args.mutant == "verifier_accepts_mismatch":
         host_mutation.enter_context(verifier_accepting_mismatch())
@@ -514,11 +423,6 @@ def main() -> int:
             elif name in INTERRUPTED:
                 interrupted_runs.append(run_id)
                 observed, checks = interrupted_publish(stack, INTERRUPTED[name], run_id, folder, producer)
-            elif name == "maintenance":
-                observed = execute(stack, "gold_maintenance_dag", run_id, folder)
-                checks = {**terminal(observed, True), "maintenance_ran": observed["tasks"].get("gold_maintenance") == "success"}
-            elif name == "maintenance_reader":
-                observed, checks = maintenance_reader(stack, folder, producer, committed)
             else:
                 if name == "tampered_build":
 

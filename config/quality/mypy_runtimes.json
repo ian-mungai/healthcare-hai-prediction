@@ -36,10 +36,6 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
-    "dags/gold_maintenance_dag.py": {
-      "runtime": "orchestration_image",
-      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
-    },
     "dags/gold_transform_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""

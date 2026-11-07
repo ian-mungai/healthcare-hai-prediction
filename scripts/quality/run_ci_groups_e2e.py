@@ -115,7 +115,6 @@ COPIED = (
     "scripts/quality/repo_checks.py",
     "scripts/quality/run_checks_e2e.py",
     "scripts/quality/run_lint_coverage_e2e.py",
-    "dags/gold_maintenance_dag.py",
     "dags/gold_transform_dag.py",
     "dags/silver_transform_dag.py",
     "orchestration/dag_runtime.py",

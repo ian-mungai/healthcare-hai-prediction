@@ -5,6 +5,8 @@
 
 ``pin`` reuses ``silver_publish.pin`` and ``checked_set`` with a gold context (the gold publish plan, so every gold table is named and each snapshot is checked
 in the catalog) and writes ``gold_pins.json`` once: the chosen ``publish_runs`` row of the gold namespace (the head, or the run named by ``--source-run``).
+With ``--newest-only`` (the features job of the AWS chain) the named gold run must be the newest committed one: the chain reads the set its own gold job just
+published, and gold maintenance in that job keeps only the newest sets, so an older run is refused by name before anything is pinned.
 A retry reads the same record and re-checks it. ``read`` exports exactly the pinned snapshots (``version as of``) to ``gold_input/`` with a manifest of file
 digests, in the shape of ``silver_input.extract``, which hardcodes the silver paths. Both run in the Spark image and record names, counts and hashes only.
 """
@@ -22,7 +24,7 @@ from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record
 from scripts.lakehouse import silver_publish
-from scripts.lakehouse.gold_publish import MODES, Context, Plan, load_plan, remove_tree, write_record
+from scripts.lakehouse.gold_publish import MODES, Context, Plan, load_plan, published_head, remove_tree, write_record
 from scripts.lakehouse.gold_publish_record import RUN_ID, PublishError
 
 PIN_NAME = "gold_pins.json"
@@ -45,8 +47,25 @@ def as_gold(error: PublishError) -> PublishError:
     return PublishError(str(error).replace("silver", "gold"))
 
 
-def pin(ctx: Context, path: Path, source_run: str | None = None) -> dict[str, Any]:
-    """Pin a committed gold set once: the silver pin function on a gold context, with its refusals worded for gold."""
+def require_newest(ctx: Context, source_run: str | None) -> None:
+    """The chain rule: the named gold run is the newest committed gold run, or the pin is refused and names both runs."""
+    if not source_run:
+        raise PublishError("the chain pin names no gold run: the features job must name the gold run its chain just published")
+    head = published_head(ctx)
+    if head is None:
+        raise PublishError(f"no committed gold run exists, so gold run {source_run} cannot be the newest")
+    if head["run_id"] != source_run:
+        raise PublishError(
+            f"gold run {source_run} is not the newest committed gold run ({head['run_id']}): the chain reads only the set its gold job just published"
+        )
+
+
+def pin(ctx: Context, path: Path, source_run: str | None = None, newest_only: bool = False) -> dict[str, Any]:
+    """Pin a committed gold set once: the silver pin function on a gold context, with its refusals worded for gold.
+
+    ``newest_only`` applies the chain rule first (``require_newest``)."""
+    if newest_only:
+        require_newest(ctx, source_run)
     try:
         return silver_publish.pin(ctx, path, source_run)
     except PublishError as error:
@@ -124,6 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--run", required=True)
     parser.add_argument("--mode", required=True, choices=MODES)
     parser.add_argument("--source-run", help="pin: the gold run to pin instead of the newest committed one")
+    parser.add_argument("--newest-only", action="store_true", help="pin: refuse a --source-run that is not the newest committed gold run (the AWS chain)")
     parser.add_argument("--expected-pin-sha256", default="", help="read: the digest of the pin record that the launcher accepted")
     parser.add_argument("--folder", type=Path, default=Path("/workspace/out"))
     parser.add_argument(
@@ -145,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ctx = Context(spark, gold_plan(), args.run, args.mode, args.folder / "publish", "", needs_sealed=False)
             if args.step == "pin":
                 record = args.record or args.folder / PIN_NAME
-                result = pin(ctx, record, args.source_run)
+                result = pin(ctx, record, args.source_run, args.newest_only)
                 digest = hashlib.sha256(record.read_bytes()).hexdigest()
                 output = {"step": "pin", "tables": len(result["snapshot_set"]), "sha256": digest}
             else:
