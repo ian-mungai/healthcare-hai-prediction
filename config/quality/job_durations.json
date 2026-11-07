@@ -34,9 +34,9 @@
     },
     {
       "job": "Repository Hooks (samples)",
-      "measured_minutes": 10,
-      "timeout_minutes": 20,
-      "basis": "measured Oct 30 2026, the `test-checks` hook alone"
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "measured Nov 6 2026: hosted pull request runs reached the 20-minute limit twice in the `test-checks` hook, at about 18 minutes"
     },
     {
       "job": "Core Static Checks",
