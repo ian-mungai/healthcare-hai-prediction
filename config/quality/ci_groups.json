@@ -414,7 +414,7 @@
     },
     "hook_samples": {
       "job": "Repository Hooks (samples)",
-      "minutes": 20
+      "minutes": 30
     },
     "acquisition_shard": {
       "job": "Acquisition Checks (Shard 1 of 4)",

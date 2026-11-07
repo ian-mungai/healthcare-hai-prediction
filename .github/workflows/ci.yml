@@ -146,7 +146,7 @@ jobs:
           - group: code
             timeout: 40  # max 22 min, about 24 estimated with the seven linters
           - group: samples
-            timeout: 20  # max 13 min
+            timeout: 30  # about 18 min measured, two hosted runs reached 20
     steps:
       - name: Record hook job start
         run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
