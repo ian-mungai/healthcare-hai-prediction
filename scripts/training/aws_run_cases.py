@@ -305,6 +305,11 @@ def extract_cases(cases: Any, folder: Path) -> None:
         require(env["FEAST_NAMESPACE"] == "features" and env["FEAST_CATALOG_TYPE"] == "rest", f"namespace: {env.get('FEAST_NAMESPACE')}")
         require(env["FEAST_PROFILE"] == "aws", f"profile: {env.get('FEAST_PROFILE')}")
         require(env["FEAST_REGISTRY_PATH"] == f"s3://{BUCKET}/lakehouse/feast/registry.pb", f"registry: {env.get('FEAST_REGISTRY_PATH')}")
+        # Feast's offline reader opens its own PyIceberg catalog hai, which reads only these variables: no credential vending and the task's region.
+        delegation = env.get("PYICEBERG_CATALOG__HAI__HEADER__X_ICEBERG_ACCESS_DELEGATION")
+        require(delegation == "", f"delegation override: {delegation!r}")
+        region = env.get("PYICEBERG_CATALOG__HAI__S3__REGION")
+        require(region == "us-west-2", f"PyIceberg region: {region!r}")
         require([item["step"] for item in lines_of(out) if "step" in item] == ["extract"], f"steps: {out}")
 
     def needs_guard() -> None:

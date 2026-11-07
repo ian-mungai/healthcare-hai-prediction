@@ -1636,12 +1636,6 @@
     },
     {
       "role": "write_features",
-      "action": "s3:ListBucket",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
-      "scope": "features"
-    },
-    {
-      "role": "write_features",
       "action": "ssm:GetParameter",
       "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${REDIS_PASSWORD_NAME}",
       "scope": "features"

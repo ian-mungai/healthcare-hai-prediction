@@ -6,13 +6,18 @@ store ends with ``S3RegistryBucketForbiddenAccess``. ``feature_store_aws.yaml`` 
 ``RegistryStore`` interface of Feast 0.66.0 and 0.67.0 (``get_registry_proto``, ``update_registry_proto``, ``teardown``) over the same object and bytes, and
 it never calls HeadBucket or ListObjectsV2.
 
-An object that is not there is a ``FileNotFoundError``, which Feast turns into a new registry on a first apply. Every other error reaches the caller.
+An object that is not there is a ``FileNotFoundError``, which Feast turns into a new registry on a first apply. S3 answers a read of a missing key with
+403, not 404, when the caller may not list the bucket, so a 403 alone cannot tell a missing object from a refused one. The registry writer (the features
+job, which sets ``FEAST_REGISTRY_BOOTSTRAP=conditional``) then creates the object with ``If-None-Match: *``: a created object shows the key was missing,
+and a refused or failed create (412 when the object exists, or a transport error) leaves the read error as it was. A reader never writes, so its 403
+always reaches the caller. Every other error reaches the caller.
 The client takes the task role's credentials and ``AWS_DEFAULT_REGION`` from the environment, as the stock store does.
 The module needs the Feast and boto3 packages, so it is imported only inside the feature store and model API images.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +26,7 @@ from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from feast.infra.registry.registry_store import RegistryStore
 from feast.protos.feast.core.Registry_pb2 import Registry as RegistryProto
 
@@ -29,6 +34,9 @@ CONNECT_SECONDS = 5
 READ_SECONDS = 30
 ATTEMPTS = 3
 MISSING_CODES = frozenset({"NoSuchKey", "404"})
+DENIED_CODES = frozenset({"AccessDenied", "403"})
+BOOTSTRAP_VARIABLE = "FEAST_REGISTRY_BOOTSTRAP"
+BOOTSTRAP_VALUE = "conditional"
 
 
 class S3ObjectRegistryStore(RegistryStore):
@@ -51,7 +59,8 @@ class S3ObjectRegistryStore(RegistryStore):
         try:
             body = self._client.get_object(Bucket=self._bucket, Key=self._key)["Body"].read()
         except ClientError as error:
-            if error.response.get("Error", {}).get("Code") in MISSING_CODES:
+            code = error.response.get("Error", {}).get("Code")
+            if code in MISSING_CODES or (code in DENIED_CODES and self._created_missing()):
                 raise FileNotFoundError(f"Error while trying to locate Registry at path {self._uri}") from error
             raise
         registry_proto = RegistryProto()
@@ -59,9 +68,22 @@ class S3ObjectRegistryStore(RegistryStore):
         return registry_proto
 
     def update_registry_proto(self, registry_proto: RegistryProto) -> None:
+        self._put(registry_proto)
+
+    def _put(self, registry_proto: RegistryProto, **condition: str) -> None:
         registry_proto.version_id = str(uuid.uuid4())
         registry_proto.last_updated.FromDatetime(datetime.now(UTC))
-        self._client.put_object(Bucket=self._bucket, Key=self._key, Body=registry_proto.SerializeToString(), **self._put_options)
+        self._client.put_object(Bucket=self._bucket, Key=self._key, Body=registry_proto.SerializeToString(), **self._put_options, **condition)
+
+    def _created_missing(self) -> bool:
+        """Whether the writer's conditional create of an empty registry succeeded, which shows that a denied read was of a missing object."""
+        if os.environ.get(BOOTSTRAP_VARIABLE) != BOOTSTRAP_VALUE:
+            return False
+        try:
+            self._put(RegistryProto(), IfNoneMatch="*")
+        except (ClientError, BotoCoreError):
+            return False
+        return True
 
     def teardown(self) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=self._key)

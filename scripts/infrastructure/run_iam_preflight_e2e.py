@@ -271,7 +271,6 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
     silver_scope = ["--scope", "silver"]
     features_scope = ["--scope", "features"]
     no_features_upload = [("owner_policies/job_writer_features_activation.json", '"Action": ["s3:PutObject"],', '"Action": ["example:Unused"],')]
-    no_registry_bucket_check = [("owner_policies/job_writer_features_activation.json", '"Action": ["s3:ListBucket"],', '"Action": ["example:Unused"],')]
     no_feast_pull = [("owner_policies/job_features_image.json", '"ecr:BatchGetImage"', '"example:Unused"')]
 
     def failed(run: Run, *words: str) -> list[str]:
@@ -528,12 +527,6 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
                     else ["upload not named"]
                 )
             ),
-        ),
-        (
-            "live features scope names the denied bucket check of the Feast registry",
-            "the bucket check is removed",
-            live_run(planted(no_registry_bucket_check), extra=features_scope),
-            lambda r: expect(r, 1) + ([] if "FAIL write_features s3:ListBucket" in r.out else ["bucket check not named"]),
         ),
         (
             "live features scope names the denied pull of the feature store image",

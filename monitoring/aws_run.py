@@ -201,9 +201,12 @@ def prepare_feature_reader(bucket: str, work: Path) -> None:
 
     if not BUCKET.fullmatch(bucket):
         raise CheckError("dependency_missing", "the current window reader needs the feature image and DATA_BUCKET_NAME for the registry path", 3)
+    region = os.environ.get("AWS_REGION", "")
+    if not region:
+        raise CheckError("dependency_missing", "the current window reader needs AWS_REGION for the PyIceberg catalog", 3)
     folder = work / "tmp"
     folder.mkdir(parents=True, exist_ok=True)
-    os.environ.update(training_extract.aws_reader_environment(bucket, str(folder)))
+    os.environ.update(training_extract.aws_reader_environment(bucket, str(folder), region=region))
 
 
 def main(argv: list[str] | None = None) -> int:

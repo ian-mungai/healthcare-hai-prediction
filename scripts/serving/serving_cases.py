@@ -996,6 +996,25 @@ def check_sink_header(c: Checker, deadline: float, stalled: bool) -> None:
     settle_threads(c, f"the sink header case ({client})", before)
 
 
+def case_sink_names_its_region(c: Checker) -> None:
+    """The sink names the task's region to PyIceberg, so its S3 file writer never asks the bucket for its region (HeadBucket)."""
+    seen: list[dict[str, Any]] = []
+
+    def load_catalog(name: str, **properties: Any) -> object:
+        seen.append({"name": name, **properties})
+        return object()
+
+    standin = SimpleNamespace(import_module=lambda _name: SimpleNamespace(load_catalog=load_catalog))
+    environ = {"POLARIS_URI": "http://10.0.0.5:8181/api/catalog", "POLARIS_CLIENT_ID": "writer", "POLARIS_CLIENT_SECRET": "x", "AWS_REGION": "us-west-2"}
+    sink = iceberg_sink.IcebergSink(environ)
+    with mock.patch.object(iceberg_sink.reads, "polaris_token", return_value=feast_aws_cases.ISSUED), mock.patch.object(iceberg_sink, "importlib", standin):
+        sink._catalog(10.0)
+    c.check("the sink opens catalog hai once", [item["name"] for item in seen] == ["hai"])
+    c.check("the sink names the task's region", bool(seen) and seen[0].get("s3.region") == "us-west-2")
+    c.check("the sink still asks for no vended credentials", bool(seen) and iceberg_sink.reads.ACCESS_DELEGATION_PROPERTY in seen[0])
+    c.check("the sink closes", sink.close(1.0))
+
+
 def case_sink_requests_no_vended_credentials(c: Checker) -> None:
     """The sink opens the REST catalog without asking Polaris for vended credentials, so no table load carries the access delegation header."""
     check_sink_header(c, 10.0, stalled=False)
@@ -1632,6 +1651,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "predictions_append": (case_predictions, "iceberg"),
     "sink_late_commit": (case_sink_late_commit, "iceberg"),
     "sink_requests_no_vended_credentials": (case_sink_requests_no_vended_credentials, "iceberg polaris"),
+    "sink_names_its_region": (case_sink_names_its_region, "iceberg polaris"),
     "sink_stalled_reply_leaves_no_client": (case_sink_stalled_reply_leaves_no_client, "iceberg polaris timeout"),
     "create_table_requests_no_vended_credentials": (case_create_table_requests_no_vended_credentials, "iceberg polaris"),
     "replay_and_compare": (case_replay_and_compare, "canary compare"),

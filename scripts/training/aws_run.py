@@ -253,7 +253,9 @@ def extract(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     check_prerequisites(work, run, "extract")
     required("POLARIS_URI")
     task_environment(work)
-    os.environ.update(importlib.import_module("scripts.features.training_extract").aws_reader_environment(bucket(), os.environ["TMPDIR"], mode))
+    os.environ.update(
+        importlib.import_module("scripts.features.training_extract").aws_reader_environment(bucket(), os.environ["TMPDIR"], mode, region=required("AWS_REGION"))
+    )
     folder = work / "in" / "extract"
     folder.mkdir(parents=True, exist_ok=True)
     resumed = (folder / "extract.done.json").exists()

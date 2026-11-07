@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA20 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA23 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -31,6 +31,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
+
+import yaml
 
 from orchestration import ecs_target
 from scripts.features import feast_aws, feast_cases, feast_job, feast_materialize, online_cases
@@ -295,20 +297,23 @@ def runs_catalog(namespace: str) -> feast_cases.StubCatalog:
 
 
 class PathBackend(feast_cases.RecordingBackend):
-    """The Feast stand-in that keeps the registry path the job environment holds when ``apply`` runs, the path the real backend consumes."""
+    """The Feast stand-in that keeps the registry path and the registry bootstrap setting the job environment holds when ``apply`` runs, as the real
+    backend and its registry store consume them."""
 
     def __init__(self, schema: dict[str, Any], log: list[str], environ: Mapping[str, str]) -> None:
         super().__init__(schema, log)
         self.environ = environ
         self.consumed = ""
+        self.bootstrap = ""
 
     def apply(self) -> None:
         self.consumed = self.environ.get("FEAST_REGISTRY_PATH", "")
+        self.bootstrap = self.environ.get("FEAST_REGISTRY_BOOTSTRAP", "")
         super().apply()
 
 
-def consumed_registry(mode: str) -> str:
-    """Run a full AWS apply in ``mode`` and return the registry path the backend consumed."""
+def consumed_registry(mode: str) -> tuple[str, str]:
+    """Run a full AWS apply in ``mode`` and return the registry path and the registry bootstrap setting the backend consumed."""
     schema = feast_cases.synthetic_schema()
     with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
         catalog, _ = feast_cases.stub_features(schema)
@@ -328,7 +333,7 @@ def consumed_registry(mode: str) -> str:
             lease=lambda: online.writer_lease(environ, control=server.client(online.CONTROL_DB, password=STORE_VALUE)),
             schema=(schema, "c" * 64),
         )
-    return backend.consumed
+    return backend.consumed, backend.bootstrap
 
 
 def case_fa1(c: Checker) -> None:
@@ -753,8 +758,14 @@ def case_fa12(c: Checker) -> None:
         c.check(f"{step}: a fixture run uses the literal fixture key", fixture.registry_path == f"s3://example-feature-bucket/{fixture_key}")
         c.check(f"{step}: a real run uses the literal real key", feast_aws.job_settings(environ, step, RUN, "real").registry_path.endswith(f"/{real_key}"))
     c.check("the fixture registry step is the probe key", feast_aws.FIXTURE_REGISTRY_STEP == "probe" and reads.REGISTRY_KEYS["probe"] == fixture_key)
-    c.check("a real apply hands the backend the real registry", consumed_registry("real") == f"s3://example-feature-bucket/{real_key}")
-    c.check("a fixture apply hands the backend the fixture registry", consumed_registry("publish_fixture") == f"s3://example-feature-bucket/{fixture_key}")
+    real_path, real_bootstrap = consumed_registry("real")
+    fixture_path, fixture_bootstrap = consumed_registry("publish_fixture")
+    c.check("a real apply hands the backend the real registry", real_path == f"s3://example-feature-bucket/{real_key}")
+    c.check("a fixture apply hands the backend the fixture registry", fixture_path == f"s3://example-feature-bucket/{fixture_key}")
+    c.check(
+        "the features job, the registry writer, lets its registry store create a missing registry conditionally",
+        real_bootstrap == fixture_bootstrap == "conditional",
+    )
     c.refused(
         "FEAST_REGISTRY_PATH is refused",
         feast_aws.job_settings,
@@ -920,6 +931,8 @@ def case_fa17(c: Checker) -> None:
     with session:
         pass
     c.check("the variable is empty when the catalog is opened, so no delegation mode is asked for", seen == [""])
+    region = environ.get("PYICEBERG_CATALOG__HAI__S3__REGION")
+    c.check("PyIceberg's catalog hai gets the job's region, so its S3 file reader resolves no bucket region", region == job.region == "us-east-2")
     c.check("the variable names catalog hai and the header", feast_aws.NO_DELEGATION_VARIABLE == "PYICEBERG_CATALOG__HAI__HEADER__X_ICEBERG_ACCESS_DELEGATION")
 
 
@@ -958,14 +971,20 @@ REGISTRY_STORE_TYPE = f"{REGISTRY_STORE_MODULE}.S3ObjectRegistryStore"
 REGISTRY_BUCKET = "example-registry-bucket"
 REGISTRY_KEY = "lakehouse/feast/registry.pb"
 REGISTRY_URI = f"s3://{REGISTRY_BUCKET}/{REGISTRY_KEY}"
+PYICEBERG_REGION_VARIABLE = "PYICEBERG_CATALOG__HAI__S3__REGION"
+REGISTRY_BOOTSTRAP = ("FEAST_REGISTRY_BOOTSTRAP", "conditional")  # the setting with which the features job, the registry writer, runs
 S3_ERROR = '<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code><Message>{code}</Message></Error>'
 
 
 class S3Handler(http.server.BaseHTTPRequestHandler):
     """A loopback stand-in for the registry bucket of a role that holds GetObject and PutObject on the registry key and nothing else.
 
-    It records every request. The object is ``server.stored``; ``server.refuse_object`` makes a read of the key answer 403. Any call on the bucket itself
-    (HeadBucket, ListObjectsV2) and any call on another key answers 403, as S3 does for a caller without those grants.
+    It records every request, and the ``If-None-Match`` header of every PUT in ``server.conditions``. The object is ``server.stored``;
+    ``server.refuse_object`` makes a read of the key answer 403, ``server.allow_put = False`` models a reader role without PutObject and
+    ``server.drop_put`` closes the connection of every PUT without an answer, a transport failure. A read of a missing
+    key answers 403, not 404, because S3 answers 404 only to a caller that may list the bucket. A PUT with ``If-None-Match: *`` answers 412 when the
+    object exists. Any call on the bucket itself (HeadBucket, ListObjectsV2) and any call on another key answers 403, as S3 does for a caller without
+    those grants.
     """
 
     protocol_version = "HTTP/1.1"
@@ -976,18 +995,23 @@ class S3Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
         server.requests.append({"method": self.command, "path": parts.path, "query": parts.query})
-        if parts.path != f"/{REGISTRY_BUCKET}/{REGISTRY_KEY}":
+        if self.command == "PUT":
+            server.conditions.append(self.headers.get("If-None-Match", ""))
+        if self.command == "PUT" and server.drop_put:
+            self.close_connection = True
+            return
+        if parts.path != f"/{REGISTRY_BUCKET}/{REGISTRY_KEY}" or (self.command == "PUT" and not server.allow_put):
             self._answer(403, S3_ERROR.format(code="AccessDenied").encode())
+        elif self.command == "PUT" and self.headers.get("If-None-Match") == "*" and server.stored is not None:
+            self._answer(412, S3_ERROR.format(code="PreconditionFailed").encode())
         elif self.command == "PUT":
             server.stored = body
             self._answer(200, b"", {"ETag": '"0"'})
         elif self.command == "DELETE":
             server.stored = None
             self._answer(204, b"")
-        elif server.refuse_object:
+        elif server.refuse_object or server.stored is None:
             self._answer(403, S3_ERROR.format(code="AccessDenied").encode())
-        elif server.stored is None:
-            self._answer(404, S3_ERROR.format(code="NoSuchKey").encode())
         else:
             self._answer(200, server.stored, {"Content-Type": "application/octet-stream", "ETag": '"0"'})
 
@@ -1013,8 +1037,11 @@ class S3Handler(http.server.BaseHTTPRequestHandler):
 def s3_server() -> Iterator[Any]:
     server: Any = http.server.ThreadingHTTPServer(("127.0.0.1", 0), S3Handler)
     server.requests = []
+    server.conditions = []
     server.stored = None
     server.refuse_object = False
+    server.allow_put = True
+    server.drop_put = False
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     try:
@@ -1114,30 +1141,47 @@ def case_fa19(c: Checker) -> None:
             )
         store = module.S3ObjectRegistryStore(config, Path("."))
         c.check(f"the store is a Feast RegistryStore ({client})", any(base.__name__ == "RegistryStore" for base in type(store).mro()))
-        try:
-            store.get_registry_proto()
-            missing = ""
-        except FileNotFoundError as error:
-            missing = str(error)
-        except Exception as error:
-            missing = f"raised {type(error).__name__}"
-        c.check("a missing registry object is a FileNotFoundError that names the URI", REGISTRY_URI in missing and not missing.startswith("raised"))
+
+        def outcome() -> str:
+            try:
+                store.get_registry_proto()
+            except FileNotFoundError as error:
+                return f"missing {error}"
+            except Exception as error:
+                return type(error).__name__
+            return "read"
+
+        with mock.patch.dict(os.environ):
+            os.environ.pop(REGISTRY_BOOTSTRAP[0], None)
+            server.allow_put = False
+            read_without_list = outcome()
+            c.check("a reader's denied read of a missing object stays an access error", read_without_list == "ClientError")
+            c.check("a reader never writes the registry", server.conditions == [] and server.stored is None)
+            server.allow_put = True
+        with mock.patch.dict(os.environ, dict([REGISTRY_BOOTSTRAP])):
+            server.drop_put = True
+            dropped = outcome()
+            server.drop_put = False
+            c.check("a conditional create that fails in transport leaves the read's access error", dropped == "ClientError")
+            c.check("the dropped create left no object", server.stored is None)
+            server.conditions.clear()
+            missing = outcome()
+            c.check(
+                "the writer's denied read of a missing object is a FileNotFoundError that names the URI",
+                missing.startswith("missing ") and REGISTRY_URI in missing,
+            )
+            c.check("the writer shows the object missing by one conditional create", server.conditions == ["*"] and server.stored is not None)
+            created = server.stored
+            server.refuse_object = True
+            c.check("a refused read of an existing object stays an access error for the writer", outcome() == "ClientError")
+            c.check("the conditional create never replaces an existing object", server.conditions == ["*", "*"] and server.stored == created)
+            server.refuse_object = False
         proto = module.RegistryProto()
         store.update_registry_proto(proto)
         c.check("a write stamps a version ID", bool(proto.version_id))
-        c.check("a write puts the object once", [r["method"] for r in server.requests if r["method"] == "PUT"] == ["PUT"] and server.stored is not None)
+        c.check("a write puts the object unconditionally", server.conditions == ["*", "*", ""] and server.stored is not None)
         again = store.get_registry_proto()
         c.check("a read returns the object that was written", again.version_id == proto.version_id)
-        server.refuse_object = True
-        denied = ""
-        try:
-            store.get_registry_proto()
-        except FileNotFoundError:
-            denied = "FileNotFoundError"
-        except Exception as error:
-            denied = type(error).__name__
-        c.check("an access error is not reported as a missing registry", denied == "ClientError")
-        server.refuse_object = False
         store.teardown()
         c.check("the teardown deletes the object", server.stored is None and server.requests[-1]["method"] == "DELETE")
         c.check("no request reached the bucket itself or another key", bucket_level(server.requests) == [])
@@ -1158,7 +1202,12 @@ def case_fa19(c: Checker) -> None:
                 stock_outcome = type(error).__name__
             c.check("the stock S3 registry store fails on HeadBucket without ListBucket", stock_outcome == "S3RegistryBucketForbiddenAccess")
             c.check("the stock store's first call is HeadBucket", server.requests[:1] == [{"method": "HEAD", "path": f"/{REGISTRY_BUCKET}", "query": ""}])
-        with s3_server() as server, s3_client_environment(server), tempfile.TemporaryDirectory(prefix="feast_registry_") as raw:
+        with (
+            s3_server() as server,
+            s3_client_environment(server),
+            tempfile.TemporaryDirectory(prefix="feast_registry_") as raw,
+            mock.patch.dict(os.environ, dict([REGISTRY_BOOTSTRAP])),
+        ):
             project = repo_config.RegistryConfig(registry_type="file", path=REGISTRY_URI, registry_store_type=REGISTRY_STORE_TYPE, cache_ttl_seconds=0)
             first = registry.Registry("hai_prediction", project, Path(raw))
             c.check("a first Feast registry on the project store creates the object", server.stored is not None)
@@ -1195,6 +1244,131 @@ def case_fa20(c: Checker) -> None:
         )
 
 
+class ReaderFeatureStore:
+    """Feast's ``FeatureStore`` as far as its registry: it reads the settings file, fills its variables from the environment and opens the registry store
+    the file selects, as Feast 0.67.0 does before any feature read.
+
+    ``registry_store_type`` selects that class. Without it an ``s3://`` path selects Feast's ``S3RegistryStore``, whose first call is HeadBucket
+    (``feast/infra/registry/s3.py``); this stand-in makes that call and stops with ``S3RegistryBucketForbiddenAccess`` when it is refused.
+    """
+
+    def __init__(self, repo_path: str, fs_yaml_file: Path | None = None) -> None:
+        self.settings_file = Path(fs_yaml_file) if fs_yaml_file is not None else Path(repo_path) / "feature_store.yaml"
+        text = self.settings_file.read_text()
+        for name in feast_aws.YAML_VARIABLES:
+            text = text.replace("${" + name + "}", os.environ.get(name, ""))
+        registry = yaml.safe_load(text)["registry"]
+        path = str(registry["path"])
+        store_type = registry.get("registry_store_type")
+        if store_type is not None:
+            if store_type != "scripts.features.feast_registry_store.S3ObjectRegistryStore":
+                raise RuntimeError(f"the stand-in knows only the project's registry store, not {store_type}")
+            store_class = importlib.import_module("scripts.features.feast_registry_store").S3ObjectRegistryStore
+            store = store_class(SimpleNamespace(path=path, s3_additional_kwargs=None), Path(repo_path))
+            self.registry = store.get_registry_proto()
+            return
+        parts = urllib.parse.urlsplit(path)
+        botocore_exceptions = importlib.import_module("botocore.exceptions")
+        try:
+            importlib.import_module("boto3").client("s3").head_bucket(Bucket=parts.hostname)
+        except botocore_exceptions.ClientError as error:
+            raise RuntimeError(f"S3RegistryBucketForbiddenAccess: {parts.hostname}") from error
+        raise RuntimeError("the stand-in stops after HeadBucket; the stock store was selected")
+
+
+@contextlib.contextmanager
+def reader_registry() -> Iterator[Any]:
+    """A registry bucket that holds a registry object for a role with GetObject on its key only (no ListBucket, no PutObject), and Feast as a stand-in."""
+    stored = RegistryProtoStandIn()
+    stored.version_id = "existing-registry"
+    stored.last_updated.moment = "2026-11-07T00:00:00+00:00"
+    with s3_server() as server, s3_client_environment(server), registry_store_module(False):
+        server.stored = stored.SerializeToString()
+        server.allow_put = False
+        with mock.patch.dict(sys.modules, {"feast": fake_module("feast", FeatureStore=ReaderFeatureStore)}):
+            yield server
+
+
+def opened_reader(open_store: Callable[[], Any]) -> tuple[Any, str]:
+    """Open a reader's Feast store against the registry stand-in: the store, or ``None`` with the error that stopped it."""
+    try:
+        return open_store(), ""
+    except Exception as error:
+        return None, f"{type(error).__name__}: {error}"
+
+
+def case_fa21(c: Checker) -> None:
+    """FA21: the training extract reads the S3 registry through the project registry store, so its role needs GetObject on the registry key only."""
+    historical = importlib.import_module("scripts.features.historical")
+    training_extract = importlib.import_module("scripts.features.training_extract")
+    with tempfile.TemporaryDirectory(prefix="feast_reader_") as raw, reader_registry() as server:
+        environ = training_extract.aws_reader_environment(REGISTRY_BUCKET, raw, "real", region="us-east-2")
+        c.check("the training extract names the real registry key", environ["FEAST_REGISTRY_PATH"] == REGISTRY_URI)
+        # The two Redis values the extract's reader sets before it opens the store (training_extract.live_reader).
+        environ.update({"FEAST_REDIS_HOST": "localhost", "REDIS_PASSWORD": "offline-read-only"})
+        with mock.patch.dict(os.environ, environ):
+            store, error = opened_reader(lambda: historical.default_store(os.environ))
+        c.check(f"the extract's store opens without HeadBucket ({error or 'opened'})", error == "")
+        c.check("the extract reads the AWS settings file", store is not None and store.settings_file == feast_aws.AWS_SETTINGS_FILE)
+        c.check("the extract read the existing registry", store is not None and store.registry.version_id == "existing-registry")
+        c.check("the extract made no call on the bucket itself or another key", bucket_level(server.requests) == [])
+        c.check("the extract wrote nothing", server.conditions == [])
+    with mock.patch.dict(os.environ, {"FEAST_REDIS_HOST": "localhost", "REDIS_PASSWORD": "offline-read-only", "FEAST_REGISTRY_PATH": "registry.pb"}):
+        os.environ.pop("FEAST_PROFILE", None)
+        with mock.patch.dict(sys.modules, {"feast": fake_module("feast", FeatureStore=SimpleNamespace)}):
+            local = historical.default_store(os.environ)
+        c.check("without the aws profile the store reads the local settings file", "fs_yaml_file" not in vars(local))
+
+
+def case_fa22(c: Checker) -> None:
+    """FA22: the model API reads the S3 registry through the project registry store, so its role needs GetObject on the registry key only."""
+    main = importlib.import_module("scripts.serving.main")
+    with reader_registry() as server:
+        environ = {"FEAST_REGISTRY_PATH": REGISTRY_URI, "FEAST_REDIS_HOST": "10.0.0.5", "REDIS_PASSWORD": "model-api-case"}
+        with mock.patch.dict(os.environ, environ):
+            store, error = opened_reader(main.feature_store)
+        c.check(f"the model API's store opens without HeadBucket ({error or 'opened'})", error == "")
+        c.check("the model API reads the AWS settings file", store is not None and store.settings_file == feast_aws.AWS_SETTINGS_FILE)
+        c.check("the model API read the existing registry", store is not None and store.registry.version_id == "existing-registry")
+        c.check("the model API made no call on the bucket itself or another key", bucket_level(server.requests) == [])
+        c.check("the model API wrote nothing", server.conditions == [])
+    dockerfile = (feast_job.REPO.parent / "services/model_api/Dockerfile").read_text()
+    c.check("the model API image holds the registry store module", "scripts/features/feast_registry_store.py" in dockerfile)
+
+
+def case_fa23(c: Checker) -> None:
+    """FA23: the training extract and the drift current window read features through Feast's offline reader, which opens its own PyIceberg catalog hai
+    from the address and the token only. Their reader environment must turn off credential vending (the AWS catalog cannot vend) and name the region
+    (otherwise PyIceberg's S3 file reader asks the bucket for its region) before PyIceberg first loads."""
+    training_extract = importlib.import_module("scripts.features.training_extract")
+    with tempfile.TemporaryDirectory(prefix="feast_reader_env_") as raw:
+        for mode in ("real", "publish_fixture"):
+            environ = training_extract.aws_reader_environment(REGISTRY_BUCKET, raw, mode, region="us-east-2")
+            c.check(f"{mode}: the training reader turns off credential vending", environ.get(feast_aws.NO_DELEGATION_VARIABLE) == "")
+            c.check(f"{mode}: the training reader names the region for PyIceberg", environ.get(PYICEBERG_REGION_VARIABLE) == "us-east-2")
+        for region in ("", "us east"):
+            try:
+                training_extract.aws_reader_environment(REGISTRY_BUCKET, raw, "real", region=region)
+                refused = False
+            except training_extract.ExtractError:
+                refused = True
+            c.check(f"the region {region!r} is refused", refused)
+        drift = importlib.import_module("monitoring.aws_run")
+        with mock.patch.dict(os.environ, {"AWS_REGION": "us-east-2"}):
+            drift.prepare_feature_reader(REGISTRY_BUCKET, Path(raw))
+            delegation, region = os.environ.get(feast_aws.NO_DELEGATION_VARIABLE), os.environ.get(PYICEBERG_REGION_VARIABLE)
+        c.check("the drift current window turns off credential vending", delegation == "")
+        c.check("the drift current window names the task's region for PyIceberg", region == "us-east-2")
+        with mock.patch.dict(os.environ):
+            os.environ.pop("AWS_REGION", None)
+            try:
+                drift.prepare_feature_reader(REGISTRY_BUCKET, Path(raw))
+                refused = False
+            except drift.CheckError:
+                refused = True
+        c.check("the drift current window refuses to start without AWS_REGION", refused)
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -1216,4 +1390,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA18": (case_fa18, "FA18"),
     "FA19": (case_fa19, "FA19"),
     "FA20": (case_fa20, "FA20"),
+    "FA21": (case_fa21, "FA21"),
+    "FA22": (case_fa22, "FA22"),
+    "FA23": (case_fa23, "FA23"),
 }
