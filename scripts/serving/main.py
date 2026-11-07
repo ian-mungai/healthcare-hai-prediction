@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from scripts.features import serving_contract_client as contract
 from scripts.serving import canary, keys, limiter, manifests, predictions, service
@@ -98,8 +99,13 @@ def manifest_store(uri: str) -> manifests.ManifestStore:
     return manifests.S3ManifestStore(importlib.import_module("boto3").client("s3", config=config), bucket, prefix)
 
 
+def feature_store() -> Any:
+    """The Feast store of the AWS settings file, whose registry store reads the S3 registry with GetObject only (scripts/features/feast_registry_store.py)."""
+    return importlib.import_module("feast").FeatureStore(repo_path=str(FEATURE_REPO), fs_yaml_file=SETTINGS_FILE)
+
+
 def build(environ: Mapping[str, str], settings: Settings) -> tuple[service.ModelService, IcebergSink]:
-    store = importlib.import_module("feast").FeatureStore(repo_path=str(FEATURE_REPO), fs_yaml_file=SETTINGS_FILE)
+    store = feature_store()
     mutable = dict(environ)
     sink = IcebergSink(environ)
     buffer = predictions.PredictionBuffer(sink, columns=COLUMNS, capacity=5000, batch=50, deadline_seconds=20.0, clock=time.monotonic)

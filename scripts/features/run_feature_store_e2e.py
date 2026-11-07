@@ -523,7 +523,9 @@ def settings_cases(report: Report) -> None:
     """E30: no teardown, closed settings, database numbers."""
     files = [*sorted((ROOT / "feature_store").glob("*.py")), *sorted((ROOT / "scripts/features").glob("*.py"))]
     needle = ".teardown("
-    hits = [path.name for path in files if needle in path.read_text() and path.name != Path(__file__).name]
+    # The AWS profile cases call the project registry store's method against a stand-in bucket, to show it deletes only the registry object.
+    cases = {Path(__file__).name, "feast_aws_cases.py"}
+    hits = [path.name for path in files if needle in path.read_text() and path.name not in cases]
     report.case("E30", "B7", "no code calls Feast teardown", not hits, files=len(files), hits=hits)
     report.case("E30", "B7", "the teardown scan finds a planted call", needle in "store.teardown()")
     definitions = (ROOT / schema_module.DEFINITIONS).read_text()

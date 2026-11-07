@@ -59,6 +59,16 @@ SSM_READ_SECONDS = 10
 # pass the header, but Feast's own reader builds its catalog with only the address and the token. PyIceberg reads this variable for catalog hai when it first
 # loads.
 NO_DELEGATION_VARIABLE = "PYICEBERG_CATALOG__HAI__HEADER__X_ICEBERG_ACCESS_DELEGATION"
+# Without a region PyIceberg's S3 file reader asks the bucket for its region (HeadBucket), which the task roles may not do. The same reader only takes it
+# from this variable.
+REGION_VARIABLE = "PYICEBERG_CATALOG__HAI__S3__REGION"
+
+
+def pyiceberg_environment(region: str) -> dict[str, str]:
+    """The variables for the PyIceberg catalog hai that Feast's offline reader opens: no credential vending and the region. Set them before PyIceberg loads."""
+    if not reads.REGION.fullmatch(region):
+        raise ReadError("the PyIceberg region is not a region name")
+    return {NO_DELEGATION_VARIABLE: "", REGION_VARIABLE: region}
 
 
 @dataclass(frozen=True)
@@ -261,7 +271,7 @@ def catalog_session(
             raise ReadError(f"the job passed its {total:g} s deadline before {phase}")
         return min(limit, left)
 
-    environ[NO_DELEGATION_VARIABLE] = ""
+    environ.update(pyiceberg_environment(job.region))
     try:
         check(PHASES[0])
         environ["REDIS_PASSWORD"] = fetch_password(open_store, wait(limits.secret, PHASES[0]))
@@ -279,6 +289,7 @@ def catalog_session(
                 "FEAST_CATALOG_ENDPOINT": settings.endpoint,
                 "FEAST_POLARIS_TOKEN": token,
                 "FEAST_REGISTRY_PATH": job.registry_path,
+                "FEAST_REGISTRY_BOOTSTRAP": "conditional",  # this job writes the registry, so its store may create a missing one (feast_registry_store)
                 "FEAST_RUN_FOLDER": str(job.folder),
                 "AWS_DEFAULT_REGION": job.region,
             }

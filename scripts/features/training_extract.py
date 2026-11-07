@@ -160,10 +160,20 @@ class FeatureReader:
         return result
 
 
-def aws_reader_environment(bucket: str, run_folder: str, mode: str = "real") -> dict[str, str]:
+def aws_reader_environment(bucket: str, run_folder: str, mode: str = "real", *, region: str) -> dict[str, str]:
     """The variables that make ``live_reader`` take its AWS branch: the real ``features`` namespace through the REST catalog and the registry in the data
-    bucket. The task definition sets none of them, so every AWS phase that opens the reader sets them first."""
+    bucket. The task definition sets none of them, so every AWS phase that opens the reader sets them first.
+
+    They also set up the PyIceberg catalog that Feast's offline reader opens with the address and the token only: no credential vending, which the AWS
+    catalog refuses, and the task's ``region``, so the S3 file reader makes no bucket call (``feast_aws.pyiceberg_environment``).
+    """
+    profiles = importlib.import_module("scripts.features.feast_aws")
+    try:
+        pyiceberg = profiles.pyiceberg_environment(region)
+    except profiles.ReadError:
+        raise ExtractError("the AWS reader needs the task's region (AWS_REGION)") from None
     return {
+        **pyiceberg,
         "FEAST_PROFILE": "aws",
         "FEAST_NAMESPACE": "features" if mode == "real" else "features_e2e",
         "FEAST_CATALOG_TYPE": "rest",

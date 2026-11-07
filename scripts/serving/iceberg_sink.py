@@ -48,6 +48,8 @@ class IcebergSink:
     def __init__(self, environ: Mapping[str, str], writer: Writer | None = None) -> None:
         self._endpoint = environ["POLARIS_URI"]
         self._id, self._secret = environ["POLARIS_CLIENT_ID"], environ["POLARIS_CLIENT_SECRET"]
+        # With the region PyIceberg's S3 file writer makes no HeadBucket call to find it. The task definition sets AWS_REGION.
+        self._region = {"s3.region": environ["AWS_REGION"]} if environ.get("AWS_REGION") else {}
         self._contract = json.loads(CONTRACT.read_text())
         self._write: Writer = writer if writer is not None else self._append_to_table
         self._lock = threading.Lock()
@@ -63,7 +65,12 @@ class IcebergSink:
             uri=self._endpoint,
             warehouse=reads.WAREHOUSE,
             token=token,
-            **{reads.ACCESS_DELEGATION_PROPERTY: None, "s3.connect-timeout": reads.S3_CONNECT_TIMEOUT, "s3.request-timeout": reads.S3_REQUEST_TIMEOUT},
+            **{
+                reads.ACCESS_DELEGATION_PROPERTY: None,
+                "s3.connect-timeout": reads.S3_CONNECT_TIMEOUT,
+                "s3.request-timeout": reads.S3_REQUEST_TIMEOUT,
+                **self._region,
+            },
         )
 
     def _append_to_table(self, rows: Sequence[Mapping[str, Any]], timeout: float) -> None:

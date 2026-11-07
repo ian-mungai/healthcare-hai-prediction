@@ -123,8 +123,15 @@ def checked_references(schema: Mapping[str, Any], features: Sequence[str]) -> tu
     return tuple(features)
 
 
-def default_store(environ: Mapping[str, str], settings_file: Path = SETTINGS_FILE) -> Any:
-    """The Feast store of the repository, after the settings file's variables are shown to be set."""
+def default_store(environ: Mapping[str, str], settings_file: Path | None = None) -> Any:
+    """The Feast store of the repository, after the settings file's variables are shown to be set.
+
+    Without ``settings_file`` the store reads the file of the environment's profile: ``FEAST_PROFILE=aws`` selects ``feature_store_aws.yaml``, whose
+    registry store reads the S3 registry with GetObject only, because Feast's own S3 store calls HeadBucket, which the task roles may not do.
+    """
+    if settings_file is None:
+        profiles = importlib.import_module("scripts.features.feast_aws")
+        settings_file = profiles.settings_file_for(profiles.selected_profile(environ))
     missing = reads.unresolved_variables(settings_file.read_text(), environ)
     if missing:
         raise ReadError(f"{settings_file.name} variables are unset or unresolved: {', '.join(missing)}")

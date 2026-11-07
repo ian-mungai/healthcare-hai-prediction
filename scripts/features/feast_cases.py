@@ -1002,9 +1002,27 @@ def case_e30_pyiceberg(c: Checker) -> None:
     c.check("a refused start leaves no folder behind", set(Path(tempfile.gettempdir()).glob("pyiceberg_home_*")) <= before)
 
 
+INTERFACE = "RegistryStore"  # Feast's abstract registry store, which declares the banned name as a method every implementation must define
+
+
+def interface_methods(tree: ast.AST) -> set[int]:
+    """The definitions of the banned method in classes that implement Feast's registry store interface: the interface makes them required."""
+    allowed = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and any(
+            (base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")) == INTERFACE for base in node.bases
+        ):
+            allowed.update(id(item) for item in node.body if isinstance(item, ast.FunctionDef) and item.name == BANNED)
+    return allowed
+
+
 def forbidden_uses(source: str) -> list[str]:
-    """Uses of the banned store-removal command in Python source: a name, attribute, import, definition or string (docstrings excluded)."""
+    """Uses of the banned store-removal command in Python source: a name, attribute, import, definition or string (docstrings excluded).
+
+    The one exception is the definition of the method in a class that implements Feast's registry store interface. A call of it stays a use.
+    """
     tree = ast.parse(source)
+    required = interface_methods(tree)
     docstrings = {
         id(node.body[0].value)
         for node in ast.walk(tree)
@@ -1022,7 +1040,7 @@ def forbidden_uses(source: str) -> list[str]:
             names = [node.id]
         elif isinstance(node, ast.alias):
             names = [node.name, node.asname or ""]
-        elif isinstance(node, ast.FunctionDef | ast.ClassDef):
+        elif isinstance(node, ast.FunctionDef | ast.ClassDef) and id(node) not in required:
             names = [node.name]
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
             names = [node.value]
@@ -1032,8 +1050,12 @@ def forbidden_uses(source: str) -> list[str]:
 
 
 def package_sources() -> list[Path]:
-    """Every Python source of the feature store package that runs in the Feast image, except the cases that name the banned command."""
-    own = {"feast_cases.py", "feast_image_cases.py", "run_feature_store_e2e.py"}
+    """Every Python source of the feature store package that runs in the Feast image, except the cases that name the banned command.
+
+    ``feast_aws_cases.py`` names it because it declares the registry store interface as a stand-in and checks that the project store's method deletes
+    only the registry object.
+    """
+    own = {"feast_cases.py", "feast_image_cases.py", "feast_aws_cases.py", "run_feature_store_e2e.py"}
     sources = [path for path in sorted((ROOT / "scripts/features").glob("*.py")) if path.name not in own]
     return sources + sorted((ROOT / "feature_store").glob("*.py"))
 
@@ -1056,6 +1078,16 @@ def case_e30_removal(c: Checker) -> None:
     c.check("a shell string is detected", bool(forbidden_uses(shell)))
     c.check("a docstring is not a use", forbidden_uses(f'"""never call {BANNED}"""\nx = 1') == [])
     c.check("a getattr by name is detected", bool(forbidden_uses(f"getattr(store, '{BANNED}')")))
+    implementation = f"class S3Store(RegistryStore):\n    def {BANNED}(self) -> None:\n        pass\n"
+    c.check("the method a registry store implementation must define is allowed", forbidden_uses(implementation) == [])
+    c.check(
+        "an interface named through its module is recognized", forbidden_uses(implementation.replace("(RegistryStore)", "(registry_store.RegistryStore)")) == []
+    )
+    c.check("a call of that method inside the implementation is detected", bool(forbidden_uses(implementation.replace("pass", f"self.{BANNED}()"))))
+    c.check("a call of that method on a store is detected", bool(forbidden_uses(implementation + f"S3Store(None, None).{BANNED}()\n")))
+    c.check("the definition in another class is detected", bool(forbidden_uses(implementation.replace("(RegistryStore)", "(Helper)"))))
+    c.check("a module-level definition is detected", bool(forbidden_uses(f"def {BANNED}() -> None:\n    pass\n")))
+    c.check("the project registry store passes the scan", forbidden_uses((ROOT / "scripts/features/feast_registry_store.py").read_text()) == [])
 
 
 def case_e30_deadline(c: Checker) -> None:
