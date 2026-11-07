@@ -23,6 +23,8 @@ RUN python -m venv /opt/dvc \
     && /opt/dvc/bin/pip install --no-cache-dir --require-hashes -r /opt/dvc_build/build_requirements.txt \
     && /opt/dvc/bin/pip install --no-cache-dir --require-hashes --no-build-isolation -r /opt/dvc_build/requirements.txt
 
+# COPY --chmod gives the folder it creates the file's mode, so /opt/hai is made first with search permission for the job user.
+RUN install -d -m 0755 /opt/hai
 COPY --chmod=0444 fetch_code.py /opt/hai/fetch_code.py
 
 ENV PATH=/opt/venv/bin:${PATH}
