@@ -18,7 +18,7 @@ from orchestration.interface import SubmissionRequest
 from scripts.orchestration import publish_recovery_cases
 
 ROOT = Path(__file__).resolve().parents[2]
-DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag")
+DAGS = ("silver_transform_dag", "gold_transform_dag")
 ROWS = {
     "silver": (
         "catalog_up",
@@ -53,7 +53,6 @@ ROWS = {
         "commit_publish",
         "catalog_release",
     ),
-    "maintenance": ("catalog_up", "gold_maintenance", "catalog_release"),
 }
 
 
@@ -90,6 +89,7 @@ def collect(root: Path) -> dict[str, Any]:
         "existing_declarations_parse": {"ok": bool(declared), "dag_ids": sorted(declared)},
         "template_schema": {"ok": not schema_errors, "errors": schema_errors},
         "combined_dag_retired": {"ok": "transform_dag" not in declared},
+        "maintenance_dag_retired": {"ok": "gold_maintenance_dag" not in declared},
     }
     for name in DAGS:
         checks[name] = {"ok": name in declared and declared[name]["manual"], "observed": declared.get(name)}

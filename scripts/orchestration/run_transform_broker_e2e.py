@@ -66,8 +66,6 @@ CONTROL_TEMPLATES = (
     "final_gate_rejected",
     "gold_final_gate_accepted",
     "gold_final_gate_rejected",
-    "maintenance_final_gate_accepted",
-    "maintenance_final_gate_rejected",
     "online_store_up",
     "pin_bronze",
     "promotion_final_gate_accepted",

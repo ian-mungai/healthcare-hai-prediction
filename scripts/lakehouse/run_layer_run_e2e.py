@@ -199,6 +199,8 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
     elif name == "feast_job":
         shared_write("feast", step=step, run=job.run)
         (folder / f"feast_{step}.json").write_text(json.dumps({"step": step, "run_id": job.run}) + "\n")
+    elif name == "gold_maintenance":
+        maintain_step(job, arguments)
     else:
         raise AssertionError(f"no stand-in for {module}")
 
@@ -309,6 +311,13 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
         source = option(arguments, "--source-run") if "--source-run" in [str(item) for item in arguments] else ""
         if source and not any(row["run_id"] == source for row in runs):
             fail(module)
+        if job.layer == "features":
+            # The chain rule of features_input: the AWS features job pins only the newest committed gold run.
+            if "--newest-only" not in [str(item) for item in arguments]:
+                raise StepError("the features pin of the chain must pass --newest-only")
+            newest = [row["run_id"] for row in runs if row["layer"] == "gold"][-1:]
+            if newest != [source]:
+                raise StepError(f"gold run {source} is not the newest committed gold run ({''.join(newest) or 'none'})")
         target = Path(option(arguments, "--record")) if "--record" in [str(item) for item in arguments] else folder / "gold_pins.json"
         pinned = sorted(contract("silver" if job.layer == "gold" else "gold", job.mode)[1].tables)
         if "pin_tables" in DEFECTS:
@@ -325,6 +334,14 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
         Path(option(arguments, "--record")).write_text(json.dumps({"run_id": job.run}) + "\n")
     else:
         publish_step(job, module, step, arguments, publish)
+
+
+def maintain_step(job: Job, arguments: Sequence[str | Path]) -> None:
+    """Stand-in for gold maintenance: the chain rule, this run, its own publish folder, and one shared write."""
+    require(job.layer == "gold", "only gold runs maintenance")
+    require(option(arguments, "--protection") == "chain" and "--protected" not in [str(item) for item in arguments], arguments)
+    require(option(arguments, "--run") == job.run and option(arguments, "--publish-dir") == str(job.publish_folder), arguments)
+    shared_write("maintenance", run=job.run, mode=option(arguments, "--mode"))
 
 
 def publish_step(job: Job, module: str, step: str, arguments: Sequence[str | Path], publish: Path) -> None:
@@ -641,7 +658,7 @@ def case_silver_chain(case: Case) -> None:
 
 def case_gold_and_features_chain(case: Case) -> None:
     require(case.chain("silver") == [0] * 7, case.err)
-    require(case.chain("gold") == [0] * 6, case.err)
+    require(case.chain("gold") == [0] * 7, case.err)
     require(case.chain("features") == [0] * 7, case.err)
     require([row["layer"] for row in model("publish_runs.json", [])] == ["silver", "gold", "features"], model("publish_runs.json", []))
     require(kinds().count("feast") == 2, "feast applies and materializes")
@@ -658,6 +675,31 @@ def case_gold_and_features_chain(case: Case) -> None:
     require(dbt_keys == ["metadata/dbt/manifest.json", "metadata/dbt/run_results.json"], f"the gold run publishes its dbt files for the catalog: {dbt_keys}")
 
 
+def case_gold_maintenance_runs_last_under_the_chain_rule(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7, case.err)
+    require(layer_run.PHASES["gold"][-1] == "maintain", layer_run.PHASES["gold"])
+    require(case.chain("gold") == [0] * 7, case.err)
+    order = kinds()
+    require(order[-1] == "maintenance" and order.count("maintenance") == 1, order)
+    require(order.index("maintenance") > max(index for index, kind in enumerate(order) if kind == "upload"), "maintenance runs after the upload")
+    require(writes()[-1]["run"] == GOLD_RUN, writes()[-1])
+
+
+def case_gold_maintenance_needs_an_accepted_publish(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7, case.err)
+    refuses(case, "gold", ["pin", "build", "validate", "export", "maintain"], "maintain")
+    require("maintenance" not in kinds(), kinds())
+
+
+def case_features_pins_only_the_newest_gold_run(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7, case.err)
+    newer = "20261030T025000Z-9e9e9e9e"
+    (CATALOG[0] / "publish_runs.json").write_text(json.dumps([*model("publish_runs.json", []), {"layer": "gold", "run_id": newer}]))
+    refuses(case, "features", ["pin"], "pin")
+    require(GOLD_RUN in case.err and newer in case.err and "not the newest" in case.err, case.err)
+    require(not (case.root / "w_features/code/data/analytics/dbt/runs" / FEATURES_RUN / "gold_pins.json").exists(), "nothing pinned")
+
+
 class FailingDbtS3(FakeS3):
     """A bucket that refuses the catalog's dbt files and takes every other object."""
 
@@ -671,7 +713,7 @@ def case_dbt_upload_failure_does_not_fail_the_gold_upload(case: Case) -> None:
     require(case.chain("silver") == [0] * 7, case.err)
     with mock.patch.object(layer_run, "s3_client", lambda: FailingDbtS3()):
         codes = case.chain("gold")
-    require(codes == [0] * 6, (codes, case.err))
+    require(codes == [0] * 7, (codes, case.err))
     require(any(key.startswith("lakehouse/layer_runs/gold/") for _, key in UPLOADS), "the run folder still uploads")
     require(not any(key.startswith("metadata/dbt/") for _, key in UPLOADS), "the refused dbt files are not recorded as uploaded")
     require("dbt" in case.err and "not uploaded" in case.err, f"the failure must be reported: {case.err}")
@@ -736,13 +778,13 @@ def case_missing_input_run(case: Case) -> None:
     require(case.chain("silver") == [0] * 7, case.err)
     for layer in ("gold", "features"):
         if layer == "features":
-            require(case.chain("gold") == [0] * 6, case.err)
+            require(case.chain("gold") == [0] * 7, case.err)
         code = case.phase(layer, "pin", extra=["--input-run", ""])
         require(code != 0 and "input" in case.err, case.err)
 
 
 def features_up_to(case: Case, last: str) -> None:
-    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7, case.err)
     for phase in layer_run.PHASES["features"]:
         if phase == last:
             return
@@ -770,7 +812,7 @@ def case_features_h3_extra_table(case: Case) -> None:
 
 
 def case_features_h3_other_source(case: Case) -> None:
-    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7, case.err)
     DEFECTS.add("pin_source")
     require(case.phase("features", "pin") != 0 and "names another gold run than INPUT_RUN_ID" in case.err, case.err)
 
@@ -1001,7 +1043,7 @@ def case_dry_run_writes_nothing(case: Case) -> None:
     before = len(writes())
     uploads = len(UPLOADS)
     case.out = ""
-    require(case.chain("gold", extra=["--dry-run"]) == [0] * 6, case.err)
+    require(case.chain("gold", extra=["--dry-run"]) == [0] * 7, case.err)
     require(len(writes()) == before and len(UPLOADS) == uploads, writes()[before:])
     require(case.out.count("DRY_RUN_PLAN ") == 1 and "CREATE" in case.out, case.out)
     plan = json.loads(case.out.split("DRY_RUN_PLAN ", 1)[1].splitlines()[0])
@@ -1025,7 +1067,7 @@ def case_dry_run_with_unreadable_catalog_state_fails(case: Case) -> None:
 
 
 def case_dry_run_features_skips_feast(case: Case) -> None:
-    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 6, case.err)
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7, case.err)
     before = len(writes())
     require(case.chain("features", extra=["--dry-run"]) == [0] * 7, case.err)
     require(len(writes()) == before and "feast" not in kinds(), kinds())
@@ -1044,7 +1086,7 @@ def case_dry_run_from_the_environment(case: Case) -> None:
     require(case.chain("silver") == [0] * 7, case.err)
     before = len(writes())
     with mock.patch.dict(os.environ, {"LAYER_DRY_RUN": "1"}):
-        require(case.chain("gold") == [0] * 6, case.err)
+        require(case.chain("gold") == [0] * 7, case.err)
     require(len(writes()) == before, "LAYER_DRY_RUN=1 behaves as --dry-run")
 
 
@@ -1052,11 +1094,15 @@ def case_phase_not_in_layer(case: Case) -> None:
     require(case.phase("gold", "verify") != 0 and "not a phase of gold" in case.err, case.err)
     require(case.phase("features", "verify") != 0, case.err)
     require(case.phase("silver", "feast") != 0, case.err)
+    require(case.phase("silver", "maintain") != 0 and case.phase("features", "maintain") != 0, case.err)
 
 
 CASES: dict[str, Callable[[Case], None]] = {
     "silver chain publishes once, uploads under its run prefix": case_silver_chain,
     "gold and features chains follow silver, features uploads its evidence": case_gold_and_features_chain,
+    "gold maintenance is the last gold phase and runs under the chain rule": case_gold_maintenance_runs_last_under_the_chain_rule,
+    "gold maintenance refuses a run without an accepted publish": case_gold_maintenance_needs_an_accepted_publish,
+    "features refuses a gold run that is not the newest committed one": case_features_pins_only_the_newest_gold_run,
     "features H3: a pin that misses a gold table is refused": case_features_h3_table_list,
     "features H3: a pin with an extra table is refused": case_features_h3_extra_table,
     "features H3: a pin of another gold run is refused": case_features_h3_other_source,
