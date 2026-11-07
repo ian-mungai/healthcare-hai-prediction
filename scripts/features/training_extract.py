@@ -43,7 +43,7 @@ VALIDATION_FIELDS = (
 ADJACENCY_FIELDS = ("edge_key", "county_fips", "neighbor_fips", "is_self_link", "is_isolated")
 BUILD_FIELDS = ("build_key", "features_run_id", "gold_run_id", "gold_snapshot_set_sha256", "feature_schema_sha256", "hai_outcome_controls_sha256")
 SUPPORT_TABLES = ("int_hospital_spine", "int_spine_validation_measures", "int_county_adjacency", "feature_build_inputs")
-KEY = re.compile(r"([0-9]{6}):([12][0-9]{3})")
+KEY = re.compile(r"([0-9]{5}[0-9A-Z]):([12][0-9]{3})")  # a CCN is five digits and a digit or letter: Veterans Affairs CCNs end in F
 SHA256 = re.compile(r"[a-f0-9]{64}")
 SECONDS = 1800.0
 

@@ -463,6 +463,21 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
             "sensitivity flags were not used",
         ),
     )
+    lettered = SyntheticReader(source)
+    for row in [*lettered.rows, *(item for rows in lettered.tables.values() for item in rows)]:
+        for field in ("spine_key", "alignment_key"):
+            if str(row.get(field, "")).startswith("000003:"):
+                row[field] = "00003F" + row[field][6:]
+    lettered_writer = JsonTableStandIn()
+    cases.check(
+        "extract_lettered_ccn_accepted",
+        lambda: require(
+            run(folder / "lettered", lettered, lettered_writer, sensitivity)
+            and json.loads((folder / "lettered/manifest_HAI_2.json").read_bytes())["row_count"] == 9
+            and {row["ccn"] for row in lettered_writer.rows["extract_HAI_2.parquet"]} == {"000001", "000002", "00003F"},
+            "a hospital-window key whose CCN ends in a letter, as Veterans Affairs CCNs do, was not extracted",
+        ),
+    )
     for name, mutate, reason in (
         ("extract_moving_support_head_refused", lambda item: setattr(item, "move_support_head", True), "support head"),
         ("extract_duplicate_historical_key_refused", lambda item: item.rows.append(copy.deepcopy(item.rows[0])), "repeated"),
