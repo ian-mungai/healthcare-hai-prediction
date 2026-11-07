@@ -12,9 +12,10 @@ worker starts; workers that end in time pass; a stop of the dispatcher itself th
 worker that starts its program through ``scripts/process.py`` ``run_command`` (a nested launch: a new process group in the worker's session) leaves no
 process at the worker deadline or at a stop of the dispatcher; and a worker is never stopped before its limit (the start is aligned late in a
 wall-clock second, where whole-second timestamps fire up to a second early: a worker that ends 0.25 s before the limit passes and a worker that never
-ends gets TERM only after its limit). The review reproductions of fix round 4: a KILL of the dispatcher leaves no worker (the worker's leader stops its
-session), a worker that ends with a background process left in its session leaves no process, and the exit trap ends within its bound when every
-listing stalls.
+ends gets TERM only after its limit; a loaded machine can miss the case's setup, a launch in the middle of a wall-clock second and a start late in one, so a
+missed setup repeats the case in a fresh sandbox, up to 3 attempts, and a case with no attempt that held the setup fails by name).
+The review reproductions of fix round 4: a KILL of the dispatcher leaves no worker (the worker's leader stops its session), a worker that ends with a
+background process left in its session leaves no process, and the exit trap ends within its bound when every listing stalls.
 Fix round 6: a worker's leader stops a left descendant while the dispatcher is paused, an alarm of the exit trap's stop step leaves no stalled
 lister or pipe holder, and a deadline stop that cannot be confirmed is named.
 Fix round 7: the stop helper and the worker's leader (whose fallback no longer signals its own group) exit with status 70 when the session cannot be
@@ -57,6 +58,10 @@ WATCHED = (
 LIMIT_SECONDS = 3
 GRACE_SECONDS = 1
 RUN_TIMEOUT_SECONDS = 20
+# The checks of worker_is_not_stopped_before_its_limit that describe its setup (where the launch fell in a wall-clock second), not the dispatcher, and the
+# number of fresh-sandbox attempts the case may use to get a setup that holds.
+TIMING_PRECONDITIONS = ("launch_in_the_middle_of_a_second", "start_late_in_a_wall_clock_second")
+TIMING_ATTEMPTS = 3
 # The stand-in Python launcher: the plan lists the groups of STUB_GROUPS, every other module succeeds, and -c code (the dispatcher's JSON reads) runs for real.
 STUB_PYTHON = f"""#!/bin/bash
 # The first worker besides the exclusive SDK runtime item starts late in a wall-clock second (STUB_ALIGN_FRACTION), whatever that item took. It waits only
@@ -73,8 +78,9 @@ time.sleep(max(0.0, float(sys.argv[2]) - now % 1))" "$STUB_DIR" "$STUB_ALIGN_FRA
 fi
 if [ "$1" = -m ]; then
   if [ "$2" = scripts.quality.ci_groups ]; then
-    # The dispatcher launches its workers shortly after this plan. Holding the plan until STUB_PLAN_FRACTION of a wall-clock second puts that launch in the
-    # middle of a second, away from its edges, where a worker that ends just before its limit could be counted a second too old.
+    # The dispatcher launches its workers about 0.75 to 0.9 s after this plan (measured on the Mac and on the hosted runner). Holding the plan until
+    # STUB_PLAN_FRACTION of a wall-clock second puts that launch in the middle of the next second, away from its edges, where a worker that ends just
+    # before its limit could be counted a second too old.
     if [ -n "${{STUB_PLAN_FRACTION:-}}" ] && [ ! -e "$STUB_DIR/planned" ]; then
       touch "$STUB_DIR/planned"
       {PYTHON} -c "import sys, time; time.sleep((float(sys.argv[1]) - time.time() % 1) % 1)" "$STUB_PLAN_FRACTION"
@@ -746,13 +752,13 @@ def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
     return case("deadline_stop_that_cannot_be_confirmed_is_named", base, body)
 
 
-def not_before_the_limit(base: Path) -> dict[str, Any]:
+def not_before_the_limit_attempt(base: Path, attempt: int) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         run = sandbox.run(
             STUB_PYTHON_LINT="alive_time",
             STUB_ORCHESTRATION="near",
             STUB_ALIGN_FRACTION="0.75",
-            STUB_PLAN_FRACTION="0.32",
+            STUB_PLAN_FRACTION="0.55",
             CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS),
         )
         alive_file = sandbox.stub / "alive.json"
@@ -779,7 +785,47 @@ def not_before_the_limit(base: Path) -> dict[str, Any]:
             "seconds": run["seconds"],
         }
 
-    return case("worker_is_not_stopped_before_its_limit", base, body)
+    return case(f"worker_is_not_stopped_before_its_limit_attempt_{attempt}", base, body)
+
+
+def setup_held(checks: dict[str, Any]) -> bool:
+    return all(checks.get(name) is True for name in TIMING_PRECONDITIONS)
+
+
+def behaviour_held(checks: dict[str, Any]) -> bool:
+    return all(value for name, value in checks.items() if isinstance(value, bool) and name not in TIMING_PRECONDITIONS)
+
+
+def not_before_the_limit(base: Path) -> dict[str, Any]:
+    """The checks in TIMING_PRECONDITIONS are the setup of this case, not the dispatcher: the stand-in launcher aligns the launch inside a wall-clock second,
+    and a loaded machine can miss that while the dispatcher behaves correctly. An attempt that misses it proves nothing about the dispatcher, so the scenario
+    runs again in a fresh sandbox, up to TIMING_ATTEMPTS times, but only when every other check of that attempt passed: an attempt with a failed behaviour
+    check fails the case at once, whether or not its setup held. Otherwise the first attempt whose setup held decides the case: it passes only when every
+    other check of that attempt is true. When no attempt held the setup, the case fails with timing_preconditions_held_in_an_attempt false."""
+    attempts: list[dict[str, Any]] = []
+    for number in range(1, TIMING_ATTEMPTS + 1):
+        attempts.append(not_before_the_limit_attempt(base, number))
+        # Only a pure timing miss runs again: a failed behaviour check decides the case even when the setup also missed, so a defect that shows only on a
+        # missed setup cannot be discarded by a later attempt.
+        if "raised" in attempts[-1]["checks"] or setup_held(attempts[-1]["checks"]) or not behaviour_held(attempts[-1]["checks"]):
+            break
+    checks = dict(attempts[-1]["checks"])
+    if "raised" not in checks:
+        checks["timing_preconditions_held_in_an_attempt"] = setup_held(checks)
+        checks["attempts_used"] = len(attempts)
+        # What each attempt measured, so a report shows how many attempts missed the setup.
+        checks["attempts"] = [
+            {
+                "attempt": number,
+                "launch_wall_fraction": attempt["checks"].get("launch_wall_fraction"),
+                "worker_start_wall_fraction": attempt["checks"].get("worker_start_wall_fraction"),
+                "timing_preconditions_held": setup_held(attempt["checks"]),
+                "behaviour_checks_passed": behaviour_held(attempt["checks"]),
+            }
+            for number, attempt in enumerate(attempts, start=1)
+        ]
+    passed = "raised" not in checks and setup_held(checks) and behaviour_held(checks)
+    return {"case": "worker_is_not_stopped_before_its_limit", "passed": passed, "seconds": round(sum(a["seconds"] for a in attempts), 1), "checks": checks}
 
 
 CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
