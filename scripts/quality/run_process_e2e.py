@@ -36,7 +36,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -614,7 +614,7 @@ def unrelated_command(base: Path) -> dict[str, Any]:
 
 def listing_failure(base: Path) -> dict[str, Any]:
     def body(scratch: Scratch) -> dict[str, Any]:
-        with mock.patch("scripts.process.SESSION_LISTING", ("no_such_ps_wv3_027", "-A")):
+        with ps_only(("no_such_ps_wv3_027", "-A")):
             caught, elapsed = timed_out_with(lambda: scratch.run("respect", "wait", CASE_TIMEOUT_SECONDS))
         pids = scratch.pids()
         return {
@@ -654,7 +654,7 @@ def listing_start_failure(base: Path) -> dict[str, Any]:
         lister.write_text("Not an executable format\n", encoding="utf-8")
         lister.chmod(0o700)
         subject = scratch.folder / "subject.pid"
-        with mock.patch("scripts.process.SESSION_LISTING", (str(lister), "-A")):
+        with ps_only((str(lister), "-A")):
             caught, elapsed = timed_out_with(
                 lambda: run_command(sys.executable, ["-B", "-c", TERM_IGNORING, str(subject)], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS)
             )
@@ -705,7 +705,7 @@ def stalled_listing(base: Path) -> dict[str, Any]:
             outcome.update(caught=caught, seconds=elapsed)
 
         calling = threading.Thread(target=invoke, daemon=True)
-        with mock.patch("scripts.process.SESSION_LISTING", (sys.executable, "-c", lister_code)), mock.patch("scripts.process.LISTING_SECONDS", 0.5):
+        with ps_only((sys.executable, "-c", lister_code)), mock.patch("scripts.process.LISTING_SECONDS", 0.5):
             calling.start()
             # Bound: the deadline, one listing, the fallback group stop's confirmation and slack for a loaded machine.
             calling.join(CASE_TIMEOUT_SECONDS + 0.5 + CASE_GRACE_SECONDS + 6)
@@ -906,7 +906,7 @@ def unproven_group_spared(base: Path) -> dict[str, Any]:
         reaped.wait(timeout=20)
         (scratch.folder / "decoy.pid").write_text(str(decoy.pid))
         try:
-            with mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)):
+            with ps_only(("/missing-lister",)):
                 outcome = process.stop_sessions({decoy.pid}, grace_seconds=0.2, leader=reaped)
             time.sleep(0.3)
             return {
@@ -935,7 +935,7 @@ def reaped_leader_run(scratch: Scratch, plant: Any = None) -> tuple[BaseExceptio
     with contextlib.ExitStack() as patches:
         patches.enter_context(mock.patch("os.killpg", recording))
         if plant is None:
-            patches.enter_context(mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)))
+            patches.enter_context(ps_only(("/missing-lister",)))
         else:
             patches.enter_context(plant)
         try:
@@ -1226,7 +1226,7 @@ def stop(*arguments, **keywords):
         return real_stop(*arguments, **keywords)
     began.set()
     process.JOB.cancellation.event.wait(8)
-    with mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)):
+    with mock.patch.multiple("scripts.process", SESSION_LISTING=("/missing-lister",), PROC_ROOT="/no_such_proc_root"):
         return real_stop(*arguments, **keywords)
 def launch(_root, _step, _environment):
     return process.run_command(sys.executable, ["-B", "-c", SUBJECT, str(folder)], timeout=0.6, grace_seconds=0.1)
@@ -1891,7 +1891,7 @@ def interrupted_listing(base: Path, plant: str = "") -> dict[str, Any]:
         earlier = signal.signal(signal.SIGALRM, alarm)
         caught: BaseException | None = None
         patches = [
-            mock.patch("scripts.process.SESSION_LISTING", (sys.executable, "-B", "-c", STALLED_LISTER, str(scratch.folder))),
+            ps_only((sys.executable, "-B", "-c", STALLED_LISTER, str(scratch.folder))),
             mock.patch("scripts.process.LISTING_SECONDS", 30.0),
             *plant_patches(plant),
         ]
@@ -1976,7 +1976,7 @@ if os.fork() == 0:
 end = time.monotonic() + 5
 while not (folder / "member.pid").exists() and time.monotonic() < end:
     time.sleep(0.01)
-patches = [mock.patch("scripts.process.SESSION_LISTING", ("/missing-lister",)), *plant_patches(plant)]
+patches = [mock.patch.multiple("scripts.process", SESSION_LISTING=("/missing-lister",), PROC_ROOT="/no_such_proc_root"), *plant_patches(plant)]
 for patch in patches:
     patch.start()
 outcome = process.stop_sessions({os.getpid()}, 0.1, allow_own=True)
@@ -2033,7 +2033,7 @@ def alarm_during_the_stop(base: Path, plant: str = "") -> dict[str, Any]:
         caught: BaseException | None = None
         lister_script = "import os, sys, time\nopen(os.path.join(sys.argv[1], 'lister.pid'), 'w').write(str(os.getpid()))\ntime.sleep(60)\n"
         patches: list[Any] = [
-            mock.patch("scripts.process.SESSION_LISTING", (sys.executable, "-B", "-c", lister_script, str(scratch.folder))),
+            ps_only((sys.executable, "-B", "-c", lister_script, str(scratch.folder))),
             mock.patch("scripts.process.LISTING_SECONDS", 10.0),
         ]
         if plant == "stop_catches_exception_only":
@@ -2134,6 +2134,222 @@ def unconfirmed_finalization(base: Path, plant: str = "") -> dict[str, Any]:
     return case("unconfirmed_finalization_is_named", base, body)
 
 
+# The record a Linux kernel keeps per process (proc(5)): the fields after the command name run from the state to the start time (the 20th).
+PROC_TAIL = (
+    "{state} {parent} {group} {session} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 {start} 1000 100 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n"
+)
+MISSING_PROC_ROOT = "/no_such_proc_root"
+
+
+def ps_only(command: tuple[str, ...]) -> Any:
+    """Patch the session listing to a stand-in ``ps`` and switch the process table off, so the listing is the ``ps`` one on Linux too."""
+    return mock.patch.multiple("scripts.process", create=True, SESSION_LISTING=command, PROC_ROOT=MISSING_PROC_ROOT)
+
+
+def proc_stat(pid: int, name: str, state: str, parent: int, group: int, session: int, start: int = 100) -> str:
+    return f"{pid} ({name}) " + PROC_TAIL.format(state=state, parent=parent, group=group, session=session, start=start)
+
+
+def stand_in_proc(folder: Path, records: Mapping[int, str | None], self_pid: int | None = None, nstgid: str | None = None) -> Path:
+    """A process table in a folder: ``self/stat``, ``self/status`` and, per pid, a ``stat`` file (a None record is a process folder without one: the
+    process ended).
+
+    ``self_pid`` is the pid ``self/stat`` names (the caller's by default). ``nstgid`` is the ``NStgid`` line of ``self/status``: the caller's pid in the
+    table's namespace and then in each namespace inward (the caller's pid alone by default, a table of the caller's own namespace). More than one entry is
+    the table of an ancestor pid namespace, even when the numbers are equal. An empty string leaves the line out."""
+    root = folder / "proc"
+    (root / "self").mkdir(parents=True)
+    own = os.getpid() if self_pid is None else self_pid
+    (root / "self" / "stat").write_text(proc_stat(own, "python", "R", os.getppid(), os.getpgrp(), os.getsid(0)), encoding="utf-8")
+    vector = str(own) if nstgid is None else nstgid
+    status = f"Name:\tpython\nTgid:\t{own}\n" + (f"NStgid:\t{vector}\n" if vector else "") + f"Pid:\t{own}\n"
+    (root / "self" / "status").write_text(status, encoding="utf-8")
+    (root / "version").write_text("stand-in\n", encoding="utf-8")
+    for pid, text in records.items():
+        (root / str(pid)).mkdir()
+        if text is not None:
+            (root / str(pid) / "stat").write_text(text, encoding="utf-8")
+    return root
+
+
+def own_record() -> dict[int, str | None]:
+    return {os.getpid(): proc_stat(os.getpid(), "python", "R", os.getppid(), os.getpgrp(), os.getsid(0))}
+
+
+def listing_reads_proc_without_ps(base: Path) -> dict[str, Any]:
+    """The live defect: a job image has no ``ps``, so a launch's session cannot be listed and the launch fails at its end (status 70). With a process table
+    to read, the same launch ends cleanly. PATH is empty and the system folders are not searched, so ``ps`` cannot be found."""
+
+    def body(scratch: Scratch) -> dict[str, Any]:
+        empty = scratch.folder / "empty_path"
+        empty.mkdir()
+        proc_root = stand_in_proc(scratch.folder, own_record())
+        caught: BaseException | None = None
+        returncode = None
+        patches = (
+            mock.patch.dict(os.environ, {"PATH": str(empty)}),
+            mock.patch("scripts.process.SYSTEM_PROGRAM_FOLDERS", ()),
+            mock.patch("scripts.process.PROC_ROOT", str(proc_root), create=True),
+        )
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            ps_absent = process.listing_program("ps") is None
+            try:
+                returncode = run_command(sys.executable, ["-B", "-c", "pass"], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS).returncode
+            except BaseException as error:
+                caught = error
+        return {
+            "ps_is_not_found": ps_absent,
+            "program_ran": returncode == 0,
+            "no_error": caught is None,
+            "error_seen": f"{type(caught).__name__}: {caught}" if caught else "",
+        }
+
+    return case("session_listing_reads_the_process_table_when_ps_is_absent", base, body)
+
+
+def proc_names(base: Path) -> dict[str, Any]:
+    """The command name is the only field that holds spaces, parentheses and newlines: the fields after it start after the last ``)``."""
+
+    def body(_scratch: Scratch) -> dict[str, Any]:
+        names = {"plain": "python", "spaces": "my program", "closing": "a) S 1 2 3", "opening": "(((", "both": "x) (y z)", "newline": "two\nlines", "empty": ""}
+        rows = {
+            key: process.parse_proc_stat(900 + number, proc_stat(900 + number, name, "S", 800, 801, 802, 5000 + number))
+            for number, (key, name) in enumerate(names.items())
+        }
+        expected = {key: (900 + number, 800, 801, "S", str(5000 + number)) for number, key in enumerate(names)}
+        # A process reaped while its record is made keeps the kernel's -1 for its group and session (Linux do_task_stat): a valid record, not a failure.
+        exiting = process.parse_proc_stat(990, proc_stat(990, "exiting", "X", 0, -1, -1, 6000))
+        rejected = {}
+        for key, text in {
+            "other_pid": proc_stat(1, "a", "S", 2, 3, 4),
+            "no_name": "900 S 800 801 802 0 -1 0 0 0 0 0 0 0 0 0 0 20 0 1 0 5000\n",
+            "short": "900 (a) S 800 801 802\n",
+            "letters": proc_stat(900, "a", "S", 800, 801, 802).replace(" 800 ", " x "),
+            "negative_parent": proc_stat(900, "a", "S", -1, 801, 802),
+            "other_negative_group": proc_stat(900, "a", "S", 800, -2, 802),
+            "empty": "",
+        }.items():
+            try:
+                process.parse_proc_stat(900, text)
+            except process.SessionListingFailed:
+                rejected[key] = True
+            else:
+                rejected[key] = False
+        return {
+            "every_name_parses_to_its_fields": {key: tuple(row) for key, row in rows.items()} == expected,
+            "exit_race_record_parses": tuple(exiting) == (990, 0, -1, "X", "6000"),
+            "malformed_records_are_rejected": all(rejected.values()),
+            "rejected": rejected,
+        }
+
+    return case("proc_record_with_an_awkward_command_name_is_parsed", base, body)
+
+
+def proc_listing_vanished(base: Path) -> dict[str, Any]:
+    """A process that ends while the table is read is not live: a folder without ``stat``, an empty ``stat`` and a read that fails with ESRCH are skipped."""
+
+    def body(scratch: Scratch) -> dict[str, Any]:
+        records = {
+            **own_record(),
+            4001: proc_stat(4001, "kept (1)", "S", 1, 4001, 4001),
+            4002: None,
+            4003: "",
+            4004: proc_stat(4004, "gone", "S", 1, 4004, 4004),
+            4005: proc_stat(4005, "exiting", "X", 0, -1, -1),
+        }
+        proc_root = stand_in_proc(scratch.folder, records)
+        real_open = open
+
+        def reading(path: Any, *arguments: Any, **keywords: Any) -> Any:
+            if str(path).endswith("/4004/stat"):
+                raise ProcessLookupError(3, "No such process")
+            return real_open(path, *arguments, **keywords)
+
+        with mock.patch("scripts.process.PROC_ROOT", str(proc_root), create=True), mock.patch("builtins.open", reading):
+            pids = sorted(row.pid for row in process.list_processes())
+        return {"only_the_live_processes_are_listed": pids == sorted([os.getpid(), 4001, 4005]), "listed": pids}
+
+    return case("proc_listing_skips_a_process_that_ended_during_the_read", base, body)
+
+
+def proc_listing_failure(base: Path) -> dict[str, Any]:
+    """A table that cannot be read is a failed listing, never an empty one: the launch that depends on it fails by name (status 70), as with ``ps``."""
+
+    def body(scratch: Scratch) -> dict[str, Any]:
+        tables: dict[str, dict[int, str | None]] = {
+            "garbled_record": {**own_record(), 4001: "4001 not a stat record\n"},
+            "record_that_is_a_folder": {**own_record(), 4001: None},
+            "no_caller": {4001: proc_stat(4001, "a", "S", 1, 4001, 4001)},
+            # Another pid namespace's table: it shows an unrelated process with the caller's pid number, and self/stat names another pid.
+            "other_namespace": {**own_record(), 4001: proc_stat(4001, "a", "S", 1, 4001, 4001)},
+        }
+        own = os.getpid()
+        # Another pid namespace's table that also shows the caller with its own pid number (a child namespace can take the same number): only the
+        # namespace list in self/status tells it apart. A table without that list, or with one that is not a pid list, cannot be proven the caller's.
+        vectors = {"other_namespace_same_pid": f"{own}\t{own}", "no_namespace_list": "", "garbled_namespace_list": "x"}
+        tables.update({key: {**own_record(), 4001: proc_stat(4001, "a", "S", 1, 4001, 4001)} for key in vectors})
+        roots = {
+            key: stand_in_proc(scratch.folder / key, records, self_pid=4001 if key == "other_namespace" else None, nstgid=vectors.get(key))
+            for key, records in tables.items()
+        }
+        (roots["record_that_is_a_folder"] / "4001" / "stat").mkdir()
+        outcomes: dict[str, bool] = {}
+        for key, root in roots.items():
+            with mock.patch("scripts.process.PROC_ROOT", str(root), create=True):
+                try:
+                    process.list_processes()
+                except process.SessionListingFailed:
+                    outcomes[key] = True
+                else:
+                    outcomes[key] = False
+        empty = scratch.folder / "empty_path"
+        empty.mkdir()
+        caught: BaseException | None = None
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {"PATH": str(empty)}))
+            stack.enter_context(mock.patch("scripts.process.SYSTEM_PROGRAM_FOLDERS", ()))
+            stack.enter_context(mock.patch("scripts.process.PROC_ROOT", str(roots["garbled_record"]), create=True))
+            try:
+                run_command(sys.executable, ["-B", "-c", "pass"], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS)
+            except BaseException as error:
+                caught = error
+        recorded = acknowledge_unconfirmed()
+        return {
+            "every_bad_table_fails_the_listing": all(outcomes.values()),
+            "tables": outcomes,
+            "launch_fails_by_name": isinstance(caught, process.LaunchesNotStopped) and "could not be listed" in str(caught),
+            "failure_is_recorded_for_status_70": bool(recorded),
+        }
+
+    return case("unreadable_process_table_fails_the_listing_visibly", base, body)
+
+
+def proc_membership(base: Path) -> dict[str, Any]:
+    """The members of a session are the same from a process table as from ``ps``: a zombie and the caller are left out, a live child of the leader stays."""
+
+    def body(scratch: Scratch) -> dict[str, Any]:
+        leader, child, zombie, outsider = 5001, 5002, 5003, 5004
+        own = os.getpid()
+        records = {
+            leader: proc_stat(leader, "bash -c (x)", "S", 700, leader, leader),
+            child: proc_stat(child, "sleep", "S", leader, leader, leader),
+            zombie: proc_stat(zombie, "defunct", "Z", leader, leader, leader),
+            outsider: proc_stat(outsider, "other", "S", 1, outsider, outsider),
+            own: proc_stat(own, "python", "R", leader, leader, leader),
+        }
+        proc_root = stand_in_proc(scratch.folder, records)
+        with (
+            mock.patch("scripts.process.PROC_ROOT", str(proc_root), create=True),
+            mock.patch("os.getsid", side_effect=lambda pid: pid if pid != child else leader),
+        ):
+            members = process.session_members({leader}, 700)
+        return {"leader_and_child_only": members == {leader, child}, "members": sorted(members)}
+
+    return case("process_table_members_leave_out_zombies_and_the_caller", base, body)
+
+
 def default_periods(base: Path) -> dict[str, Any]:
     return {
         "case": "default_grace_periods_are_set",
@@ -2192,6 +2408,11 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "missing_lister_fallback_spares_the_confirming_caller": leader_with_a_missing_lister,
     "normal_end_finalizes_the_session": normal_end_finalizes,
     "unconfirmed_finalization_is_named": unconfirmed_finalization,
+    "session_listing_reads_the_process_table_when_ps_is_absent": listing_reads_proc_without_ps,
+    "proc_record_with_an_awkward_command_name_is_parsed": proc_names,
+    "proc_listing_skips_a_process_that_ended_during_the_read": proc_listing_vanished,
+    "unreadable_process_table_fails_the_listing_visibly": proc_listing_failure,
+    "process_table_members_leave_out_zombies_and_the_caller": proc_membership,
     "default_grace_periods_are_set": default_periods,
 }
 REAL_STOP = process.stop_launch

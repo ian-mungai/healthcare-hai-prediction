@@ -163,8 +163,10 @@ sleep 60 &
 echo $! >"$STUB_DIR/lister_child.pid"
 wait
 """
-# Appended to the sandbox copy of scripts/process.py: the session lister does not exist, so every listing fails (the fix round 7 reproductions).
-MISSING_LISTER = '\nSESSION_LISTING = ("/missing-review-lister",)\n'
+# Appended to the sandbox copy of scripts/process.py: the process table is off, so ``ps`` is the session listing.
+PS_ONLY = '\nPROC_ROOT = "/missing-review-proc-root"\n'
+# Also the session lister does not exist, so every listing fails (the fix round 7 reproductions).
+MISSING_LISTER = '\nSESSION_LISTING = ("/missing-review-lister",)' + PS_ONLY
 # A worker command (argv: the stub folder) that leaves a member in a group of its own, ignoring TERM with output closed, and ends once the member is recorded.
 LEFT_MEMBER = """
 import os, signal, sys, time
@@ -622,6 +624,9 @@ def alarm_expiry(base: Path) -> dict[str, Any]:
             return {"alarm_text_found": False}
         script.write_text(text.replace("+ 25)", "+ 0)"), encoding="utf-8")
         (sandbox.root / "bin/ps").write_text(LOGGING_STALLED_PS, encoding="utf-8")
+        # On Linux the session listing reads the process table; this case needs the listing to be the stalled ``ps``.
+        sandbox_process = sandbox.root / "scripts/process.py"
+        sandbox_process.write_text(sandbox_process.read_text(encoding="utf-8") + PS_ONLY, encoding="utf-8")
         path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
         environment = sandbox.environment("python_lint", {"CI_WORKER_LIMIT_SECONDS": "600", "PATH": path})
         dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
