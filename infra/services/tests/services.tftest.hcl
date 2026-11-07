@@ -99,7 +99,7 @@ run "reservations_follow_measured_use_and_hard_limits_stay" {
     condition = alltrue([
       for name, sizes in {
         postgres              = { reservation = 128, limit = 2048 }
-        redis                 = { reservation = 64, limit = 1024 }
+        redis                 = { reservation = 64, limit = 2304 }
         polaris               = { reservation = 320, limit = 2048 }
         airflow_apiserver     = { reservation = 256, limit = 1536 }
         airflow_scheduler     = { reservation = 320, limit = 1536 }
@@ -852,12 +852,12 @@ run "state_lives_on_the_data_mount" {
   assert {
     condition = (
       one(aws_ecs_task_definition.service["postgres"].volume).host_path == "/mnt/example-data/postgres"
-      && one(aws_ecs_task_definition.service["redis"].volume).host_path == "/mnt/example-data/redis"
+      && length(aws_ecs_task_definition.service["redis"].volume) == 0
       && contains([for volume in aws_ecs_task_definition.service["airflow_scheduler"].volume : volume.host_path], "/mnt/example-data/airflow/logs")
       && length(aws_ecs_task_definition.service["polaris"].volume) == 0
       && one(aws_ecs_task_definition.one_shot["host_prepare"].volume).host_path == "/mnt/example-data"
     )
-    error_message = "Postgres, Redis and the Airflow logs live on the data volume; Polaris keeps no state."
+    error_message = "Postgres and the Airflow logs live on the data volume; Redis and Polaris keep no state on the host."
   }
 
   assert {
@@ -936,7 +936,8 @@ run "containers_run_as_non_root" {
   assert {
     condition = (
       jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].user == "0"
-      && strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chown 999:999 /host/postgres /host/redis")
+      && strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chown 999:999 /host/postgres\n")
+      && !strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "/host/redis")
     )
     error_message = "The root exception is the host preparation task, which also hands the Postgres directory to its non-root user."
   }
@@ -994,10 +995,13 @@ run "listeners_bind_loopback" {
     condition = (
       can(regex("'bind 0\\.0\\.0\\.0' 'port 6379'", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
       && can(regex("'maxmemory-policy noeviction'", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
+      && can(regex("'maxmemory 2048mb'", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
+      && can(regex("'save \"\"'", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
+      && length(regexall("save", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0])) == 1
       && can(regex("printf 'requirepass \"%s\"\\\\n' \"\\$pw\"", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
       && can(regex("exec redis-server - < <\\(", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
     )
-    error_message = "Redis listens on 6379 only with a password, read from standard input, and never evicts feature values."
+    error_message = "Redis listens on 6379 only with a password, read from standard input, holds 2048 MiB of feature values, never evicts them and saves no snapshots."
   }
 
   assert {
@@ -1190,14 +1194,14 @@ run "container_definitions_match_the_approved_versions" {
       "airflow_dag_processor/airflow_dag_processor" = "123d1308431f66be7702f9566547fce86b14e4b533ce77bd85afe16e7bb7dd3e"
       "airflow_scheduler/airflow_scheduler"         = "4a529d0ac5414d00b74ea4fbc7655906ae30bcd37cb4ad44d873699a932d1715"
       "airflow_triggerer/airflow_triggerer"         = "b3530c6e55c47f3ac37ee820db80901303c4fa23439f7c5dae5b4b165afe412d"
-      "host_prepare/host_prepare"                   = "be053a1bb4edef4fd2889f838f96d6fe6b78db7ed2d4cf43df033dc5e8736207"
+      "host_prepare/host_prepare"                   = "a208b8e2ca2bc45db88ede4b24aa7acdbe5b4392194ba73f3b68ac8ac03454bb"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
       "polaris/polaris"                             = "4091249731a1ee59e36999c93cacc38ad67f1c8be37c13308b5b65f3d673e487"
       "polaris_bootstrap/polaris_bootstrap"         = "1a0bffac42991a144cec7b17cc7809f2316317c916bd9af2f3271f62ec7899c5"
       "postgres/postgres"                           = "84ffdb77ff2045be5b3abcf4437443a9a14b42cd406a155da052da8c5c4d860f"
       "postgres/postgres_databases"                 = "d1832558975c44ccb1c94ed39efbe9e024edaa1ddd6f3161b9d7e95288db71f4"
-      "redis/redis"                                 = "583fcf4e2db9335bd827c6b0cf2fc7b2428b7c187ba72e1acbcb247d4a01db10"
+      "redis/redis"                                 = "65ca3d65c4cf5e89cb31edbdbbc2eda34fb067c7ed8b58bfc4c078ff25f447be"
     }
     error_message = "A container script changed from its reviewed version. Review the change, then record its digest here. Current digests: ${jsonencode(output.execution_digests)}"
   }
@@ -1340,8 +1344,7 @@ run "every_field_of_every_container_and_referenced_volume_is_bound_unless_exclud
   assert {
     condition = alltrue([
       for path in [
-        "container.mountPoints",
-        "container.mountPoints[0].containerPath",
+        "container.linuxParameters.tmpfs[0]",
         "container.secrets[0].valueFrom",
         "container.healthCheck.command",
         "container.healthCheck.command[1]",
@@ -1350,10 +1353,15 @@ run "every_field_of_every_container_and_referenced_volume_is_bound_unless_exclud
         "container.entryPoint[1]",
         "container.portMappings[0].hostPort",
         "container.ulimits[0].name",
-        "task.volume[0].host_path",
-        "task.volume[0].name",
         "task.tags.Project",
       ] : contains(output.mutation_paths["redis/redis"], path)
+      ]) && alltrue([
+      for path in [
+        "container.mountPoints",
+        "container.mountPoints[0].containerPath",
+        "task.volume[0].host_path",
+        "task.volume[0].name",
+      ] : contains(output.mutation_paths["postgres/postgres"], path)
     ])
     error_message = "The Redis mount, secret, script, health check, log, port, limit, volume and tag values must each have been mutated."
   }
@@ -1400,13 +1408,13 @@ run "redis_mount_target_change_changes_the_digest" {
   variables {
     tasks = run.container_definitions_for_review.task_definition_settings
     definitions = {
-      redis = replace(run.container_definitions_for_review.container_definitions["redis"], "\"containerPath\":\"/data\"", "\"containerPath\":\"/usr/local/bin\"")
+      postgres = replace(run.container_definitions_for_review.container_definitions["postgres"], "\"containerPath\":\"/var/lib/postgresql/data\"", "\"containerPath\":\"/usr/local/bin\"")
     }
   }
 
   assert {
-    condition     = output.execution_digests["redis/redis"] != run.container_definitions_match_the_approved_versions.execution_digests["redis/redis"]
-    error_message = "Mounting the Redis data volume over /usr/local/bin can hide the executables the approved script runs, so it must change the execution digest."
+    condition     = output.execution_digests["postgres/postgres"] != run.container_definitions_match_the_approved_versions.execution_digests["postgres/postgres"]
+    error_message = "Mounting the Postgres data volume over /usr/local/bin can hide the executables the approved script runs, so it must change the execution digest."
   }
 }
 
@@ -1438,12 +1446,12 @@ run "mounted_host_path_change_changes_the_digest" {
   }
 
   variables {
-    tasks       = jsondecode(replace(jsonencode(run.container_definitions_for_review.task_definition_settings), "/mnt/example-data/redis", "/mnt/example-data/other"))
-    definitions = { redis = run.container_definitions_for_review.container_definitions["redis"] }
+    tasks       = jsondecode(replace(jsonencode(run.container_definitions_for_review.task_definition_settings), "/mnt/example-data/postgres", "/mnt/example-data/other"))
+    definitions = { postgres = run.container_definitions_for_review.container_definitions["postgres"] }
   }
 
   assert {
-    condition     = output.execution_digests["redis/redis"] != run.container_definitions_match_the_approved_versions.execution_digests["redis/redis"]
+    condition     = output.execution_digests["postgres/postgres"] != run.container_definitions_match_the_approved_versions.execution_digests["postgres/postgres"]
     error_message = "The host path behind a mounted volume decides which files the container sees, so changing it must change the execution digest."
   }
 }
@@ -1475,7 +1483,7 @@ run "memory_change_leaves_the_digest_unchanged" {
 
   variables {
     tasks       = run.container_definitions_for_review.task_definition_settings
-    definitions = { redis = replace(run.container_definitions_for_review.container_definitions["redis"], "\"memory\":1024", "\"memory\":2048") }
+    definitions = { redis = replace(run.container_definitions_for_review.container_definitions["redis"], "\"memory\":2304", "\"memory\":4096") }
   }
 
   assert {
@@ -2652,6 +2660,18 @@ run "redis_is_unchanged_while_the_model_api_is_off" {
   }
 }
 
+run "redis_keeps_no_data_across_starts" {
+  command = plan
+
+  assert {
+    condition = (
+      length(lookup(jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0], "mountPoints", [])) == 0
+      && contains([for mount in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].linuxParameters.tmpfs : mount.containerPath], "/data")
+    )
+    error_message = "Redis keeps its data folder in task memory only, so a start never loads a dump left by an earlier task and the online store is empty until the next materialize."
+  }
+}
+
 run "redis_creates_a_read_only_user_for_the_model_api" {
   command = plan
 
@@ -2672,6 +2692,11 @@ run "redis_creates_a_read_only_user_for_the_model_api" {
       contains(container.secrets, { name = "REDIS_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/redis_password" })
     ])
     error_message = "The Redis task injects the model API's Redis password beside its own."
+  }
+
+  assert {
+    condition     = can(regex("'save \"\"'", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0])) && length(regexall("save", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0])) == 1
+    error_message = "The Redis script with the model API user also saves no snapshots."
   }
 
   # Redis ACLs cannot bind a database, so the user may only run the read commands the serving client sends, select databases 1 (Feast) and 2 (the marker),
@@ -2831,7 +2856,7 @@ run "serving_container_definitions_match_the_approved_versions" {
     condition = alltrue([
       for pin in [
         { id = "model_api/model_api", digest = "f87f0f24695ce2d0d9e7a0f9306ccbf81fdc5e6ff2dfd680764e07516c884704" },
-        { id = "redis/redis", digest = "8fa7ba5084d86c6a1c3a3d674bcbd83236481f739b79e83bf448c09639d13382" },
+        { id = "redis/redis", digest = "7f52421e0183b5e1bb5b278b45dff274fcc87e3e52c57986cb169bfb71831a46" },
         { id = "streamlit/streamlit", digest = "f8e2c6e9514fc5a6205c06cbfed1d52950ddcce9fe60e33034de38c25a0438af" },
       ] : output.execution_digests[pin.id] == pin.digest
     ])

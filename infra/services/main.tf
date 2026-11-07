@@ -106,7 +106,7 @@ locals {
       redis = {
         task_role_arn = var.control_plane_task_role_arn
         containers    = local.redis_containers
-        volumes       = { redis_data = "${var.data_mount_path}/redis" }
+        volumes       = {}
       }
       polaris = {
         task_role_arn = var.polaris_task_role_arn

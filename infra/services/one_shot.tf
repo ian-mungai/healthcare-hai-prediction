@@ -1,10 +1,10 @@
 locals {
   host_prepare_script = <<-EOT
-    mkdir -p /host/postgres /host/redis /host/airflow/logs /host/airflow/lineage_provider /host/repo${var.broker_enabled ? " /host/broker" : ""}${local.om_on ? " /host/opensearch" : ""}
-    chown 999:999 /host/postgres /host/redis${local.om_on ? "\n    chown 1000:1000 /host/opensearch\n    chmod 0700 /host/opensearch" : ""}
+    mkdir -p /host/postgres /host/airflow/logs /host/airflow/lineage_provider /host/repo${var.broker_enabled ? " /host/broker" : ""}${local.om_on ? " /host/opensearch" : ""}
+    chown 999:999 /host/postgres${local.om_on ? "\n    chown 1000:1000 /host/opensearch\n    chmod 0700 /host/opensearch" : ""}
     chown 50000:0 /host/airflow/logs /host/airflow/lineage_provider${var.broker_enabled ? " /host/broker" : ""}
     chmod 0700 /host/postgres
-    chmod 0750 /host/airflow/logs /host/airflow/lineage_provider /host/redis${var.broker_enabled ? " /host/broker" : ""}
+    chmod 0750 /host/airflow/logs /host/airflow/lineage_provider${var.broker_enabled ? " /host/broker" : ""}
     mkdir -p ${join(" ", local.host_scratch_directories)}
     chown 10001:10001 ${join(" ", local.host_scratch_directories)}
     chmod 0700 /host/${var.host_scratch_folder}
@@ -45,7 +45,7 @@ locals {
             capabilities = { drop = ["ALL"], add = ["CHOWN", "DAC_OVERRIDE", "FOWNER"] }
           }
           healthCheck = {
-            command     = ["CMD-SHELL", "test -d /host/postgres && test -d /host/redis && test -d /host/airflow/logs && test -d /host/${var.host_scratch_folder}"]
+            command     = ["CMD-SHELL", "test -d /host/postgres && test -d /host/airflow/logs && test -d /host/${var.host_scratch_folder}"]
             interval    = 5
             timeout     = 2
             retries     = 2
