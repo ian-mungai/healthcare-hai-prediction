@@ -5,7 +5,7 @@ pinned DVC in a throwaway Git checkout in a temporary folder (the tracked ``.dvc
 ``data/`` and the matrix under ``data/``, as in the repository), a local folder as the DVC remote and a local stand-in for the MLflow run store that keeps the
 MLflow file store layout (``<run>/artifacts/<path>`` and ``<run>/tags/<key>``) and the call shapes the helper uses. The matrix is a real Parquet file written
 by DuckDB. Planted defects must fail visibly: a missing matrix, empty snapshot IDs, a wrong hash tag, a missing metafile, a missing baseline, an unwritable
-remote, a deadline, a replaced remote object and a rerun that must change nothing.
+remote, a deadline, a replaced remote object, a site cache folder that cannot be written and a rerun that must change nothing.
 Results go to ``data/e2e/dvc_baseline/<UTC>/report.json``.
 """
 
@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 import duckdb
 
@@ -221,6 +222,28 @@ def replaced_remote_object(top: Path) -> Problems:
     return problems
 
 
+def unwritable_site_cache(top: Path) -> Problems:
+    """The training task's root file system is read-only, so DVC's default site cache (/var/tmp/dvc) cannot be created there; an inherited site cache
+    folder that cannot be written stands in for it, and the record and load must keep their site cache inside the project."""
+    work = Workspace(top)
+    locked = top / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        with mock.patch.dict(os.environ, {"DVC_SITE_CACHE_DIR": str(locked / "dvc")}):
+            work.record()
+            work.wipe_local_copies()
+            loaded = work.load()
+    finally:
+        locked.chmod(0o755)
+    problems: Problems = []
+    if hashlib.sha256(loaded.read_bytes()).hexdigest() != work.original:
+        problems.append("the loaded matrix differs from the recorded one")
+    if not (work.project / ".dvc/tmp/site_cache").is_dir():
+        problems.append("DVC did not keep its site cache at .dvc/tmp/site_cache inside the project")
+    return problems
+
+
 def main() -> int:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = ROOT / "data" / "e2e" / "dvc_baseline" / stamp
@@ -238,6 +261,7 @@ def main() -> int:
         push_failure,
         deadline,
         replaced_remote_object,
+        unwritable_site_cache,
     )
     try:
         for check in cases:

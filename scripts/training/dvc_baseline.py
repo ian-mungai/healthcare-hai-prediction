@@ -15,6 +15,7 @@ project. Run scripts that import this module from the repository root as modules
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import tempfile
@@ -27,6 +28,9 @@ from scripts.process import SubprocessError, TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 DVC = ROOT / ".tools/dvc/bin/dvc"
+# DVC's shared site cache defaults to /var/tmp/dvc, which the training task's read-only root file system cannot hold; keep it in the project's
+# git-ignored .dvc/tmp instead.
+SITE_CACHE = Path(".dvc/tmp/site_cache")
 ARTIFACT_FOLDER = "dvc"
 HASH_TAG = "dvc_metafile_sha256"
 PATH_TAG = "dvc_matrix_path"
@@ -81,7 +85,8 @@ def run_dvc(arguments: list[str], project: Path, deadline: float) -> str:
     """Run one DVC command in the project and return its output; a failure or a deadline is a BaselineError naming the step."""
     step = f"dvc {arguments[0]}"
     try:
-        result = run_command(str(DVC), arguments, cwd=project, timeout=deadline)
+        environment = {**os.environ, "DVC_SITE_CACHE_DIR": str(project.resolve() / SITE_CACHE)}
+        result = run_command(str(DVC), arguments, cwd=project, env=environment, timeout=deadline)
     except TimeoutExpired:
         raise BaselineError(f"{step} passed its deadline of {deadline} seconds") from None
     except (OSError, SubprocessError) as error:
