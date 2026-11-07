@@ -1007,7 +1007,7 @@ INTERFACE = "RegistryStore"  # Feast's abstract registry store, which declares t
 
 def interface_methods(tree: ast.AST) -> set[int]:
     """The definitions of the banned method in classes that implement Feast's registry store interface: the interface makes them required."""
-    allowed = set()
+    allowed: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and any(
             (base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")) == INTERFACE for base in node.bases

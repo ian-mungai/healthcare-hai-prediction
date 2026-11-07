@@ -32,8 +32,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-import yaml
-
 from orchestration import ecs_target
 from scripts.features import feast_aws, feast_cases, feast_job, feast_materialize, online_cases
 from scripts.features import online_protocol as online
@@ -1257,7 +1255,7 @@ class ReaderFeatureStore:
         text = self.settings_file.read_text()
         for name in feast_aws.YAML_VARIABLES:
             text = text.replace("${" + name + "}", os.environ.get(name, ""))
-        registry = yaml.safe_load(text)["registry"]
+        registry = importlib.import_module("yaml").safe_load(text)["registry"]
         path = str(registry["path"])
         store_type = registry.get("registry_store_type")
         if store_type is not None:
@@ -1356,9 +1354,9 @@ def case_fa23(c: Checker) -> None:
         drift = importlib.import_module("monitoring.aws_run")
         with mock.patch.dict(os.environ, {"AWS_REGION": "us-east-2"}):
             drift.prepare_feature_reader(REGISTRY_BUCKET, Path(raw))
-            delegation, region = os.environ.get(feast_aws.NO_DELEGATION_VARIABLE), os.environ.get(PYICEBERG_REGION_VARIABLE)
+            delegation, named = os.environ.get(feast_aws.NO_DELEGATION_VARIABLE), os.environ.get(PYICEBERG_REGION_VARIABLE)
         c.check("the drift current window turns off credential vending", delegation == "")
-        c.check("the drift current window names the task's region for PyIceberg", region == "us-east-2")
+        c.check("the drift current window names the task's region for PyIceberg", named == "us-east-2")
         with mock.patch.dict(os.environ):
             os.environ.pop("AWS_REGION", None)
             try:
