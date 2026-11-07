@@ -1,0 +1,23 @@
+table inet platform_jobs
+delete table inet platform_jobs
+table inet platform_jobs {
+  chain input {
+    type filter hook input priority 0; policy accept;
+    iifname "docker0" ct state established,related accept
+    iifname "docker0" ip daddr 169.254.169.254 drop
+    iifname "docker0" udp dport 53 accept
+    iifname "docker0" tcp dport 53 accept
+    iifname "docker0" ip daddr 169.254.170.2 tcp dport 80 accept
+    iifname "docker0" ip daddr 127.0.0.1 tcp dport 51679 accept
+    iifname "docker0" fib daddr type local tcp dport { 5100, 6379, 8181, 8585 } accept
+    iifname "docker0" drop
+  }
+  chain forward {
+    type filter hook forward priority 0; policy accept;
+    iifname "docker0" ip daddr 169.254.169.254 drop
+    iifname "docker0" udp dport 53 accept
+    iifname "docker0" tcp dport 53 accept
+    iifname "docker0" tcp dport 443 accept
+    iifname "docker0" drop
+  }
+}

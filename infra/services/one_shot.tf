@@ -5,6 +5,9 @@ locals {
     chown 50000:0 /host/airflow/logs /host/airflow/lineage_provider${var.broker_enabled ? " /host/broker" : ""}
     chmod 0700 /host/postgres
     chmod 0750 /host/airflow/logs /host/airflow/lineage_provider /host/redis${var.broker_enabled ? " /host/broker" : ""}
+    mkdir -p ${join(" ", local.host_scratch_directories)}
+    chown 10001:10001 ${join(" ", local.host_scratch_directories)}
+    chmod 0700 /host/${var.host_scratch_folder}
   EOT
 
   polaris_bootstrap_script = <<-EOT
@@ -42,7 +45,7 @@ locals {
             capabilities = { drop = ["ALL"], add = ["CHOWN", "DAC_OVERRIDE", "FOWNER"] }
           }
           healthCheck = {
-            command     = ["CMD-SHELL", "test -d /host/postgres && test -d /host/redis && test -d /host/airflow/logs"]
+            command     = ["CMD-SHELL", "test -d /host/postgres && test -d /host/redis && test -d /host/airflow/logs && test -d /host/${var.host_scratch_folder}"]
             interval    = 5
             timeout     = 2
             retries     = 2
