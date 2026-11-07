@@ -109,13 +109,30 @@
       }
     },
     "feature_store": {
-      "reason": "The Feast repository and the Feast, online-store and historical-read jobs run in the Feast image (services/feature_store/Dockerfile). The feature_store group of uv.lock pins them with hashes.",
+      "reason": "The Feast repository and the Feast, online-store and historical-read jobs run in the Feast image (services/feature_store/Dockerfile). The feature_store group of uv.lock pins them with hashes. The training extract and the features job's Feast phase run there too, so their modules are listed.",
       "groups": [
         "feature_store"
       ],
       "code": [
         "feature_store/*.py",
-        "scripts/features/feast_registry_store.py"
+        "scripts/features/feast_registry_store.py",
+        "scripts/training/aws_run.py",
+        "scripts/training/job.py",
+        "scripts/training/job_failure.py",
+        "scripts/training/promote_lease.py",
+        "scripts/training/promote_receipt.py",
+        "scripts/training/step_records.py",
+        "orchestration/code_digest.py",
+        "orchestration/mlflow_service.py",
+        "orchestration/training_contract.py",
+        "scripts/features/training_extract.py",
+        "scripts/features/historical.py",
+        "scripts/features/publication_reads.py",
+        "scripts/features/fixture_catalog.py",
+        "scripts/features/feast_aws.py",
+        "scripts/features/feast_job.py",
+        "scripts/features/feast_materialize.py",
+        "scripts/features/online_protocol.py"
       ]
     },
     "serving": {
