@@ -327,6 +327,11 @@
       "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
     },
     {
+      "module": "scripts/process.py",
+      "pattern": null,
+      "why": "reviewed: list_table_processes lists the kernel process table under PROC_ROOT (/proc) to find live processes; it lists no repository folder and reads no repository file through that listing"
+    },
+    {
       "module": "scripts/quality/docker_calls.py",
       "pattern": "\\.py$",
       "why": "docker_calls.check lists every tracked and untracked Python file with git ls-files and parses each one to discover wrappers; the suite's docker_calls_check case runs it, so any Python file, also a future one, can change the result"
@@ -403,6 +408,7 @@
     "scripts/orchestration/in_image_checks.py": 2,
     "scripts/orchestration/ledger.py": 1,
     "scripts/orchestration/run_control.py": 1,
+    "scripts/process.py": 1,
     "scripts/quality/docker_calls.py": 1,
     "scripts/training/bundle.py": 1,
     "scripts/training/guards.py": 1,

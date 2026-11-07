@@ -169,8 +169,10 @@ sleep 60 &
 echo $! >"$STUB_DIR/lister_child.pid"
 wait
 """
-# Appended to the sandbox copy of scripts/process.py: the session lister does not exist, so every listing fails (the fix round 7 reproductions).
-MISSING_LISTER = '\nSESSION_LISTING = ("/missing-review-lister",)\n'
+# Appended to the sandbox copy of scripts/process.py: the process table is off, so ``ps`` is the session listing.
+PS_ONLY = '\nPROC_ROOT = "/missing-review-proc-root"\n'
+# Also the session lister does not exist, so every listing fails (the fix round 7 reproductions).
+MISSING_LISTER = '\nSESSION_LISTING = ("/missing-review-lister",)' + PS_ONLY
 # A worker command (argv: the stub folder) that leaves a member in a group of its own, ignoring TERM with output closed, and ends once the member is recorded.
 LEFT_MEMBER = """
 import os, signal, sys, time
@@ -556,9 +558,16 @@ def completed_worker(base: Path) -> dict[str, Any]:
     return case("completed_worker_leaves_no_descendant", base, body)
 
 
+def listing_from_ps_only(sandbox: Sandbox) -> None:
+    """Make ``ps`` the session listing of the sandbox: on Linux the listing reads the process table, so a case with a stalled ``ps`` turns the table off."""
+    path = sandbox.root / "scripts/process.py"
+    path.write_text(path.read_text(encoding="utf-8") + PS_ONLY, encoding="utf-8")
+
+
 def trap_with_stalled_listing(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         # The review reproduction: TERM to the dispatcher while every listing stalls; the exit trap must still end within its bound.
+        listing_from_ps_only(sandbox)
         path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
         environment = sandbox.environment("python_lint", {"CI_WORKER_LIMIT_SECONDS": "600", "PATH": path})
         dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
@@ -628,6 +637,7 @@ def alarm_expiry(base: Path) -> dict[str, Any]:
             return {"alarm_text_found": False}
         script.write_text(text.replace("+ 25)", "+ 0)"), encoding="utf-8")
         (sandbox.root / "bin/ps").write_text(LOGGING_STALLED_PS, encoding="utf-8")
+        listing_from_ps_only(sandbox)
         path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
         environment = sandbox.environment("python_lint", {"CI_WORKER_LIMIT_SECONDS": "600", "PATH": path})
         dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
@@ -737,6 +747,7 @@ def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         # The deadline stop cannot list the session (every listing stalls). The failure entry must say that the stop is not confirmed, and the dispatcher
         # must not wait for the worker without a bound.
+        listing_from_ps_only(sandbox)
         path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
         run = sandbox.run(groups="python_lint", timeout=45, CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS), PATH=path)
         return {
