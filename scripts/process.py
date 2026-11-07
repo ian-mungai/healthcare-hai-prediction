@@ -4,8 +4,9 @@ Every call resolves the program to a full path, passes a list of arguments (neve
 applies a timeout. A top-level call starts the program in a new session (``setsid``), which it leads; the call names it to its descendants with
 ``PROCESS_LAUNCH_SESSION=1``. At the deadline, or when the caller is interrupted, every member of that session stops: the call lists the live
 processes and signals those whose ``os.getsid`` is the session. The listing reads the kernel's process table (``/proc/<pid>/stat``) when the platform has
-one, because a job image can have no ``ps``; a platform without it (macOS) runs ``ps -A -o pid=,ppid=,pgid=,stat=,lstart=`` (macOS ``pgrep`` has no session
-option and its ``ps`` shows the session as 0). A table that cannot be read fails the listing, as a ``ps`` that cannot run does. Every member is frozen
+one, because a job image can have no ``ps``; a helper process (``TABLE_READER``) reads the records, so a read that blocks is ended at the listing
+deadline. A platform without it (macOS) runs ``ps -A -o pid=,ppid=,pgid=,stat=,lstart=`` (macOS ``pgrep`` has no session option and its ``ps`` shows the
+session as 0). A table that cannot be read fails the listing, as a ``ps`` that cannot run does. Every member is frozen
 (SIGSTOP), then gets KILL, then a check that no member is left. A frozen member never runs again, so
 its TERM handler cannot fork a child into a new session during the stop; a session stop therefore gives no grace period (a stopped Terraform can leave
 its state lock and Git its ``index.lock``). A call made inside such a session (a nested
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import json
 import os
 import shutil
 import signal
@@ -97,6 +99,28 @@ PROC_START_FIELD = 19
 # the stop of a launch must not fail for that. A program named with a path, or one these folders do not hold, is looked up as before.
 SYSTEM_PROGRAM_FOLDERS = ("/bin", "/usr/bin")
 LISTING_SECONDS = 5.0
+# The script that reads the records of the process table in a helper process (``python -I``), so that ``LISTING_SECONDS`` ends a read that blocks: a
+# blocked read cannot be interrupted in a thread, and an alarm reaches only the main thread. Its argument is the table's folder; the pids to read come on
+# its standard input, one per line, so its arguments do not grow with the table (a large host's pid list can exceed the argument limit, E2BIG).
+# It prints a JSON list of ``[pid, record]``; a process that ends during the read is left out, and any other failure exits 1 with the reason.
+TABLE_READER = """
+import json, sys
+
+def read_table(root, names):
+    rows = []
+    for name in names:
+        try:
+            with open(f"{root}/{name}/stat", encoding="utf-8", errors="replace") as record:
+                rows.append([name, record.read()])
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError as failure:
+            sys.exit(f"{root}/{name}/stat could not be read: {failure}")
+    return rows
+
+if __name__ == "__main__":
+    json.dump(read_table(sys.argv[1], sys.stdin.read().split()), sys.stdout)
+"""
 # Seconds the stop of a session spends stopping (SIGSTOP) the members it finds, until a listing finds no new member, before it signals them.
 FREEZE_SECONDS = 1.0
 # Seconds the lister gets to be reaped after its group got KILL at the listing deadline.
@@ -268,13 +292,14 @@ def close_pipes(process: subprocess.Popen[str]) -> None:
             pipe.close()
 
 
-def start(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, new_session: bool) -> subprocess.Popen[str]:
-    """Start a resolved program with closed stdin and captured text output, in a new session or in a new process group."""
-    return subprocess.Popen(  # noqa: S603 - the only process launcher: full path, list arguments, no shell, stdin closed, own session or group
+def start(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, new_session: bool, piped_input: bool = False) -> subprocess.Popen[str]:
+    """Start a resolved program with closed stdin (a pipe from the caller when ``piped_input`` is set: a lister's input) and captured text output, in a
+    new session or in a new process group."""
+    return subprocess.Popen(  # noqa: S603 - the only process launcher: full path, list arguments, no shell, stdin closed or piped, own session or group
         list(argv),
         cwd=cwd,
         env=env,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if piped_input else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -288,6 +313,9 @@ def end_lister(lister: subprocess.Popen[str]) -> None:
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(lister.pid, signal.SIGKILL)
     close_pipes(lister)
+    if lister.stdin is not None:
+        with contextlib.suppress(OSError):
+            lister.stdin.close()
     with contextlib.suppress(TimeoutExpired):
         lister.wait(timeout=REAP_SECONDS)
 
@@ -343,7 +371,8 @@ def list_table_processes() -> list[ProcessRow]:
     table, and a table that does not show the caller, fail the listing: a listing that is wrongly empty would let a stop report success. The table must
     also be the caller's own pid namespace: the ``NStgid`` line of ``self/status`` lists the caller's pid in the table's namespace and then in each
     namespace inward, so it must be the caller's pid alone. A table of an ancestor namespace has more entries even when the numbers are equal, and its
-    rows can show unrelated processes under the caller's pid numbers. A missing or malformed line fails the listing."""
+    rows can show unrelated processes under the caller's pid numbers. A missing or malformed line fails the listing. The records are read in a helper
+    process (``TABLE_READER``) that is killed at ``LISTING_SECONDS``, as a stalled ``ps`` is: a read that blocks fails the listing in any thread."""
     try:
         with open(f"{PROC_ROOT}/self/status", encoding="utf-8", errors="replace") as record:
             status = record.read()
@@ -358,17 +387,23 @@ def list_table_processes() -> list[ProcessRow]:
         names = os.listdir(PROC_ROOT)
     except OSError as failure:
         raise SessionListingFailed(f"{PROC_ROOT} could not be read: {failure}") from None
+    pids = [name for name in names if name.isascii() and name.isdigit()]
+    wanted = set(pids)
+    if not sys.executable:
+        raise SessionListingFailed("the path of this interpreter is unknown, so the process table cannot be read within a deadline")
+    returncode, output, error = run_lister([sys.executable, "-I", "-c", TABLE_READER, PROC_ROOT], "the process table reader", "\n".join(pids))
+    if returncode:
+        raise SessionListingFailed(error.strip() or f"the process table reader exited {returncode}")
+    try:
+        records = json.loads(output)
+    except ValueError:
+        records = None
+    if not isinstance(records, list) or not all(
+        isinstance(item, list) and len(item) == 2 and isinstance(item[0], str) and item[0] in wanted and isinstance(item[1], str) for item in records
+    ):
+        raise SessionListingFailed(f"the process table reader printed no list of records: {output[:200]!r}")
     rows: list[ProcessRow] = []
-    for name in names:
-        if not (name.isascii() and name.isdigit()):
-            continue
-        try:
-            with open(f"{PROC_ROOT}/{name}/stat", encoding="utf-8", errors="replace") as record:
-                text = record.read()
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        except OSError as failure:
-            raise SessionListingFailed(f"{PROC_ROOT}/{name}/stat could not be read: {failure}") from None
+    for name, text in records:
         if text:
             rows.append(parse_proc_stat(int(name), text))
     if all(row.pid != os.getpid() for row in rows):
@@ -376,26 +411,34 @@ def list_table_processes() -> list[ProcessRow]:
     return rows
 
 
+def run_lister(argv: Sequence[str], name: str, input_text: str | None = None) -> tuple[int, str, str]:
+    """Run a lister in its own group within ``LISTING_SECONDS`` and return its exit status, output and error output. ``input_text`` goes to its standard
+    input within the same deadline (None: stdin is closed). A lister that cannot start or does not finish in time fails the listing
+    (``SessionListingFailed``): its group gets KILL and it is reaped within a bound."""
+    try:
+        lister = start(argv, None, None, new_session=False, piped_input=input_text is not None)
+    except OSError as failure:
+        raise SessionListingFailed(f"{name} could not start: {failure}") from None
+    try:
+        output, error = lister.communicate(input=input_text, timeout=LISTING_SECONDS)
+    except TimeoutExpired:
+        end_lister(lister)
+        raise SessionListingFailed(f"{name} did not finish within {LISTING_SECONDS} s") from None
+    except BaseException:
+        # An alarm or an interrupt ends the listing: the lister and the process that holds its pipes must not outlive it.
+        end_lister(lister)
+        raise
+    return lister.returncode, output, error
+
+
 def list_ps_processes() -> list[ProcessRow]:
     """Every live process, from ``SESSION_LISTING``. Raises ``SessionListingFailed`` on any failure."""
     executable = listing_program(SESSION_LISTING[0])
     if executable is None:
         raise SessionListingFailed(f"{SESSION_LISTING[0]} is not on PATH")
-    try:
-        lister = start([executable, *SESSION_LISTING[1:]], None, None, new_session=False)
-    except OSError as failure:
-        raise SessionListingFailed(f"{executable} could not start: {failure}") from None
-    try:
-        output, error = lister.communicate(timeout=LISTING_SECONDS)
-    except TimeoutExpired:
-        end_lister(lister)
-        raise SessionListingFailed(f"{executable} did not finish within {LISTING_SECONDS} s") from None
-    except BaseException:
-        # An alarm or an interrupt ends the listing: the lister and the process that holds its pipes must not outlive it.
-        end_lister(lister)
-        raise
-    if lister.returncode:
-        raise SessionListingFailed(f"{executable} exited {lister.returncode}: {error.strip()}")
+    returncode, output, error = run_lister([executable, *SESSION_LISTING[1:]], executable)
+    if returncode:
+        raise SessionListingFailed(f"{executable} exited {returncode}: {error.strip()}")
     rows: list[ProcessRow] = []
     for line in output.splitlines():
         fields = line.split()
