@@ -215,7 +215,6 @@ def aws_environment(**changes: str | None) -> dict[str, str]:
         "POLARIS_URI": PORT_OF_NOTHING,
         "POLARIS_CLIENT_ID": "reader-id-1",
         "POLARIS_CLIENT_SECRET": SENTINEL,
-        "FEAST_REDIS_HOST": "redis.example.internal",
         "AWS_REGION": "us-east-2",
         "FEAST_REGISTRY_BUCKET": "example-feature-bucket",
     }
@@ -534,12 +533,32 @@ def case_fa7(c: Checker) -> None:
 
 
 def case_fa8(c: Checker) -> None:
-    """FA8: the Redis host is a plain host name or IPv4 address."""
-    for value in ("redis", "redis.example.internal", "10.0.12.7"):
-        c.check(f"{value} is accepted", feast_aws.aws_settings(aws_environment(FEAST_REDIS_HOST=value), "real").redis_host == value)
-    for value in ("", "redis:6379", "redis/db", "red is", "-x", "host\nname", "a" * 300):
-        c.refused(f"the host {value[:12]!r} is refused", feast_aws.aws_settings, "FEAST_REDIS_HOST", aws_environment(FEAST_REDIS_HOST=value), "real")
-    c.refused("an unset host is refused", feast_aws.aws_settings, "FEAST_REDIS_HOST", aws_environment(FEAST_REDIS_HOST=None), "real")
+    """FA8: the Redis host is the host of POLARIS_URI; a FEAST_REDIS_HOST that differs from it is refused, an equal or unset one is accepted."""
+    for host in ("polaris", "polaris.example.internal", "10.0.12.7"):
+        uri = f"http://{host}:8181/api/catalog"
+        c.check(f"{host} in POLARIS_URI gives the Redis host", feast_aws.aws_settings(aws_environment(POLARIS_URI=uri), "real").redis_host == host)
+        c.check(
+            f"an equal FEAST_REDIS_HOST ({host}) is accepted",
+            feast_aws.aws_settings(aws_environment(POLARIS_URI=uri, FEAST_REDIS_HOST=host), "real").redis_host == host,
+        )
+        c.refused(
+            f"a differing FEAST_REDIS_HOST beside {host} is refused",
+            feast_aws.aws_settings,
+            "FEAST_REDIS_HOST",
+            aws_environment(POLARIS_URI=uri, FEAST_REDIS_HOST="10.9.9.9" if host != "10.9.9.9" else "other"),
+            "real",
+        )
+    c.check("an unset FEAST_REDIS_HOST is accepted", feast_aws.aws_settings(aws_environment(FEAST_REDIS_HOST=None), "real").redis_host == "127.0.0.1")
+    c.refused("an empty FEAST_REDIS_HOST is refused", feast_aws.aws_settings, "FEAST_REDIS_HOST", aws_environment(FEAST_REDIS_HOST=""), "real")
+    guarded = GuardedCatalog(runs_catalog("features"))
+    uri = "http://10.0.12.7:8181/api/catalog"
+    environ, store, server = prepared(POLARIS_URI=uri)
+    with session_for("real", environ, store, server, guarded):
+        c.check("the session gives the YAML rendering the derived host", environ.get("FEAST_REDIS_HOST") == "10.0.12.7")
+    environ, store, server = prepared(POLARIS_URI=uri, FEAST_REDIS_HOST="10.9.9.9")
+    c.refused(
+        "a session with a differing FEAST_REDIS_HOST is refused", lambda: session_for("real", environ, store, server, guarded).__enter__(), "FEAST_REDIS_HOST"
+    )
 
 
 def case_fa9(c: Checker) -> None:

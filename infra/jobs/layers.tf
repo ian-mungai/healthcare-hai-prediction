@@ -49,23 +49,6 @@ variable "layer_resources" {
   }
 }
 
-variable "layer_feast_redis_host" {
-  description = "Private address of the host Redis that the features job applies Feast to. Required while the features layer job is registered."
-  type        = string
-  default     = ""
-  nullable    = false
-
-  validation {
-    condition     = var.layer_feast_redis_host == "" || can(regex("^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$", var.layer_feast_redis_host))
-    error_message = "Supply a host name or address, or leave it empty."
-  }
-
-  validation {
-    condition     = !(var.layer_jobs_enabled && contains(var.layer_jobs, "features")) || var.layer_feast_redis_host != ""
-    error_message = "The features job needs the private address of the host Redis."
-  }
-}
-
 locals {
   layer_jobs = var.layer_jobs_enabled ? var.layer_jobs : toset([])
   layer_roles = {
@@ -175,7 +158,6 @@ locals {
           [for name in lookup(local.layer_run_variables[layer], step.name, []) : { name = name, value = "" }],
           step.name == "feast" ? [
             { name = "FEAST_PROFILE", value = "aws" },
-            { name = "FEAST_REDIS_HOST", value = var.layer_feast_redis_host },
             { name = "FEAST_REGISTRY_BUCKET", value = var.data_bucket_name },
           ] : []
         )

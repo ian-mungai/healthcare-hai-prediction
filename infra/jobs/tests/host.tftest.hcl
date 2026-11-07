@@ -63,7 +63,6 @@ variables {
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
   openmetadata_admin_password_name      = "/example_project/openmetadata_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
-  layer_feast_redis_host                = "10.0.1.20"
   openmetadata_cpu_architecture         = "ARM64"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
   host_openmetadata_api                 = "http://10.0.1.20:8585/api"

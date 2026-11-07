@@ -30,7 +30,6 @@ variables {
   aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   log_group_name                        = "example_project_jobs_dev"
-  layer_feast_redis_host                = "10.0.1.20"
 }
 
 run "default_plan_creates_no_layer_task" {
@@ -42,7 +41,6 @@ run "default_plan_creates_no_layer_task" {
     job_role_arns          = {}
     writer_parameter_names = {}
     log_group_name         = null
-    layer_feast_redis_host = ""
   }
 
   assert {
@@ -181,7 +179,7 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
       jsondecode(output.layer_phase_containers["features"])[8].command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run feast --layer features --run \"$RUN_ID\""] &&
       jsondecode(output.layer_phase_containers["features"])[8].image == var.train_images.feature_store &&
       contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
-      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_REDIS_HOST", value = "10.0.1.20" }) &&
+      !anytrue([for entry in jsondecode(output.layer_phase_containers["features"])[8].environment : entry.name == "FEAST_REDIS_HOST"]) &&
       contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" })
     )
     error_message = "The features job applies Feast from the feature store image on the AWS profile."
@@ -486,7 +484,7 @@ run "missing_image_for_an_enabled_layer_is_refused" {
   expect_failures = [var.layer_jobs_enabled]
 }
 
-run "features_without_the_feature_store_image_or_redis_host_is_refused" {
+run "features_without_the_feature_store_image_is_refused" {
   command = plan
 
   variables {
@@ -495,17 +493,6 @@ run "features_without_the_feature_store_image_or_redis_host_is_refused" {
   }
 
   expect_failures = [var.layer_jobs_enabled]
-}
-
-run "features_without_a_redis_host_is_refused" {
-  command = plan
-
-  variables {
-    layer_jobs_enabled     = true
-    layer_feast_redis_host = ""
-  }
-
-  expect_failures = [var.layer_feast_redis_host]
 }
 
 run "a_mutable_image_tag_is_refused" {
