@@ -1,4 +1,4 @@
-"""Offline cases for the OpenMetadata image mirror of ``push_images``; no real registry, AWS service or Docker is contacted.
+"""Offline cases for the OpenMetadata image mirror and the drift image of ``push_images``; no real registry, AWS service or Docker is contacted.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.push_images_cases``. ``scripts/infrastructure/run_push_images_e2e.py`` runs
 them and keeps the report. The cases call the command line of ``push_images`` (``check``, ``plan`` and ``record``) on a scratch copy of the two image
@@ -27,6 +27,7 @@ from typing import Any
 from scripts.infrastructure import push_images
 from scripts.infrastructure import push_images_fake_cloud as fake_cloud
 from scripts.process import run_command
+from scripts.quality import lock_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = {
@@ -203,6 +204,36 @@ def plan_lines() -> dict[str, bool]:
         "no image is pulled by a tag alone": not any(line.startswith("docker pull") and "@sha256:" not in line for line in lines),
         "the plan names the record command with the three names": "push_images record" in text and all(f"{n}=sha256:<DIGEST>" in text for n in UPSTREAM),
         "the database image is not planned": "database" not in text,
+    }
+
+
+def drift_image() -> dict[str, bool]:
+    """The drift task's own image is a build of ``services/drift`` that the plan accepts by name, beside the training and feature store images it also runs."""
+    config = real_config()
+    images = config["images"]
+    drift = images.get("drift", {})
+    with tempfile.TemporaryDirectory(prefix="push_images_drift_") as directory:
+        urls = push_images.repository_urls(repository_urls(Path(directory)))
+    try:
+        lines = push_images.plan(config, urls, "example_profile", "us-west-2", ["drift"])
+    except push_images.ImagesError:
+        lines = []
+    text = "\n".join(lines)
+    return {
+        "the list is valid with the drift image": push_images.check(config) == [],
+        "the drift image builds the drift context and its Dockerfile": drift.get("kind") == "build"
+        and drift.get("context") == "services/drift"
+        and "dockerfile" not in drift,
+        "the drift image needs no shared build context, because its Dockerfile copies only the lock's requirement file": "build_contexts" not in drift,
+        "the drift tags follow the Evidently release of the lock": drift.get("local_tag") == "hai-drift:evidently0.7.23"
+        and drift.get("tag") == "evidently0.7.23-arm64",
+        "the requirement file the lock writes for the drift group is in that context": lock_env.IMAGE_FILES["drift"]
+        == {"requirements.txt": "services/drift/requirements.txt"},
+        "every image the drift task runs is in the list": all(images.get(name, {}).get("kind") == "build" for name in ("training", "feature_store", "drift")),
+        "the plan for the drift image alone writes the requirement files and builds it for linux/arm64": (
+            "scripts.quality.lock_env images" in text and "docker build --platform linux/arm64 --tag hai-drift:evidently0.7.23 services/drift" in text
+        ),
+        "the plan names the drift record command": "push_images record drift=sha256:<DIGEST>" in text,
     }
 
 
@@ -478,6 +509,7 @@ CASES: dict[str, Case] = {
     "list_pins": list_pins,
     "list_refusals": list_refusals,
     "plan_lines": plan_lines,
+    "drift_image": drift_image,
     "plan_execution": plan_execution,
     "registry_file": registry_file,
     "record_flow": record_flow,
