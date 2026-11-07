@@ -11,9 +11,11 @@ mean that no version holds the alias: 404 and ``{"error_code": "RESOURCE_DOES_NO
 missing answer within the deadline, a redirect (the login is never sent to another address), 401, 403, 5xx, another 400 (another code or message) or 404 (a
 wrong address) and an answer that is not the JSON of a version of the model. The login never enters a message.
 
-One absolute deadline of ``TIMEOUT_SECONDS`` covers the connection, the status line and headers and every byte of the body, the body of a 400 or 404 answer
-included. Every receive on the socket gets the time that is left as its timeout, so a server that sends one byte at a time cannot keep the call open. Two
-steps have only a per-step bound: the name lookup of the address, and the TLS handshake of an https address, which each can use the full limit again.
+One absolute deadline of ``TIMEOUT_SECONDS`` covers the status line and headers and every byte of the body, the body of a 400 or 404 answer included.
+Every receive on the socket gets the time that is left as its timeout, so a server that sends one byte at a time cannot keep the call open. Three steps are
+outside that deadline: the name lookup of the address has no timeout of its own (the system resolver's limits apply), the TCP connection to each address the
+lookup returns can use the full limit again, and so can the TLS handshake of an https address. The documented owner address, http://localhost:5100 through
+the Session Manager port forward, needs neither a name server nor TLS.
 """
 
 from __future__ import annotations
