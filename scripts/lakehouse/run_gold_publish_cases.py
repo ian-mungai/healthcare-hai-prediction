@@ -824,6 +824,9 @@ def maintenance_cases(h: Harness) -> Check:
     }
     none = maintenance.Protected()
     checks["with no reservation the newest retain_sets runs stay"] = maintenance.kept_runs(synthetic, none, 2) == {run_id(4), run_id(5)}
+    checks["orphan removal lists through the table file IO, which has no Hadoop s3 filesystem on the Spark image"] = (
+        "prefix_listing => true" in maintenance.ORPHANS
+    )
     return checks
 
 
