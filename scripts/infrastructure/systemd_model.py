@@ -2,8 +2,9 @@
 # section that defines it and ignores a misplaced one with a warning, which is why a dependency in the wrong section
 # silently stops being a dependency. Its dependency rules follow systemd.unit(5): stopping or restarting a unit also
 # stops or restarts the units that require it (Requires= and BindsTo=) and the units that are PartOf= it, dependents
-# first; a reload reaches the units that list the reloaded unit in ReloadPropagatedFrom=. It does not model failure
-# restarts, timers, sockets, job queues or parallel starts.
+# first; a reload reaches the units that list the reloaded unit in ReloadPropagatedFrom=. RequiresMountsFor= requires the
+# mount of each listed path, so a start fails while a path is not a mount point (a nofail mount whose device is missing). It
+# does not model failure restarts, timers, sockets, mount units, job queues or parallel starts.
 import json
 import os
 import sys
@@ -27,6 +28,7 @@ KNOWN = {
         "After",
         "ReloadPropagatedFrom",
         "PropagatesReloadTo",
+        "RequiresMountsFor",
         "OnFailure",
         "ConditionPathExists",
     },
@@ -48,7 +50,19 @@ KNOWN = {
     "Install": {"WantedBy", "RequiredBy", "Also", "Alias"},
     "Timer": {"OnActiveSec", "OnUnitActiveSec", "OnBootSec", "OnCalendar", "AccuracySec", "Unit", "Persistent"},
 }
-LISTS = {"Requires", "Requisite", "Wants", "BindsTo", "PartOf", "Conflicts", "Before", "After", "ReloadPropagatedFrom", "PropagatesReloadTo"}
+LISTS = {
+    "Requires",
+    "Requisite",
+    "Wants",
+    "BindsTo",
+    "PartOf",
+    "Conflicts",
+    "Before",
+    "After",
+    "ReloadPropagatedFrom",
+    "PropagatesReloadTo",
+    "RequiresMountsFor",
+}
 
 
 def read_unit(units: Path, unit: str, builtin: dict[str, str], warnings: list[str]) -> Sections:
@@ -137,6 +151,10 @@ class Manager:
         for required in self.values(unit, "Unit", "Requires") + self.values(unit, "Unit", "BindsTo"):
             if required in self.sections:
                 self.start(required)
+        for path in self.values(unit, "Unit", "RequiresMountsFor"):
+            if self.execute(["mountpoint", "-q", path]):
+                self.event(f"mount_missing {unit} {path}")
+                sys.exit(f"{unit} failed: the mount for {path} is not active")
         self.run(unit, "ExecStartPre")
         self.run(unit, "ExecStart")
         self.run(unit, "ExecStartPost")

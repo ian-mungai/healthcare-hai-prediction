@@ -23,6 +23,8 @@ current_step="starting"
 region="${region}"
 mount_path="${mount_path}"
 data_volume_name="${data_volume_name}"
+scratch_volume_name="${scratch_volume_name}"
+scratch_path="${scratch_path}"
 address_name="${address_name}"
 project_tag="${project_tag}"
 
@@ -122,11 +124,17 @@ if [ "$core_pattern" != "core" ] || [ "$suid_dumpable" != "0" ]; then
 fi
 
 # Host-network containers share the host's network, so only root (the ECS agent, ecs-init and the Session Manager agent)
-# may reach the instance metadata service and the host role. The rule has its own nftables table, which Docker, firewalld
+# may reach the instance metadata service and the host role. Job containers use the bridge network, so a second table in the
+# same file limits what the bridge may reach (see host_job_firewall.nft). One file is one transaction, so the guard, the
+# firewall configuration and every reload load both tables together. The rule has its own nftables table, which Docker, firewalld
 # and reloads of the xtables rule sets leave alone. The nftables configuration includes it, so a reload of that service loads it again in the
 # same transaction, and the guard unit is part of that service, so stopping or restarting it stops or restarts Docker
-# and the ECS agent too. Both require the guard and load and check the rule before every start. A timer checks it every
-# 10 seconds, loads it again when it is missing and stops both when it cannot.
+# and the ECS agent too. Both require the guard and load and check the rule before every start. A timer checks both tables
+# every 10 seconds, loads them again when either is missing and stops both services when it cannot.
+# Docker and the ECS agent also require the scratch mount at every start, not only during this first boot: its fstab line
+# is nofail, so on a later boot without it the job folders would land on the snapshotted data volume underneath.
+# RequiresMountsFor makes each service require the mount unit, and ExecStartPre checks the mount itself, so a start fails
+# while the scratch volume is not mounted.
 step "Writing the metadata firewall files"
 command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y -q nftables
 mkdir -p "$(dirname "$nft_rules_file")" "$(dirname "$guard_script")" "$systemd_directory/docker.service.d" "$systemd_directory/ecs.service.d"
@@ -139,23 +147,25 @@ table inet platform_imds {
     ip daddr 169.254.169.254 meta skuid != 0 drop
   }
 }
-RULES
+${job_firewall_rules}RULES
 include_line="include \"$nft_rules_file\""
 grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line" >>"$nftables_config"
 {
   echo '#!/bin/bash'
   printf 'rules_file=%q\n' "$nft_rules_file"
   cat <<'GUARD'
-# apply loads the rule in one transaction and checks it. check confirms that the table exists and that user 65534
-# cannot connect to the metadata service (curl status 7 or 28). enforce loads a missing rule again and stops the ECS
-# agent and Docker when it cannot.
+# apply loads both tables in one transaction and checks them. check confirms that the metadata table and the job table
+# both exist and that user 65534 cannot connect to the metadata service (curl status 7 or 28). enforce loads both tables
+# again when either is missing and stops the ECS agent and Docker when it cannot.
 probe_blocked() {
   local status=0
   timeout --kill-after=5 10 setpriv --reuid=65534 --regid=65534 --clear-groups -- curl -s -o /dev/null --max-time 3 http://169.254.169.254/latest/meta-data/ || status=$?
   [ "$status" -eq 7 ] || [ "$status" -eq 28 ]
 }
 check() {
-  timeout --kill-after=5 30 nft list table inet platform_imds >/dev/null && probe_blocked
+  timeout --kill-after=5 30 nft list table inet platform_imds >/dev/null \
+    && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \
+    && probe_blocked
 }
 apply() {
   timeout --kill-after=5 30 nft -f "$rules_file" || { echo "Could not load the metadata firewall rule." >&2; return 1; }
@@ -204,6 +214,16 @@ After=platform_imds_guard.service
 
 [Service]
 ExecStartPre=$guard_script apply
+UNIT
+done
+mountpoint_command=$(command -v mountpoint)
+for unit in docker.service ecs.service; do
+  cat >"$systemd_directory/$unit.d/platform_scratch_mount.conf" <<UNIT
+[Unit]
+RequiresMountsFor=$scratch_path
+
+[Service]
+ExecStartPre=$mountpoint_command -q $scratch_path
 UNIT
 done
 cat >"$systemd_directory/platform_imds_watch.service" <<UNIT
@@ -260,8 +280,14 @@ allocation=$(run_within 60 "$current_step" aws ec2 describe-addresses --region "
   echo "The Elastic IP could not be listed."
   exit 1
 }
+current_step="Finding the scratch volume"
+scratch=$(run_within 60 "$current_step" aws ec2 describe-volumes --region "$region" --filters "Name=tag:Name,Values=$scratch_volume_name" "Name=tag:Project,Values=$project_tag" --query "Volumes[].VolumeId" --output text) || {
+  echo "The scratch volume could not be listed."
+  exit 1
+}
 [[ "$volume" =~ ^vol-[0-9a-f]{8,17}$ ]] || { echo "Exactly one data volume must carry the project tags, but the search did not return one volume ID."; exit 1; }
 [[ "$allocation" =~ ^eipalloc-[0-9a-f]{8,17}$ ]] || { echo "Exactly one Elastic IP must carry the project tags, but the search did not return one allocation ID."; exit 1; }
+[[ "$scratch" =~ ^vol-[0-9a-f]{8,17}$ ]] || { echo "Exactly one scratch volume must carry the project tags, but the search did not return one volume ID."; exit 1; }
 run_within 60 "Checking the Session Manager agent" rpm -q amazon-ssm-agent >/dev/null || run_within 300 "Installing the Session Manager agent" dnf install -y -q amazon-ssm-agent
 run_within 120 "Starting the Session Manager agent" systemctl enable --now amazon-ssm-agent
 run_within 60 "Associating the Elastic IP" aws ec2 associate-address --region "$region" --allocation-id "$allocation" --instance-id "$instance" --allow-reassociation >/dev/null
@@ -291,6 +317,43 @@ uuid=$(run_within 60 "$current_step" blkid -s UUID -o value "$device")
 mkdir -p "$mount_path"
 grep -q "UUID=$uuid" "$fstab_file" || echo "UUID=$uuid $mount_path xfs defaults,nofail 0 2" >>"$fstab_file"
 run_within 30 "Checking the data mount" mountpoint -q "$mount_path" || run_within 120 "Mounting the data volume" mount "$mount_path"
+run_within 120 "Growing the data volume file system" xfs_growfs "$mount_path"
+
+# The scratch volume holds the job work folders and is not snapshotted. It mounts under the data mount, so the data volume must be
+# mounted first. The host does not join the cluster without it, because a job would otherwise write its files to the data volume.
+deadline=$((SECONDS + 600))
+until run_within 60 "Attaching the scratch volume" aws ec2 attach-volume --region "$region" --volume-id "$scratch" --instance-id "$instance" --device /dev/xvdg >/dev/null; do
+  if ((SECONDS >= deadline)); then echo "The scratch volume did not attach within 600 seconds."; exit 1; fi
+  sleep 15
+done
+step "Waiting for the scratch volume device"
+scratch_link="$device_directory/nvme-Amazon_Elastic_Block_Store_$(echo "$scratch" | tr -d -)"
+deadline=$((SECONDS + 300))
+until [ -e "$scratch_link" ]; do
+  if ((SECONDS >= deadline)); then echo "The scratch volume device did not appear within 300 seconds."; exit 1; fi
+  sleep 5
+done
+scratch_device=$(readlink -f "$scratch_link")
+status=0
+run_within 60 "Reading the scratch volume's file system" blkid -p "$scratch_device" || status=$?
+if [ "$status" -eq 2 ]; then
+  run_within 300 "Formatting the scratch volume" mkfs.xfs "$scratch_device"
+elif [ "$status" -ne 0 ]; then
+  echo "Could not read the scratch volume's file system (blkid status $status)."
+  exit 1
+fi
+current_step="Reading the scratch volume's UUID"
+scratch_uuid=$(run_within 60 "$current_step" blkid -s UUID -o value "$scratch_device")
+mkdir -p "$scratch_path"
+grep -q "UUID=$scratch_uuid" "$fstab_file" || echo "UUID=$scratch_uuid $scratch_path xfs defaults,nofail 0 2" >>"$fstab_file"
+run_within 30 "Checking the scratch mount before mounting" mountpoint -q "$scratch_path" || run_within 120 "Mounting the scratch volume" mount "$scratch_path"
+run_within 120 "Growing the scratch volume file system" xfs_growfs "$scratch_path"
+run_within 30 "Checking the scratch mount" mountpoint -q "$scratch_path" || {
+  echo "The scratch volume is not mounted, so the host does not join the cluster."
+  exit 1
+}
+# systemd reads the new fstab lines, so the mount units that RequiresMountsFor names exist before Docker or the ECS agent starts.
+run_within 60 "Reloading systemd units for the new mounts" systemctl daemon-reload
 step "Writing the ECS agent configuration"
 cat >>"$ecs_config_file" <<CONFIG
 ECS_ENABLE_TASK_IAM_ROLE=true

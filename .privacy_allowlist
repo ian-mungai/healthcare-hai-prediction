@@ -64,3 +64,8 @@ aws-account infra/iam/tests/features_image.tftest.hcl -- synthetic all-ones acco
 aws-account infra/jobs/tests/guard.tftest.hcl -- synthetic all-ones account IDs in the mocked guard task definition tests; not the project account
 aws-account infra/jobs/tests/host.tftest.hcl -- synthetic all-ones account IDs in the mocked host task definition plans and refusal cases; not the project account
 aws-account infra/iam/tests/serving_execution.tftest.hcl -- synthetic all-ones account IDs in mocked serving execution role tests; not the project account
+aws-account infra/platform/tests/scratch.tftest.hcl -- synthetic all-ones account ID in the scratch volume plan tests; not the project's account
+aws-account infra/platform/tests/scratch_replace.tftest.hcl -- synthetic all-ones account ID in the scratch volume replacement tests; not the project's account
+aws-account infra/iam/tests/host_network.tftest.hcl -- synthetic all-ones account IDs in the host firewall and boot plan tests; not the project's account
+aws-account infra/services/tests/host_capacity.tftest.hcl -- synthetic all-ones account IDs in the service CPU and host folder plan tests; not the project's account
+aws-account infra/jobs/tests/host_scratch.tftest.hcl -- synthetic all-ones account IDs in the host init wipe plan tests; not the project's account

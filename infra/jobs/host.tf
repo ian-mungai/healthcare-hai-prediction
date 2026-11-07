@@ -40,19 +40,19 @@ variable "host_job_threads" {
 }
 
 variable "host_scratch_root" {
-  description = "Absolute folder on the host's scratch volume. Each family gets <root>/<family>/<volume> for its task volumes. The job wipes it at start and after success."
+  description = "Folder on the host's scratch volume: /data/job_scratch, where boot mounts that volume, or a folder inside it. Each family gets <root>/<family>/<volume> for its task volumes. The job wipes it at start and after success."
   type        = string
   default     = "/data/job_scratch"
   nullable    = false
 
   validation {
-    condition     = can(regex("^/[A-Za-z0-9_][A-Za-z0-9_./-]*[A-Za-z0-9_]$", var.host_scratch_root)) && !strcontains(var.host_scratch_root, "..") && !strcontains(var.host_scratch_root, "//")
-    error_message = "Use an absolute folder without a trailing slash, a parent step or a double slash, for example /data/job_scratch."
+    condition     = can(regex("^/data/job_scratch(/[A-Za-z0-9_]([A-Za-z0-9_./-]*[A-Za-z0-9_])?)?$", var.host_scratch_root)) && !strcontains(var.host_scratch_root, "..") && !strcontains(var.host_scratch_root, "//")
+    error_message = "Use /data/job_scratch, where boot mounts the scratch volume, or a folder inside it, without a trailing slash, a parent step or a double slash. Any other folder is on the snapshotted data volume."
   }
 }
 
 variable "host_metadata_resources" {
-  description = "CPU units and memory MiB of the metadata host task. It holds one ingestion container that sends Polaris and dbt metadata to the persistent catalog, so it is small: the catalog itself runs as a service."
+  description = "CPU units and memory MiB of the metadata host task. It holds an init step and one ingestion container that sends Polaris and dbt metadata to the persistent catalog, so it is small: the catalog itself runs as a service."
   type = object({
     cpu    = number
     memory = number
@@ -149,54 +149,102 @@ locals {
     serve    = local.serve_containers
     metadata = local.host_metadata_containers
   })
-  # The persistent catalog runs as a service on the host. The metadata job is only its client: one container sends the Polaris and dbt metadata to the catalog API.
+  # The persistent catalog runs as a service on the host. The metadata job is only its client: after the init step, one container sends the Polaris and dbt metadata to the catalog API.
   host_repo_mount = "/opt/hai/repo"
-  host_metadata_containers = [{
-    name                   = "ingest"
-    image                  = lookup(var.openmetadata_images, "ingestion", "invalid")
-    essential              = true
-    privileged             = false
-    readonlyRootFilesystem = true
-    user                   = "10001:10001"
-    workingDirectory       = local.host_repo_mount
-    entryPoint             = ["python", "-m", "scripts.infrastructure.openmetadata_host_ingest"]
-    command                = ["--config-dir", "${local.host_repo_mount}/config/metadata/ingestion", "--work-dir", "/workspace", "polaris", "dbt"]
-    stopTimeout            = 60
-    linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
-    ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
-    dependsOn              = []
-    environment = concat(local.om_common_environment, [
-      { name = "OM_API", value = coalesce(var.host_openmetadata_api, "unset") },
-      { name = "RUN_ID", value = "" },
-      { name = "POLARIS_URI", value = "" },
-    ])
-    secrets = concat(local.reader_parameters, [
-      { name = "OM_INGESTION_TOKEN", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}" },
-    ])
-    mountPoints = [
-      { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
-      { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
-      { sourceVolume = "repo", containerPath = local.host_repo_mount, readOnly = true },
-    ]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = var.log_group_name
-        awslogs-region        = var.aws_region
-        awslogs-stream-prefix = "metadata"
-        mode                  = "non-blocking"
-        max-buffer-size       = "16m"
-      }
+  host_metadata_mounts = [
+    { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
+    { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+  ]
+  host_metadata_log = {
+    logDriver = "awslogs"
+    options = {
+      awslogs-group         = var.log_group_name
+      awslogs-region        = var.aws_region
+      awslogs-stream-prefix = "metadata"
+      mode                  = "non-blocking"
+      max-buffer-size       = "16m"
     }
-  }]
+  }
+  # The init step of the metadata job is the one every other job has: it runs as root, so the common host wipe below deletes what the last attempt left and hands the two folders to the job user.
+  host_metadata_containers = [
+    {
+      name                   = "init"
+      image                  = lookup(var.openmetadata_images, "ingestion", "invalid")
+      essential              = false
+      privileged             = false
+      readonlyRootFilesystem = true
+      user                   = "0:0"
+      workingDirectory       = "/workspace"
+      entryPoint             = ["sh", "-c"]
+      command                = ["chown 10001:10001 /workspace /tmp"]
+      stopTimeout            = 60
+      linuxParameters        = { capabilities = { add = [], drop = local.train_init_drop }, initProcessEnabled = true }
+      ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
+      dependsOn              = []
+      environment            = []
+      secrets                = []
+      mountPoints            = local.host_metadata_mounts
+      logConfiguration       = local.host_metadata_log
+    },
+    {
+      name                   = "ingest"
+      image                  = lookup(var.openmetadata_images, "ingestion", "invalid")
+      essential              = true
+      privileged             = false
+      readonlyRootFilesystem = true
+      user                   = "10001:10001"
+      workingDirectory       = local.host_repo_mount
+      entryPoint             = ["sh", "-c"]
+      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace polaris dbt"]
+      stopTimeout            = 60
+      linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
+      ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
+      dependsOn              = [{ containerName = "init", condition = "SUCCESS" }]
+      environment = concat(local.om_common_environment, [
+        { name = "OM_API", value = coalesce(var.host_openmetadata_api, "unset") },
+        { name = "RUN_ID", value = "" },
+        { name = "POLARIS_URI", value = "" },
+      ])
+      secrets = concat(local.reader_parameters, [
+        { name = "OM_INGESTION_TOKEN", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}" },
+      ])
+      mountPoints      = concat(local.host_metadata_mounts, [{ sourceVolume = "repo", containerPath = local.host_repo_mount, readOnly = true }])
+      logConfiguration = local.host_metadata_log
+    },
+  ]
+  # A host folder keeps what the last job left, so the init step of each job first deletes the contents of its two folders. Root can
+  # delete the job user's files only with DAC_OVERRIDE and FOWNER, which the Fargate init step drops, so the host init step keeps
+  # those two and drops the rest of the Fargate list.
+  #
+  # The same deletion ends the last phase of the job, after the whole phase has succeeded. A task stops as soon as its essential container
+  # ends, so a later container would never start, and that is why the phase runs the deletion itself: the group keeps the phase command
+  # unchanged, && makes the deletion follow only an exit code of zero, and a failed phase leaves its files for diagnosis until the next job
+  # of the family wipes them at its start. Both deletions name only /workspace and /tmp, the mounts of the family's own two folders.
+  host_scratch_wipe = "find /workspace /tmp -mindepth 1 -delete"
+  host_init_wipe    = "${local.host_scratch_wipe} && "
+  host_init_drop    = ["FSETID", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]
+  host_phase_names = {
+    for family in keys(local.host_selected) : family => [for container in lookup(local.host_source_containers, family, []) : container.name if container.name != "guard"]
+  }
+  host_last_phase = { for family, names in local.host_phase_names : family => length(names) > 0 ? names[length(names) - 1] : "" }
   host_containers = {
     for family in keys(local.host_selected) : family => [
-      for container in lookup(local.host_source_containers, family, []) : merge(container, {
-        environment = [
-          for item in container.environment :
-          contains(local.host_thread_variables, item.name) && item.value == local.host_thread_default ? { name = item.name, value = tostring(var.host_job_threads) } : item
-        ]
-      })
+      for container in lookup(local.host_source_containers, family, []) : merge(
+        container,
+        {
+          environment = [
+            for item in container.environment :
+            contains(local.host_thread_variables, item.name) && item.value == local.host_thread_default ? { name = item.name, value = tostring(var.host_job_threads) } : item
+          ]
+        },
+        { for key, value in {
+          command         = [format("%s%s", local.host_init_wipe, container.command[0])]
+          linuxParameters = merge(container.linuxParameters, { capabilities = { add = [], drop = local.host_init_drop } })
+        } : key => value if container.name == "init" },
+        { for key, value in {
+          command = [format("(%s) && %s", container.command[0], local.host_scratch_wipe)]
+        } : key => value if container.name == local.host_last_phase[family] }
+      )
     ]
   }
   host_volumes = {

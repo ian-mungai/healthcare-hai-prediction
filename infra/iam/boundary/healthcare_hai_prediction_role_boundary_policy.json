@@ -147,6 +147,18 @@
       }
     },
     {
+      "Sid": "AttachScratchVolume",
+      "Effect": "Allow",
+      "Action": "ec2:AttachVolume",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_scratch_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
       "Sid": "CreateProjectSnapshots",
       "Effect": "Allow",
       "Action": "ec2:CreateSnapshot",

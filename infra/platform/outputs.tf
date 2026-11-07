@@ -63,6 +63,16 @@ output "data_volume_id" {
   value       = aws_ebs_volume.data.id
 }
 
+output "scratch_volume_id" {
+  description = "The host's gp3 scratch volume, never snapshotted."
+  value       = aws_ebs_volume.scratch.id
+}
+
+output "scratch_mount_path" {
+  description = "Where the scratch volume is mounted on the host, below the data mount; job work folders live under it."
+  value       = "${local.data_mount_path}/job_scratch"
+}
+
 output "data_mount_path" {
   description = "Where the data volume is mounted on the host; host services keep their state under it."
   value       = local.data_mount_path
