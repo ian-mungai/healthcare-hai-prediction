@@ -1,4 +1,4 @@
-"""Run the OpenMetadata image mirror cases of ``push_images`` and keep the report under data/e2e/push_images/.
+"""Run the OpenMetadata image mirror and drift image cases of ``push_images`` and keep the report under data/e2e/push_images/.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.run_push_images_e2e``. No real registry, AWS service or Docker is contacted. The
 command line of ``push_images`` starts no program, but two cases run shell scripts against local stand-in ``aws`` and ``docker`` commands (see
