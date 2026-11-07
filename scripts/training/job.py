@@ -145,6 +145,7 @@ def action_modules() -> tuple[ModuleType, ...]:
     import scripts.training.job_inputs as job_inputs
     import scripts.training.mediation as mediation
     import scripts.training.models.suite as suite
+    import scripts.training.promote as promote
     import scripts.training.promotion as promotion
     import scripts.training.promotion_check as promotion_check
     import scripts.training.registry as registry
@@ -166,6 +167,7 @@ def action_modules() -> tuple[ModuleType, ...]:
         bundle,
         promotion,
         promotion_check,
+        promote,
         registry,
     )
 
