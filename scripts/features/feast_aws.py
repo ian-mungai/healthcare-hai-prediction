@@ -10,7 +10,9 @@ Everything the job needs comes from its environment or the secret store, never f
 
 - ``POLARIS_URI`` is the catalog endpoint (``http://<host>:<port>/api/catalog``). ``POLARIS_CLIENT_ID`` and ``POLARIS_CLIENT_SECRET`` are the reader pair that
   the existing ``publication_reads.polaris_token`` exchanges for a token. Both leave the environment after the exchange.
-- ``FEAST_REDIS_HOST`` is the address of the host Redis (port 6379, as ``online_protocol`` fixes). ``REDIS_PASSWORD`` must be unset. The password is read once
+- The host Redis (port 6379, as ``online_protocol`` fixes) runs on the host of ``POLARIS_URI``, so the job takes its address from there and sets
+  ``FEAST_REDIS_HOST`` for the settings file. A ``FEAST_REDIS_HOST`` in the environment is refused unless it equals that host.
+  ``REDIS_PASSWORD`` must be unset. The password is read once
   from the secret store (one ``get`` of the Redis password secret) and held in the job environment in memory until the session ends.
 - ``FEAST_REGISTRY_BUCKET`` names the registry bucket. The registry key is the step's closed key (``reads.REGISTRY_KEYS``). A fixture run uses the separate
   ``lakehouse/feast_e2e/`` key so that it cannot replace the real registry. ``AWS_REGION`` is required. AWS access comes from the task role.
@@ -136,9 +138,10 @@ def aws_settings(environ: MutableMapping[str, str] | Any, mode: str) -> AwsSetti
     if preset is not None and preset != "rest":
         raise ReadError("the AWS profile uses the rest catalog type only; FEAST_CATALOG_TYPE is set to another value")
     endpoint = check_endpoint(environ.get("POLARIS_URI", ""))
-    host = environ.get("FEAST_REDIS_HOST", "")
-    if not HOST.fullmatch(host):
-        raise ReadError("FEAST_REDIS_HOST must be a plain host name or IPv4 address")
+    host = urllib.parse.urlsplit(endpoint).hostname or ""
+    preset = environ.get("FEAST_REDIS_HOST")
+    if preset is not None and preset != host:
+        raise ReadError("the Redis host is the host of POLARIS_URI; FEAST_REDIS_HOST is set to another value")
     return AwsSettings(mode, namespace, endpoint, host)
 
 
@@ -242,6 +245,7 @@ def catalog_session(
     of ``total``, whichever is shorter, and the session is not handed over after ``total`` has passed.
     """
     settings = aws_settings(environ, job.mode)
+    environ["FEAST_REDIS_HOST"] = settings.redis_host
     if environ.get("REDIS_PASSWORD") is not None:
         raise ReadError("REDIS_PASSWORD is set; the AWS profile reads the password from the secret store only")
     missing = sorted(name for name in ("POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET") if not environ.get(name))

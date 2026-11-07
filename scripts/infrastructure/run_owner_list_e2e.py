@@ -180,7 +180,7 @@ def features_checks(body: str) -> dict[str, bool]:
         ("feature store image", index("push_images plan", "--only feature_store")),
         ("host start", index("host_session start", "describe-instances")),
         ("pair under the administrator", index("aws_catalog_setup principal", "--identity features", "--admin-profile <ADMIN_PROFILE>")),
-        ("jobs file", index("--jobs", "layer_feast_redis_host", "train_images")),
+        ("jobs file", index("--jobs", "train_images")),
         ("approval", index("code_archive", "layer_acceptance approve --layer features")),
         ("IAM preflight", index("iam_preflight --scope features")),
         ("dry run", index("run-task", "--input-run <GOLD_RUN_ID> --dry-run")),
@@ -192,7 +192,7 @@ def features_checks(body: str) -> dict[str, bool]:
     ]
     positions = [position for _, position in order]
     checks[f"the features steps come in dependency order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
-    jobs = index("--jobs", "layer_feast_redis_host", "train_images")
+    jobs = index("--jobs", "train_images")
     checks["the jobs step names the task role, the pair and only the features task definition"] = jobs >= 0 and all(
         word in steps[jobs] for word in ("write_features_task", "_job_features", "and nothing else")
     )

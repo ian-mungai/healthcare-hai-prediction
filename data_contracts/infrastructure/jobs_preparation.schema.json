@@ -510,10 +510,6 @@
         "layer_resources": {
           "$ref": "#/$defs/job_resources"
         },
-        "layer_feast_redis_host": {
-          "type": "string",
-          "pattern": "^$|^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"
-        },
         "drift_enabled": {
           "type": "boolean"
         },

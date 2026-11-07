@@ -236,7 +236,6 @@ ROWS: list[Row] = [
         {"write_silver_task": ["/example_project/aws_polaris_silver_client_id"]},
     ),
     Row("jobs", "log_group_name", "example_project_jobs_dev", 5),
-    Row("jobs", "layer_feast_redis_host", "10.0.1.20", 5),
     Row("jobs", "layer_resources", RESOURCES, {"cpu": 1}),
     Row("jobs", "drift_images", {name: IMAGE % name for name in ("training", "feature_store", "drift")}, {"drift": "latest"}),
     Row("jobs", "drift_roles", {"execution": ROLE % "job_execution", "drift_task": ROLE % "job_drift_task"}, {"drift_task": "x"}),
