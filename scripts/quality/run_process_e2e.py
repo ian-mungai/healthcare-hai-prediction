@@ -672,14 +672,14 @@ def listing_start_failure(base: Path) -> dict[str, Any]:
 
 def listing_without_path(base: Path) -> dict[str, Any]:
     """A caller that limits PATH (the launcher E2E does, to test the Docker lookup) still gets its program started and its session stopped: the session listing
-    finds ``ps`` in the system folders and not in that PATH."""
+    finds ``ps`` in the system folders and not in that PATH. The process table is turned off, so on Linux the listing is ``ps`` too."""
 
     def body(scratch: Scratch) -> dict[str, Any]:
         empty = scratch.folder / "empty_path"
         empty.mkdir()
         caught: BaseException | None = None
         returncode = None
-        with mock.patch.dict(os.environ, {"PATH": str(empty)}):
+        with mock.patch.dict(os.environ, {"PATH": str(empty)}), mock.patch("scripts.process.PROC_ROOT", MISSING_PROC_ROOT, create=True):
             try:
                 returncode = run_command(sys.executable, ["-B", "-c", "pass"], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS).returncode
             except BaseException as error:
