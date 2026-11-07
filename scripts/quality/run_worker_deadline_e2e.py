@@ -78,8 +78,9 @@ time.sleep(max(0.0, float(sys.argv[2]) - now % 1))" "$STUB_DIR" "$STUB_ALIGN_FRA
 fi
 if [ "$1" = -m ]; then
   if [ "$2" = scripts.quality.ci_groups ]; then
-    # The dispatcher launches its workers shortly after this plan. Holding the plan until STUB_PLAN_FRACTION of a wall-clock second puts that launch in the
-    # middle of a second, away from its edges, where a worker that ends just before its limit could be counted a second too old.
+    # The dispatcher launches its workers about 0.75 to 0.9 s after this plan (measured on the Mac and on the hosted runner). Holding the plan until
+    # STUB_PLAN_FRACTION of a wall-clock second puts that launch in the middle of the next second, away from its edges, where a worker that ends just
+    # before its limit could be counted a second too old.
     if [ -n "${{STUB_PLAN_FRACTION:-}}" ] && [ ! -e "$STUB_DIR/planned" ]; then
       touch "$STUB_DIR/planned"
       {PYTHON} -c "import sys, time; time.sleep((float(sys.argv[1]) - time.time() % 1) % 1)" "$STUB_PLAN_FRACTION"
@@ -757,7 +758,7 @@ def not_before_the_limit_attempt(base: Path, attempt: int) -> dict[str, Any]:
             STUB_PYTHON_LINT="alive_time",
             STUB_ORCHESTRATION="near",
             STUB_ALIGN_FRACTION="0.75",
-            STUB_PLAN_FRACTION="0.32",
+            STUB_PLAN_FRACTION="0.55",
             CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS),
         )
         alive_file = sandbox.stub / "alive.json"
