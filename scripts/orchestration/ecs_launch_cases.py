@@ -218,7 +218,10 @@ def aged_recovery_never_replays_runtask() -> None:
     rig.time.now += 7200
     runs = rig.ecs.count("run_task")
     error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec(2)))
-    require("Manual owner path" in str(error) and "start a new run" in str(error), f"the message names the manual owner path: {error}")
+    require(
+        "Manual owner path" in str(error) and "orchestration.airflow_steps settle" in str(error) and "admits a new run" in str(error),
+        f"the message names the manual owner path and its settle command: {error}",
+    )
     require(rig.ecs.count("run_task") == runs and len(gold_tasks(rig)) == 1, "no RunTask is repeated after the window, the token life and what ECS remembers")
     require("end" not in rig.events(1), "the unresolved launch is not closed, however old it is")
 
@@ -424,6 +427,11 @@ def stale_listing_blocks_recovery_and_cancel() -> None:
             )
 
 
+def counts(rig: Rig, operation: str) -> bool:
+    """False for the family gate's task listings (by family), which run before the claim; the discovery listing of a send asks by its identity."""
+    return operation != "list_tasks" or "startedBy" in rig.ecs.calls[-1][1]
+
+
 def send_is_withheld_after_the_reads() -> None:
     def run_with(operation: str, nth: int, interfere: Callable[[Rig], None], low_room: bool = False) -> tuple[Rig, Any]:
         rig = Rig()
@@ -432,7 +440,7 @@ def send_is_withheld_after_the_reads() -> None:
         seen = {"count": 0}
 
         def hook(name: str) -> None:
-            if name == operation:
+            if name == operation and counts(rig, name):
                 seen["count"] += 1
                 if seen["count"] == nth:
                     rig.ecs.call_hook = None
@@ -475,7 +483,7 @@ def send_is_withheld_after_the_reads() -> None:
     calls = {"list": 0}
 
     def cancel_on_repeat(name: str) -> None:
-        if name == "list_tasks":
+        if name == "list_tasks" and counts(rig, name):
             calls["list"] += 1
             if calls["list"] == 2:
                 rig.ecs.call_hook = None
