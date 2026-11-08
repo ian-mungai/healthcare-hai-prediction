@@ -60,7 +60,9 @@ def pipeline_types(pipeline: Any) -> set[str]:
         elif isinstance(item, tuple | list | set | frozenset):
             pending.extend(item)
         elif hasattr(item, "__dict__"):
-            pending.extend(vars(item).values())
+            # skops saves what __getstate__ returns, not __dict__: XGBoost's Booster swaps its ctypes handle for raw bytes there.
+            state = item.__getstate__()
+            pending.extend(state.values() if isinstance(state, Mapping) else state if isinstance(state, tuple | list) else [state])
     return found
 
 
