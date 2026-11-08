@@ -10,13 +10,13 @@ Reach MLflow from the owner's machine through the Session Manager port forward t
 start). The server allows the Host header localhost:5100. Keep the forward open in a second terminal while resolve runs. It finds the instance ID of the
 host, which the Auto Scaling group of the project lists, and forwards port 5100 (the commands are for the dev environment):
 
-INSTANCE=$(aws autoscaling describe-auto-scaling-groups --profile healthcare_hai_prediction_dev --region us-west-2 \
+INSTANCE=$(aws autoscaling describe-auto-scaling-groups --profile "$AWS_PROFILE" --region us-west-2 \
   --auto-scaling-group-names healthcare_hai_prediction_host_dev --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --profile healthcare_hai_prediction_dev --region us-west-2 --target "$INSTANCE" \
+aws ssm start-session --profile "$AWS_PROFILE" --region us-west-2 --target "$INSTANCE" \
   --document-name AWS-StartPortForwardingSession --parameters portNumber=5100,localPortNumber=5100
 
 Then set MLFLOW_TRACKING_URI=http://localhost:5100, MLFLOW_TRACKING_USERNAME=admin and MLFLOW_TRACKING_PASSWORD in the shell of the owner command. The password
-is the value of the SecureString parameter /healthcare_hai_prediction/mlflow_admin_password. The project profile healthcare_hai_prediction_dev may read it
+is the value of the SecureString parameter /healthcare_hai_prediction/mlflow_admin_password. The project profile in AWS_PROFILE may read it
 (ssm:GetParameter in the project SSM policy), so read it with that profile into the variable and never print it or write it to a file. Show reads only the
 data bucket and needs none of this. If the forward drops, open it again and run resolve again.
 
