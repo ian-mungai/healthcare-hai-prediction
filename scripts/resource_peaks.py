@@ -10,14 +10,11 @@ misses page cache and a child that is still running, so the record names its sou
 Scratch use is the allocated size of the job's work and temporary folders, walked by a background thread every ``interval`` seconds and once more at
 exit. A peak that rises and falls between two walks is missed, so the record states the measure and the number of walks.
 
-The recording never changes the job's result: a counter, walk or sampler thread that fails (built, started or walked) records null and a reason, and
-a stderr that cannot be written or an interrupt inside the recorder loses only the record. The job's exit code or exception, its own interrupt
-included, passes on.
+The recording never changes the job's result: a counter or walk that fails records null and a reason, and the job's exit code or exception passes on.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import resource
@@ -115,57 +112,32 @@ def _exit_code(value: object) -> int:
     return value if isinstance(value, int) else 1
 
 
-def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int) -> None:
-    """Write the one record; any failure here, an interrupt included, ends the record and never the job's result."""
+def _emit(sampler: _Sampler, exit_code: int) -> None:
     try:
-        if sampler is not None:
-            sampler.stopped.set()
-            if sampler.ident is not None:
-                sampler.join(timeout=sampler.interval + 30)
-            if not sampler.is_alive():
-                sampler.sample()
-            unavailable = sampler.error
+        sampler.stopped.set()
+        sampler.join(timeout=sampler.interval + 30)
+        if not sampler.is_alive():
+            sampler.sample()
         memory, source, reason = peak_memory()
         record: dict[str, Any] = {
             "exit_code": exit_code,
             "peak_memory_bytes": memory,
             "peak_memory_reason": reason,
             "peak_memory_source": source,
-            "peak_scratch_bytes": None if unavailable or sampler is None else sampler.peak,
-            "scratch_measure": f"unavailable: {unavailable}" if unavailable else SCRATCH_MEASURE,
-            "scratch_samples": 0 if sampler is None else sampler.samples,
+            "peak_scratch_bytes": None if sampler.error else sampler.peak,
+            "scratch_measure": f"unavailable: {sampler.error}" if sampler.error else SCRATCH_MEASURE,
+            "scratch_samples": sampler.samples,
         }
         sys.stderr.write("event=resource_peaks " + json.dumps(record, sort_keys=True) + "\n")
         sys.stderr.flush()
-    except BaseException as error:
-        # The recorder's own failure, an interrupt during the join or a closed stderr, loses only the record; the job's result still passes on.
-        # After an interrupt the record is abandoned with no further write: stderr may be a full pipe whose reader stopped, and a write would block.
-        if isinstance(error, KeyboardInterrupt):
-            return
-        with contextlib.suppress(BaseException):
-            sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
-
-
-def _start(folders: tuple[Path, ...], interval: float) -> tuple[_Sampler | None, str, bool]:
-    """Build and start the scratch sampler; a sampler that cannot be built or started leaves the measure unavailable.
-
-    The third value is True after an interrupt here: the record is then abandoned, with no stderr write that could block on a full pipe.
-    """
-    try:
-        sampler = _Sampler(folders, interval)
-    except BaseException as error:
-        return None, f"sampler not built: {type(error).__name__}: {error}", isinstance(error, KeyboardInterrupt)
-    try:
-        sampler.start()
-    except BaseException as error:
-        sampler.error = f"sampler did not start: {type(error).__name__}: {error}"
-        return sampler, "", isinstance(error, KeyboardInterrupt)
-    return sampler, "", False
+    except Exception as error:
+        sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
 
 
 def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH, interval: float = INTERVAL_SECONDS) -> NoReturn:
     """Run a job entry point, log its resource peaks once and exit with the job's own code or exception."""
-    sampler, unavailable, abandoned = _start(scratch, interval)
+    sampler = _Sampler(scratch, interval)
+    sampler.start()
     code = 1
     try:
         code = _exit_code(main())
@@ -173,9 +145,5 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
         code = _exit_code(stop.code)
         raise
     finally:
-        if abandoned:
-            if sampler is not None:
-                sampler.stopped.set()
-        else:
-            _emit(sampler, unavailable, code)
+        _emit(sampler, code)
     raise SystemExit(code)

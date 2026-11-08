@@ -6,6 +6,7 @@ import ast
 import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 import re
@@ -1940,6 +1941,156 @@ def log_run_cases(cases: Any, folder: Path) -> None:
     cases.check("job_log_run_metric_names", metric_names)
 
 
+ENTRY_MODULES = (
+    "scripts/training/aws_run.py",
+    "scripts/lakehouse/layer_run.py",
+    "scripts/lakehouse/bronze_run.py",
+    "monitoring/aws_run.py",
+    "scripts/serving/deploy_job.py",
+    "scripts/infrastructure/openmetadata_host_ingest.py",
+)
+PEAK_FIELDS = {"peak_memory_bytes", "peak_memory_source", "peak_memory_reason", "peak_scratch_bytes", "scratch_measure", "scratch_samples", "exit_code"}
+
+
+def _peak_line(stream: str) -> dict[str, Any]:
+    lines = [line for line in stream.splitlines() if line.startswith("event=resource_peaks ")]
+    require(len(lines) == 1, f"expected one resource_peaks line, saw {len(lines)}")
+    record = json.loads(lines[0].removeprefix("event=resource_peaks "))
+    require(set(record) == PEAK_FIELDS, f"fields {sorted(record)}")
+    return dict(record)
+
+
+def _recorded(job: Callable[[], int], scratch: Path, **patches: Any) -> tuple[int | None, dict[str, Any]]:
+    """Run a job through the shared recorder and return its exit code and the one log record it wrote."""
+    from scripts import resource_peaks
+
+    stream = io.StringIO()
+    code: int | None = None
+    with contextlib.ExitStack() as stack:
+        for name, value in patches.items():
+            stack.enter_context(mock.patch.object(resource_peaks, name, value))
+        stack.enter_context(contextlib.redirect_stderr(stream))
+        try:
+            resource_peaks.recorded(job, scratch=(scratch,), interval=0.02)
+        except SystemExit as stop:
+            code = stop.code if isinstance(stop.code, int) else None
+    return code, _peak_line(stream.getvalue())
+
+
+def resource_peak_cases(cases: Any, folder: Path) -> None:
+    """Every job container logs its peak memory and peak scratch use at exit, and the recording never changes the job's result."""
+    scratch = folder / "scratch"
+
+    def fields() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        code, record = _recorded(lambda: 0, scratch)
+        require(code == 0 and record["exit_code"] == 0, f"exit {code} {record['exit_code']}")
+        require(isinstance(record["peak_memory_bytes"], int) and record["peak_memory_bytes"] > 0, f"memory {record['peak_memory_bytes']}")
+        require(record["peak_memory_source"] in {"cgroup_v2_memory_peak", "cgroup_v1_max_usage", "rusage_max_rss"}, record["peak_memory_source"])
+        require(record["scratch_measure"] == "sampled_folder_allocation", record["scratch_measure"])
+        require(isinstance(record["peak_scratch_bytes"], int) and record["peak_scratch_bytes"] >= 0, f"scratch {record['peak_scratch_bytes']}")
+
+    def scratch_peak() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        size = 8 * 1024 * 1024
+
+        def job() -> int:
+            path = scratch / "spill.bin"
+            with path.open("wb") as handle:
+                handle.write(os.urandom(size))
+                handle.flush()
+                os.fsync(handle.fileno())
+            time.sleep(0.3)
+            path.unlink()
+            return 0
+
+        _, record = _recorded(job, scratch)
+        require(record["peak_scratch_bytes"] >= size, f"peak {record['peak_scratch_bytes']} under {size}")
+        require(record["scratch_samples"] >= 2, f"samples {record['scratch_samples']}")
+
+    def unreadable_counters() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+
+        def broken(_who: int) -> Any:
+            raise OSError("no rusage")
+
+        missing = folder / "no_cgroup"
+        code, record = _recorded(lambda: 0, scratch, CGROUP_V2_PEAK=missing / "memory.peak", CGROUP_V1_PEAK=missing / "max", getrusage=broken)
+        require(code == 0, f"exit {code}")
+        require(record["peak_memory_bytes"] is None and record["peak_memory_source"] == "unavailable", f"{record}")
+        require(bool(record["peak_memory_reason"]), "an unreadable counter names its reason")
+
+    def cgroup_preferred() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        counter = folder / "cgroup" / "memory.peak"
+        counter.parent.mkdir(parents=True, exist_ok=True)
+        counter.write_text("123456789\n", encoding="utf-8")
+        _, record = _recorded(lambda: 0, scratch, CGROUP_V2_PEAK=counter)
+        require(record["peak_memory_bytes"] == 123456789 and record["peak_memory_source"] == "cgroup_v2_memory_peak", f"{record}")
+
+    def failures_kept() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        code, record = _recorded(lambda: 3, scratch)
+        require(code == 3 and record["exit_code"] == 3, f"exit {code} {record['exit_code']}")
+
+        def raises() -> int:
+            raise RuntimeError("job failed")
+
+        from scripts import resource_peaks
+
+        stream = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(stream):
+                resource_peaks.recorded(raises, scratch=(scratch,), interval=0.02)
+        except RuntimeError as error:
+            require(str(error) == "job failed", str(error))
+        else:
+            raise AssertionError("the job's exception was swallowed")
+        require(_peak_line(stream.getvalue())["exit_code"] == 1, "an exception logs exit code 1")
+
+    def broken_sampler_kept() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+
+        def explode(_folders: Any) -> int:
+            raise OSError("walk failed")
+
+        code, record = _recorded(lambda: 0, scratch, folder_allocation=explode)
+        require(code == 0, f"a failing scratch sampler changed the job's exit code to {code}")
+        require(record["peak_scratch_bytes"] is None and record["scratch_measure"].startswith("unavailable"), f"{record}")
+
+    def unreadable_subfolder() -> None:
+        root = folder / "locked_scratch"
+        locked = root / "other_owner"
+        locked.mkdir(parents=True, exist_ok=True)
+        (root / "kept.bin").write_bytes(os.urandom(1024 * 1024))
+        locked.chmod(0)
+        try:
+            _, record = _recorded(lambda: 0, root)
+        finally:
+            locked.chmod(0o700)
+        require(record["scratch_measure"] == "sampled_folder_allocation", f"an unreadable folder ended the measure: {record['scratch_measure']}")
+        require(record["peak_scratch_bytes"] >= 1024 * 1024, f"peak {record['peak_scratch_bytes']}")
+
+    def entry_points() -> None:
+        for relative in ENTRY_MODULES:
+            tree = ast.parse((REAL / relative).read_text(encoding="utf-8"))
+            guards = [node for node in tree.body if isinstance(node, ast.If) and "__main__" in ast.unparse(node.test)]
+            require(len(guards) == 1, f"{relative}: one __main__ block")
+            require(
+                any(call in ast.unparse(guards[0]) for call in ("resource_peaks.recorded(main)", "resource_peaks.recorded(partial(main,")),
+                f"{relative}: the __main__ block does not run main through resource_peaks.recorded",
+            )
+
+    cases.check("resource_peaks_record_fields", fields)
+    cases.check("resource_peaks_scratch_peak_sampled", scratch_peak)
+    cases.check("resource_peaks_unreadable_counters_record_null", unreadable_counters)
+    cases.check("resource_peaks_cgroup_counter_preferred", cgroup_preferred)
+    cases.check("resource_peaks_job_result_kept", failures_kept)
+    cases.check("resource_peaks_broken_sampler_kept", broken_sampler_kept)
+    cases.check("resource_peaks_unreadable_subfolder_skipped", unreadable_subfolder)
+    cases.check("resource_peaks_every_job_entry_point", entry_points)
+
+
 def scenarios(cases: Any, folder: Path) -> None:
     """Register every data-action case."""
     fit_cases(cases, folder / "fit")
@@ -1952,6 +2103,7 @@ def scenarios(cases: Any, folder: Path) -> None:
     from scripts.training import aws_run_cases
 
     aws_run_cases.scenarios(cases, folder / "aws_run")
+    resource_peak_cases(cases, folder / "resource_peaks")
 
 
 class Selected(Cases):

@@ -35,6 +35,7 @@ from typing import Any
 from monitoring import baseline, current_window, drift_check, drift_config
 from monitoring.drift_check import HAI_TYPES, CheckError, deadline
 from orchestration.training_contract import RUN_ID
+from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
 from scripts.training import dvc_baseline
@@ -268,4 +269,4 @@ def open_s3() -> Any:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    resource_peaks.recorded(main)

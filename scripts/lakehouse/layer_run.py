@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
+from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, task_capacity, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
@@ -982,4 +983,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    resource_peaks.recorded(main)

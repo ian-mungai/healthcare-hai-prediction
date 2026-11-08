@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
 from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch
@@ -342,4 +343,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    resource_peaks.recorded(main)

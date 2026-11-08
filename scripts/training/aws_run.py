@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import code_digest, mlflow_service, training_contract
+from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
 from scripts.training import job, promote_lease, promote_receipt
@@ -363,4 +364,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    resource_peaks.recorded(main)

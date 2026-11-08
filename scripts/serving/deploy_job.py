@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from orchestration import serving_contract
+from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.serving import deploy, manifests
 
@@ -63,4 +64,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    resource_peaks.recorded(main)

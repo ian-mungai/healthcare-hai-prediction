@@ -15,9 +15,11 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from scripts import resource_peaks
 from scripts.infrastructure import openmetadata_ingest as ingest
 from scripts.infrastructure import startup_check
 
@@ -81,4 +83,4 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    resource_peaks.recorded(partial(main, sys.argv[1:]))
