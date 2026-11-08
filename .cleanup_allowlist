@@ -1,29 +1,4 @@
 # Exceptions to the cleanup checks: <kind> <path glob> -- <reason> (README, Quality Checks).
-config scripts/lakehouse/run_provenance_e2e.py -- negative assertion rejects the removed release-copy switch in every launched command
-orphan dbt/models/* -- dbt loads every model and properties file under model-paths; a final model has no ref() to it
-orphan dbt/macros/* -- dbt loads every macro under macro-paths; models call macros by name, not by file
-config data_contracts/lakehouse/gold_contract.json -- geography_level is a live column of the MMD fact the contract declares
-config data_contracts/lakehouse/silver_columns.json -- geography_level is a live column of int_mmd_prevalence the contract declares
-config dbt/models/silver/intermediate/_intermediate__models.yml -- geography_level is a column of int_mmd_prevalence; the name left only the retired mmd_conditions seed
-config dbt/models/silver/intermediate/int_mmd_prevalence.sql -- geography_level is a column of int_mmd_prevalence; the name left only the retired mmd_conditions seed
-config dbt/tests/assert_hai_outcome_measures_known.sql -- hai_type is a Jinja loop variable over hai_outcome_types(), not the retired seed column
-config dbt/tests/assert_shortage_grain.sql -- geography_level is a column of int_mmd_prevalence; the name left only the retired mmd_conditions seed
-config features/great_expectations/suites/silver_contract.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config scripts/lakehouse/bridge_references.py -- geography_level and source_status are recipe columns in dbt/seeds/features, not the retired seed columns
-config scripts/lakehouse/mmd_conditions.py -- geography_level is a column the collection plans give and int_mmd_prevalence keeps
-config scripts/lakehouse/run_bridge_references_e2e.py -- geography_level and source_status are recipe columns in dbt/seeds/features, not the retired seed columns
-config scripts/lakehouse/run_staging_e2e.py -- geography_level is a column of int_mmd_prevalence that the runner reads
-dbt README.md -- the Saved for the Feature Phase section describes the saved models by name
-dbt data_contracts/lakehouse/silver_columns.json -- the silver contract records the removed models as changes against the beab859 baseline
-dbt features/archive_manifest.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_alignment.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_contract.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_history.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_leakage.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_outcomes.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_spatial.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/great_expectations/suites/silver_spine.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt scripts/lakehouse/archive_saved_models.py -- the archive tool lists the saved model files it verifies by name
 unused-code scripts/acquisition/tests/aws_stand_in.py -- http.server calls handle_error with client_address and reads daemon_threads of the loopback STS and Secrets Manager stand-in
 unused-code scripts/features/feast_aws_cases.py -- http.server calls the do_* hooks and reads protocol_version of the loopback catalog and S3 stand-ins; Feast calls the RegistryStore methods and protobuf calls FromDatetime, ParseFromString and SerializeToString of the registry stand-ins by name
 unused-code scripts/lakehouse/fake_docker.py -- http.server calls the do_* hooks, log_message and address_string and reads protocol_version, daemon_threads and close_connection
@@ -33,33 +8,13 @@ unused-code scripts/lakehouse/code_archive.py -- tarfile writes the gid and gnam
 unused-code scripts/orchestration/airflow_import_probe.py -- importlib calls Finder.create_module through the Loader protocol when a DAG imports the stand-in airflow package
 unused-code scripts/orchestration/run_supervisor_e2e.py -- http.server calls the do_* hooks and log_message of the stand-in health endpoint
 unused-code scripts/acquisition/run_reference_documents_e2e.py -- urllib's OpenerDirector calls https_open by its protocol name, and the sitecustomize text the E2E writes into each download process calls install_stand_in
-orphan tests/orchestration/fixtures/tiny/* -- dbt loads every model, test and property file of the project it is given; the transform E2E copies the folder as one project
 
 unused-code scripts/orchestration/run_lineage_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/run_lineage_launcher_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/traffic_probe.py -- http.server dispatches Catalog.do_GET and Catalog.log_message by method name
 unused-code scripts/lakehouse/run_bronze_cutover_e2e.py -- http.server dispatches do_GET, do_POST and do_DELETE of the loopback Polaris stand-in by method name
 unused-code scripts/lakehouse/run_aws_catalog_setup_e2e.py -- http.server dispatches do_GET, do_POST and do_PUT of the loopback Polaris stand-in by method name and reads its close_connection and daemon_threads; mock reads side_effect
-dbt dbt/models/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
-dbt dbt/tests/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
 unused-code feature_store/definitions.py -- feast apply scans the module for Entity and FeatureView objects, so each view the generated file assigns to a module-level name is read by Feast, not imported
-config .pre-commit-config.yaml -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
-config config/quality/ci_groups.json -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
-config scripts/quality/lint_tools.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
-config scripts/quality/run_ci_groups_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
-config scripts/quality/run_lint_tools_e2e.py -- trivy-config is the id of the live hook and check that runs trivy config; only the separate Homebrew tool pin of that name was removed
-flag data_contracts/orchestration/examples/job_templates.json -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag dbt/tests/assert_bronze_datasets_placed_or_listed.sql -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag orchestration/catalog_transport_child.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag orchestration/launcher.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/lakehouse/feature_columns.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/lakehouse/pipeline_build.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/lakehouse/run_launcher_e2e.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/lakehouse/run_project_evaluator.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/lakehouse/run_provenance_e2e.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/orchestration/ecs_engine_cases.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/orchestration/ecs_stage_runtime_cases.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
-flag scripts/quality/lint_sources.py -- --target here belongs to dbt, aws or pip; only the flag of the removed run preparation tool is gone
 unused-code scripts/infrastructure/run_openmetadata_e2e.py -- http.server dispatches do_GET and do_PUT of the stand-in OpenMetadata server by method name
 unused-code scripts/infrastructure/run_openmetadata_persistent_e2e.py -- http.server dispatches do_GET and do_PUT of the stand-in OpenMetadata server by method name
 unused-code scripts/orchestration/run_openmetadata_comparison_e2e.py -- http.server dispatches do_GET of the Marquez and OpenMetadata stand-ins by method name
@@ -69,21 +24,12 @@ unused-code scripts/serving/api_image_cases.py -- uvicorn's server loop reads sh
 unused-code scripts/serving/serving_cases.py -- http.server reads close_connection and daemon_threads of the slow stand-in API
 unused-code scripts/streamlit_app/stand_in_api.py -- http.server dispatches do_GET by method name and reads protocol_version, daemon_threads and close_connection of the stand-in API
 unused-code scripts/orchestration/task_guard_cases.py -- http.server dispatches do_GET of the loopback task metadata stand-in by method name
-config scripts/quality/model_metadata.py -- confidential_columns is still the live source annotation that the Confidential origin check enforces for a future source outside the Public research-data scope (decision 158)
-config scripts/quality/run_model_metadata_e2e.py -- confidential_columns appears in the synthetic Confidential source samples that prove the origin check still works (decision 176)
-config scripts/quality/dbt_manifest_labels.py -- the Public label guard names the removed Confidential label keys so it can refuse any model that brings them back
-config scripts/quality/label_guard_fixtures.py -- the guard's test fixtures plant the removed Confidential label keys to prove the guard refuses them
-orphan orchestration/ecs_launch_provider.py -- the Airflow image imports the launch operator by name when a DAG uses it; the offline cases run its guarantees through orchestration/ecs_launch_operator.py over a stand-in
 unused-code orchestration/ecs_launch_provider.py -- Airflow's DAG parser imports the operator class by name
 unused-code orchestration/ecs_launch_operator.py -- the provider operator's execute calls the four hooks by name, the task runner calls on_kill, and the unused started_by argument is part of the hook signature
 unused-code scripts/orchestration/ecs_launch_standin.py -- the stand-in keeps the signatures of the provider operator, so unused arguments and the hook names stay
 unused-code scripts/lakehouse/run_gold_publish_runner_cases.py -- the tempfile.mkdtemp stand-in keeps the dir keyword of the real signature, so callers that pass dir= still work
 unused-code scripts/training/mlflow_alias_read.py -- urllib calls http_open and https_open of the deadline handlers by scheme name and http.client reads response_class of the deadline connections -- permanent
 unused-code scripts/training/mlflow_alias_stand_in.py -- http.server calls do_GET of the loopback MLflow alias stand-in and reads daemon_threads of its server -- permanent
-config scripts/quality/ci_hooks.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
-config scripts/quality/pre_push.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
-config scripts/quality/run_ci_groups_e2e.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
-config .pre-commit-config.yaml -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
 docs-path scripts/acquisition/run_single_copy_index_e2e.py -- synthetic output path that the tool must refuse because Git does not ignore it
 docs-path scripts/lakehouse/run_layer_acceptance_e2e.py -- synthetic report path that the tool must refuse inside the repository
 docs-path scripts/quality/run_checks_e2e.py -- the scratch repositories of the cases hold their own docs/ files
