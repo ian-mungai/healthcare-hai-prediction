@@ -1443,6 +1443,7 @@
     "scripts/training/job_inputs.py",
     "scripts/training/lane_b_cases.py",
     "scripts/training/mediation.py",
+    "scripts/training/mlflow_alias_read.py",
     "scripts/training/models/__init__.py",
     "scripts/training/models/common.py",
     "scripts/training/models/elastic.py",
