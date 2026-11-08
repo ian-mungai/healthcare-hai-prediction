@@ -1,7 +1,10 @@
 """Run one OpenMetadata ingestion source of the catalog task, after proving its configuration has no profiler and no sampling.
 
-Runs inside the ingestion image as ``python openmetadata_ingest.py polaris|dbt --config-dir D --token-file F --work-dir W``. The persistent catalog
-gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. It refuses a configuration that profiles, samples
+Runs inside the ingestion image as ``python openmetadata_ingest.py glue|dbt --config-dir D --token-file F --work-dir W``. The persistent catalog
+gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. OpenMetadata 2.0.7 has no Iceberg connector, so the
+``glue`` source reads the gold and features tables from their read-only Glue mirror with the task role (owner decision of Nov 7 2026). The ``dbt`` source
+names, in its copy of the manifest, the Glue database of each gold and features model, so that dbt attaches to those tables.
+It refuses a configuration that profiles, samples
 or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables can hold personal fields outside
 the Public research-data scope, which is why this guard exists beside the read-only role and the server setting that disables ingestion pipelines.
 Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a value.
@@ -19,8 +22,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-SOURCES = ("polaris", "dbt")
-ALLOWED_SOURCE_TYPES = frozenset({"iceberg", "dbt"})
+SOURCES = ("glue", "dbt")
+ALLOWED_SOURCE_TYPES = frozenset({"glue", "dbt"})
+# The script's own setting in dbt.json: the OpenMetadata database and the Glue schema of each mirrored dbt model folder. It never reaches the workflow.
+MAPPING_KEY = "hai_glue_mapping"
 ALLOWED_PIPELINES = frozenset({"DatabaseMetadata", "DBT"})
 # Normalized key names (lower case, letters and digits only) that start profiling, sampling, classification or row reads.
 BANNED_KEYS = frozenset(
@@ -117,6 +122,34 @@ def fetch_dbt(s3: Any, bucket: str, folder: Path) -> list[str]:
     return absent
 
 
+def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
+    """Point every dbt model of a mirrored layer at its Glue table in the downloaded manifest and catalog; return how many models moved.
+
+    dbt runs on DuckDB, so a model's database is ``staging`` and its schema ``main``. OpenMetadata 2.0.7 finds the table of a dbt node as
+    ``service.database.schema.table`` and its ``catalogMapping`` can change only the database. The layer is the model's folder under the project
+    (``fqn[1]``). Silver models, tests, seeds and sources keep what dbt wrote: no Glue table exists for them.
+    """
+    schemas = mapping["schemas"]
+    manifest_path = folder / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    moved: dict[str, str] = {}
+    for key, node in (manifest.get("nodes") or {}).items():
+        fqn = node.get("fqn") or []
+        if node.get("resource_type") == "model" and len(fqn) > 2 and fqn[1] in schemas:
+            node["database"], node["schema"] = mapping["database"], schemas[fqn[1]]
+            moved[key] = schemas[fqn[1]]
+    manifest_path.write_text(json.dumps(manifest))
+    catalog_path = folder / "catalog.json"
+    if catalog_path.is_file():
+        catalog = json.loads(catalog_path.read_text())
+        for key, schema in moved.items():
+            metadata = ((catalog.get("nodes") or {}).get(key) or {}).get("metadata")
+            if isinstance(metadata, dict):
+                metadata["database"], metadata["schema"] = mapping["database"], schema
+        catalog_path.write_text(json.dumps(catalog))
+    return len(moved)
+
+
 def run_workflow(config: dict[str, Any]) -> None:
     """Run the OpenMetadata metadata workflow and raise when it recorded a failure."""
     workflow = importlib.import_module("metadata.workflow.metadata").MetadataWorkflow.create(config)
@@ -138,6 +171,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     environment = dict(os.environ if env is None else env)
     run = run_workflow if workflow is None else workflow
     config = json.loads((options.config_dir / f"{options.source}.json").read_text())
+    mapping = config.pop(MAPPING_KEY, None)
     refused = violations(config)
     if refused:
         sys.stderr.write(f"openmetadata_ingest: refused {options.source}.json: {'; '.join(refused)}\n")
@@ -173,6 +207,13 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
         if "manifest.json" in absent:
             sys.stderr.write("openmetadata_ingest: manifest.json is missing from the dbt artifacts\n")
             return 1
+        if mapping is not None:
+            try:
+                moved = place_models(folder, mapping)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                sys.stderr.write(f"openmetadata_ingest: the dbt artifacts cannot be mapped to the Glue tables: {type(error).__name__}\n")
+                return 1
+            sys.stdout.write(f"openmetadata_ingest: {moved} dbt models point at their Glue tables\n")
         values["DBT_ARTIFACT_DIR"] = str(folder)
         settings = config["source"]["sourceConfig"]["config"]["dbtConfigSource"]
         for name in absent:

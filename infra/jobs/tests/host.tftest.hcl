@@ -644,7 +644,7 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
   assert {
     condition = (
       one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://10.0.1.20:8585/api" &&
-      toset([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.name]) == toset(["OM_INGESTION_TOKEN", "POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"]) &&
+      toset([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.name]) == toset(["OM_INGESTION_TOKEN"]) &&
       one([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.valueFrom if item.name == "OM_INGESTION_TOKEN"]) ==
       "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_ingestion"
     )
@@ -654,10 +654,10 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
   assert {
     condition = (
       jsondecode(output.host_container_definitions["metadata"])[1].entryPoint == ["sh", "-c"] &&
-      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace polaris dbt)") &&
+      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt)") &&
       jsondecode(output.host_container_definitions["metadata"])[1].workingDirectory == "/opt/hai/repo"
     )
-    error_message = "The container runs the host ingestion script from the mounted checkout for the Polaris and dbt sources."
+    error_message = "The container runs the host ingestion script from the mounted checkout for the Glue mirror and dbt sources."
   }
 
   assert {

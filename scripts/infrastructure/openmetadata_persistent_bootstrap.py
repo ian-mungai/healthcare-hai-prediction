@@ -4,7 +4,11 @@ Runs in the ingestion image as the one-shot ``openmetadata_bootstrap`` host task
 It reads ``OM_API``, ``OM_ADMIN_PASSWORD`` (injected from Parameter Store by the task definition) and ``OM_BOT_PARAMETERS``
 (a JSON object that names the token parameter of the callers lineage, ingestion and comparison).
 It waits for the server within a deadline, replaces the factory administrator password, makes sure each caller has a bot with its role,
-and writes each bot's token straight to that caller's SecureString parameter.
+writes each bot's token straight to that caller's SecureString parameter, and turns ``autoCreateEntities`` off in the OpenLineage settings
+(owner decision of Nov 7 2026: the OpenLineage API resolves only tables the Glue connector cataloged and never invents a table or a pipeline).
+OpenMetadata 2.0.7 keeps those settings in its database (``openLineageSettings``, seeded on first start with ``autoCreateEntities`` true by
+SettingsCache), not in a configuration file, so the bootstrap reads ``GET /v1/system/settings/openLineageSettings`` and writes
+``PUT /v1/system/settings`` only when the value is not already false; the other OpenLineage settings keep the server's values.
 A rerun changes nothing when everything is current. A token that differs from its parameter is written again.
 Exit codes: 0 done, 1 a step failed (the message names the caller or the class of the error), 2 the configuration was refused before any call.
 Output names steps and callers and never prints a password or a token.
@@ -91,6 +95,20 @@ def ensure_bot(api: str, session: str, caller: str) -> str:
     return str(token)
 
 
+def lineage_settings(api: str, session: str) -> str:
+    """Turn autoCreateEntities off in the server's OpenLineage settings; return ``changed`` or ``current``. Raises RuntimeError when refused."""
+    status, current = base.call("GET", f"{api}/v1/system/settings/openLineageSettings", session=session)
+    value = current.get("config_value") if status == 200 and isinstance(current, dict) else None
+    if not isinstance(value, dict):
+        raise RuntimeError("the OpenLineage settings could not be read")
+    if value.get("autoCreateEntities") is False:
+        return "current"
+    body = {"config_type": "openLineageSettings", "config_value": {**value, "autoCreateEntities": False}}
+    if base.call("PUT", f"{api}/v1/system/settings", body, session)[0] != 200:
+        raise RuntimeError("the OpenLineage settings change was refused")
+    return "changed"
+
+
 def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deadline-seconds", type=int, default=900)
@@ -145,6 +163,10 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
             failed.append(f"{caller} ({error})")
         except Exception as error:
             failed.append(f"{caller} ({type(error).__name__})")
+    try:
+        sys.stdout.write(f"openmetadata_persistent_bootstrap: OpenLineage settings {lineage_settings(api, session)}\n")
+    except RuntimeError as error:
+        failed.append(f"OpenLineage settings ({error})")
     if failed:
         return fail(f"failed for: {'; '.join(failed)}")
     sys.stdout.write("openmetadata_persistent_bootstrap: ready\n")

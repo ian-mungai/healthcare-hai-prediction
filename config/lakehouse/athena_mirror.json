@@ -1,12 +1,20 @@
 {
   "schema": 1,
-  "note": "Athena reads every published gold table, all Public research data, through read-only Glue registrations, because Athena is for the owner to review the data. Polaris stays the catalog. Access stays private to the owner.",
+  "note": "Athena reads every published silver, gold and features table, all Public research data, through read-only Glue registrations, because Athena is for the owner to review the data. The same registrations are the tables the OpenMetadata Glue connector catalogs (OpenMetadata 2.0.7 has no Iceberg connector). Polaris stays the catalog and the source of truth. Access stays private to the owner.",
   "enabled": false,
   "mirror_marker": "hai_mirror",
   "layers": {
+    "silver": {
+      "namespace": "silver",
+      "database": "hai_mirror_silver"
+    },
     "gold": {
       "namespace": "gold",
       "database": "hai_mirror_gold"
+    },
+    "features": {
+      "namespace": "features",
+      "database": "hai_mirror_features"
     }
   },
   "workgroup": {

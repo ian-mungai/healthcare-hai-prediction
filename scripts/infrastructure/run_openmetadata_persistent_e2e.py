@@ -78,6 +78,15 @@ class FakeServer:
         self.refuse_bot: str | None = None
         self.missing_role: str | None = None
         self.password_changes = 0
+        # OpenMetadata 2.0.7 seeds openLineageSettings in its database on first start (SettingsCache) with these values; no config file sets them.
+        self.openlineage: dict[str, Any] = {
+            "enabled": True,
+            "autoCreateEntities": True,
+            "defaultPipelineService": "openlineage",
+            "eventTypeFilter": ["COMPLETE"],
+        }
+        self.refuse_settings = False
+        self.settings_writes = 0
 
 
 @contextlib.contextmanager
@@ -111,6 +120,8 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     return self.reply(200 if state.version_calls > state.healthy_after else 503)
                 if not self.authorized():
                     return self.reply(401)
+                if self.path == "/api/v1/system/settings/openLineageSettings":
+                    return self.reply(200, {"config_type": "openLineageSettings", "config_value": dict(state.openlineage)})
                 if self.path.startswith("/api/v1/roles/name/"):
                     name = self.path.rsplit("/", 1)[1]
                     return self.reply(404) if name == state.missing_role else self.reply(200, {"id": str(uuid.uuid5(uuid.NAMESPACE_DNS, name)), "name": name})
@@ -140,6 +151,13 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                 if not self.authorized():
                     return self.reply(401)
                 request = self.body()
+                if self.path == "/api/v1/system/settings":
+                    if state.refuse_settings:
+                        return self.reply(403)
+                    require(request.get("config_type") == "openLineageSettings", f"only the OpenLineage settings may change: {request.get('config_type')}")
+                    state.openlineage = dict(request["config_value"])
+                    state.settings_writes += 1
+                    return self.reply(200, request)
                 if self.path == "/api/v1/users/changePassword":
                     if request["oldPassword"] != state.admin or request["newPassword"] != request["confirmPassword"]:
                         return self.reply(400)
@@ -207,6 +225,12 @@ def fresh_start() -> None:
         require(sorted(state.bots) == ["comparison-bot", "ingestion-bot", "lineage-bot"], f"wrong bots: {sorted(state.bots)}")
         require(set(store.values) == set(PARAMETERS.values()), "every caller needs its own token parameter")
         require(len(set(store.values.values())) == 3, "two callers received the same token")
+        require(state.openlineage["autoCreateEntities"] is False, "the OpenLineage API must not create tables or pipelines for unknown datasets")
+        require(
+            {key: value for key, value in state.openlineage.items() if key != "autoCreateEntities"}
+            == {"enabled": True, "defaultPipelineService": "openlineage", "eventTypeFilter": ["COMPLETE"]},
+            f"the other OpenLineage settings must stay as the server had them: {state.openlineage}",
+        )
         for caller, name in PARAMETERS.items():
             require(store.values[name] == state.users[f"{caller}-bot"]["token"], f"{caller} parameter does not hold its own bot token")
         assert_no_values(out, err)
@@ -313,8 +337,28 @@ def wrong_stored_password_with_changed_factory_value_fails() -> None:
         OBSERVED["unknown_admin_password"] = {"exit": code}
 
 
+def openlineage_settings_refusal_fails_visibly() -> None:
+    with open_metadata() as (state, base):
+        state.refuse_settings = True
+        store = FakeParameterStore()
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "OpenLineage settings" in err, f"a refused settings change must fail and say so: {code} {err}")
+        require(set(store.values) == set(PARAMETERS.values()), "the bot tokens are still issued when only the settings change is refused")
+        require(state.openlineage["autoCreateEntities"] is True, "the stand-in kept its seeded value")
+        assert_no_values(out, err)
+
+
+def openlineage_settings_already_off_are_left_alone() -> None:
+    with open_metadata() as (state, base):
+        state.openlineage["autoCreateEntities"] = False
+        code, _, err = run(environment(base), FakeParameterStore())
+        require(code == 0 and state.settings_writes == 0, f"settings that are already right must not be written: {state.settings_writes} {err}")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "fresh_start": fresh_start,
+    "openlineage_settings_refusal_fails_visibly": openlineage_settings_refusal_fails_visibly,
+    "openlineage_settings_already_off_are_left_alone": openlineage_settings_already_off_are_left_alone,
     "rerun_changes_nothing": rerun_changes_nothing,
     "stale_parameter_is_repaired": stale_parameter_is_repaired,
     "server_that_never_starts_fails_in_time": server_that_never_starts_fails_in_time,

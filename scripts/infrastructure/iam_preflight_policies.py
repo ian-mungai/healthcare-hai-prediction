@@ -245,7 +245,25 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
         }
     if Path(policy).name.startswith("airflow_launch_"):
         return airflow_launch_inputs(infra, values, names)
+    if policy.endswith(("job_writer_glue_mirror.json", "openmetadata_glue_read.json")):
+        return glue_mirror_inputs(policy, role, infra, values)
     return {}
+
+
+def glue_mirror_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Mapping[str, str]) -> dict[str, str]:
+    """The Glue mirror placeholders, built the way ``athena_mirror.tf`` builds them from ``config/lakehouse/athena_mirror.json``: a layer writer
+    reaches its own layer's database, the catalog task role reads every mirror database."""
+    layers = json.loads((infra.parent.parent / "config/lakehouse/athena_mirror.json").read_text(encoding="utf-8"))["layers"]
+    glue = f"arn:aws:glue:{values['AWS_REGION']}:{values['AWS_ACCOUNT_ID']}"
+    if policy.endswith("openmetadata_glue_read.json"):
+        arns = [f"{glue}:catalog"] + [arn for spec in layers.values() for arn in (f"{glue}:database/{spec['database']}", f"{glue}:table/{spec['database']}/*")]
+        return {"MIRROR_ARNS": json.dumps(arns)}
+    database = layers[role["layer"]]["database"]
+    return {
+        "CATALOG_ARN": f"{glue}:catalog",
+        "DATABASE_ARN": f"{glue}:database/{database}",
+        "REGISTRATION_ARNS": json.dumps([f"{glue}:catalog", f"{glue}:database/{database}", f"{glue}:table/{database}/*"]),
+    }
 
 
 def airflow_launch_inputs(infra: Path, values: Mapping[str, str], names: Mapping[str, str]) -> dict[str, str]:

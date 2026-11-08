@@ -41,7 +41,7 @@ Check = dict[str, bool]
 class FakeGlue:
     """The Glue calls the mirror may use. ``fail`` names calls that raise a service error; every call is logged."""
 
-    def __init__(self, databases: Sequence[str] = ("hai_mirror_gold", "hai_mirror_silver"), fail: dict[str, str] | None = None) -> None:
+    def __init__(self, databases: Sequence[str] = ("hai_mirror_gold", "hai_mirror_features", "hai_mirror_silver"), fail: dict[str, str] | None = None) -> None:
         self.databases = set(databases)
         self.tables: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: list[tuple[str, str, str]] = []
@@ -501,12 +501,104 @@ def case_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
     reports = {
         layer: glue_mirror.mirror(enabled(), layer, "real", ids(["int_acs_county_values"]), FakeSource({"int_acs_county_values": FIRST}), glue)
-        for layer in ("silver", "features", "bronze")
+        for layer in ("bronze", "bronze_dictionary", "silver_e2e", "features_e2e", "gold_e2e")
     }
     return {
         "no_call": glue.calls == [],
         "every_layer_skipped": all(report.get("status") == "skipped" for report in reports.values()),
-        "no_silver_database_in_config": "silver" not in glue_mirror.load_config().layers,
+        "no_bronze_database_in_config": not any(layer.startswith("bronze") for layer in glue_mirror.load_config().layers),
+    }
+
+
+SILVER = "int_acs_county_values"
+SILVER_FILE = f"s3://{BUCKET}/lakehouse/silver/{SILVER}/metadata/00001-dddd.metadata.json"
+
+
+def case_silver_layer_is_mirrored() -> Check:
+    glue = FakeGlue()
+    report = glue_mirror.mirror(enabled(), "silver", "real", ids([SILVER]), FakeSource({SILVER: SILVER_FILE}), glue, RUN_ID)
+    fixture = glue_mirror.mirror(enabled(), "silver", "publish_fixture", ids([SILVER]), FakeSource({SILVER: SILVER_FILE}), FakeGlue())
+    return {
+        "created_in_the_silver_database": glue.writes() == [("create_table", "hai_mirror_silver", SILVER)],
+        "points_at_the_committed_file": glue.tables.get(("hai_mirror_silver", SILVER), {}).get("Parameters", {}).get("metadata_location") == SILVER_FILE,
+        "reported_ok": report.get("status") == "ok",
+        "fixture_mode_skipped": fixture.get("status") == "skipped",
+    }
+
+
+def case_silver_publish_hook_mirrors_silver() -> Check:
+    with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
+        glue = FakeGlue()
+        report = hook(context(Path(directory), namespace="silver"), FakeSource({SILVER: SILVER_FILE}), glue, names=(SILVER,))
+        fixture = hook(context(Path(directory), namespace="silver", mode="publish_fixture"), FakeSource({SILVER: SILVER_FILE}), FakeGlue(), names=(SILVER,))
+        broken = hook(context(Path(directory), namespace="silver"), FakeSource({}, error=RuntimeError("catalog unreachable")), FakeGlue(), names=(SILVER,))
+    return {
+        "hook_created_the_silver_table": glue.writes() == [("create_table", "hai_mirror_silver", SILVER)],
+        "hook_reported_ok": report.get("status") == "ok",
+        "fixture_hook_skipped": fixture.get("status") == "skipped",
+        "a_failure_is_reported_not_raised": broken.get("status") == "failed",
+        "runs_table_never_listed": all(call[2] != "publish_runs" for call in glue.calls),
+    }
+
+
+def case_silver_publish_plan_reaches_the_hook() -> Check:
+    from scripts.lakehouse import silver_publish
+
+    plan = silver_publish.publish_plan("real")
+    config = glue_mirror.load_config()
+    return {
+        "silver_commit_is_the_gold_engine": silver_publish.commit_publish is gold_publish.commit_publish,
+        "real_layer_is_silver": plan.namespaces["real"] == "silver",
+        "silver_layer_is_configured": "silver" in config.layers and config.layers["silver"].database == "hai_mirror_silver",
+        "contract_tables_are_listed": glue_mirror.tables_to_mirror(replace(config, enabled=True), "silver", "real", list(plan.tables))[0] == list(plan.tables),
+        "silver_plan_is_read": glue_mirror.layer_plan("silver").namespaces["real"] == "silver",
+    }
+
+
+FEATURE = "feature_matrix_hospital"
+FEATURE_FILE = f"s3://{BUCKET}/lakehouse/features/{FEATURE}/metadata/00001-cccc.metadata.json"
+
+
+def case_features_layer_is_mirrored() -> Check:
+    glue = FakeGlue()
+    report = glue_mirror.mirror(enabled(), "features", "real", ids([FEATURE]), FakeSource({FEATURE: FEATURE_FILE}), glue, RUN_ID)
+    table = glue.tables.get(("hai_mirror_features", FEATURE), {})
+    fixture = glue_mirror.mirror(enabled(), "features", "publish_fixture", ids([FEATURE]), FakeSource({FEATURE: FEATURE_FILE}), FakeGlue())
+    return {
+        "created_in_the_features_database": glue.writes() == [("create_table", "hai_mirror_features", FEATURE)],
+        "nothing_in_the_gold_database": not any(database == "hai_mirror_gold" for (database, _) in glue.tables),
+        "points_at_the_committed_file": table.get("Parameters", {}).get("metadata_location") == FEATURE_FILE,
+        "reported_ok": report.get("status") == "ok",
+        "fixture_mode_skipped": fixture.get("status") == "skipped",
+    }
+
+
+def case_features_publish_hook_mirrors_features() -> Check:
+    with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
+        glue = FakeGlue()
+        report = hook(context(Path(directory), namespace="features"), FakeSource({FEATURE: FEATURE_FILE}), glue, names=(FEATURE,))
+        fixture = hook(
+            context(Path(directory), namespace="features", mode="publish_fixture"), FakeSource({FEATURE: FEATURE_FILE}), FakeGlue(), names=(FEATURE,)
+        )
+        record = json.loads((Path(directory) / "mirror.json").read_text()) if (Path(directory) / "mirror.json").is_file() else {}
+    return {
+        "hook_created_the_features_table": glue.writes() == [("create_table", "hai_mirror_features", FEATURE)],
+        "hook_reported_ok": report.get("status") == "ok" and record.get("status") == "ok",
+        "fixture_hook_skipped": fixture.get("status") == "skipped",
+    }
+
+
+def case_features_publish_plan_reaches_the_hook() -> Check:
+    from scripts.features import features_publish
+
+    plan = features_publish.publish_plan("real")
+    config = glue_mirror.load_config()
+    return {
+        "features_commit_is_the_gold_engine": features_publish.commit_publish is gold_publish.commit_publish,
+        "real_layer_is_features": plan.namespaces["real"] == "features",
+        "features_layer_is_configured": "features" in config.layers and config.layers["features"].database == "hai_mirror_features",
+        "contract_tables_are_listed": glue_mirror.tables_to_mirror(replace(config, enabled=True), "features", "real", list(plan.tables))[0]
+        == list(plan.tables),
     }
 
 
@@ -531,22 +623,27 @@ def case_other_pointers_are_refused() -> Check:
     return checks
 
 
-def case_config_scope_is_gold_only() -> Check:
+def case_config_scope_is_silver_gold_and_features_only() -> Check:
     config = glue_mirror.load_config()
     gold = config.layers["gold"]
     return {
-        "only_gold_is_configured": list(config.layers) == ["gold"] and gold.namespace == "gold",
+        "only_silver_gold_and_features_are_configured": list(config.layers) == ["silver", "gold", "features"]
+        and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features")),
         "real_config_has_no_violation": glue_mirror.violations(config) == [],
-        "silver_is_flagged": any(
-            "silver" in line for line in glue_mirror.violations(replace(config, layers={**config.layers, "silver": replace(gold, namespace="silver")}))
+        "silver_is_allowed": glue_mirror.violations(replace(config, layers={"silver": replace(gold, namespace="silver")})) == [],
+        "silver_test_namespace_is_flagged": any(
+            "silver_e2e" in line for line in glue_mirror.violations(replace(config, layers={"silver": replace(gold, namespace="silver_e2e")}))
         ),
-        "features_is_flagged": any(
-            "features" in line for line in glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features")}))
+        "features_is_allowed": glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features")})) == [],
+        "bronze_is_flagged": any("bronze" in line for line in glue_mirror.violations(replace(config, layers={"bronze": replace(gold, namespace="bronze")}))),
+        "features_test_namespace_is_flagged": any(
+            "features_e2e" in line for line in glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features_e2e")}))
         ),
         "test_namespace_is_flagged": any(
             "gold_e2e" in line for line in glue_mirror.violations(replace(config, layers={"gold": replace(gold, namespace="gold_e2e")}))
         ),
-        "no_class_filter_left": not hasattr(glue_mirror, "PUBLIC") and "tables" not in json.loads(glue_mirror.CONFIG.read_text())["layers"]["gold"],
+        "no_class_filter_left": not hasattr(glue_mirror, "PUBLIC")
+        and all("tables" not in spec for spec in json.loads(glue_mirror.CONFIG.read_text())["layers"].values()),
     }
 
 
@@ -581,6 +678,20 @@ def run_check(arguments: Sequence[str], source: FakeSource, glue: FakeGlue) -> t
     return code, out.getvalue() + err.getvalue()
 
 
+def case_check_accepts_the_features_layer() -> Check:
+    glue = FakeGlue()
+    glue_mirror.mirror(enabled(), "features", "real", ids([FEATURE]), FakeSource({FEATURE: FEATURE_FILE}), glue, RUN_ID)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        code = glue_mirror.main(
+            ["check", "--layer", "features"], source=FakeSource({FEATURE: FEATURE_FILE}), glue=glue, config=enabled(), snapshots=ids([FEATURE]), run_id=RUN_ID
+        )
+    return {
+        "features_check_passes": code == 0 and f"features.{FEATURE}: match" in out.getvalue(),
+        "features_plan_is_read": glue_mirror.layer_plan("features").namespaces["real"] == "features",
+    }
+
+
 def case_check_compares_the_two_pointers() -> Check:
     glue = FakeGlue()
     glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue, RUN_ID)
@@ -609,6 +720,13 @@ CASES: dict[str, Callable[[], Check]] = {
     "bronze_and_other_layers_touch_nothing": case_bronze_and_other_layers_touch_nothing,
     "second_gold_table_is_mirrored": case_second_gold_table_is_mirrored,
     "other_layers_touch_nothing": case_other_layers_touch_nothing,
+    "silver_layer_is_mirrored": case_silver_layer_is_mirrored,
+    "silver_publish_hook_mirrors_silver": case_silver_publish_hook_mirrors_silver,
+    "silver_publish_plan_reaches_the_hook": case_silver_publish_plan_reaches_the_hook,
+    "features_layer_is_mirrored": case_features_layer_is_mirrored,
+    "features_publish_hook_mirrors_features": case_features_publish_hook_mirrors_features,
+    "features_publish_plan_reaches_the_hook": case_features_publish_plan_reaches_the_hook,
+    "check_accepts_the_features_layer": case_check_accepts_the_features_layer,
     "foreign_table_is_refused": case_foreign_table_is_refused,
     "other_pointers_are_refused": case_other_pointers_are_refused,
     "committed_retry_mirrors_the_committed_set": case_committed_retry_mirrors_the_committed_set,
@@ -623,7 +741,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "check_compares_the_run": case_check_compares_the_run,
     "glue_client_has_short_timeouts": case_glue_client_has_short_timeouts,
     "closed_diagnostic_pipe_does_not_escape": case_closed_diagnostic_pipe_does_not_escape,
-    "config_scope_is_gold_only": case_config_scope_is_gold_only,
+    "config_scope_is_silver_gold_and_features_only": case_config_scope_is_silver_gold_and_features_only,
     "reader_access_is_one_role_for_one_user": case_reader_access_is_one_role_for_one_user,
     "check_compares_the_two_pointers": case_check_compares_the_two_pointers,
 }

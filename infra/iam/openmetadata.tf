@@ -38,7 +38,7 @@ resource "aws_iam_role" "openmetadata_task" {
   count = var.openmetadata_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "job_openmetadata_task")
-  description          = "Catalog task: reads Iceberg metadata files and dbt artifacts only. It has no data file read and no write."
+  description          = "Catalog task: reads the dbt artifacts and the Glue mirror registrations only. It has no data file read and no write."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags

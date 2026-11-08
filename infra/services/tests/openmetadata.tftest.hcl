@@ -170,18 +170,47 @@ run "health_checks_are_exec_form_and_bounded" {
 
   assert {
     condition = alltrue([
-      for index in [0, 2] : (
+      for index in [0] : (
         jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[index].healthCheck.command[0] == "CMD"
         && length([for argument in jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[index].healthCheck.command : argument if startswith(argument, "http://127.0.0.1:")]) == 1
         && contains(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[index].healthCheck.command, "--max-time")
       )
     ])
-    error_message = "The OpenSearch and server health checks run curl in CMD form with the whole URL as one argument and a bounded curl timeout."
+    error_message = "The OpenSearch health check runs curl in CMD form with the whole URL as one argument and a bounded curl timeout."
+  }
+
+  # The 2.0.7 server image is Alpine with bash and a JRE and no curl (docker/docker-compose-quickstart/Dockerfile at tag 2.0.7-release); its upstream compose file
+  # checks the admin port with BusyBox wget.
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[2].healthCheck.command == ["CMD", "wget", "-q", "--spider", "-T", "8", "http://127.0.0.1:8586/healthcheck"]
+    error_message = "The server health check runs the image's BusyBox wget in CMD form against the admin port with a bounded timeout, because the image has no curl."
   }
 
   assert {
     condition     = contains(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[0].healthCheck.command, "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s")
     error_message = "The OpenSearch URL, with its unquoted-in-shell ampersand, is a single argument."
+  }
+}
+
+# Entry points of the 2.0.7 images (read from the linux/arm64 image configuration on Nov 7 2026): the server image has ENTRYPOINT ["/bin/bash"], CMD
+# ["/openmetadata-start.sh"] and WORKDIR /opt/openmetadata, so its start script sits at the file system root; the upstream compose file runs the migration as
+# bash with ./bootstrap/openmetadata-ops.sh migrate. OpenSearch 3.3.2 has ENTRYPOINT ["./opensearch-docker-entrypoint.sh"] and CMD ["opensearch"].
+run "entry_points_match_the_upstream_images" {
+  command = plan
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[2].entryPoint == ["/bin/bash", "/openmetadata-start.sh"]
+    error_message = "The server runs the image's own start script at /openmetadata-start.sh through bash, as the image does."
+  }
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[1].entryPoint == ["/bin/bash", "./bootstrap/openmetadata-ops.sh", "migrate"]
+    error_message = "The migration runs bootstrap/openmetadata-ops.sh migrate through bash from the image working directory, as the upstream compose file does."
+  }
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[0].entryPoint == ["./opensearch-docker-entrypoint.sh", "opensearch"]
+    error_message = "OpenSearch keeps its image entry point and command."
   }
 }
 

@@ -1,7 +1,15 @@
 {
+  "hai_glue_mapping": {
+    "database": "hai_lakehouse",
+    "schemas": {
+      "silver": "hai_mirror_silver",
+      "gold": "hai_mirror_gold",
+      "features": "hai_mirror_features"
+    }
+  },
   "source": {
     "type": "dbt",
-    "serviceName": "polaris",
+    "serviceName": "glue_mirror",
     "sourceConfig": {
       "config": {
         "type": "DBT",

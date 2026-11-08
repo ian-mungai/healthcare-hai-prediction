@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +43,7 @@ MUTANTS: dict[str, Callable[[dict[str, Any]], None]] = {
     "auto classification": lambda c: c["source"]["sourceConfig"]["config"].update(enableAutoClassification=True),
     "nested sampling block": lambda c: c["source"]["sourceConfig"]["config"].update(extra={"sampling": {"method": "BERNOULLI"}}),
     "unknown source type": lambda c: c["source"].update(type="postgres"),
+    "iceberg source type": lambda c: c["source"].update(type="iceberg"),
 }
 
 
@@ -113,7 +115,7 @@ def real_configs_have_no_profiler_or_sampling() -> None:
     from scripts.infrastructure import openmetadata_ingest as ingest
 
     names = sorted(path.stem for path in INGESTION.glob("*.json"))
-    require({"polaris", "dbt", "marquez"} <= set(names), f"missing ingestion configs, found {names}")
+    require({"glue", "dbt", "marquez"} <= set(names) and "polaris" not in names, f"wrong ingestion configs, found {names}")
     for name in names:
         found = ingest.violations(load(name))
         require(found == [], f"{name}.json: {found}")
@@ -123,10 +125,10 @@ def every_profiler_or_sampling_mutant_is_refused() -> None:
     from scripts.infrastructure import openmetadata_ingest as ingest
 
     for label, mutate in MUTANTS.items():
-        config = copy.deepcopy(load("polaris"))
+        config = copy.deepcopy(load("glue"))
         mutate(config)
         require(ingest.violations(config), f"mutant not refused: {label}")
-    clean = copy.deepcopy(load("polaris"))
+    clean = copy.deepcopy(load("glue"))
     clean["source"]["sourceConfig"]["config"].update(generateSampleData=False, computeMetrics=False)
     require(ingest.violations(clean) == [], "an explicit false must stay allowed")
 
@@ -144,8 +146,6 @@ def ingest_environment(root: Path) -> tuple[list[str], dict[str, str]]:
     token_file.write_text(BEARER_VALUE + "\n")
     env = {
         "POLARIS_URI": "http://10.0.1.20:8181/api/catalog",
-        "POLARIS_CLIENT_ID": CLIENT[0],
-        "POLARIS_CLIENT_SECRET": CLIENT[1],
         "DATA_BUCKET_NAME": "example-project-data-dev",
         "AWS_REGION": "us-west-2",
     }
@@ -156,14 +156,15 @@ def ingest_substitutes_values_and_keeps_secrets_out_of_output() -> None:
     seen: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as folder:
         args, env = ingest_environment(Path(folder))
-        code, out, err = run_ingest(["polaris", *args], env, seen.append)
+        code, out, err = run_ingest(["glue", *args], env, seen.append)
     require(code == 0, (code, err))
     require(len(seen) == 1, "the workflow must run once")
     text = json.dumps(seen[0])
-    require(env["POLARIS_URI"] in text and CLIENT[0] in text and CLIENT[1] in text and BEARER_VALUE in text, "values must reach the workflow")
+    require(
+        seen[0]["source"]["serviceConnection"]["config"]["awsConfig"]["awsRegion"] == "us-west-2" and BEARER_VALUE in text, "values must reach the workflow"
+    )
     require("${" not in text, "a placeholder was left")
-    for secret in (CLIENT[0], CLIENT[1], BEARER_VALUE):
-        require(secret not in out + err, "a secret reached the output")
+    require(BEARER_VALUE not in out + err, "a secret reached the output")
 
 
 def ingest_takes_the_token_from_the_environment_and_the_persistent_server() -> None:
@@ -172,7 +173,7 @@ def ingest_takes_the_token_from_the_environment_and_the_persistent_server() -> N
         args, env = ingest_environment(Path(folder))
         args = [argument for index, argument in enumerate(args) if argument != "--token-file" and (index == 0 or args[index - 1] != "--token-file")]
         env["OM_INGESTION_TOKEN"] = BEARER_VALUE
-        code, out, err = run_ingest(["polaris", *args, "--token-env", "OM_INGESTION_TOKEN", "--server-url", "http://10.0.1.20:8585/api"], env, seen.append)
+        code, out, err = run_ingest(["glue", *args, "--token-env", "OM_INGESTION_TOKEN", "--server-url", "http://10.0.1.20:8585/api"], env, seen.append)
     require(code == 0, (code, err))
     require(len(seen) == 1, "the workflow must run once")
     server = seen[0]["workflowConfig"]["openMetadataServerConfig"]
@@ -188,10 +189,10 @@ def ingest_refuses_a_missing_token_source_or_a_wrong_server_url() -> None:
         args, env = ingest_environment(Path(folder))
         without_file = [argument for index, argument in enumerate(args) if argument != "--token-file" and (index == 0 or args[index - 1] != "--token-file")]
         env["OM_INGESTION_TOKEN"] = BEARER_VALUE
-        none_code, _, none_err = run_ingest(["polaris", *without_file], env, lambda _: None)
-        empty_code, _, empty_err = run_ingest(["polaris", *without_file, "--token-env", "OM_UNSET"], env, lambda _: None)
+        none_code, _, none_err = run_ingest(["glue", *without_file], env, lambda _: None)
+        empty_code, _, empty_err = run_ingest(["glue", *without_file, "--token-env", "OM_UNSET"], env, lambda _: None)
         bad_url_code, out, err = run_ingest(
-            ["polaris", *without_file, "--token-env", "OM_INGESTION_TOKEN", "--server-url", "https://example.invalid/api"], env, lambda _: None
+            ["glue", *without_file, "--token-env", "OM_INGESTION_TOKEN", "--server-url", "https://example.invalid/api"], env, lambda _: None
         )
     require(none_code == 2 and "token" in none_err.lower(), (none_code, none_err))
     require(empty_code == 2 and "OM_UNSET" in empty_err, (empty_code, empty_err))
@@ -203,13 +204,13 @@ def ingest_refuses_a_profiler_config_before_the_workflow_starts() -> None:
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
         args, env = ingest_environment(root)
-        config = load("polaris")
+        config = load("glue")
         config["source"]["sourceConfig"]["config"]["generateSampleData"] = True
         bad = root / "bad"
         bad.mkdir()
-        (bad / "polaris.json").write_text(json.dumps(config))
+        (bad / "glue.json").write_text(json.dumps(config))
         args[args.index("--config-dir") + 1] = str(bad)
-        code, _, err = run_ingest(["polaris", *args], env, seen.append)
+        code, _, err = run_ingest(["glue", *args], env, seen.append)
     require(code == 2 and seen == [], (code, seen))
     require("generatesampledata" in err.lower(), err)
 
@@ -217,10 +218,10 @@ def ingest_refuses_a_profiler_config_before_the_workflow_starts() -> None:
 def ingest_names_a_missing_variable_but_not_a_value() -> None:
     with tempfile.TemporaryDirectory() as folder:
         args, env = ingest_environment(Path(folder))
-        del env["POLARIS_CLIENT_SECRET"]
-        code, out, err = run_ingest(["polaris", *args], env, lambda _: None)
+        del env["AWS_REGION"]
+        code, out, err = run_ingest(["glue", *args], env, lambda _: None)
     require(code == 2, code)
-    require("POLARIS_CLIENT_SECRET" in err and CLIENT[0] not in out + err, err)
+    require("AWS_REGION" in err and BEARER_VALUE not in out + err, err)
 
 
 def ingest_fails_when_the_workflow_fails_without_echoing_the_config() -> None:
@@ -229,9 +230,9 @@ def ingest_fails_when_the_workflow_fails_without_echoing_the_config() -> None:
 
     with tempfile.TemporaryDirectory() as folder:
         args, env = ingest_environment(Path(folder))
-        code, out, err = run_ingest(["polaris", *args], env, broken)
+        code, out, err = run_ingest(["glue", *args], env, broken)
     require(code == 1, code)
-    require("RuntimeError" in err and CLIENT[1] not in out + err and BEARER_VALUE not in out + err, err)
+    require("RuntimeError" in err and BEARER_VALUE not in out + err, err)
 
 
 class FakeS3:
@@ -262,6 +263,82 @@ def ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest() -> None:
     require(code == 1 and seen == [] and "manifest.json" in err, (code, err))
 
 
+def glue_config_reads_the_two_mirror_databases_with_the_task_role() -> None:
+    """OpenMetadata 2.0.7 has no Iceberg connector (open-metadata PR 26365), so the tables come from the Glue mirror (owner decision of Nov 7 2026)."""
+    glue = load("glue")
+    mirror = json.loads((REPO / "config/lakehouse/athena_mirror.json").read_text())
+    connection = glue["source"]["serviceConnection"]["config"]
+    filters = glue["source"]["sourceConfig"]["config"]["schemaFilterPattern"]
+    require(glue["source"]["type"] == "glue" and connection["type"] == "Glue", "the source must be the OpenMetadata Glue connector")
+    require(
+        set(connection["awsConfig"]) == {"awsRegion"},
+        f"the connector must use the task role's credentials, not keys, a profile or a role: {connection['awsConfig']}",
+    )
+    require(connection.get("databaseName") == "hai_lakehouse", "one OpenMetadata database, named like the Polaris warehouse, instead of the AWS account ID")
+    require(
+        filters == {"includes": [f"^{spec['database']}$" for spec in mirror["layers"].values()]},
+        f"the connector reads exactly the mirror databases of config/lakehouse/athena_mirror.json: {filters}",
+    )
+    require(load("dbt")["source"]["serviceName"] == glue["source"]["serviceName"] == "glue_mirror", "dbt must attach to the Glue service's tables")
+
+
+def dbt_manifest() -> dict[str, Any]:
+    def model(layer: str, name: str) -> dict[str, Any]:
+        return {"resource_type": "model", "name": name, "fqn": ["hai", layer, name], "database": "staging", "schema": "main", "alias": name}
+
+    return {
+        "nodes": {
+            "model.hai.dim_state": model("gold", "dim_state"),
+            "model.hai.feature_matrix_hospital": model("features", "feature_matrix_hospital"),
+            "model.hai.stg_measure": model("silver", "stg_measure"),
+            "model.dbt_project_evaluator.fct_check": {**model("silver", "fct_check"), "fqn": ["dbt_project_evaluator", "marts", "fct_check"]},
+            "test.hai.not_null_dim_state": {
+                "resource_type": "test",
+                "name": "not_null_dim_state",
+                "fqn": ["hai", "gold", "x"],
+                "database": "staging",
+                "schema": "main",
+            },
+        },
+        "sources": {"source.hai.bronze.measure": {"resource_type": "source", "database": "lakehouse", "schema": "bronze", "name": "measure"}},
+    }
+
+
+def ingest_dbt_points_gold_and_features_models_at_the_glue_tables() -> None:
+    """dbt runs on DuckDB, so every model says database staging and schema main. OpenMetadata 2.0.7 looks a dbt node up as service.database.schema.table
+    and its catalogMapping changes only the database, so the copy of the manifest the workflow reads names the Glue database of each mirrored layer."""
+    manifest = dbt_manifest()
+    catalog = {"nodes": {key: {"metadata": {"database": "staging", "schema": "main", "name": node["name"]}} for key, node in manifest["nodes"].items()}}
+    keys = {"metadata/dbt/manifest.json": json.dumps(manifest).encode(), "metadata/dbt/catalog.json": json.dumps(catalog).encode()}
+    seen: list[dict[str, Any]] = []
+    read: dict[str, Any] = {}
+
+    def workflow(config: dict[str, Any]) -> None:
+        seen.append(config)
+        source = config["source"]["sourceConfig"]["config"]["dbtConfigSource"]
+        read["manifest"] = json.loads(Path(source["dbtManifestFilePath"]).read_text())
+        read["catalog"] = json.loads(Path(source["dbtCatalogFilePath"]).read_text())
+
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = ingest_environment(Path(folder))
+        code, _, err = run_ingest(["dbt", *args], env, workflow, s3_client=FakeS3(keys))
+    require(code == 0 and len(seen) == 1, (code, err))
+    require("hai_glue_mapping" not in json.dumps(seen[0]), "the mapping is the script's setting and must not reach the workflow")
+    nodes, cat = read["manifest"]["nodes"], read["catalog"]["nodes"]
+    place = {key: (node["database"], node["schema"]) for key, node in nodes.items()}
+    require(place["model.hai.dim_state"] == ("hai_lakehouse", "hai_mirror_gold"), place)
+    require(place["model.hai.feature_matrix_hospital"] == ("hai_lakehouse", "hai_mirror_features"), place)
+    require(place["model.hai.stg_measure"] == ("hai_lakehouse", "hai_mirror_silver"), place)
+    require(
+        place["test.hai.not_null_dim_state"] == ("staging", "main") and place["model.dbt_project_evaluator.fct_check"] == ("staging", "main"),
+        "tests and models of other folders or packages stay as dbt wrote them",
+    )
+    require(read["manifest"]["sources"] == manifest["sources"], "sources stay as dbt wrote them")
+    require((cat["model.hai.dim_state"]["metadata"]["database"], cat["model.hai.dim_state"]["metadata"]["schema"]) == ("hai_lakehouse", "hai_mirror_gold"), cat)
+    require(cat["model.hai.stg_measure"]["metadata"]["schema"] == "hai_mirror_silver", "the catalog entry of a silver model moves with it")
+    require(cat["model.dbt_project_evaluator.fct_check"]["metadata"]["schema"] == "main", "the catalog entry of a package model stays")
+
+
 HOST_API = "http://10.0.1.20:8585/api"
 
 
@@ -282,7 +359,7 @@ def host_ingest_environment(root: Path, **changes: str | None) -> tuple[list[str
             env.pop(name, None)
         else:
             env[name] = value
-    return ["--config-dir", str(INGESTION), "--work-dir", str(root / "work"), "polaris", "dbt"], env
+    return ["--config-dir", str(INGESTION), "--work-dir", str(root / "work"), "glue", "dbt"], env
 
 
 def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
@@ -292,15 +369,14 @@ def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
         args, env = host_ingest_environment(Path(folder))
         code, out, err = run_host_ingest(args, env, seen.append, s3_client=FakeS3(keys))
         require(code == 0, (code, err))
-        require(len(seen) == 2, f"polaris and dbt must each run once, got {len(seen)}")
+        require(len(seen) == 2, f"glue and dbt must each run once, got {len(seen)}")
         for config in seen:
             server = config["workflowConfig"]["openMetadataServerConfig"]
             require(server["hostPort"] == HOST_API, f"the workflow does not name the persistent catalog: {server['hostPort']}")
             require(server["securityConfig"]["jwtToken"] == BEARER_VALUE, "the workflow does not carry the ingestion token")
             require("127.0.0.1" not in json.dumps(config) and "${" not in json.dumps(config), "a loopback address or placeholder is left")
-        require(env["POLARIS_URI"] in json.dumps(seen[0]) and CLIENT[1] in json.dumps(seen[0]), "the Polaris values must reach the first workflow")
-        for secret in (CLIENT[1], BEARER_VALUE):
-            require(secret not in out + err, "a secret reached the output")
+        require(seen[0]["source"]["type"] == "glue", "the Glue source must run first")
+        require(BEARER_VALUE not in out + err, "a secret reached the output")
         written = [path for path in (Path(folder) / "work").rglob("*") if path.is_file()]
         require(written, "the dbt artifacts must be in the work folder, or this check proves nothing")
         for path in written:
@@ -391,11 +467,11 @@ def host_ingest_keeps_the_profiler_refusal() -> None:
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
         args, env = host_ingest_environment(root)
-        config = load("polaris")
+        config = load("glue")
         config["source"]["sourceConfig"]["config"]["generateSampleData"] = True
         bad = root / "bad"
         bad.mkdir()
-        (bad / "polaris.json").write_text(json.dumps(config))
+        (bad / "glue.json").write_text(json.dumps(config))
         args[args.index("--config-dir") + 1] = str(bad)
         code, _, err = run_host_ingest(args, env, seen.append)
     require(code == 2 and seen == [], (code, seen))
@@ -525,9 +601,12 @@ def marquez_routes() -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
                 "id": "job:file:build_silver",
                 "type": "JOB",
                 "data": {},
-                "inEdges": [{"origin": "dataset:file:silver/hospital", "destination": "job:file:build_silver"}],
+                "inEdges": [
+                    {"origin": "dataset:file:gold/dim_hospital", "destination": "job:file:build_silver"},
+                    {"origin": "dataset:file:silver/hospital", "destination": "job:file:build_silver"},
+                ],
                 "outEdges": [
-                    {"origin": "job:file:build_silver", "destination": "dataset:file:gold/dim_hospital"},
+                    {"origin": "job:file:build_silver", "destination": "dataset:file:features/feature_matrix_hospital"},
                     {"origin": "job:file:build_silver", "destination": "dataset:file:tmp/scratch_file"},
                 ],
             },
@@ -538,7 +617,7 @@ def marquez_routes() -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
         if path.startswith("/api/v1/namespaces?"):
             return 200, {"namespaces": [{"name": "file"}]}
         if path.startswith("/api/v1/namespaces/file/datasets"):
-            return 200, {"datasets": [{"name": "silver/hospital"}, {"name": "gold/dim_hospital"}]}
+            return 200, {"datasets": [{"name": "silver/hospital"}, {"name": "gold/dim_hospital"}, {"name": "features/feature_matrix_hospital"}]}
         if path.startswith("/api/v1/lineage"):
             return 200, graph
         return 404, {}
@@ -546,9 +625,12 @@ def marquez_routes() -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
     return route
 
 
-def om_lineage_routes(edges: list[dict[str, Any]]) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
+def om_lineage_routes(edges: list[dict[str, Any]], looked_up: list[str] | None = None) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
+    looked_up = [] if looked_up is None else looked_up
+
     def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
         if path.startswith("/api/v1/tables/name/"):
+            looked_up.append(urllib.parse.unquote(path.rsplit("/", 1)[-1]))
             return 200, {"id": "id-of-" + path.rsplit("/", 1)[-1]}
         if path == "/api/v1/lineage":
             edges.append(body)
@@ -568,19 +650,29 @@ def run_marquez(args: list[str]) -> tuple[int, str, str]:
 
 def marquez_step_adds_mapped_edges_and_reports_the_unmapped() -> None:
     edges: list[dict[str, Any]] = []
-    with serving(marquez_routes()) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
+    looked_up: list[str] = []
+    with serving(marquez_routes()) as marquez, serving(om_lineage_routes(edges, looked_up)) as om, tempfile.TemporaryDirectory() as folder:
         token = Path(folder) / "token"
         token.write_text(BEARER_VALUE)
         args = ["--marquez", marquez.url, "--om-base", om.url + "/api", "--token-file", str(token), "--config", str(INGESTION / "marquez.json")]
         code, out, err = run_marquez(args)
         require(code == 0, (code, err))
-        require(len(edges) == 1, edges)
+        require(len(edges) == 2, edges)
         edge = edges[0]["edge"]
         require(edge["fromEntity"]["type"] == "table" and edge["toEntity"]["type"] == "table", edge)
-        require("unmapped" in out and "1" in out, out)
+        require("edges=2 unmapped=2" in out, f"the two pairs with a scratch end have no Glue table and stay unmapped: {out}")
+        require(
+            set(looked_up)
+            == {
+                "glue_mirror.hai_lakehouse.hai_mirror_silver.hospital",
+                "glue_mirror.hai_lakehouse.hai_mirror_gold.dim_hospital",
+                "glue_mirror.hai_lakehouse.hai_mirror_features.feature_matrix_hospital",
+            },
+            f"the step must look up the Glue mirror tables: {looked_up}",
+        )
         edges.clear()
         run_marquez(args)
-        require(len(edges) == 1, "a rerun must send the same edge again, which OpenMetadata treats as the same edge")
+        require(len(edges) == 2, "a rerun must send the same edges again, which OpenMetadata treats as the same edges")
 
 
 def marquez_step_fails_visibly_when_marquez_is_down() -> None:
@@ -607,14 +699,14 @@ def marquez_step_fails_visibly_when_marquez_is_down() -> None:
 def paged_marquez_routes(namespaces: int, datasets: int, ignore_offset: bool = False) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
     """A Marquez stand-in that pages its listings by limit and offset. The only connected pair sits at the end of the last page of the last namespace."""
     names = [f"ns{index:03d}" for index in range(namespaces)] + ["file"]
-    rows = [f"filler/set_{index:03d}" for index in range(datasets - 2)] + ["silver/late_a", "gold/late_b"]
+    rows = [f"filler/set_{index:03d}" for index in range(datasets - 2)] + ["gold/late_a", "features/late_b"]
     graph = {
         "graph": [
             {
                 "id": "job:file:late_job",
                 "type": "JOB",
-                "inEdges": [{"origin": "dataset:file:silver/late_a", "destination": "job:file:late_job"}],
-                "outEdges": [{"origin": "job:file:late_job", "destination": "dataset:file:gold/late_b"}],
+                "inEdges": [{"origin": "dataset:file:gold/late_a", "destination": "job:file:late_job"}],
+                "outEdges": [{"origin": "job:file:late_job", "destination": "dataset:file:features/late_b"}],
             }
         ]
     }
@@ -673,11 +765,13 @@ def marquez_step_stops_at_its_deadline_when_paging_never_ends() -> None:
     )
 
 
-def polaris_and_marquez_configs_use_the_same_database_name() -> None:
-    catalog = load("polaris")["source"]["serviceConnection"]["config"]["catalog"]
+def glue_and_marquez_configs_name_the_same_tables() -> None:
+    glue = load("glue")
+    marquez = load("marquez")
+    named = (glue["source"]["serviceName"], glue["source"]["serviceConnection"]["config"].get("databaseName"))
     require(
-        catalog.get("databaseName") == load("marquez")["database"],
-        f"the Iceberg catalog database name is {catalog.get('databaseName')!r} and the mapper looks for {load('marquez')['database']!r}",
+        named == (marquez["service"], marquez["database"]),
+        f"the Glue service and database are {named}, the mapper looks for {marquez['service']}.{marquez['database']}",
     )
 
 
@@ -850,7 +944,7 @@ def migrate_script_passes_a_migration_that_succeeds_on_a_later_try() -> None:
         require(done.returncode == 0 and not (Path(folder) / "abort").exists(), f"a later success must pass without an abort, got {done.returncode}")
 
 
-def catalog_policy_reads_metadata_files_and_nothing_else() -> None:
+def catalog_policy_reads_dbt_artifacts_and_nothing_else() -> None:
     from infra.iam.scripts.render_policy import render_template
     from scripts.infrastructure.policy_evaluator import Request, decide
 
@@ -863,14 +957,16 @@ def catalog_policy_reads_metadata_files_and_nothing_else() -> None:
     }
     document = render_template(OWNER_POLICY.read_text(), values, names={})
     bucket = "arn:aws:s3:::example-project-data-dev"
+    # The Glue connector reads the mirror registrations (owner decision of Nov 7 2026), so no Iceberg metadata file stays readable.
     allowed = [
-        ("s3:GetObject", f"{bucket}/lakehouse/silver/hospital/metadata/00001.metadata.json", {}),
-        ("s3:GetObject", f"{bucket}/lakehouse/gold/dim_hospital/metadata/snap-1.avro", {}),
         ("s3:GetObject", f"{bucket}/metadata/dbt/manifest.json", {}),
-        ("s3:ListBucket", bucket, {"s3:prefix": ("lakehouse/silver/hospital/metadata/",)}),
         ("s3:ListBucket", bucket, {"s3:prefix": ("metadata/dbt/",)}),
     ]
     refused = [
+        ("s3:GetObject", f"{bucket}/lakehouse/silver/hospital/metadata/00001.metadata.json", {}),
+        ("s3:GetObject", f"{bucket}/lakehouse/gold/dim_hospital/metadata/snap-1.avro", {}),
+        ("s3:GetObjectVersion", f"{bucket}/lakehouse/gold/dim_hospital/metadata/00001.metadata.json", {}),
+        ("s3:ListBucket", bucket, {"s3:prefix": ("lakehouse/silver/hospital/metadata/",)}),
         ("s3:GetObject", f"{bucket}/lakehouse/silver/hospital/data/00000-0.parquet", {}),
         ("s3:GetObject", f"{bucket}/lakehouse/bronze/raw/file.csv", {}),
         ("s3:GetObject", f"{bucket}/lakehouse/run_stage/run/inputs/code.tar.gz", {}),
@@ -1030,7 +1126,9 @@ CASES: list[Callable[[], None]] = [
     marquez_step_carries_its_deadline_through_the_openmetadata_requests,
     marquez_step_pages_namespaces_and_datasets_to_the_end,
     marquez_step_stops_at_its_deadline_when_paging_never_ends,
-    polaris_and_marquez_configs_use_the_same_database_name,
+    glue_and_marquez_configs_name_the_same_tables,
+    glue_config_reads_the_two_mirror_databases_with_the_task_role,
+    ingest_dbt_points_gold_and_features_models_at_the_glue_tables,
     bounded_wrapper_exits_zero_when_stopped_after_the_deadline,
     bounded_wrapper_fails_when_stopped_before_the_deadline,
     migrate_script_writes_the_abort_marker_after_its_last_try,
@@ -1063,7 +1161,7 @@ CASES: list[Callable[[], None]] = [
     bounded_wrapper_refuses_to_start_after_the_deadline,
     bounded_wrapper_stops_on_the_abort_marker_with_exit_one,
     bounded_wrapper_extra_seconds_outlive_the_server_deadline,
-    catalog_policy_reads_metadata_files_and_nothing_else,
+    catalog_policy_reads_dbt_artifacts_and_nothing_else,
     dag_runs_one_broker_step_with_bounds_and_no_schedule,
 ]
 

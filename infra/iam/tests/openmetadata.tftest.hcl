@@ -85,19 +85,28 @@ run "prepared_role_reads_catalog_metadata_only" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement :
-      statement.Effect == "Deny" || alltrue([for action in flatten([statement.Action]) : contains(["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"], action)])
+      statement.Effect == "Deny" || alltrue([for action in flatten([statement.Action]) : contains(["s3:GetObject", "s3:ListBucket"], action)])
     ])
-    error_message = "The catalog role may only get and list objects. It holds no write, stop, run or parameter action."
+    error_message = "The catalog role may only get and list objects, with no version read. It holds no write, stop, run or parameter action."
   }
 
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement :
       statement.Effect == "Deny" || alltrue([for resource in flatten([statement.Resource]) :
-        endswith(resource, "/metadata/*") || endswith(resource, ":::${var.data_bucket_name}") || endswith(resource, "/metadata/dbt/*")
+        resource == "arn:aws:s3:::${var.data_bucket_name}" || resource == "arn:aws:s3:::${var.data_bucket_name}/metadata/dbt/*"
       ])
     ])
-    error_message = "The catalog role may read Iceberg metadata files and the dbt artifacts. It may not read a data file."
+    error_message = "The catalog role reads the dbt artifacts only. The Glue connector reads the mirror registrations, so no Iceberg metadata file or data file is readable."
+  }
+
+  assert {
+    condition = (
+      !strcontains(aws_iam_role_policy.openmetadata_task["catalog_read"].policy, "lakehouse") &&
+      toset(flatten([for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement : statement.Condition.StringLike["s3:prefix"] if contains(flatten([statement.Action]), "s3:ListBucket")])) ==
+      toset(["metadata/dbt/", "metadata/dbt/*"])
+    )
+    error_message = "The catalog role lists only the dbt artifact prefix, nothing under the lakehouse."
   }
 
   assert {

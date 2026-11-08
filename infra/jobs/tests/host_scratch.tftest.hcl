@@ -281,7 +281,7 @@ run "the_cleanup_keeps_the_phase_command_and_follows_only_its_success" {
   assert {
     condition = (
       jsondecode(output.host_container_definitions["metadata"])[1].name == "ingest" &&
-      jsondecode(output.host_container_definitions["metadata"])[1].command[0] == "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace polaris dbt) && find /workspace /tmp -mindepth 1 -delete" &&
+      jsondecode(output.host_container_definitions["metadata"])[1].command[0] == "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt) && find /workspace /tmp -mindepth 1 -delete" &&
       jsondecode(output.host_container_definitions["metadata"])[1].dependsOn == [{ containerName = "init", condition = "SUCCESS" }]
     )
     error_message = "The metadata ingestion command is unchanged inside the group, joined to the cleanup with &&, and it waits for the init step."

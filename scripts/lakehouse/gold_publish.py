@@ -658,7 +658,9 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
 
 
 def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, config: Any = None) -> dict[str, Any]:
-    """Register the newest committed gold snapshot set in Glue. The publish is already committed, so this never raises and never undoes it.
+    """Register the newest committed snapshot set of the plan's layer (gold or features) in Glue.
+
+    The publish is already committed, so this never raises and never undoes it.
 
     The set comes from the newest ``publish_runs`` row, not from this run and not from the live main: a retry of an old committed run, or a later
     publish that failed halfway, cannot move the mirror to a set that was not committed. One absolute deadline starts here, before the first Spark read.
@@ -666,9 +668,9 @@ def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, conf
     it. The report goes to ``mirror.json`` in the publish folder, to standard error when it failed, and into the step's JSON line. Skipped runs write nothing.
     """
     entered = time.monotonic()
+    layer = ctx.plan.namespaces["real"]
     try:
         config = config or glue_mirror.load_config()
-        layer = ctx.plan.namespaces["real"]
         wanted, reason = glue_mirror.tables_to_mirror(config, layer, ctx.mode, list(ctx.plan.tables))
         if not wanted:
             return {"status": "skipped", "reason": reason, "tables": {}}
@@ -691,7 +693,7 @@ def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, conf
     if report["status"] == "failed":
         with contextlib.suppress(OSError):
             sys.stderr.write(
-                f"gold publish: the Glue mirror FAILED and the publish stays committed: {report['reason']}. Rerun this step to retry the mirror.\n"
+                f"{layer} publish: the Glue mirror FAILED and the publish stays committed: {report['reason']}. Rerun this step to retry the mirror.\n"
             )
     return report
 

@@ -109,10 +109,20 @@ run "enabled_plan_registers_one_bounded_private_task" {
   assert {
     condition = (
       [for c in jsondecode(output.openmetadata_container_definitions) : [for s in lookup(c, "secrets", []) : s.name] if c.name == "bootstrap"][0] == ["OM_ADMIN_PASSWORD"] &&
-      [for c in jsondecode(output.openmetadata_container_definitions) : [for s in lookup(c, "secrets", []) : s.name] if c.name == "ingest_polaris"][0] == ["POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"] &&
-      alltrue([for c in jsondecode(output.openmetadata_container_definitions) : length(lookup(c, "secrets", [])) == 0 if !contains(["bootstrap", "ingest_polaris"], c.name)])
+      alltrue([for c in jsondecode(output.openmetadata_container_definitions) : length(lookup(c, "secrets", [])) == 0 if c.name != "bootstrap"])
     )
-    error_message = "Only the bootstrap step reads the admin password and only the Polaris step reads the reader client pair."
+    error_message = "Only the bootstrap step reads the admin password. The lakehouse step reads the Glue mirror with the task role and needs no Polaris client pair."
+  }
+
+  # OpenMetadata 2.0.7 has no Iceberg connector: the step keeps its broker-table name ingest_polaris but runs the Glue source (owner decision of Nov 7 2026).
+  # The server and migration commands are those of the 2.0.7 server image (ENTRYPOINT /bin/bash, CMD /openmetadata-start.sh, WORKDIR /opt/openmetadata).
+  assert {
+    condition = (
+      [for c in jsondecode(output.openmetadata_container_definitions) : contains(c.entryPoint, "glue") && !contains(c.entryPoint, "polaris") if c.name == "ingest_polaris"][0] &&
+      [for c in jsondecode(output.openmetadata_container_definitions) : slice(c.entryPoint, length(c.entryPoint) - 2, length(c.entryPoint)) if c.name == "server"][0] == ["/bin/bash", "/openmetadata-start.sh"] &&
+      [for c in jsondecode(output.openmetadata_container_definitions) : slice(c.entryPoint, length(c.entryPoint) - 3, length(c.entryPoint)) if c.name == "migrate"][0] == ["/bin/bash", "./bootstrap/openmetadata-ops.sh", "migrate"]
+    )
+    error_message = "The lakehouse step runs the Glue source, and the server and migration run the image's own scripts through bash."
   }
 
   assert {
@@ -367,7 +377,8 @@ run "persistent_server_makes_an_ingestion_only_task" {
   assert {
     condition = (
       [for c in jsondecode(output.openmetadata_container_definitions) : [for s in c.secrets : s.valueFrom if s.name == "OM_INGESTION_TOKEN"] if c.name == "ingest_dbt"][0] == ["arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_ingestion"]
-      && [for c in jsondecode(output.openmetadata_container_definitions) : length([for s in c.secrets : s if s.name == "OM_INGESTION_TOKEN"]) if c.name == "ingest_polaris"][0] == 1
+      && [for c in jsondecode(output.openmetadata_container_definitions) : [for s in c.secrets : s.name] if c.name == "ingest_polaris"][0] == ["OM_INGESTION_TOKEN"]
+      && [for c in jsondecode(output.openmetadata_container_definitions) : contains(c.entryPoint, "glue") if c.name == "ingest_polaris"][0]
       && [for c in jsondecode(output.openmetadata_container_definitions) : length(c.secrets) if c.name == "init"][0] == 0
     )
     error_message = "Each ingestion step receives exactly the ingestion bot token parameter, and the init step receives no secret."

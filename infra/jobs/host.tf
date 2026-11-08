@@ -148,7 +148,7 @@ locals {
     serve    = local.serve_containers
     metadata = local.host_metadata_containers
   })
-  # The persistent catalog runs as a service on the host. The metadata job is only its client: after the init step, one container sends the Polaris and dbt metadata to the catalog API.
+  # The persistent catalog runs as a service on the host. The metadata job is only its client: after the init step, one container sends the Glue mirror and dbt metadata to the catalog API.
   host_repo_mount = "/opt/hai/repo"
   host_metadata_mounts = [
     { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
@@ -194,7 +194,7 @@ locals {
       user                   = "10001:10001"
       workingDirectory       = local.host_repo_mount
       entryPoint             = ["sh", "-c"]
-      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace polaris dbt"]
+      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace glue dbt"]
       stopTimeout            = 60
       linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
@@ -204,9 +204,9 @@ locals {
         { name = "RUN_ID", value = "" },
         { name = "POLARIS_URI", value = "" },
       ])
-      secrets = concat(local.reader_parameters, [
+      secrets = [
         { name = "OM_INGESTION_TOKEN", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}" },
-      ])
+      ]
       mountPoints      = concat(local.host_metadata_mounts, [{ sourceVolume = "repo", containerPath = local.host_repo_mount, readOnly = true }])
       logConfiguration = local.host_metadata_log
     },

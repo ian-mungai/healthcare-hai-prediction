@@ -39,6 +39,12 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_security_group.host
+  override_during = plan
+  values          = { id = "sg-0000000000000host0" }
+}
+
+override_resource {
   target          = aws_launch_template.host
   override_during = plan
   values          = { id = "lt-0123456789abcdef0", latest_version = 1 }
@@ -78,7 +84,7 @@ run "athena_mirror_defaults_to_off" {
   }
 }
 
-run "prepared_mirror_has_one_gold_database_and_a_limited_workgroup" {
+run "prepared_mirror_has_silver_gold_and_features_databases_and_a_limited_workgroup" {
   command = plan
   variables {
     athena_mirror_prepared = true
@@ -87,11 +93,13 @@ run "prepared_mirror_has_one_gold_database_and_a_limited_workgroup" {
 
   assert {
     condition = (
-      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["gold"]) &&
+      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold", "features"]) &&
+      aws_glue_catalog_database.athena_mirror["silver"].name == "hai_mirror_silver" &&
       aws_glue_catalog_database.athena_mirror["gold"].name == "hai_mirror_gold" &&
-      aws_glue_catalog_database.athena_mirror["gold"].tags.DataClassification == "Public"
+      aws_glue_catalog_database.athena_mirror["features"].name == "hai_mirror_features" &&
+      alltrue([for database in aws_glue_catalog_database.athena_mirror : database.tags.DataClassification == "Public"])
     )
-    error_message = "One Glue database for the gold layer only, named by the tracked config and tagged Public like the collected research data it lists."
+    error_message = "One Glue database each for the silver, gold and features layers and none for bronze, named by the tracked config and tagged Public like the collected research data they list."
   }
 
   assert {
@@ -111,7 +119,7 @@ run "prepared_mirror_has_one_gold_database_and_a_limited_workgroup" {
   }
 }
 
-run "gold_writer_grants_cover_only_the_gold_mirror_database" {
+run "layer_writer_grants_cover_only_their_own_mirror_database" {
   command = plan
   variables {
     athena_mirror_prepared     = true
@@ -120,8 +128,20 @@ run "gold_writer_grants_cover_only_the_gold_mirror_database" {
   }
 
   assert {
-    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["gold"])
-    error_message = "Only the gold writer gets a grant, and never silver, bronze, features, the qualification role or the project user."
+    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["silver", "gold", "features"])
+    error_message = "Only the silver, gold and features writers get a grant, and never bronze, the qualification role or the project user."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.athena_mirror_writer["silver"].role == aws_iam_role.job_write_layer_task["silver"].name &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["silver"].policy).Statement : s.Resource])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
+      ])
+    )
+    error_message = "The silver writer may register tables in the silver mirror database only."
   }
 
   assert {
@@ -136,6 +156,20 @@ run "gold_writer_grants_cover_only_the_gold_mirror_database" {
       ])
     )
     error_message = "The gold writer may read its database and read, create and update tables in it only, with no delete and no other database."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.athena_mirror_writer["features"].role == aws_iam_role.job_write_layer_task["features"].name &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["features"].policy).Statement : s.Action])) ==
+      toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["features"].policy).Statement : s.Resource])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+      ])
+    )
+    error_message = "The features writer may read its database and read, create and update tables in it only, with no delete and no other database."
   }
 }
 
@@ -179,20 +213,21 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
       ])
     )
-    error_message = "Glue reads are limited to the gold mirror database and its tables."
+    error_message = "The owner's Athena review stays on gold: Glue reads are limited to the gold mirror database and its tables. The features mirror serves the catalog, and both layers' folders do not fit one inline policy."
   }
 
   assert {
     condition = (
       length(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) == length(keys(jsondecode(file("${path.module}/../../data_contracts/lakehouse/gold_contract.json")).publish.tables)) &&
       alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : alltrue([for r in s.Resource : can(regex("^arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/[a-z_]+/[*]$", r))]) if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]) &&
+      !strcontains(aws_iam_role_policy.athena_reader[0].policy, "features") &&
       contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state/*") &&
       !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*") &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([for r in s.Resource : startswith(r, "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs")])]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the published contract tables, one folder each, never publish_runs or the whole namespace. Writes reach only the results prefix and nothing deletes."
+    error_message = "Data reads reach only the published gold contract tables, one folder each, never features, publish_runs or the whole namespace. Writes reach only the results prefix and nothing deletes."
   }
 }
 
@@ -362,7 +397,7 @@ run "glue_endpoint_needs_the_private_endpoints" {
   }
 }
 
-run "glue_endpoint_reaches_only_the_gold_writer_path" {
+run "glue_endpoint_reaches_only_the_layer_writer_path" {
   command = plan
   variables {
     athena_mirror_prepared = true
@@ -395,18 +430,97 @@ run "glue_endpoint_reaches_only_the_gold_writer_path" {
 
   assert {
     condition = (
+      length(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement) == 1 &&
       toset(flatten([for s in jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement : s.Action])) == toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
       toset(flatten([for s in jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
         "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
       ])
     )
-    error_message = "The endpoint policy allows the four mirror actions on the gold mirror database and its tables only, nothing else of Glue."
+    error_message = "Without the catalog the endpoint policy allows the four mirror actions on the three mirror databases and their tables only, nothing else of Glue."
   }
 
   assert {
-    condition     = jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[0].Condition == { ArnEquals = { "aws:PrincipalArn" = "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev" } }
-    error_message = "Only the gold writer role may use the endpoint for these actions."
+    condition = toset(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"]) == toset([
+      "arn:aws:iam::111111111111:role/example_project_job_write_silver_task_dev",
+      "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev",
+      "arn:aws:iam::111111111111:role/example_project_job_write_features_task_dev",
+    ]) && keys(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[0].Condition) == ["ArnEquals"]
+    error_message = "Only the silver, gold and features writer roles may use the endpoint for these actions."
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.openmetadata_glue_read) == 0 && length(aws_vpc_security_group_ingress_rule.athena_glue_from_host) == 0
+    error_message = "Without a catalog no role reads the mirror for OpenMetadata and the host does not reach the endpoint."
+  }
+}
+
+# Owner decision of Nov 7 2026: OpenMetadata 2.0.7 has no Iceberg connector, so its Glue connector catalogs the two mirror databases. The catalog task role
+# reads the registrations and nothing else of Glue, through the endpoint, from the lakehouse job group (Fargate) or from the host (the metadata host task).
+run "catalog_reads_the_mirror_through_the_endpoint" {
+  command = plan
+  variables {
+    openmetadata_admin_password_name = "/example_project/openmetadata_admin_password"
+    athena_mirror_prepared           = true
+    athena_owner_user                = "example_owner"
+    job_endpoints_enabled            = true
+    openmetadata_prepared            = true
+    openmetadata_persistent_prepared = true
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.openmetadata_glue_read[0].role == aws_iam_role.openmetadata_task[0].name &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Action])) ==
+      toset(["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"]) &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Resource])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+      ]) &&
+      alltrue([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Effect == "Allow"])
+    )
+    error_message = "The catalog task role reads the three mirror databases and their tables and has no Glue write and no other database."
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement) == 2 &&
+      toset(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[1].Action) == toset(["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"]) &&
+      jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[1].Condition == { ArnEquals = { "aws:PrincipalArn" = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev" } }
+    )
+    error_message = "The endpoint lets the catalog task role read through it, and only read."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.athena_glue_from_host[0].security_group_id == "sg-0000000000000glue0" &&
+      aws_vpc_security_group_ingress_rule.athena_glue_from_host[0].referenced_security_group_id == "sg-0000000000000host0" &&
+      aws_vpc_security_group_ingress_rule.athena_glue_from_host[0].from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.athena_glue_from_host[0].to_port == 443
+    )
+    error_message = "With the persistent catalog the host reaches the endpoint on 443, because private DNS sends the metadata host task's Glue calls there."
+  }
+}
+
+run "catalog_glue_read_needs_the_mirror" {
+  command = plan
+  variables {
+    openmetadata_admin_password_name = "/example_project/openmetadata_admin_password"
+    openmetadata_prepared            = true
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.openmetadata_glue_read) == 0
+    error_message = "No Glue read is granted while the mirror databases do not exist."
   }
 }

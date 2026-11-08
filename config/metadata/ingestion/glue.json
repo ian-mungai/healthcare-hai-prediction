@@ -1,29 +1,28 @@
 {
   "source": {
-    "type": "iceberg",
-    "serviceName": "polaris",
+    "type": "glue",
+    "serviceName": "glue_mirror",
     "serviceConnection": {
       "config": {
-        "type": "Iceberg",
-        "catalog": {
-          "name": "hai_lakehouse",
-          "databaseName": "hai_lakehouse",
-          "connection": {
-            "uri": "${POLARIS_URI}",
-            "credential": {
-              "clientId": "${POLARIS_CLIENT_ID}",
-              "clientSecret": "${POLARIS_CLIENT_SECRET}"
-            }
-          },
-          "warehouseLocation": "hai_lakehouse"
-        }
+        "type": "Glue",
+        "awsConfig": {
+          "awsRegion": "${AWS_REGION}"
+        },
+        "databaseName": "hai_lakehouse"
       }
     },
     "sourceConfig": {
       "config": {
         "type": "DatabaseMetadata",
         "includeTables": true,
-        "includeViews": false
+        "includeViews": false,
+        "schemaFilterPattern": {
+          "includes": [
+            "^hai_mirror_silver$",
+            "^hai_mirror_gold$",
+            "^hai_mirror_features$"
+          ]
+        }
       }
     }
   },

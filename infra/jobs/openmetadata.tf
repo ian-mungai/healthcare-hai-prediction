@@ -11,7 +11,7 @@ variable "openmetadata_enabled" {
 }
 
 variable "openmetadata_server_url" {
-  description = "Private http address of the persistent OpenMetadata catalog on the container host, for example http://10.0.1.20:8585. Set, the catalog task keeps its name and container names but runs only the Polaris and dbt ingestion steps against that catalog, with the ingestion bot token from Parameter Store, and needs only the ingestion image. Empty keeps the finite catalog task that rebuilds its own catalog."
+  description = "Private http address of the persistent OpenMetadata catalog on the container host, for example http://10.0.1.20:8585. Set, the catalog task keeps its name and container names but runs only the Glue mirror and dbt ingestion steps against that catalog, with the ingestion bot token from Parameter Store, and needs only the ingestion image. Empty keeps the finite catalog task that rebuilds its own catalog."
   type        = string
   default     = ""
   nullable    = false
@@ -139,7 +139,7 @@ variable "openmetadata_admin_password_name" {
 }
 
 variable "openmetadata_commands" {
-  description = "Start commands of the upstream images, unproven until the owner reads each image's entry point. The wrapper runs server, search and database and the migrate command runs once."
+  description = "Start commands of the upstream images. The server and migration commands were read from the linux/arm64 configuration of the 2.0.7 server image on Nov 7 2026 (ENTRYPOINT /bin/bash, CMD /openmetadata-start.sh, WORKDIR /opt/openmetadata). The wrapper runs server, search and database and the migrate command runs once."
   type = object({
     server   = list(string)
     migrate  = list(string)
@@ -147,8 +147,8 @@ variable "openmetadata_commands" {
     database = list(string)
   })
   default = {
-    server   = ["./openmetadata-start.sh"]
-    migrate  = ["./bootstrap/openmetadata-ops.sh", "migrate"]
+    server   = ["/bin/bash", "/openmetadata-start.sh"]
+    migrate  = ["/bin/bash", "./bootstrap/openmetadata-ops.sh", "migrate"]
     search   = ["./opensearch-docker-entrypoint.sh", "opensearch"]
     database = ["docker-entrypoint.sh", "postgres"]
   }
@@ -165,7 +165,7 @@ locals {
     "bin/openmetadata_ingest.py"    = file("${local.om_repo}/scripts/infrastructure/openmetadata_ingest.py")
     "bin/openmetadata_bootstrap.py" = file("${local.om_repo}/scripts/infrastructure/openmetadata_bootstrap.py")
     "bin/openmetadata_marquez.py"   = file("${local.om_repo}/scripts/infrastructure/openmetadata_marquez.py")
-    "config/polaris.json"           = file("${local.om_repo}/config/metadata/ingestion/polaris.json")
+    "config/glue.json"              = file("${local.om_repo}/config/metadata/ingestion/glue.json")
     "config/dbt.json"               = file("${local.om_repo}/config/metadata/ingestion/dbt.json")
     "config/marquez.json"           = file("${local.om_repo}/config/metadata/ingestion/marquez.json")
   }
@@ -226,13 +226,15 @@ locals {
   om_init_step = { name = "init", image = local.om_persistent ? "ingestion" : "database", user = "0:0", essential = false, writable = false, after = [], environment = [{ name = "OM_LIFETIME_SECONDS", value = tostring(var.openmetadata_lifetime_seconds) }], secrets = [], entry = ["sh", "-c", local.om_init_script], workdir = "/workspace" }
 
   # The persistent mode keeps the broker table's containers (ingest_polaris with RUN_ID and POLARIS_URI, ingest_dbt with RUN_ID) and runs them against the host catalog.
+  # OpenMetadata 2.0.7 has no Iceberg connector, so ingest_polaris keeps its broker-table name and variables but runs the Glue source over the read-only Glue
+  # mirror of the gold and features tables with the task role (owner decision of Nov 7 2026). It needs no Polaris client pair.
   om_steps_persistent = [
     local.om_init_step,
     {
       name        = "ingest_polaris", image = "ingestion", user = "10001:10001", essential = false, writable = false, after = [["init", "SUCCESS"]], workdir = "/workspace"
       environment = [{ name = "RUN_ID", value = "" }, { name = "POLARIS_URI", value = "" }]
-      secrets     = concat(local.reader_parameters, [{ name = "OM_INGESTION_TOKEN", valueFrom = local.om_token_arn }])
-      entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "polaris"], local.om_persistent_ingest)
+      secrets     = [{ name = "OM_INGESTION_TOKEN", valueFrom = local.om_token_arn }]
+      entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "glue"], local.om_persistent_ingest)
     },
     {
       name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = true, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"
@@ -274,8 +276,8 @@ locals {
       {
         name        = "ingest_polaris", image = "ingestion", user = "10001:10001", essential = false, writable = false, after = [["bootstrap", "SUCCESS"]], workdir = "/workspace"
         environment = [{ name = "RUN_ID", value = "" }, { name = "POLARIS_URI", value = "" }]
-        secrets     = local.reader_parameters
-        entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "polaris"], local.om_ingest)
+        secrets     = []
+        entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "glue"], local.om_ingest)
       },
       {
         name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = false, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"

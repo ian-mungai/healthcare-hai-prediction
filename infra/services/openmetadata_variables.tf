@@ -99,15 +99,15 @@ variable "openmetadata_memory_mib" {
 }
 
 variable "openmetadata_commands" {
-  description = "Start commands of the upstream images, unproven until the owner reads each image's entry point. The server runs its start script, the migration runs once, OpenSearch runs its entry point."
+  description = "Start commands of the upstream images, read from the linux/arm64 image configuration of each pinned release on Nov 7 2026. The server image (ENTRYPOINT /bin/bash, CMD /openmetadata-start.sh, WORKDIR /opt/openmetadata) runs its start script at the file system root, the migration runs bootstrap/openmetadata-ops.sh migrate through bash once, OpenSearch runs its entry point."
   type = object({
     server  = list(string)
     migrate = list(string)
     search  = list(string)
   })
   default = {
-    server  = ["./openmetadata-start.sh"]
-    migrate = ["./bootstrap/openmetadata-ops.sh", "migrate"]
+    server  = ["/bin/bash", "/openmetadata-start.sh"]
+    migrate = ["/bin/bash", "./bootstrap/openmetadata-ops.sh", "migrate"]
     search  = ["./opensearch-docker-entrypoint.sh", "opensearch"]
   }
   nullable = false

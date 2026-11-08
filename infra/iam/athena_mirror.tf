@@ -1,6 +1,7 @@
 locals {
   athena_mirror_config = jsondecode(file("${path.module}/../../config/lakehouse/athena_mirror.json"))
-  # The mirror covers the gold layer only: every table the gold publish writes, and no other layer or namespace.
+  # The mirror covers the silver, gold and features layers: every table their publishes write, and no bronze, test namespace or runs table. The OpenMetadata Glue
+  # connector catalogs the same registrations (owner decision of Nov 7 2026: OpenMetadata 2.0.7 has no Iceberg connector).
   athena_layers        = local.athena_mirror_config.layers
   athena_account_arn   = "arn:aws:glue:${var.aws_region}:${var.expected_account_id}"
   athena_catalog_arn   = "${local.athena_account_arn}:catalog"
@@ -10,18 +11,30 @@ locals {
   # The reader reads the folders of the tables that the gold publish contract names, and nothing else of the namespace: not publish_runs, not a table
   # that is not in the contract and not a folder that only starts with a table name. Each pattern ends at the directory boundary, <table>/*. If Polaris
   # puts another name on a table folder, the live query is denied and the owner binds the real folder, not every suffix.
-  athena_contract_tables = sort(keys(jsondecode(file("${path.module}/../../data_contracts/lakehouse/gold_contract.json")).publish.tables))
-  athena_table_folders   = flatten([for layer, spec in local.athena_layers : [for table in local.athena_contract_tables : "lakehouse/${spec.namespace}/${table}/*"]])
-  athena_glue_endpoint   = var.athena_mirror_prepared && var.job_endpoints_enabled
+  athena_contracts = {
+    silver   = "${path.module}/../../data_contracts/lakehouse/silver_publish.json"
+    gold     = "${path.module}/../../data_contracts/lakehouse/gold_contract.json"
+    features = "${path.module}/../../data_contracts/lakehouse/features_publish.json"
+  }
+  athena_contract_tables = { for layer, spec in local.athena_layers : layer => sort(keys(jsondecode(file(local.athena_contracts[layer])).publish.tables)) }
+  # The owner's Athena review stays on gold. Both layers' table folders do not fit one inline role policy, and the features mirror is for the catalog.
+  athena_reader_layers = { for layer, spec in local.athena_layers : layer => spec if layer == "gold" }
+  athena_table_folders = flatten([for layer, spec in local.athena_reader_layers : [for table in local.athena_contract_tables[layer] : "lakehouse/${spec.namespace}/${table}/*"]])
+  athena_mirror_arns   = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
+  athena_glue_endpoint = var.athena_mirror_prepared && var.job_endpoints_enabled
   athena_reader_policy = templatefile("${path.module}/owner_policies/athena_reader.json", {
     WORKGROUP_ARN      = local.athena_workgroup_arn
-    GLUE_ARNS          = jsonencode(concat([local.athena_catalog_arn], [for layer, spec in local.athena_layers : "${local.athena_account_arn}:database/${spec.database}"], values(local.athena_table_arns)))
+    GLUE_ARNS          = jsonencode(concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_reader_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]])))
     TABLE_OBJECT_ARNS  = jsonencode([for folder in local.athena_table_folders : "${local.bronze_bucket_arn}/${folder}"])
     LIST_PREFIXES      = jsonencode(concat(local.athena_table_folders, [local.athena_results_path]))
     BUCKET_ARN         = local.bronze_bucket_arn
     RESULTS_OBJECT_ARN = "${local.bronze_bucket_arn}/${local.athena_results_path}"
   })
-  athena_gold_writer_arn = "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_gold_task")}"
+  athena_writer_arns = [for layer in keys(local.athena_layers) : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_${layer}_task")}"]
+  # The catalog task role of the OpenMetadata ingestion (Fargate catalog task or metadata host task) reads the registrations and writes nothing.
+  athena_catalog_reader     = var.athena_mirror_prepared && var.openmetadata_prepared
+  athena_catalog_reader_arn = "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_openmetadata_task")}"
+  athena_glue_read_actions  = ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"]
 }
 
 resource "aws_glue_catalog_database" "athena_mirror" {
@@ -125,8 +138,16 @@ output "athena_mirror_contract" {
   }
 }
 
-# The private gold writer has no route to the public Glue API. This endpoint is the one way, restricted to the gold writer role and the four mirror
-# actions on the mirror database. It follows the reviewed private endpoint switch.
+resource "aws_iam_role_policy" "openmetadata_glue_read" {
+  count = local.athena_catalog_reader ? 1 : 0
+
+  name   = "glue_mirror_catalog_read"
+  role   = aws_iam_role.openmetadata_task[0].name
+  policy = templatefile("${path.module}/owner_policies/openmetadata_glue_read.json", { MIRROR_ARNS = jsonencode(local.athena_mirror_arns) })
+}
+
+# The private layer writers have no route to the public Glue API. This endpoint is the one way, restricted to the silver, gold and features writer roles
+# and the four mirror actions on the mirror databases, plus reads for the catalog task role when the catalog is prepared. It follows the reviewed private endpoint switch.
 resource "aws_security_group" "athena_glue_endpoint" {
   count = local.athena_glue_endpoint ? 1 : 0
 
@@ -148,13 +169,22 @@ resource "aws_vpc_endpoint" "athena_glue" {
   tags                = merge(local.project_tags, { Name = format(local.platform_name, "athena_glue") })
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { AWS = "*" }
-      Action    = ["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]
-      Resource  = concat([local.athena_catalog_arn], [for layer, spec in local.athena_layers : "${local.athena_account_arn}:database/${spec.database}"], values(local.athena_table_arns))
-      Condition = { ArnEquals = { "aws:PrincipalArn" = local.athena_gold_writer_arn } }
-    }]
+    Statement = concat(
+      [{
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action    = ["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]
+        Resource  = local.athena_mirror_arns
+        Condition = { ArnEquals = { "aws:PrincipalArn" = local.athena_writer_arns } }
+      }],
+      [for reader in [local.athena_catalog_reader_arn] : {
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action    = local.athena_glue_read_actions
+        Resource  = local.athena_mirror_arns
+        Condition = { ArnEquals = { "aws:PrincipalArn" = reader } }
+      } if local.athena_catalog_reader]
+    )
   })
 }
 
@@ -178,4 +208,17 @@ resource "aws_vpc_security_group_egress_rule" "athena_glue_from_lakehouse" {
   from_port                    = 443
   to_port                      = 443
   referenced_security_group_id = aws_security_group.athena_glue_endpoint[0].id
+}
+
+# The metadata host task runs on the host in bridge mode, so its Glue calls leave from the host. Private DNS sends them to this endpoint, which must accept
+# the host while the persistent catalog is prepared. The host already sends HTTPS anywhere (network.tf host_https).
+resource "aws_vpc_security_group_ingress_rule" "athena_glue_from_host" {
+  count = local.athena_glue_endpoint && local.athena_catalog_reader && var.openmetadata_persistent_prepared ? 1 : 0
+
+  security_group_id            = aws_security_group.athena_glue_endpoint[0].id
+  description                  = "Glue HTTPS from the container host for the catalog ingestion"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.host.id
 }

@@ -12,7 +12,7 @@
       "runs_as": "migration step and catalog server of the catalog task; the persistent host service (openmetadata_persistent_enabled)",
       "release": "2.0.7",
       "selected_reference": "docker.io/openmetadata/server:2.0.7",
-      "digest": "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner"
+      "digest": "sha256:010d63887c5b428d877a84e7edd65a152894145e0bb0a90aabf334cd70815a0c"
     },
     "ingestion": {
       "ecr_repository": "<project>_openmetadata_ingestion_<environment>",
@@ -22,7 +22,7 @@
       "runs_as": "bootstrap and ingestion steps of the catalog task; the one-shot bootstrap of the persistent service",
       "release": "2.0.7",
       "selected_reference": "docker.io/openmetadata/ingestion:2.0.7",
-      "digest": "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner"
+      "digest": "sha256:cd28c0b1f64b9c3581badf996f7fef6ffea3918754d588095b2f04a8c9f3dca4"
     },
     "search": {
       "ecr_repository": "<project>_openmetadata_search_<environment>",
@@ -32,7 +32,7 @@
       "runs_as": "search index of the catalog task; the persistent OpenSearch single node on the host (loopback only, fixed heap)",
       "release": "3.3.2",
       "selected_reference": "docker.io/opensearchproject/opensearch:3.3.2",
-      "digest": "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner",
+      "digest": "sha256:6836708871685e272ad9042285e1c680790fe4315b047279ad16f761da2f4b70",
       "release_line": "OpenSearch 3.3.x (OpenMetadata 2.0.x supports 3.x, recommended 3.3.0)"
     },
     "database": {

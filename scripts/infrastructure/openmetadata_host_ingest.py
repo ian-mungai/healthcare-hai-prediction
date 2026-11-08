@@ -1,6 +1,6 @@
-"""Run the Polaris and dbt ingestion of the metadata job on the host, against the persistent OpenMetadata catalog.
+"""Run the Glue mirror and dbt ingestion of the metadata job on the host, against the persistent OpenMetadata catalog.
 
-Runs inside the ingestion image as ``python -m scripts.infrastructure.openmetadata_host_ingest --config-dir D --work-dir W polaris dbt``. The job is a bridge
+Runs inside the ingestion image as ``python -m scripts.infrastructure.openmetadata_host_ingest --config-dir D --work-dir W glue dbt``. The job is a bridge
 task that holds only this one container, so the catalog is not on loopback: ``OM_API`` names the catalog API on the host's private address, and the bot token
 arrives in ``OM_INGESTION_TOKEN`` as a task secret. The token is never written to a file. Each source goes through ``openmetadata_ingest.main``, so its refusal
 of a profiling or sampling configuration, its variable check and its dbt download stay the ones of the catalog task. Exit codes: 0 done, 1 a source failed,

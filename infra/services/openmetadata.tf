@@ -120,7 +120,8 @@ locals {
         { containerPort = local.om_admin_port, hostPort = local.om_admin_port, protocol = "tcp" },
       ]
       healthCheck = {
-        command     = ["CMD", "curl", "--fail", "--silent", "--max-time", "8", "http://127.0.0.1:${local.om_admin_port}/healthcheck"]
+        # The 2.0.7 server image is Alpine without curl; BusyBox wget is what its upstream compose file checks with.
+        command     = ["CMD", "wget", "-q", "--spider", "-T", "8", "http://127.0.0.1:${local.om_admin_port}/healthcheck"]
         interval    = 30
         timeout     = 10
         retries     = 10

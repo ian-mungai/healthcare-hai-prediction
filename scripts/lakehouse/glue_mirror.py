@@ -1,12 +1,15 @@
 """Mirror published Iceberg tables into read-only Glue registrations for Athena. Polaris stays the catalog and the source of truth.
 
-After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``. For every table that the publish contract names, all Public
-research data, the mirror makes one Glue table. Its ``metadata_location`` is the metadata file of the table's committed snapshot, taken from the
-newest ``publish_runs`` row. A repeat with the same file, snapshot and run writes nothing. Only mode ``real`` and the gold layer of
-``config/lakehouse/athena_mirror.json`` are mirrored, so silver, features, bronze, test namespaces and the runs table never reach Glue
-(``violations``). The mirror never raises and stops at ``mirror_seconds``: a failure comes back in the report.
+After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``; the silver and features publishes commit through the same engine
+(``gold_publish.commit_publish``), so they call it too.
+For every table that the publish contract names, all Public research data, the mirror makes one Glue table. Its ``metadata_location`` is the metadata
+file of the table's committed snapshot, taken from the newest ``publish_runs`` row. A repeat with the same file, snapshot and run writes nothing. Only mode
+``real`` and the silver, gold and features layers of ``config/lakehouse/athena_mirror.json`` are mirrored, so bronze, test namespaces and the runs
+table never reach Glue (``violations``). The Glue registrations are also what the OpenMetadata Glue connector reads (owner decision of Nov 7 2026), because
+OpenMetadata 2.0.7 has no Iceberg connector. The mirror never raises and stops at ``mirror_seconds``: a failure comes back in the report.
 
-``python -m scripts.lakehouse.glue_mirror check --layer gold`` compares each registration with Polaris and exits 1 on any difference. It writes nothing.
+``python -m scripts.lakehouse.glue_mirror check --layer silver|gold|features`` compares each registration with Polaris and exits 1 on any difference.
+It writes nothing.
 """
 
 from __future__ import annotations
@@ -25,7 +28,13 @@ from typing import Any, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "config/lakehouse/athena_mirror.json"
-MIRRORED_LAYERS = ("gold",)
+MIRRORED_LAYERS = ("silver", "gold", "features")
+# The publish contract of each mirrored layer: the features publish is the gold engine with its own contract (scripts/features/features_publish.py).
+LAYER_CONTRACTS = {
+    "silver": REPO_ROOT / "data_contracts/lakehouse/silver_publish.json",
+    "gold": REPO_ROOT / "data_contracts/lakehouse/gold_contract.json",
+    "features": REPO_ROOT / "data_contracts/lakehouse/features_publish.json",
+}
 POINTER = re.compile(r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/(?:[^/]+/)*metadata/[^/]+\.metadata\.json")
 # The newest metadata file whose current snapshot is the committed one. A later publish that failed halfway moves main, but not this answer.
 COMMITTED_METADATA_FILE = "SELECT file FROM {table}.metadata_log_entries WHERE latest_snapshot_id = {snapshot} ORDER BY timestamp DESC LIMIT 1"
@@ -299,11 +308,18 @@ def check(config: MirrorConfig, layer: str, snapshots: Mapping[str, int], source
     return {"ok": all(outcome == "match" for outcome in outcomes.values()), "tables": outcomes}
 
 
+def layer_plan(layer: str) -> Any:
+    """The publish plan of a mirrored layer, read from its own contract."""
+    from scripts.lakehouse import gold_publish
+
+    return gold_publish.load_plan(LAYER_CONTRACTS[layer])
+
+
 def committed_set(spark: Any, layer: str) -> tuple[dict[str, int], str]:
     """The newest committed snapshot set of the layer: the publish_runs row that a reader reads first."""
     from scripts.lakehouse import gold_publish
 
-    ctx = gold_publish.Context(spark, gold_publish.load_plan(), "00000000T000000Z-00000000", "real", Path("/nonexistent"), "", needs_sealed=False)
+    ctx = gold_publish.Context(spark, layer_plan(layer), "00000000T000000Z-00000000", "real", Path("/nonexistent"), "", needs_sealed=False)
     head = gold_publish.published_head(ctx)
     if head is None:
         raise MirrorError(f"no committed {layer} snapshot set exists")

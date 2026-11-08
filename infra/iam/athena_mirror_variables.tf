@@ -1,5 +1,5 @@
 variable "athena_mirror_prepared" {
-  description = "Create the gold Glue database, the limited Athena workgroup and the mirror-only grants. The mirror itself stays off in config/lakehouse/athena_mirror.json until the owner turns it on."
+  description = "Create the silver, gold and features Glue databases, the limited Athena workgroup and the mirror-only grants (with openmetadata_prepared, also the catalog task's read of them). The mirror itself stays off in config/lakehouse/athena_mirror.json until the owner turns it on."
   type        = bool
   default     = false
   nullable    = false
