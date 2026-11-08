@@ -149,7 +149,8 @@ run "airflow_launch_is_off_by_default" {
     condition = (
       length(aws_iam_role.airflow_launch_task) == 0 && length(aws_iam_role_policy.airflow_launch_jobs) == 0 &&
       length(aws_iam_role_policy.airflow_launch_records) == 0 && length(aws_iam_role_policy.airflow_launch_requests) == 0 &&
-      length(aws_iam_role_policy.airflow_launch_bronze_record) == 0 && output.airflow_launch_roles == {}
+      length(aws_iam_role_policy.airflow_launch_bronze_record) == 0 && length(aws_iam_role_policy.airflow_launch_code_runs) == 0 &&
+      length(aws_iam_role_policy.airflow_launch_drift_records) == 0 && output.airflow_launch_roles == {}
     )
     error_message = "Without airflow_launch_prepared the IAM root adds no launch role and no launch grant."
   }
@@ -512,6 +513,116 @@ run "the_bronze_family_reads_only_the_bronze_run_record" {
       ]
     )
     error_message = "The bronze family adds one get action on the run record name lakehouse/bronze_runs/<run>/check.json of the data bucket, with no list and no other key."
+  }
+}
+
+run "every_launch_role_binds_code_runs_once" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_iam_role_policy.airflow_launch_code_runs[0].role == aws_iam_role.airflow_launch_task[0].name &&
+      jsondecode(aws_iam_role_policy.airflow_launch_code_runs[0].policy).Statement == [
+        {
+          Sid      = "ReadCodeRunBindings"
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/code_run.json"
+        },
+        {
+          Sid       = "BindCodeRunsOnce"
+          Effect    = "Allow"
+          Action    = "s3:PutObject"
+          Resource  = "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/code_run.json"
+          Condition = { StringEquals = { "s3:if-none-match" = "*" } }
+        },
+        {
+          Sid       = "ListCodeRunBindings"
+          Effect    = "Allow"
+          Action    = "s3:ListBucket"
+          Resource  = "arn:aws:s3:::example-project-ci-bucket"
+          Condition = { StringLike = { "s3:prefix" = ["lakehouse/run_stage/*/inputs/code_run.json"] } }
+        },
+      ]
+    )
+    error_message = "Every launch role reads the code run binding of a run, creates it once and lists only that key, so a missing binding reads as absent; nothing else of the staged inputs."
+  }
+}
+
+run "no_drift_record_read_without_the_drift_family" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["promote", "serve", "train"]
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.airflow_launch_drift_records) == 0
+    error_message = "Without the drift family the launch role reads no drift record."
+  }
+}
+
+run "the_drift_family_reads_only_the_drift_records" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["drift", "promote", "serve", "train"]
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.airflow_launch_drift_records[0].role == aws_iam_role.airflow_launch_task[0].name &&
+      jsondecode(aws_iam_role_policy.airflow_launch_drift_records[0].policy).Statement == [
+        {
+          Sid      = "ReadDriftRecords"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject"]
+          Resource = "arn:aws:s3:::example-project-ci-bucket/drift/*"
+        }
+      ]
+    )
+    error_message = "The drift family adds one get action on the drift records of the data bucket to the launch role, for the drift DAG's decision: no list, no write and no other prefix."
+  }
+
+  assert {
+    condition = (
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_drift_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_serve_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+      ] &&
+      jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Condition.StringEquals["aws:RequestTag/HaiJob"] == ["drift", "promote", "serve", "train"] &&
+      length(aws_iam_role_policy.airflow_launch_requests) == 1 &&
+      jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/serving_request.json"]
+    )
+    error_message = "The four families of the Airflow DAG launches pass the drift, serve and train task roles (promote reuses the train role) with the execution role, tag their four jobs and read the staged serving request."
+  }
+}
+
+run "the_control_plane_role_gains_no_launch_grant" {
+  command = plan
+
+  variables {
+    airflow_launch_families          = ["drift", "promote", "serve", "train"]
+    drift_prepared                   = true
+    job_endpoints_enabled            = true
+    drift_mlflow_admin_password_name = "/example_project/mlflow_admin_password"
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in concat(
+        aws_iam_role_policy.airflow_launch_jobs, aws_iam_role_policy.airflow_launch_records, aws_iam_role_policy.airflow_launch_requests,
+        aws_iam_role_policy.airflow_launch_code_runs, aws_iam_role_policy.airflow_launch_drift_records,
+      ) : policy.role == aws_iam_role.airflow_launch_task[0].name
+    ])
+    error_message = "Every launch grant sits on the launch role; the control-plane role of the other Airflow services gains none."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.drift_records_read[0].role == aws_iam_role.control_plane_task.name && jsondecode(aws_iam_role_policy.drift_records_read[0].policy).Statement == jsondecode(aws_iam_role_policy.airflow_launch_drift_records[0].policy).Statement
+    error_message = "The launch role reads the drift records with the same document as the drift stack's read, and the control-plane read stays as it was."
   }
 }
 

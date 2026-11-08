@@ -1,7 +1,7 @@
 """Run silver, gold, features and drift in order after one bronze run, with no calendar schedule.
 
 The owner starts this DAG by hand after a new bronze snapshot, with ``run_id`` set to the run of that snapshot. A sensor that starts it comes later.
-The first task asks the broker whether the first silver and gold publishes are signed. Without that record the broker refuses and the chain stops.
+The first task checks that the first silver and gold publishes are signed. Without that record the gate refuses and the chain stops.
 Each layer then runs as a triggered DAG run and the chain waits for its success before the next layer, so a failed layer or a failed acceptance check stops
 the chain before the later layers. Every wait has a limit.
 
@@ -109,7 +109,7 @@ def trigger_for(index: int) -> TriggerDagRunOperator:
     if parent_key is not None:
         conf[parent_key] = f"{{{{ chain_run('{CHAIN[index - 1][0]}', params.run_id) }}}}"
     if layer == "drift":
-        conf["mlflow"] = "local"
+        conf["mlflow"] = "aws"
     return TriggerDagRunOperator(
         task_id=f"run_{layer}",
         trigger_dag_id=dag_id,

@@ -24,6 +24,7 @@ from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
 from orchestration.ecs_launch import (
     CleanupFailed,
     EcsFitProbe,
+    FamilyBusy,
     JobSpec,
     Launch,
     Launcher,
@@ -76,9 +77,9 @@ class Rig:
         self.adapter = EcsAdapter(self.ecs, self.logs, SETTINGS)
         self.scratch_free = 2 * NEED.scratch_bytes
 
-    def launcher(self, cleanup: Callable[[JobSpec], None] | None = None) -> Launcher:
+    def launcher(self, cleanup: Callable[[JobSpec], None] | None = None, scratch_usage: Callable[[], dict[str, int]] | None = None) -> Launcher:
         probe = EcsFitProbe(self.ecs, CLUSTER, lambda: self.scratch_free)
-        return Launcher(self.adapter, S3LaunchStore(self.bucket, BUCKET, PREFIX), probe, self.time.clock(), cleanup)
+        return Launcher(self.adapter, S3LaunchStore(self.bucket, BUCKET, PREFIX), probe, self.time.clock(), cleanup, scratch_usage)
 
     def key(self, attempt: int, event: str, job: str = "gold") -> str:
         return f"{PREFIX}/{RUN}/{job}/{attempt:02d}/{event}.json"
@@ -1030,12 +1031,18 @@ def store_scope() -> None:
     done = rig.launcher().run(spec(3))
     require(done.ok, f"records read by key across a gap in the attempts: {done}")
     require(rig.launcher().run(spec(3)) == done, "a repeat reads the records and returns the outcome")
-    require(not hasattr(rig.bucket, "list_objects_v2"), "the code never lists")
     operations = {name for name, _ in rig.bucket.calls}
-    require(operations <= {"put_object", "get_object"}, f"no delete, list or other call: {operations}")
+    require(operations <= {"put_object", "get_object", "list_objects_v2"}, f"no delete or other call: {operations}")
+    listings = [arguments for name, arguments in rig.bucket.calls if name == "list_objects_v2"]
+    require(
+        len(listings) == 1 and set(listings[0]) <= {"Bucket", "Prefix", "ContinuationToken"} and listings[0]["Prefix"] == f"{PREFIX}/families/gold/",
+        f"the one listing is the family index of the job, before the claim: {listings}",
+    )
     for name, arguments in rig.bucket.calls:
+        if name == "list_objects_v2":
+            continue
         key = arguments["Key"]
-        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim|decision|cancel)|absent-probe)\.json"
+        pattern = rf"{re.escape(PREFIX)}/({RUN}/gold/([0-9]{{2}}/(intent|started|end)|claim|decision|cancel)|families/gold/{RUN}|absent-probe)\.json"
         require(re.fullmatch(pattern, key) is not None, f"{name} {key} is not a launch record key")
         require(
             name != "put_object" or arguments.get("IfNoneMatch") == "*" or ("IfMatch" in arguments and key.endswith("/decision.json")),
@@ -1261,7 +1268,228 @@ def empty_description_is_never_an_outcome() -> None:
     require(launcher.conclude(launch).outcome == "timeout", "and then it is a timeout")
 
 
+THIRD_RUN = "20261104T120000Z-abcdef03"
+
+
+def family_key(run: str, job: str = "gold") -> str:
+    return f"{PREFIX}/families/{job}/{run}.json"
+
+
+def claim_of(rig: Rig, run: str, job: str = "gold") -> bool:
+    return f"{PREFIX}/{run}/{job}/claim.json" in rig.bucket.objects
+
+
+def family_busy_while_a_task_of_the_family_runs() -> None:
+    """Owner decision A (Nov 7 2026): the host keeps one scratch folder per family, so a run of a family never starts beside a running task of the family's
+    host definition. The refusal comes before the claim, so the refused run is not burned and launches once the family is free."""
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(rig, spec())
+    error = refuses(FamilyBusy, lambda: rig.launcher().run(spec(1, run_id=OTHER_RUN)))
+    require("has not stopped" in str(error) and "example_dev_job_gold_host" in str(error), f"the refusal names the unstopped task of the family: {error}")
+    require(not claim_of(rig, OTHER_RUN) and family_key(OTHER_RUN) not in rig.bucket.objects, "the refused run was claimed or indexed, so it is burned")
+    require(rig.ecs.count("run_task") == 1, "a second task of the family was started")
+    rig.ecs.hold = False
+    for arn in gold_tasks(rig):
+        rig.ecs.finish(arn)
+    rig.launcher().run(spec())
+    done = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(done.ok and claim_of(rig, OTHER_RUN), f"the refused run did not launch once the family was free: {done}")
+
+
+def family_busy_while_an_earlier_launch_has_no_end() -> None:
+    """A claimed launch of the family that has no end record may still have a task the cloud does not show (a lost reply, a failed read): the family stays
+    closed until that launch is settled, even when ECS lists no running task."""
+    rig = Rig()
+    rig.ecs.forget_stopped_tokens = True
+    rig.ecs.hold = True
+    rig.bucket.put_faults["started.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
+    require(family_key(RUN) in rig.bucket.objects, "the claimed launch is not in the family index")
+    for arn in gold_tasks(rig):
+        rig.ecs.finish(arn)
+    rig.ecs.hold = False
+    rig.ecs.faults["list_tasks"] = []
+    error = refuses(FamilyBusy, lambda: rig.launcher().run(spec(1, run_id=OTHER_RUN)))
+    require(RUN in str(error) and "no end record" in str(error), f"the refusal names the unsettled launch: {error}")
+    require(not claim_of(rig, OTHER_RUN), "the refused run was claimed")
+    rig.time.now += 300
+    settled = rig.launcher().run(spec(2))
+    require(settled.outcome is not None and rig.launcher().run(spec(1, run_id=OTHER_RUN)).ok, "after the earlier launch is settled the next run launches")
+
+
+def family_gate_reads_or_refuses() -> None:
+    """A gate that cannot read the cloud or the index never reads as free: the run is refused unclaimed."""
+    rig = Rig()
+    rig.ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
+    refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
+    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, "a run started without reading the family's tasks")
+    rig = Rig()
+    rig.bucket.faults["list_objects_v2"] = [client_error("SlowDown", "ListObjectsV2")]
+    refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
+    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, "a run started without reading the family index")
+    rig = Rig()
+    rig.bucket.faults["list_objects_v2"] = [client_error("AccessDenied", "ListObjectsV2")]
+    refuses(LaunchRefused, lambda: rig.launcher().run(spec()))
+    require(not claim_of(rig, RUN), "a run started on a family index it may not list")
+
+
+def family_gate_spares_other_families_and_its_own_run() -> None:
+    """Another family's running task never closes this family, and a retry of a claimed run settles its own launch instead of meeting its own index."""
+    rig = Rig()
+    rig.ecs.hold = True
+    die_while_running(
+        rig,
+        spec(
+            job="drift",
+            environment={"drift": {"RUN_ID": RUN}},
+            acceptance=(),
+            log_container="drift",
+            log_prefix="drift",
+            need=Resources(cpu_units=512, memory_mib=1024, scratch_bytes=1),
+        ),
+    )
+    launcher = rig.launcher()
+    launch = launcher.attach(spec())
+    launcher.start(launch)
+    require(launch.arn is not None and claim_of(rig, RUN), "a running drift task closed the gold family")
+    again = rig.launcher()
+    repeat = again.attach(spec(2))
+    again.start(repeat)
+    require(repeat.arn == launch.arn and rig.ecs.count("run_task") == 2, "a retry of the same run met its own index instead of joining its task")
+    require(
+        sorted(key for key in rig.bucket.objects if "/families/" in key) == sorted([family_key(RUN), family_key(RUN, "drift")]),
+        "the index is not one key per run",
+    )
+    require(json.loads(rig.bucket.objects[family_key(RUN)])["attempt"] == 1, "the index does not name the claimed attempt")
+    require(not claim_of(rig, THIRD_RUN), "a run that was never asked for was claimed")
+
+
+def family_busy_while_a_task_of_the_family_is_stopping() -> None:
+    """A stopping task (desired status STOPPED, containers still running) still writes to the family's scratch folder, so the gate admits a new run only
+    when every listed task of the family's host definition shows last status STOPPED (round 2 review, H1). The task here was not started by the launcher,
+    so only the cloud shows it."""
+    rig = Rig()
+    rig.ecs.stop_lag = 3
+    arn = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT, "", HOST)
+    rig.ecs.stop_task(cluster=CLUSTER, task=arn, reason="owner stop")
+    require(rig.ecs.tasks[arn]["desiredStatus"] == "STOPPED" and rig.ecs.tasks[arn]["lastStatus"] != "STOPPED", "the stand-in task is not stopping")
+    error = refuses(FamilyBusy, lambda: rig.launcher().run(spec()))
+    require(arn in str(error) and "has not stopped" in str(error), f"the refusal does not name the stopping task: {error}")
+    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 1, "a run was claimed or started beside a stopping task of its family")
+    while rig.ecs.tasks[arn]["lastStatus"] != "STOPPED":
+        rig.ecs.describe_tasks(cluster=CLUSTER, tasks=[arn])
+    done = rig.launcher().run(spec())
+    require(done.ok, f"the run did not launch once the stopping task showed STOPPED: {done}")
+
+
+def family_index_write_with_a_lost_reply() -> None:
+    """The family index write can lose its reply; the store then reads the entry back with the index reader, not the launch record reader (review M5)."""
+    rig = Rig()
+    rig.bucket.lose_reply_once = True
+    done = rig.launcher().run(spec())
+    require(done.ok and family_key(RUN) in rig.bucket.objects, f"a lost reply of the index write stopped the launch: {done}")
+    rig = Rig()
+    rig.bucket.objects[family_key(RUN)] = b'{"event": "family"}'
+    rig.bucket.faults["put_object"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    error = refuses(LaunchError, lambda: rig.launcher().run(spec()))
+    require("family index" in str(error) and not claim_of(rig, RUN), f"a malformed index entry was accepted or the run was claimed: {error}")
+
+
+def unresolved_gold(rig: Rig) -> None:
+    """A launch whose every RunTask call lost its reply before ECS created anything: the send token is held, no task exists, and the launch stays
+    unresolved after its window."""
+    rig.ecs.faults["run_task"] = [ReadTimeoutError(endpoint_url="https://ecs.invalid")] * 200
+    error = refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
+    require("Manual owner path" in str(error) and "settle" in str(error), f"the unresolved launch does not name the owner's settle path: {error}")
+    rig.ecs.faults["run_task"] = []
+    require(not gold_tasks(rig) and "end" not in rig.events(1), "the stand-in launch is not unresolved")
+
+
+def owner_settles_an_unresolved_launch_and_admits_a_new_run() -> None:
+    """The owner path ends an unresolved launch durably (review M7): after the send window, with no task of the family that has not stopped, and with the
+    owner's statement of what was checked, the claim gets a failed_closed end record, every later caller reports it, and a new run of the family launches."""
+    rig = Rig()
+    unresolved_gold(rig)
+    refuses(FamilyBusy, lambda: rig.launcher().run(spec(1, run_id=OTHER_RUN)))
+    refuses(LaunchRefused, lambda: rig.launcher().owner_settle(RUN, "gold", 2, "checked"))
+    require("end" not in rig.events(1), "a settle without a statement of what was checked ended the launch")
+    statement = "ECS console and CloudTrail show no RunTask of this identity created a task"
+    settled = rig.launcher().owner_settle(RUN, "gold", 2, statement)
+    require(settled.outcome == "failed_closed" and settled.reason.startswith("owner_settled:"), f"the settle did not end the launch: {settled}")
+    require(rig.record(1, "end")["outcome"] == "failed_closed" and f"{PREFIX}/{RUN}/gold/cancel.json" in rig.bucket.objects, "no durable end or cancel")
+    sent = rig.ecs.count("run_task")
+    again = rig.launcher().run(spec(3))
+    require(
+        again.outcome == "failed_closed" and rig.ecs.count("run_task") == sent and not gold_tasks(rig), f"a later caller of the settled run launched: {again}"
+    )
+    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(fresh.ok, f"a new run of the family was not admitted after the settle: {fresh}")
+
+
+def owner_settle_needs_the_family_stopped_and_the_window_over() -> None:
+    """The settle never ends a launch while a task of the family has not stopped, or while a sender of the launch may still send."""
+    rig = Rig()
+    unresolved_gold(rig)
+    rig.ecs.hold = True
+    other = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT, "", HOST)
+    statement = "ECS console and CloudTrail show no RunTask of this identity created a task"
+    error = refuses(FamilyBusy, lambda: rig.launcher().owner_settle(RUN, "gold", 2, statement))
+    require(other in str(error) and "end" not in rig.events(1), f"the settle ended a launch beside an unstopped task of the family: {error}")
+    rig = Rig()
+    rig.ecs.faults["run_task"] = [ReadTimeoutError(endpoint_url="https://ecs.invalid")]
+    launcher = rig.launcher()
+    launch = launcher.attach(spec())
+    rig.time.on_sleep = lambda now: (_ for _ in ()).throw(Interrupted())
+    with contextlib.suppress(Interrupted):
+        launcher.start(launch)
+    rig.time.on_sleep = None
+    require(not gold_tasks(rig) and rig.decision_key() in rig.bucket.objects, "the stand-in sender did not hold the send token without a task")
+    error = refuses(LaunchUnavailable, lambda: rig.launcher().owner_settle(RUN, "gold", 2, statement))
+    require("window" in str(error) and "end" not in rig.events(1), f"the settle ended a launch whose sender may still send: {error}")
+
+
+GIB = 2**30
+
+
+def fit_credits_the_family_own_idle_scratch() -> None:
+    """Owner decision A (Nov 7 2026, H2): the task's first container empties the launching family's own scratch folder, and the gate has shown the family
+    idle, so admission counts the bytes in that folder as free. The host's free space alone is short here."""
+    rig = Rig()
+    rig.scratch_free = NEED.scratch_bytes - 10 * GIB
+    done = rig.launcher(scratch_usage=lambda: {"gold": 20 * GIB, "silver": 0}).run(spec())
+    require(done.ok and rig.ecs.count("run_task") == 1, f"the family's own reclaimable scratch was not counted: {done}")
+
+
+def fit_never_credits_another_family_and_names_it() -> None:
+    """Another family's leftovers are not this task's to empty: they still block, and the fit report names each family that holds scratch."""
+    rig = Rig()
+    rig.scratch_free = NEED.scratch_bytes - 10 * GIB
+    done = rig.launcher(scratch_usage=lambda: {"gold": 0, "silver": 30 * GIB, "drift": 5 * GIB, "train": 0}).run(spec())
+    require(done.outcome == "failed_closed" and rig.ecs.count("run_task") == 0, f"another family's scratch was counted as free: {done}")
+    require("silver" in done.reason and "drift" in done.reason and "train" not in done.reason, f"the fit report does not name the holders: {done.reason}")
+
+
+def fit_without_a_usage_reader_counts_free_space_only() -> None:
+    """Without a usage reader (a caller that cannot see the scratch folders) the free space alone decides, as before."""
+    rig = Rig()
+    rig.scratch_free = NEED.scratch_bytes - 10 * GIB
+    done = rig.launcher().run(spec())
+    require(done.outcome == "failed_closed" and "scratch_bytes" in done.reason, f"a short host was admitted without evidence of reclaimable scratch: {done}")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "fit_credits_the_family_own_idle_scratch": fit_credits_the_family_own_idle_scratch,
+    "fit_never_credits_another_family_and_names_it": fit_never_credits_another_family_and_names_it,
+    "fit_without_a_usage_reader_counts_free_space_only": fit_without_a_usage_reader_counts_free_space_only,
+    "family_busy_while_a_task_of_the_family_is_stopping": family_busy_while_a_task_of_the_family_is_stopping,
+    "family_index_write_with_a_lost_reply": family_index_write_with_a_lost_reply,
+    "owner_settles_an_unresolved_launch_and_admits_a_new_run": owner_settles_an_unresolved_launch_and_admits_a_new_run,
+    "owner_settle_needs_the_family_stopped_and_the_window_over": owner_settle_needs_the_family_stopped_and_the_window_over,
+    "family_busy_while_a_task_of_the_family_runs": family_busy_while_a_task_of_the_family_runs,
+    "family_busy_while_an_earlier_launch_has_no_end": family_busy_while_an_earlier_launch_has_no_end,
+    "family_gate_reads_or_refuses": family_gate_reads_or_refuses,
+    "family_gate_spares_other_families_and_its_own_run": family_gate_spares_other_families_and_its_own_run,
     "no_terminal_outcome_while_a_launch_may_be_live": no_terminal_outcome_while_a_launch_may_be_live,
     "aged_recovery_never_replays_runtask": aged_recovery_never_replays_runtask,
     "claim_that_sent_nothing_an_hour_later": claim_that_sent_nothing_an_hour_later,

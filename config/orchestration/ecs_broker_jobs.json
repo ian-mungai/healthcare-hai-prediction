@@ -350,6 +350,8 @@
     "pin_silver": "gold",
     "promote": "promote",
     "promotion_check": "train",
+    "promotion_final_gate_accepted": null,
+    "promotion_final_gate_rejected": null,
     "publish_candidates": "gold",
     "read_gold": "features",
     "read_silver": "gold",

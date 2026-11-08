@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 from unittest import mock
 
 from orchestration import graph, launcher
-from orchestration.interface import Handle, State, Status, SubmissionRequest
+from orchestration.interface import SubmissionRequest
 from scripts.lakehouse import memory_budget
 from scripts.orchestration.trigger_dag import run_conf
 from scripts.training.lane_b_cases import PARAMETERS, REGISTRY_ID, ROOT, RUN, Cases, require
@@ -104,7 +104,14 @@ def run() -> list[dict[str, Any]]:
         ),
     )
     sdk = ModuleType("airflow.sdk")
-    for name, value in (("DAG", Dag), ("Param", Param), ("TriggerRule", Rule), ("Asset", str), ("task", task), ("get_current_context", lambda: {})):
+    for name, value in (
+        ("DAG", Dag),
+        ("Param", Param),
+        ("TriggerRule", Rule),
+        ("Asset", str),
+        ("task", task),
+        ("get_current_context", lambda: {}),
+    ):
         setattr(sdk, name, value)
     package = ModuleType("airflow")
     previous = sys.modules.pop("orchestration.dag_runtime", None)
@@ -130,57 +137,45 @@ def run() -> list[dict[str, Any]]:
                 cases.check(f"dag_{dag_id}_actual_builder", check_graph)
                 cases.check(f"dag_{dag_id}_run_limits", check_limits)
             captured: list[SubmissionRequest] = []
+            launched = {**PARAMETERS, "mlflow": "aws"}  # a DAG step launches on AWS, so its MLflow lane is aws (mlflow=local is refused by name)
 
-            def wait(client: Any, request: SubmissionRequest) -> tuple[Handle, Status]:
+            def launch_step(request: SubmissionRequest, context: Any, selections: Any) -> str:
                 captured.append(request)
-                handle = Handle(request.submission_id, request.container_name)
-                return handle, Status(handle, State.NO_OP, 0, None)
+                return "succeeded"
 
-            instance = SimpleNamespace(try_number=1, dag_id="training_dag", task_id="catalog_up", run_id="manual")
+            library = SimpleNamespace(launch_step=launch_step)  # the launch library's fake: the DAGs launch through nothing else
+            instance = SimpleNamespace(try_number=1, dag_id="training_dag", task_id="guard", run_id="manual")
             with (
-                mock.patch.object(runtime, "get_current_context", return_value={"params": {"run_id": RUN, "mode": "fixture", **PARAMETERS}, "ti": instance}),
-                mock.patch.object(runtime.BrokerClient, "from_session", return_value=SimpleNamespace()),
-                mock.patch.object(runtime, "submit_and_wait", side_effect=wait),
+                mock.patch.object(runtime, "get_current_context", return_value={"params": {"run_id": RUN, "mode": "real", **launched}, "ti": instance}),
+                mock.patch.object(runtime, "launch_module", return_value=library),
             ):
                 cases.check(
-                    "dag_intentional_no_op_is_success", lambda: require(runtime.run_step("catalog_up") == "no_op", "an intentional no-op failed the task")
+                    "dag_step_returns_the_launch_library_state", lambda: require(runtime.run_step("guard") == "succeeded", "the step lost the library's state")
                 )
             cases.check(
-                "dag_training_parameters_reach_broker",
+                "dag_training_parameters_reach_launch_library",
                 lambda: require(
-                    len(captured) == 1 and captured[0].training == PARAMETERS and captured[0].mode == "fixture", "task adapter dropped a training parameter"
+                    len(captured) == 1 and captured[0].training == launched and captured[0].mode == "real", "task adapter dropped a training parameter"
                 ),
             )
-            for dag_id in ("silver_transform_dag", "gold_transform_dag", "transform_dag"):
-                instance = SimpleNamespace(try_number=1, dag_id=dag_id, task_id="catalog_up", run_id="manual")
-                with (
-                    mock.patch.object(runtime, "get_current_context", return_value={"params": {"run_id": RUN, "mode": "fixture"}, "ti": instance}),
-                    mock.patch.object(runtime.BrokerClient, "from_session", return_value=SimpleNamespace()),
-                    mock.patch.object(runtime, "submit_and_wait", side_effect=wait),
-                ):
-
-                    def refuses_no_op() -> None:
-                        try:
-                            runtime.run_step("catalog_up")
-                        except RuntimeError as error:
-                            require("ended no_op" in str(error), "the DAG task failed for another reason")
-                        else:
-                            raise ValueError("an existing DAG accepted a no-op")
-
-                    cases.check(f"dag_{dag_id}_no_op_remains_failure", refuses_no_op)
             instance = SimpleNamespace(try_number=1, dag_id="model_promotion_dag", task_id="promote", run_id="manual")
-            params = {"run_id": RUN, "mode": "rollback", "hai_type": "HAI_2", "model_version": "3", "mlflow": "local"}
+            params = {"run_id": RUN, "mode": "rollback", "hai_type": "HAI_2", "model_version": "3", "mlflow": "aws"}
             with (
                 mock.patch.object(runtime, "get_current_context", return_value={"params": params, "ti": instance}),
-                mock.patch.object(runtime.BrokerClient, "from_session", return_value=SimpleNamespace()),
-                mock.patch.object(runtime, "submit_and_wait", side_effect=wait),
+                mock.patch.object(runtime, "launch_module", return_value=library),
             ):
                 cases.check("dag_rollback_parameter_mapping", lambda: runtime.run_step("promote"))
+            local = {**params, "mlflow": "local"}
+            with (
+                mock.patch.object(runtime, "get_current_context", return_value={"params": local, "ti": instance}),
+                mock.patch.object(runtime, "launch_module", return_value=library),
+            ):
+                cases.refuses("dag_local_mlflow_refused_by_name", lambda: runtime.run_step("promote"), "mlflow=aws")
             cases.check(
                 "dag_rollback_uses_real_execution_mode",
                 lambda: require(
                     captured[-1].mode == "real"
-                    and captured[-1].training == {"hai_type": "HAI_2", "model_version": "3", "promotion_mode": "rollback", "mlflow": "local"},
+                    and captured[-1].training == {"hai_type": "HAI_2", "model_version": "3", "promotion_mode": "rollback", "mlflow": "aws"},
                     "rollback mode was confused with data mode",
                 ),
             )

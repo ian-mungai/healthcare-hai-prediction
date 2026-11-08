@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Reviewed services preparation inputs",
-  "description": "Nonsecret inputs of the services stack that the platform outputs and the committed defaults do not supply (the MLflow, broker, model API, page and monitoring switches with their roles and addresses), bound to a reviewed byte digest.",
+  "description": "Nonsecret inputs of the services stack that the platform outputs and the committed defaults do not supply (the MLflow, broker, model API, page and monitoring switches with their roles and addresses, and the Airflow scheduler's launch role), bound to a reviewed byte digest.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -72,6 +72,14 @@
         "broker_task_role_arn": {
           "type": "string",
           "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:broker_task)_(dev|prod)$"
+        },
+        "airflow_launch_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:airflow_launch_task)_(dev|prod)$"
+        },
+        "airflow_launch_bucket_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
         },
         "model_api_hai_types": {
           "type": "string",

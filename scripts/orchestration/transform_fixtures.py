@@ -122,7 +122,6 @@ def prepare_checkout(folder: Path, extra_dags: dict[str, str] | None = None) -> 
     shutil.copy2(ROOT / "scripts" / "orchestration" / "db_dump.py", folder / "scripts" / "orchestration" / "db_dump.py")
     for name in ("__init__.py", "interface.py", "client.py", "dag_runtime.py", "training_contract.py"):
         shutil.copy2(ROOT / "orchestration" / name, folder / "orchestration" / name)
-    shutil.copy2(ROOT / "dags" / "broker_probe_dag.py", folder / "dags" / "broker_probe_dag.py")
     shutil.copy2(ROOT / "tests/orchestration/fixtures/combined_dag.py", folder / "dags" / "transform_dag.py")
     for name, text in (extra_dags or {}).items():
         (folder / "dags" / name).write_text(text)

@@ -1,4 +1,4 @@
-"""Promote or restore an explicitly approved model version through the broker."""
+"""Promote or restore an explicitly approved model version through the direct ECS launch library."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ with DAG(
         "hai_type": Param(type="string", enum=list(HAI_TYPES)),
         "model_version": Param(type="string", pattern=r"^[1-9][0-9]{0,18}$"),
         "mode": Param("promote", type="string", enum=["promote", "rollback"]),
-        "mlflow": Param("local", type="string", enum=["local", "aws"]),
+        "mlflow": Param("aws", type="string", enum=["local", "aws"]),
     },
     default_args={"retries": 0},
 ) as dag:

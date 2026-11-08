@@ -16,7 +16,6 @@ It imports no launcher and makes no Docker call. The listener binds loopback onl
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import os
 import re
@@ -31,45 +30,46 @@ from datetime import UTC, date, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from botocore.exceptions import BotoCoreError, ClientError
 from jsonschema import Draft202012Validator
 
-from orchestration import serving_contract
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable, client_config
+from orchestration.ecs_preflight import (
+    APPROVAL_BYTES,
+    APPROVAL_DAY,
+    BRONZE_VARIABLES,
+    CHAIN_LAYERS,
+    CLOSED,
+    DEADLINE_VARIABLE,
+    GATE,
+    JOB_MODE,
+    RUN_ID,
+    SERVING_VARIABLES,
+    TABLE_MAP_FILE,
+    bronze_request_reader,
+    derived_run_id,
+    s3_digest_reader,
+    s3_object_reader,
+    serving_request_reader,
+    ssm_signed_reader,
+)
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.training_approvals import PROMOTION_KEYS
 from orchestration.training_contract import JOB_LANES, parameters_for, training_run_id
-from scripts.lakehouse.bronze_dispatch import DispatchError, check_dispatch
 from scripts.orchestration.ledger import Ledger, schema_validator
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
 OPERATIONS = ("health", "submit", "status", "cancel", "logs", "record")
 MAX_BODY_BYTES = 4096
-BRONZE_REQUEST_BYTES = 4096
-BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
-TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 HANDLER_TIMEOUT_SECONDS = 15.0
 CONTENT_LENGTH = re.compile(r"[0-9]{1,18}")
 SUBMISSION = re.compile(
     r"^([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}):([a-z][a-z0-9_]{1,40}):(fixture|publish_fixture|real):([0-9]{1,2})(?::([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}))?$"
 )
-DIGEST = re.compile(r"[a-f0-9]{64}")
-BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
-SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
 # The checked values a run keeps from its first attempt, with the word the refusal uses for each.
 BOUND_VALUES = (("BRONZE_INVENTORY_SHA256", "inventory"), ("BRONZE_REQUEST_SHA256", "request"), ("SERVING_REQUEST_SHA256", "request"))
-SERVING_REQUEST_BYTES = 4096
-DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
-GATE = "@gate"
-CHAIN_LAYERS = ("silver", "gold", "features", "drift")
-APPROVAL_BYTES = 4096
-APPROVAL_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-CLOSED = "the chain is closed until the first silver and gold publishes are signed"
-JOB_MODE = "real"
 TIMEOUT_EXIT = 124
 NO_CHECK_EXIT = 125
 CANCEL_EXIT = 143
@@ -109,146 +109,6 @@ def load_jobs(root: Path) -> dict[str, Any]:
     if unknown:
         raise BrokerError(f"{JOBS_FILE.name}: steps name unknown jobs {unknown}")
     return document
-
-
-class S3Reader(Protocol):
-    def get_object(self, **arguments: Any) -> dict[str, Any]: ...
-
-
-def s3_digest_reader(s3: S3Reader, bucket: str) -> Callable[[str], str]:
-    """Read the SHA-256 of a run's staged code archive from ``code.sha256`` beside ``code.tar.gz``."""
-
-    def read(run_id: str) -> str:
-        try:
-            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/code.sha256")["Body"].read(256)
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                raise TaskUnavailable("code_digest_not_staged") from None
-            raise TaskUnavailable("code_digest_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("code_digest_unreadable") from None
-        text = body.decode(errors="replace").strip()
-        if not DIGEST.fullmatch(text):
-            raise TaskRefused("code_digest_malformed")
-        return text
-
-    return read
-
-
-def s3_object_reader(s3: S3Reader, bucket: str, name: str) -> Callable[[str], str | None]:
-    """Read a small staged record of a run (``lakehouse/run_stage/<run>/inputs/<name>``), or None while the owner has not staged it."""
-
-    def read(run_id: str) -> str | None:
-        try:
-            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/{name}")["Body"].read(APPROVAL_BYTES + 1)
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                return None
-            raise TaskUnavailable("staged_record_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("staged_record_unreadable") from None
-        return str(body.decode(errors="replace"))
-
-    return read
-
-
-def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, str]) -> Callable[[str], dict[str, str]]:
-    """Read and check the run's staged ``bronze_request.json`` and return the values of the bronze containers.
-
-    The file holds exactly ``tables`` (a list of table names), ``target`` (``real`` or ``qualify``), ``dry_run`` (true or false) and
-    ``inventory_sha256`` (the digest of the staged source inventory). The tables must be
-    in the table map (``collections`` maps each table to its collection) and a qualification run takes the tables of one collection. A file that is not
-    staged yet is retryable, a file that fails a check is refused.
-    """
-
-    def read(run_id: str) -> dict[str, str]:
-        try:
-            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/bronze_request.json")["Body"].read(BRONZE_REQUEST_BYTES + 1)
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                raise TaskUnavailable("bronze_request_not_staged") from None
-            raise TaskUnavailable("bronze_request_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("bronze_request_unreadable") from None
-        if len(body) > BRONZE_REQUEST_BYTES:
-            raise TaskRefused("bronze_request_too_large")
-        try:
-            document = json.loads(body)
-        except ValueError:
-            raise TaskRefused("bronze_request_malformed") from None
-        if not isinstance(document, dict) or set(document) != BRONZE_REQUEST_KEYS:
-            raise TaskRefused("bronze_request_needs_exactly_tables_target_and_dry_run")
-        tables, target, dry_run, inventory = document["tables"], document["target"], document["dry_run"], document["inventory_sha256"]
-        if (
-            not isinstance(tables, list)
-            or not all(isinstance(name, str) for name in tables)
-            or not isinstance(target, str)
-            or type(dry_run) is not bool
-            or not isinstance(inventory, str)
-            or not DIGEST.fullmatch(inventory)
-        ):
-            raise TaskRefused("bronze_request_has_wrong_types")
-        try:
-            names = check_dispatch(tables, target, collections)
-        except DispatchError as error:
-            raise TaskRefused(f"bronze_request_refused: {error}") from None
-        values = {"BRONZE_TABLES": ",".join(names), "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
-        return values | {"BRONZE_REQUEST_SHA256": hashlib.sha256(body).hexdigest(), "BRONZE_INVENTORY_SHA256": inventory}
-
-    return read
-
-
-def derived_run_id(parent_run: str, layer: str) -> str:
-    """The run ID of a chain layer: the parent's time stamp and eight hex digits of a hash. ``dags/bronze_chain_dag.py`` derives the same IDs."""
-    return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
-
-
-def serving_request_reader(s3: S3Reader, bucket: str) -> Callable[[str], dict[str, str]]:
-    """Read and check the run's staged ``serving_request.json`` and return the values of the serve container.
-
-    The file is the closed record of ``orchestration.serving_contract``: the HAI type, the mode, the candidate version and the percent. A file that is not
-    staged yet is retryable, a file that fails a check is refused. The container receives the checked request and never reads the bucket for it.
-    """
-
-    def read(run_id: str) -> dict[str, str]:
-        try:
-            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/{serving_contract.REQUEST_FILE}")["Body"].read(
-                SERVING_REQUEST_BYTES + 1
-            )
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                raise TaskUnavailable("serving_request_not_staged") from None
-            raise TaskUnavailable("serving_request_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("serving_request_unreadable") from None
-        if len(body) > SERVING_REQUEST_BYTES:
-            raise TaskRefused("serving_request_too_large")
-        try:
-            document = json.loads(body)
-            if not isinstance(document, dict):
-                raise ValueError("the request is not an object")
-            checked = serving_contract.parameters_for("serving_deploy_dag", document)
-        except ValueError as error:
-            raise TaskRefused(f"serving_request_refused: {error}") from None
-        return {"SERVING_REQUEST": json.dumps(checked, sort_keys=True, separators=(",", ":")), "SERVING_REQUEST_SHA256": hashlib.sha256(body).hexdigest()}
-
-    return read
-
-
-def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
-    """Read the record of the signed first publishes from a Parameter Store value, or None while the parameter does not exist."""
-
-    def read() -> str | None:
-        try:
-            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
-                return None
-            raise TaskUnavailable("signed_record_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("signed_record_unreadable") from None
-
-    return read
 
 
 def parse_submission(submission_id: str) -> tuple[str, str, str, int]:

@@ -185,6 +185,8 @@ ROWS: list[Row] = [
     Row("services", "streamlit_task_role_arn", ROLE % "streamlit_task", "arn:aws:iam::1:role/x"),
     Row("services", "serving_execution_role_arn", ROLE % "serving_execution", "arn:aws:iam::1:role/x"),
     Row("services", "broker_task_role_arn", ROLE % "broker_task", "arn:aws:iam::1:role/x"),
+    Row("services", "airflow_launch_task_role_arn", ROLE % "airflow_launch_task", "arn:aws:iam::1:role/x"),
+    Row("services", "airflow_launch_bucket_name", "example-project-data-dev", "s3://example-project-data-dev"),
     Row("services", "model_api_hai_types", "HAI_1,HAI_2", "HAI_9"),
     Row("services", "streamlit_hai_types", "HAI_1", "HAI_9"),
     Row("services", "model_api_manifest_uri", "s3://example-project-data-dev/serving/deployments", "/serving/deployments"),

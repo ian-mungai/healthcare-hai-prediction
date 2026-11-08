@@ -583,3 +583,49 @@ variable "prometheus_retention_size_mb" {
     error_message = "Use a whole number of MB from 256 to 16384."
   }
 }
+
+variable "airflow_launch_task_role_arn" {
+  description = "IAM output airflow_launch_roles: the task role of the Airflow scheduler, which runs every DAG step under the LocalExecutor and launches the jobs through the direct ECS launch library. It may start, stop and describe the host definitions of the named job families, pass their roles and write the launch records. The API server, the DAG processor and the triggerer keep the control-plane role. Null keeps the scheduler on the control-plane role, which can launch nothing."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.airflow_launch_task_role_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:role/", coalesce(var.airflow_launch_task_role_arn, "none")))
+    error_message = "Supply an IAM role ARN for the Airflow scheduler, or leave airflow_launch_task_role_arn null."
+  }
+
+  validation {
+    condition = var.airflow_launch_task_role_arn == null || (
+      var.airflow_launch_task_role_arn != var.control_plane_task_role_arn && var.airflow_launch_task_role_arn != var.polaris_task_role_arn &&
+      var.airflow_launch_task_role_arn != var.mlflow_task_role_arn
+    )
+    error_message = "The Airflow scheduler must have its own launch role, so the control plane, Polaris and MLflow hold no permission to start job tasks and the scheduler holds no lakehouse or artifact permission."
+  }
+
+  validation {
+    condition     = var.airflow_launch_task_role_arn == null || can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", coalesce(var.mlflow_host_ip, "none")))
+    error_message = "The launched jobs reach the catalog and MLflow at the host's private address: supply mlflow_host_ip with airflow_launch_task_role_arn."
+  }
+}
+
+variable "airflow_launch_bucket_name" {
+  description = "Name of the data bucket that holds the launch records and the staged inputs of the jobs the Airflow scheduler launches (HAI_LAUNCH_BUCKET). Required when airflow_launch_task_role_arn is set."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.airflow_launch_task_role_arn == null || (var.airflow_launch_bucket_name != null && can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", coalesce(var.airflow_launch_bucket_name, "!"))))
+    error_message = "Name the data bucket of the launch records and staged inputs, or leave airflow_launch_task_role_arn null."
+  }
+}
+
+variable "airflow_launch_scratch_path" {
+  description = "Absolute host folder of the scratch volume that the Airflow containers see read-only, so that the launch library can check the free space before it starts a job."
+  type        = string
+  default     = "/data/job_scratch"
+
+  validation {
+    condition     = can(regex("^/[A-Za-z0-9_][A-Za-z0-9_./-]*[A-Za-z0-9_]$", var.airflow_launch_scratch_path)) && !strcontains(var.airflow_launch_scratch_path, "..") && !strcontains(var.airflow_launch_scratch_path, "//")
+    error_message = "Use an absolute folder without a trailing slash, a parent step or a double slash, for example /data/job_scratch."
+  }
+}

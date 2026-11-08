@@ -68,7 +68,6 @@ A1_FILES = (
     "scripts/orchestration/run_real_e2e.py",
     "orchestration/client.py",
     "orchestration/graph.py",
-    "dags/broker_probe_dag.py",
 )
 
 
@@ -235,7 +234,7 @@ def mutation_cases(platform: dict[str, Any]) -> dict[str, bool]:
     postgres_digest = platform["metadata_database"]["image"].split("@sha256:")[1]
     dockerfile = (ROOT / platform["airflow"]["dockerfile"]).read_text()
     constraints = (ROOT / platform["airflow"]["constraints"]["path"]).read_bytes()
-    dag = (ROOT / "dags" / "broker_probe_dag.py").read_text()
+    dag = (ROOT / "dags" / "metadata_ingest_dag.py").read_text()
     volume = "    - ${HAI_ORCH_REPO}/dags:/opt/airflow/dags:ro\n"
     return {
         "compose with another PostgreSQL digest refused": bool(compose_problems(compose.replace(postgres_digest, "f" * 64), platform)),

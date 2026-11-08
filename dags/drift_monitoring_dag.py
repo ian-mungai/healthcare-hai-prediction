@@ -1,12 +1,12 @@
 """Compare the Production models' features with their training baselines and start ``training_dag`` when enough of them drift.
 
-One broker step starts the drift task on AWS. The task covers the six HAI types and publishes its records to ``s3://<data bucket>/drift/<run>/``, with the
-marker ``_complete.json`` last. ``decide`` reads the marker and the records it names, refuses a missing marker, a record of another run, a changed or
-inconsistent record, and builds at most one request for ``training_dag``: the types whose record says ``triggered``, the primary population, the latest
-publication and ``trigger=drift:<this run>``. A run where no type has a Production model has a marker with no records and starts nothing. The trigger is mapped
-over that list, so a quiet run starts nothing. The training run id and the trigger run id come from the drift run id, so a retry never starts a second training
-run. The training DAG keeps its own approval gate for real runs, and promotion of a retrained model stays with the owner.
-"""
+One step launches the drift task on AWS through the direct ECS launch library. The task covers the six HAI types and publishes its records to
+``s3://<data bucket>/drift/<run>/``, with the marker ``_complete.json`` last. ``decide`` reads the marker and the records it names, refuses a missing marker,
+a record of another run, a changed or inconsistent record, and builds at most one request for ``training_dag``: the types whose record says ``triggered``, the
+primary population, the latest publication and ``trigger=drift:<this run>``. A run where no type has a Production model has a marker with no records and
+starts nothing. The trigger is mapped over that list, so a quiet run starts nothing. The training run id and the trigger run id come from the drift run id, so
+a retry never starts a second training run. The training DAG keeps its own approval gate for real runs, and promotion of a retrained model stays with the
+owner."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration import dag_runtime
-from orchestration.training_contract import HAI_TYPES, RUN_ID, parameters_for, training_run_id
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, parameters_for, training_run_id
 
 MARKER = "_complete.json"
 
@@ -80,7 +80,10 @@ def training_requests(drift_run: str, mlflow: str, records: list[dict[str, Any]]
         return []
     training = {"features_run": "latest", "population": "primary", "hai_types": drifted, "trigger": f"drift:{drift_run}", "mlflow": mlflow}
     return [
-        {"trigger_run_id": f"drift__{drift_run}", "conf": {"run_id": training_run_id(drift_run), "mode": "real", **parameters_for("training_dag", training)}}
+        {
+            "trigger_run_id": f"drift__{drift_run}",
+            "conf": {"run_id": training_run_id(drift_run), "mode": "real", **parameters_for("training_dag", training, LAUNCH_LANES)},
+        }
     ]
 
 
@@ -93,21 +96,21 @@ with DAG(
     params={
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
         "mode": Param("real", type="string", enum=["real"]),
-        "mlflow": Param("local", type="string", enum=["local", "aws"]),
+        "mlflow": Param("aws", type="string", enum=["local", "aws"]),
     },
     default_args={"retries": 0},
 ) as dag:
 
-    @task(task_id="drift_run", retries=0, execution_timeout=dag_runtime.STEP_TIMEOUT)
+    @task(task_id="drift_run", retries=0, execution_timeout=dag_runtime.STEP_TIMEOUT, pool=dag_runtime.launch_pool())
     def drift_run() -> str:
         return dag_runtime.run_step("drift_run")
 
     @task(task_id="decide", retries=0)
     def decide() -> list[dict[str, Any]]:
         params = get_current_context()["params"]
-        bucket = os.environ.get("DATA_BUCKET_NAME", "")
+        bucket = os.environ.get("HAI_LAUNCH_BUCKET", "")
         if not bucket:
-            raise RuntimeError("DATA_BUCKET_NAME is not set in the Airflow service environment")
+            raise RuntimeError("HAI_LAUNCH_BUCKET (the data bucket of the launched jobs) is not set in the Airflow service environment")
         return training_requests(params["run_id"], params["mlflow"], read_records(s3_client(), bucket, params["run_id"]))
 
     ran = drift_run()

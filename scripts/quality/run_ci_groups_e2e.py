@@ -1486,7 +1486,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(
             work,
             "dag_python_selects_types",
-            ["--scope", "paths", "--path", "dags/broker_probe_dag.py", "--part", "core+layers"],
+            ["--scope", "paths", "--path", "dags/metadata_ingest_dag.py", "--part", "core+layers"],
             ["python_lint", "orchestration_checks", "repository_code_checks"],
         ),
         selection_case(
@@ -3071,6 +3071,7 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.run_ecs_target_e2e", "--proof", "D"),
     ("scripts.orchestration.task_guard_cases",),
     ("scripts.orchestration.run_ecs_launch_e2e",),
+    ("scripts.orchestration.run_airflow_mode_e2e",),
     ("scripts.lakehouse.run_layer_run_e2e",),
     ("scripts.lakehouse.run_bronze_run_e2e",),
     ("scripts.orchestration.run_lineage_completion_e2e",),

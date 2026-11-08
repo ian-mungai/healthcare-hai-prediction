@@ -61,6 +61,8 @@ PREREQUISITES = {
 INPUT_STEPS = {**PREREQUISITES, "mediation": ("extract",), "hac_validate": ("extract", "fit")}
 MAC_LANES = ("local",)
 JOB_LANES = ("local", "aws")
+# A DAG step launches its job on AWS through the direct ECS launch library, where the MLflow lane is aws. mlflow=local is refused by name, never converted.
+LAUNCH_LANES = ("aws",)
 
 
 def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] = MAC_LANES) -> dict[str, Any]:
@@ -92,6 +94,8 @@ def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] =
             raise ValueError("model_version must be a positive version string")
     else:
         raise ValueError("training parameters belong only to the training and promotion DAGs")
+    if raw["mlflow"] == "local" and lanes == LAUNCH_LANES:
+        raise ValueError("mlflow=local is the Mac route's lane. A DAG step launches its job on AWS through the launch library: name mlflow=aws")
     if raw["mlflow"] == "aws" and "aws" not in lanes:
         raise ValueError("mlflow=aws is not built on the Mac route. It runs only as an AWS task. Use mlflow=local")
     if raw["mlflow"] not in lanes:

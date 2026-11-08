@@ -9,7 +9,8 @@ It knows the two task shapes of the cluster. A definition whose name ends in ``_
 refuses an awsvpc network for it, refuses a strategy that names another provider and, when the strategy is omitted, places it by the cluster default
 (``FARGATE_SPOT``), which cannot run it. Every other definition is an awsvpc Fargate task: it needs the network and a Fargate provider. ``host_full`` makes
 the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room. ``describe_overrides`` replaces the next DescribeTasks replies, for example
-with one that names no task while the task runs.
+with one that names no task while the task runs. ``definitions`` names the containers of a task definition: ECS refuses an override for a container that
+the definition lacks, and so does the fake for each definition named there (a definition not named there takes any override).
 
 ``SdkStub`` is a different kind of stand-in: a real botocore client whose HTTP layer alone is replaced by scripted answers, so the SDK's own retry handling
 runs as it does against AWS. It sends nothing over the network: every request is answered by the ``before-send`` event, and the endpoint is a reserved
@@ -73,6 +74,7 @@ class FakeEcs:
         self.instance_free = {"CPU": 4096, "MEMORY": 31000}  # what the host's container instance reports as remaining
         self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
         self.describe_overrides: list[dict[str, Any] | None] = []  # replies for the next describe_tasks calls, in order (None lets a call through)
+        self.definitions: dict[str, frozenset[str]] = {}  # the containers of a task definition, for the definitions a case names
 
     def count(self, operation: str) -> int:
         return sum(1 for name, _ in self.calls if name == operation)
@@ -111,6 +113,10 @@ class FakeEcs:
         if arguments.get("count") != 1 or not 1 <= len(token) <= 64 or len(started_by) > 128 or not all(33 <= ord(c) <= 126 for c in token):
             raise client_error("InvalidParameterException", "RunTask")
         on_host = self._check_shape(arguments)
+        known = self.definitions.get(str(arguments["taskDefinition"]))
+        lacking = sorted({item["name"] for item in arguments.get("overrides", {}).get("containerOverrides", [])} - known) if known is not None else []
+        if lacking:
+            raise client_error("InvalidParameterException", "RunTask", f"Override for container named {lacking[0]} is not a container in the TaskDefinition.")
         expired = self.token_ttl is not None and self.clock is not None and token in self.tokens and self.clock() - self.token_made[token] > self.token_ttl
         if token in self.tokens and not expired and not (self.forget_stopped_tokens and self.tasks[self.tokens[token]]["lastStatus"] == STOPPED):
             return {"tasks": [self.tasks[self.tokens[token]]], "failures": []}
@@ -162,7 +168,10 @@ class FakeEcs:
         found = [
             arn
             for arn, task in self.tasks.items()
-            if ("startedBy" not in arguments or task["startedBy"] == arguments["startedBy"]) and task["desiredStatus"] == wanted and self._listed(task)
+            if ("startedBy" not in arguments or task["startedBy"] == arguments["startedBy"])
+            and ("family" not in arguments or str(task["request"]["taskDefinition"]).split(":")[0] == arguments["family"])
+            and task["desiredStatus"] == wanted
+            and self._listed(task)
         ]
         start = int(arguments.get("nextToken", "0"))
         reply: dict[str, Any] = {"taskArns": found[start : start + self.list_page]}

@@ -620,11 +620,11 @@ run "no_secret_in_environment_literals" {
     condition = alltrue(flatten([
       for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : [
         for container in jsondecode(definition.container_definitions) : [
-          for entry in lookup(container, "environment", []) : !can(regex("://[^/@[:space:]]*:[^/@[:space:]$]+@", entry.value)) && !can(regex("^[A-Za-z0-9+/=_-]{32,}$", entry.value)) && !can(regex("^arn:aws:(secretsmanager|ssm):", entry.value))
+          for entry in lookup(container, "environment", []) : !can(regex("://[^/@[:space:]]*:[^/@[:space:]$]+@", entry.value)) && (!can(regex("^[A-Za-z0-9+/=_-]{32,}$", entry.value)) || can(regex("^/?[a-z0-9]+(?:_[a-z0-9]+)+_?(?:/[a-z0-9]+(?:_[a-z0-9]+)*_?)*$", entry.value))) && !can(regex("^arn:aws:(secretsmanager|ssm):", entry.value))
         ]
       ]
     ]))
-    error_message = "An environment value must not hold a URL with a password, a long random token or a secret reference."
+    error_message = "An environment value must not hold a URL with a password, a long random token or a secret reference. Lowercase words joined by underscores (the project naming format) are names, not tokens."
   }
 }
 
@@ -863,10 +863,21 @@ run "state_lives_on_the_data_mount" {
   assert {
     condition = alltrue(flatten([
       for key, definition in aws_ecs_task_definition.service : [
-        for volume in definition.volume : startswith(volume.host_path, "/mnt/example-data/")
+        for volume in definition.volume : startswith(volume.host_path, "/mnt/example-data/") || (volume.name == "job_scratch" && volume.host_path == var.airflow_launch_scratch_path)
       ]
     ]))
-    error_message = "Every host path lies below the data mount, including the default code checkout."
+    error_message = "Every host path lies below the data mount, including the default code checkout; only the job scratch volume lies at the job scratch path."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for key, definition in aws_ecs_task_definition.service : [
+        for container in jsondecode(definition.container_definitions) : [
+          for mount in lookup(container, "mountPoints", []) : mount.readOnly == true && mount.containerPath == "/opt/hai/job_scratch" if mount.sourceVolume == "job_scratch"
+        ]
+      ]
+    ]))
+    error_message = "A service mounts the job scratch volume only read-only at /opt/hai/job_scratch: the jobs own that volume, and a service only measures its free space."
   }
 }
 
@@ -2861,5 +2872,302 @@ run "serving_container_definitions_match_the_approved_versions" {
       ] : output.execution_digests[pin.id] == pin.digest
     ])
     error_message = "A serving container script changed from its reviewed version. Review the change, then record its digest here. Current digests: ${jsonencode(output.execution_digests)}"
+  }
+}
+
+run "launch_mounts_are_always_present" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for path in [
+          "/opt/hai/orchestration/airflow_steps.py",
+          "/opt/hai/orchestration/ecs_preflight.py",
+          "/opt/hai/orchestration/ecs_launch.py",
+          "/opt/hai/orchestration/ecs_launch_provider.py",
+          "/opt/hai/config/orchestration/host_jobs.json",
+          "/opt/hai/config/orchestration/ecs_broker_jobs.json",
+          "/opt/hai/scripts/lakehouse/bronze_dispatch.py",
+          "/opt/hai/job_scratch",
+        ] : strcontains(aws_ecs_task_definition.service[key].container_definitions, path)
+      ])
+    ])
+    error_message = "Every Airflow container mounts the launch modules, tables and the scratch folder: every DAG step launches through the launch library."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : alltrue([
+          for mount in container.mountPoints : contains([for volume in aws_ecs_task_definition.service[key].volume : volume.name], mount.sourceVolume)
+        ])
+      ])
+    ])
+    error_message = "Every mount of an Airflow container names a volume of its task definition."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] :
+      contains([for volume in aws_ecs_task_definition.service[key].volume : "${volume.name}=${volume.host_path}"], "job_scratch=/data/job_scratch")
+    ])
+    error_message = "Every Airflow task definition declares the scratch volume at airflow_launch_scratch_path."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : alltrue([
+          for mount in container.mountPoints : mount.readOnly || contains(["airflow_logs", "airflow_lineage_provider"], mount.sourceVolume)
+        ])
+      ])
+    ])
+    error_message = "The launch mounts are read-only: only the Airflow log and lineage provider folders are writable."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_POOL=host_jobs") if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container names the pool of host jobs in HAI_LAUNCH_POOL."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+          length(setsubtract(
+            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_SIGNED_PARAMETER", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH"],
+            [for item in container.environment : item.name]
+          )) == 0
+          && !anytrue([for item in try(container.secrets, []) : startswith(item.name, "HAI_LAUNCH_") || item.name == "AWS_REGION"])
+          && !anytrue([for item in container.environment : startswith(item.name, "HAI_LAUNCH_") && (strcontains(item.value, "arn:aws:ssm") || strcontains(item.value, "arn:aws:secretsmanager"))])
+        ) if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container carries each launch setting as a plain environment value, and none of them is a secret or a secret reference."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.service["airflow_apiserver"].container_definitions)[0].name == "airflow_migrate"
+      && endswith(jsondecode(aws_ecs_task_definition.service["airflow_apiserver"].container_definitions)[0].command[2], "airflow db migrate\nexec airflow pools set host_jobs 1 'One host job at a time'\n")
+    )
+    error_message = "The migrate container creates the one-slot pool of host jobs after the migration."
+  }
+}
+
+run "launch_settings_come_from_the_stack_variables" {
+  command = plan
+
+  variables {
+    mlflow_host_ip               = "10.0.1.20"
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : alltrue([
+          for expected in [
+            "AWS_REGION=us-west-2",
+            "HAI_LAUNCH_CLUSTER=example-project-dev",
+            "HAI_LAUNCH_FAMILY_PREFIX=example_project_dev_job_",
+            "HAI_LAUNCH_PROJECT_TAG=example_project",
+            "HAI_LAUNCH_LOG_GROUP=example_project_jobs_dev",
+            "HAI_LAUNCH_HOST_PROVIDER=example-project-dev-host",
+            "HAI_LAUNCH_BUCKET=example-project-data-dev",
+            "HAI_LAUNCH_SIGNED_PARAMETER=/healthcare_hai_prediction/first_publishes_signed",
+            "HAI_LAUNCH_POLARIS_URI=http://10.0.1.20:8181/api/catalog",
+            "HAI_LAUNCH_MLFLOW_URI=http://10.0.1.20:5100",
+            "HAI_LAUNCH_SCRATCH_PATH=/opt/hai/job_scratch",
+            "HAI_LAUNCH_POOL=host_jobs",
+          ] : contains([for item in container.environment : "${item.name}=${item.value}"], expected)
+        ]) if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "The launch settings name the cluster, the job definitions, the jobs log group, the host provider, the data bucket, the signed record and the host's catalog and MLflow addresses from the stack's variables."
+  }
+}
+
+# Owner decision A (Nov 7 2026): the Airflow task that runs DAG steps runs as the Airflow launch role of infra/iam/airflow_launch.tf. Under the LocalExecutor
+# every task runs inside the scheduler's task, so only the scheduler takes the role. The API server (with the migrate container), the DAG processor and the
+# triggerer run no step and call no AWS API, so they keep the control-plane role, which holds no permission.
+run "airflow_keeps_the_control_plane_role_without_a_launch_role" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : aws_ecs_task_definition.service[key].task_role_arn == var.control_plane_task_role_arn
+    ])
+    error_message = "Without airflow_launch_task_role_arn every Airflow task definition keeps the control-plane role."
+  }
+}
+
+run "only_the_scheduler_runs_as_the_launch_role" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.service["airflow_scheduler"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    error_message = "The scheduler, which runs every DAG step under the LocalExecutor, runs as the launch role."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_dag_processor", "airflow_triggerer"] : aws_ecs_task_definition.service[key].task_role_arn == var.control_plane_task_role_arn
+    ])
+    error_message = "The API server, the DAG processor and the triggerer run no DAG step, so they keep the control-plane role and gain no launch right."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) :
+      definition.task_role_arn != "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev" if key != "airflow_scheduler"
+    ])
+    error_message = "No task definition but the scheduler's names the launch role."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.service["airflow_scheduler"].execution_role_arn == var.execution_role_arn
+    error_message = "The scheduler keeps the shared execution role: the launch role is a task role only."
+  }
+}
+
+run "launch_role_that_is_not_a_role_arn_is_refused" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  expect_failures = [var.airflow_launch_task_role_arn]
+}
+
+run "launch_role_shared_with_the_control_plane_is_refused" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  expect_failures = [var.airflow_launch_task_role_arn]
+}
+
+run "launch_role_shared_with_polaris_is_refused" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example-polaris"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  expect_failures = [var.airflow_launch_task_role_arn]
+}
+
+run "launch_role_shared_with_mlflow_is_refused" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example-mlflow"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  expect_failures = [var.airflow_launch_task_role_arn]
+}
+
+# The launch path has its own inputs (review, Nov 7 2026): the bucket of the launch records and staged inputs is airflow_launch_bucket_name, and the host
+# address of the catalog and MLflow is mlflow_host_ip. Both are required once the scheduler runs as the launch role, and broker_jobs feeds nothing.
+run "launch_role_without_the_launch_bucket_is_refused" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+  }
+
+  expect_failures = [var.airflow_launch_bucket_name]
+}
+
+run "launch_bucket_that_is_not_a_bucket_name_is_refused" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "s3://example-project-data-dev"
+  }
+
+  expect_failures = [var.airflow_launch_bucket_name]
+}
+
+run "launch_role_without_the_host_address_is_refused" {
+  command = plan
+
+  variables {
+    mlflow_host_ip               = null
+    mlflow_enabled               = false
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  expect_failures = [var.airflow_launch_task_role_arn]
+}
+
+run "the_broker_bucket_never_feeds_the_launch_path" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "example-project-launch-dev"
+    broker_jobs = {
+      subnet_id          = "subnet-0example1"
+      security_group_ids = { lakehouse = "sg-0example1", training = "sg-0example2" }
+      log_group_name     = "example_project_jobs_dev"
+      bucket_name        = "example-project-broker-dev"
+      host_ip            = "10.0.1.99"
+      families           = ["train"]
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions) : (
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_BUCKET=example-project-launch-dev") &&
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_POLARIS_URI=http://10.0.1.20:8181/api/catalog") &&
+        !strcontains(jsonencode(container.environment), "example-project-broker-dev") && !strcontains(jsonencode(container.environment), "10.0.1.99")
+      ) if startswith(container.name, "airflow")
+    ])
+    error_message = "The launch settings come from airflow_launch_bucket_name and mlflow_host_ip; the broker's bucket and host address reach no Airflow container."
+  }
+}
+
+# Round 2 review H3: coalesce(null, "") is an error in Terraform, so without a launch role and a launch bucket the plan must still succeed, with the bucket
+# setting empty and the scheduler on the control-plane role.
+run "no_launch_role_and_no_launch_bucket_plan_with_an_empty_bucket_setting" {
+  command = plan
+
+  variables {
+    airflow_launch_task_role_arn = null
+    airflow_launch_bucket_name   = null
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_BUCKET=") if startswith(container.name, "airflow")
+      ])
+    ]) && aws_ecs_task_definition.service["airflow_scheduler"].task_role_arn == var.control_plane_task_role_arn
+    error_message = "Without a launch role and a launch bucket every Airflow container gets an empty HAI_LAUNCH_BUCKET and the scheduler keeps the control-plane role."
   }
 }

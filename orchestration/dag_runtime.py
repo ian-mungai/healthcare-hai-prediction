@@ -1,62 +1,47 @@
-"""Build manual pipeline tasks that submit work through the broker and retain failed runs."""
+"""Build manual pipeline tasks that launch their jobs through the direct ECS launch library and retain failed runs.
+
+``run_step`` runs a task's fixed template through ``orchestration/airflow_steps.py``: a job step launches or joins its job's one ECS task, and a control step
+(acquire, seal, release, the gates) launches nothing. There is no other path: the DAGs hold no broker client.
+"""
 
 from __future__ import annotations
 
-import contextlib
+import importlib
 import logging
-import time
+import os
+import re
 from datetime import timedelta
 from typing import Any
 
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
-from orchestration.client import BrokerClient, BrokerUnavailable
-from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
-from orchestration.training_contract import DAGS, parameters_for
+from orchestration.interface import SubmissionRequest
+from orchestration.training_contract import DAGS, LAUNCH_LANES, parameters_for
 
 LOG = logging.getLogger(__name__)
 STEP_TIMEOUT = timedelta(hours=26)
-POLL_SECONDS = 2.0
-TERMINAL = (State.SUCCEEDED, State.NO_OP, State.FAILED, State.CANCELLED, State.FAILED_CLOSED)
-PASSING = (State.SUCCEEDED,)
 # The DAG parameter that selects the producer run a pin reads ("latest" when absent), and the asset each committing task emits.
 SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
 ASSETS = {"commit_publish": "gold", "features_commit": "features"}
+# The module that launches a step, and the environment setting that names the pool of host jobs.
+LAUNCH_MODULE = "orchestration.airflow_steps"
+POOL_SETTING = "HAI_LAUNCH_POOL"
+POOL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,200}")
+DEFAULT_POOL = "default_pool"
 
 
-def submit_and_wait(client: BrokerClient, request: SubmissionRequest) -> tuple[Handle, Status]:
-    """Wait for a broker submission within the task deadline and cancel it if the caller fails."""
-    deadline = time.monotonic() + STEP_TIMEOUT.total_seconds()
-    handle: Handle | None = None
-    try:
-        while handle is None:
-            try:
-                handle = client.submit(request)
-            except BrokerUnavailable as error:
-                if "answered 503" not in str(error) or time.monotonic() >= deadline:
-                    raise
-                time.sleep(POLL_SECONDS)
-        while time.monotonic() < deadline:
-            try:
-                status = client.status(handle)
-            except BrokerUnavailable as error:
-                if "answered 503" not in str(error):
-                    raise
-            else:
-                if status.state in TERMINAL:
-                    return handle, status
-            time.sleep(POLL_SECONDS)
-        raise TimeoutError(f"{request.template} did not end within {STEP_TIMEOUT}")
-    except BaseException:
-        if handle is not None:
-            with contextlib.suppress(BrokerUnavailable, SubmissionRefused):
-                client.cancel(handle)
-        raise
+def launch_pool() -> str:
+    """The pool that serializes host jobs where the deployment names one (``HAI_LAUNCH_POOL``), else Airflow's default pool."""
+    name = os.environ.get(POOL_SETTING)
+    if name is None:
+        return DEFAULT_POOL
+    if not POOL_NAME.fullmatch(name):
+        raise ValueError(f"{POOL_SETTING} must be a pool name of letters, digits, dots, dashes and underscores")
+    return name
 
 
-def run_step(template: str) -> str:
-    """Submit the current task's fixed template and return its successful terminal state."""
-    context = get_current_context()
+def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
+    """The request of the current task's fixed template."""
     params = context["params"]
     selected = params.get(SELECTIONS[template], "latest") if template in SELECTIONS else "latest"
     instance = context["ti"]
@@ -70,8 +55,8 @@ def run_step(template: str) -> str:
         if instance.dag_id == "model_promotion_dag":
             raw["promotion_mode"] = mode
             mode = "real"
-        training = parameters_for(instance.dag_id, raw)
-    request = SubmissionRequest(
+        training = parameters_for(instance.dag_id, raw, LAUNCH_LANES)  # every step runs on AWS: mlflow=local is refused by name
+    return SubmissionRequest(
         template,
         str(params["run_id"]),
         mode,
@@ -82,10 +67,21 @@ def run_step(template: str) -> str:
         None if selected == "latest" else str(selected),
         training=training,
     )
-    _, status = submit_and_wait(BrokerClient.from_session(), request)
-    if status.state != State.SUCCEEDED and not (instance.dag_id in DAGS and status.state == State.NO_OP):
-        raise RuntimeError(f"{template} ended {status.state.value} with exit code {status.exit_code}")
-    return status.state.value
+
+
+def launch_module() -> Any:
+    """The module that launches a step. It is imported by name when a step runs, so a container without it still parses the DAGs and the step names it."""
+    try:
+        airflow_steps = importlib.import_module(LAUNCH_MODULE)  # dynamic: the launch library's step, mounted where the DAGs launch jobs
+    except ImportError as error:
+        raise RuntimeError(f"{LAUNCH_MODULE} is not in this container's mounts, so the step cannot launch its job: {error}") from None
+    return airflow_steps
+
+
+def run_step(template: str) -> str:
+    """Run the current task's fixed template through the direct ECS launch library and return its successful state."""
+    context = get_current_context()
+    return str(launch_module().launch_step(step_request(template, context), context, SELECTIONS))
 
 
 def task_states(task_ids: tuple[str, ...]) -> dict[str, str | None]:
@@ -102,7 +98,7 @@ def build_tasks(work_steps: tuple[str, ...], family: str) -> None:
     def step(name: str, rule: TriggerRule = TriggerRule.ALL_SUCCESS) -> Any:
         outlets = [Asset(ASSETS[name])] if name in ASSETS else []
 
-        @task(task_id=name, trigger_rule=rule, retries=0, execution_timeout=STEP_TIMEOUT, outlets=outlets)
+        @task(task_id=name, trigger_rule=rule, retries=0, execution_timeout=STEP_TIMEOUT, outlets=outlets, pool=launch_pool())
         def run() -> str:
             return run_step(name)
 

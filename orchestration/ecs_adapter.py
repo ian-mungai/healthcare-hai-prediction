@@ -181,9 +181,38 @@ class EcsAdapter:
             raise classify(error) from None
         return str(running[0]) if running else None
 
-    def lookup(self, key: str) -> TaskFound | None:
+    def unstopped(self, definition: str) -> list[str]:
+        """The ARNs of the tasks of a task definition family that ECS does not show STOPPED: every task it lists with desired status RUNNING (pending or
+        running), and every task with desired status STOPPED whose last status is not STOPPED yet (a stopping task still runs its containers). A failed or
+        unfinished listing, or a describe reply that leaves a listed task out, raises: neither is evidence that the family is idle."""
+        try:
+            busy = [str(arn) for arn in self.ecs.list_tasks(cluster=self.settings.cluster, family=definition)["taskArns"]]
+            if busy:
+                return busy
+            token: str | None = None
+            for _ in range(STOPPED_PAGES):
+                page = self.ecs.list_tasks(cluster=self.settings.cluster, family=definition, desiredStatus=STOPPED, **({"nextToken": token} if token else {}))
+                arns = [str(arn) for arn in page["taskArns"]]
+                for start in range(0, len(arns), DESCRIBE_BATCH):
+                    batch = arns[start : start + DESCRIBE_BATCH]
+                    described = {
+                        str(task.get("taskArn")): task for task in self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=batch).get("tasks") or []
+                    }
+                    if set(batch) - set(described):
+                        raise TaskUnavailable("stopping_task_not_described")
+                    busy += [arn for arn in batch if described[arn].get("lastStatus") != STOPPED]
+                token = page.get("nextToken")
+                if not token:
+                    return busy
+        except (ClientError, BotoCoreError) as error:
+            raise classify(error) from None
+        raise TaskUnavailable("stopped_task_listing_too_long")
+
+    def lookup(self, key: str, definition: str) -> TaskFound | None:
         """The task started for ``key`` in any state ECS still lists: running first, then stopped (ECS keeps a stopped task for about an hour), so a task that
-        ended before the caller looked is found too. None means no listed task carries the identity. A failed or unfinished listing raises."""
+        ended before the caller looked is found too. None means no listed task carries the identity. A failed or unfinished listing raises.
+        ``definition`` is the task definition family of the key's task: the stopped listing names it, so only that family's tasks are described (a role may
+        describe only the tasks of the families it starts)."""
         started_by = self.identity(key)
         try:
             running = self.ecs.list_tasks(cluster=self.settings.cluster, startedBy=started_by)["taskArns"]
@@ -192,7 +221,7 @@ class EcsAdapter:
                 return TaskFound(str(running[0]), self.created_at(found[0]) if found else None)
             token: str | None = None
             for _ in range(STOPPED_PAGES):
-                page = self.ecs.list_tasks(cluster=self.settings.cluster, desiredStatus=STOPPED, **({"nextToken": token} if token else {}))
+                page = self.ecs.list_tasks(cluster=self.settings.cluster, desiredStatus=STOPPED, family=definition, **({"nextToken": token} if token else {}))
                 arns = [str(arn) for arn in page["taskArns"]]
                 for start in range(0, len(arns), DESCRIBE_BATCH):
                     for task in self.ecs.describe_tasks(cluster=self.settings.cluster, tasks=arns[start : start + DESCRIBE_BATCH]).get("tasks") or []:

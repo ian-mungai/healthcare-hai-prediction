@@ -3,8 +3,9 @@
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
 families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
 instances, and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
-prefix. A role that may start the bronze family also reads the run record of each bronze run, ``lakehouse/bronze_runs/<run>/check.json``, as the job's
-evidence. It holds nothing else.
+prefix. It reads every run's code run binding, ``lakehouse/run_stage/<run>/inputs/code_run.json``, creates it once and lists exactly that key, so a missing
+binding answers 404. A role that may start the bronze family also reads the run record of each bronze run, ``lakehouse/bronze_runs/<run>/check.json``, as the
+job's evidence, and one that may start the drift family reads the records under ``drift/`` for the drift DAG's decision. It holds nothing else.
 
 The first check is closed: the permitted (action, resource, required conditions) triples of the role are written below as data, and every Allow statement
 of the policies must be inside them. An action outside the set, a wildcard, a NotAction, a resource outside its triple or a missing required
@@ -51,8 +52,12 @@ JOBS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_jobs.json"
 RECORDS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_records.json"
 REQUESTS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_requests.json"
 BRONZE_RECORD_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_bronze_record.json"
+CODE_RUNS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_code_runs.json"
+# The drift DAG reads the records the drift task publishes. The launch role holds the same document as the drift read of the drift_prepared stack.
+DRIFT_RECORDS_TEMPLATE = ROOT / "infra/iam/owner_policies/drift_records_read.json"
 ENVIRONMENT = "dev"
 FAMILIES = ["bronze", "gold", "promote", "serve", "silver", "train"]
+DRIFT_FAMILIES = sorted([*FAMILIES, "drift"])
 RECORD_PREFIX = "lakehouse/launch_records/"
 INLINE_LIMIT = 10240
 ECS_TASKS = "ecs-tasks.amazonaws.com"
@@ -77,6 +82,9 @@ RECORDS = f"arn:aws:s3:::{BUCKET}/{RECORD_PREFIX}"
 STAGE = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs"
 BRONZE_RUNS = f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs"
 BRONZE_RECORD = f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/check.json"
+CODE_RUN = f"{STAGE}/code_run.json"
+CODE_RUN_PREFIX = "lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/code_run.json"
+DRIFT_RECORD = f"arn:aws:s3:::{BUCKET}/drift/20261030T100000Z-abcdef01/HAI_1.json"
 
 
 def definition(family: str, revision: str = "7") -> str:
@@ -215,6 +223,7 @@ def job_cases() -> list[Case]:
     add("read a digest in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code.sha256", False)
     add("write a digest", "s3:PutObject", f"{STAGE}/code.sha256", False)
     add("list the bucket", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False)
+    add("read a drift record while drift is not named", "s3:GetObject", DRIFT_RECORD, False)
     stream = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
     add("read a job log stream", "logs:GetLogEvents", stream, True)
     add("read a stream of another group", "logs:GetLogEvents", stream.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), False)
@@ -355,6 +364,48 @@ def bronze_record_cases() -> list[tuple[Any, ...]]:
     ]
 
 
+def code_run_cases() -> list[tuple[Any, ...]]:
+    """The binding of a run to the run whose staged code it uses: read for every job, created once by the chain gate and the drift step, never replaced."""
+    bucket = f"arn:aws:s3:::{BUCKET}"
+    return [
+        ("read the code run binding", "s3:GetObject", CODE_RUN, True),
+        ("create the code run binding once", "s3:PutObject", CODE_RUN, True, ONCE),
+        ("replace the code run binding", "s3:PutObject", CODE_RUN, False),
+        ("replace the code run binding with a version check", "s3:PutObject", CODE_RUN, False, VERSION_CHECKED),
+        ("delete the code run binding", "s3:DeleteObject", CODE_RUN, False),
+        ("read an earlier version of the code run binding", "s3:GetObjectVersion", CODE_RUN, False),
+        ("create another staged input once", "s3:PutObject", f"{STAGE}/code.sha256", False, ONCE),
+        ("create a code run binding outside the inputs", "s3:PutObject", f"{bucket}/lakehouse/run_stage/20261030T100000Z-abcdef01/code_run.json", False, ONCE),
+        ("read a code run binding in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code_run.json", False),
+        ("list the code run binding of a run", "s3:ListBucket", bucket, True, {"s3:prefix": (CODE_RUN_PREFIX,)}),
+        ("list the inputs of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/",)}),
+        ("list the staged runs", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/",)}),
+        ("list the versions of the code run binding", "s3:ListBucketVersions", bucket, False, {"s3:prefix": (CODE_RUN_PREFIX,)}),
+        ("list the multipart uploads of the code run binding", "s3:ListBucketMultipartUploads", bucket, False, {"s3:prefix": (CODE_RUN_PREFIX,)}),
+        ("list the code run binding in another bucket", "s3:ListBucket", "arn:aws:s3:::another-bucket", False, {"s3:prefix": (CODE_RUN_PREFIX,)}),
+        ("create the code run binding with another precondition value", "s3:PutObject", CODE_RUN, False, {"s3:if-none-match": ("etag-of-the-old-object",)}),
+    ]
+
+
+def drift_record_cases() -> list[Case]:
+    """A role that may start the drift family also reads the records the drift task published, for the drift DAG's decision. It writes none of them."""
+    bucket = f"arn:aws:s3:::{BUCKET}"
+    return [
+        ("drift named: read a drift record", "s3:GetObject", DRIFT_RECORD, True, {}),
+        ("drift named: read the drift marker", "s3:GetObject", f"{bucket}/drift/20261030T100000Z-abcdef01/_complete.json", True, {}),
+        ("drift named: write a drift record", "s3:PutObject", DRIFT_RECORD, False, ONCE),
+        ("drift named: delete a drift record", "s3:DeleteObject", DRIFT_RECORD, False, {}),
+        ("drift named: read an earlier version of a drift record", "s3:GetObjectVersion", DRIFT_RECORD, False, {}),
+        ("drift named: read a drift record in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/drift/run/HAI_1.json", False, {}),
+        ("drift named: read a sibling of the drift prefix", "s3:GetObject", f"{bucket}/drift_extra/run/HAI_1.json", False, {}),
+        ("drift named: read a gold table", "s3:GetObject", LAKEHOUSE_FILE, False, {}),
+        ("drift named: list the drift records", "s3:ListBucket", bucket, False, {"s3:prefix": ("drift/",)}),
+        ("drift named: run the drift host definition", "ecs:RunTask", definition("drift"), True, run_context("drift")),
+        ("drift named: pass the drift role", "iam:PassRole", role("job_drift_task"), True, {"iam:PassedToService": (ECS_TASKS,)}),
+        ("drift named: read the code run binding", "s3:GetObject", CODE_RUN, True, {}),
+    ]
+
+
 def with_empty_context(rows: list[tuple[Any, ...]]) -> list[Case]:
     """Give every row the five fields of a case: a row without a context gets an empty one."""
     return [(row[0], row[1], row[2], row[3], row[4] if len(row) > 4 else {}) for row in rows]
@@ -407,6 +458,8 @@ RESOURCES = (
     Resource("staged bronze request", f"{STAGE}/bronze_request.json", GET, GET),
     Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
     Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
+    Resource("staged code run binding", CODE_RUN, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("drift record while drift is not named", DRIFT_RECORD, NONE, NONE),
     Resource("bronze run record", BRONZE_RECORD, GET, GET),
     Resource("another file of a bronze run", f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/report.json", NONE, NONE),
     Resource("launch record", RECORD, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
@@ -521,6 +574,8 @@ def train_only_cases() -> list[Case]:
         ("train only: read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", False, {}),
         ("train only: read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, False, {}),
         ("train only: create a launch record", "s3:PutObject", RECORD, True, ONCE),
+        ("train only: read the code run binding", "s3:GetObject", CODE_RUN, True, {}),
+        ("train only: read a drift record", "s3:GetObject", DRIFT_RECORD, False, {}),
     ]
 
 
@@ -553,6 +608,10 @@ WIDENING_ACTIONS = {
     "ListLaunchRecords": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
     "ReadStagedRequests": ("s3:PutObject", "s3:DeleteObject"),
     "ReadBronzeRunRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
+    "ReadCodeRunBindings": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
+    "BindCodeRunsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
+    "ListCodeRunBindings": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
+    "ReadDriftRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
 }
 
 
@@ -739,6 +798,49 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
             "ReadBronzeRunRecords_every_version",
             replaced(bronze_record, "ReadBronzeRunRecords", Action=["s3:GetObject", "s3:GetObjectVersion"]),
         ),
+        *planted_code_runs(documents["code_runs"]),
+    ]
+
+
+def planted_code_runs(code_runs: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    """Named widenings of the code run binding policy."""
+    bucket = f"arn:aws:s3:::{BUCKET}"
+    return [
+        ("code_runs", "ReadCodeRunBindings_every_input", replaced(code_runs, "ReadCodeRunBindings", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("code_runs", "BindCodeRunsOnce_every_input", replaced(code_runs, "BindCodeRunsOnce", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("code_runs", "BindCodeRunsOnce_without_the_precondition", replaced(code_runs, "BindCodeRunsOnce", Condition={"Null": {"s3:if-none-match": "false"}})),
+        (
+            "code_runs",
+            "ListCodeRunBindings_the_staged_runs",
+            replaced(code_runs, "ListCodeRunBindings", Condition={"StringLike": {"s3:prefix": ["lakehouse/run_stage/*"]}}),
+        ),
+        (
+            "code_runs",
+            "an_extra_statement_replaces_the_binding",
+            appended(
+                code_runs, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutObject", "Resource": f"{bucket}/lakehouse/run_stage/*/inputs/code_run.json"}
+            ),
+        ),
+    ]
+
+
+def planted_drift(drift_records: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    """Named widenings of the drift record read: the whole bucket, the lakehouse, a write and a sibling prefix."""
+    bucket = f"arn:aws:s3:::{BUCKET}"
+    return [
+        ("drift_records", "ReadDriftRecords_the_whole_bucket", replaced(drift_records, "ReadDriftRecords", Resource=f"{bucket}/*")),
+        (
+            "drift_records",
+            "ReadDriftRecords_the_lakehouse",
+            replaced(drift_records, "ReadDriftRecords", Resource=[f"{bucket}/drift/*", f"{bucket}/lakehouse/*"]),
+        ),
+        ("drift_records", "ReadDriftRecords_a_sibling_prefix", replaced(drift_records, "ReadDriftRecords", Resource=f"{bucket}/drift*")),
+        ("drift_records", "ReadDriftRecords_write_a_record", replaced(drift_records, "ReadDriftRecords", Action=["s3:GetObject", "s3:PutObject"])),
+        (
+            "drift_records",
+            "an_extra_statement_lists_the_records",
+            appended(drift_records, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": bucket}),
+        ),
     ]
 
 
@@ -764,6 +866,8 @@ def allowed_grants(families: list[str]) -> list[Grant]:
     stage = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs"
     staged = (f"{stage}/code.sha256", f"{stage}/promotion_approval.json", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
     staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs/*/check.json",) if "bronze" in named else ()
+    staged += (f"{stage}/code_run.json",)
+    staged += (f"arn:aws:s3:::{BUCKET}/drift/*",) if "drift" in named else ()
     tagged_tasks: Conditions = {"StringEquals": {"aws:ResourceTag/HaiJob": named}}
     return [
         Grant(
@@ -786,6 +890,8 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("s3:PutObject", (f"{RECORDS}*",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
         Grant("s3:PutObject", (f"{RECORDS}*/decision.json",), {"Null": {"s3:if-match": ["false"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": [f"{RECORD_PREFIX}*"]}}),
+        Grant("s3:PutObject", (f"{stage}/code_run.json",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
+        Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
         Grant("ssm:GetParameter", (f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}",), {}),
     ]
@@ -800,7 +906,7 @@ def allowlist_problems(documents: Role, families: list[str]) -> list[str]:
     """Every way the policies of a role leave the allowed set: an unknown element, action or resource, a wildcard, a missing condition or a missing grant."""
     grants = allowed_grants(families)
     found: list[str] = []
-    granted: set[tuple[str, str]] = set()
+    granted: set[tuple[int, str]] = set()
     for name, document in documents.items():
         if set(document) != {"Version", "Statement"} or document["Version"] != "2012-10-17":
             found.append(f"{name}: the document holds more than Version 2012-10-17 and Statement")
@@ -823,20 +929,22 @@ def allowlist_problems(documents: Role, families: list[str]) -> list[str]:
                     continue
                 for resource in as_list(statement["Resource"]):
                     matching = [grant for grant in entries if resource in grant.resources]
+                    held_by = [
+                        grants.index(grant)
+                        for grant in matching
+                        if all(held.get((operator, key)) == sorted(values) for operator, keys in grant.conditions.items() for key, values in keys.items())
+                    ]
                     if not matching:
                         found.append(f"{label}: {action} on {resource} is outside the allowed resources")
-                    elif not any(
-                        all(held.get((operator, key)) == sorted(values) for operator, keys in grant.conditions.items() for key, values in keys.items())
-                        for grant in matching
-                    ):
+                    elif not held_by:
                         found.append(f"{label}: {action} on {resource} lacks a required condition")
                     else:
-                        granted.add((action, resource))
+                        granted.update((index, resource) for index in held_by)
     found += [
         f"the allowed grant {grant.action} on {resource} is not given by any statement"
-        for grant in grants
+        for index, grant in enumerate(grants)
         for resource in grant.resources
-        if (grant.action, resource) not in granted
+        if (index, resource) not in granted
     ]
     return found
 
@@ -844,11 +952,17 @@ def allowlist_problems(documents: Role, families: list[str]) -> list[str]:
 def role_documents(directory: Path, families: list[str]) -> Role:
     """The policies of one role, rendered from a folder of templates. The request policy exists only while bronze or serve is named, the bronze record
     policy only while bronze is named."""
-    documents = {"jobs": render(directory / JOBS_TEMPLATE.name, families), "records": render(directory / RECORDS_TEMPLATE.name, families)}
+    documents = {
+        "jobs": render(directory / JOBS_TEMPLATE.name, families),
+        "records": render(directory / RECORDS_TEMPLATE.name, families),
+        "code_runs": render(directory / CODE_RUNS_TEMPLATE.name, families),
+    }
     if any(family in REQUEST_FILES for family in families):
         documents["requests"] = render(directory / REQUESTS_TEMPLATE.name, families)
     if "bronze" in families:
         documents["bronze_record"] = render(directory / BRONZE_RECORD_TEMPLATE.name, families)
+    if "drift" in families:
+        documents["drift_records"] = render(directory / DRIFT_RECORDS_TEMPLATE.name, families)
     return documents
 
 
@@ -888,20 +1002,26 @@ def allowlist_checks(label: str, documents: Role, families: list[str]) -> list[d
 def verify(output: Path, directory: Path = JOBS_TEMPLATE.parent) -> int:
     documents = role_documents(directory, FAMILIES)
     train_only = role_documents(directory, ["train"])
-    rows = with_empty_context(job_cases() + record_cases() + request_cases() + bronze_record_cases()) + matrix_cases()
+    drift = role_documents(directory, DRIFT_FAMILIES)
+    rows = with_empty_context(job_cases() + record_cases() + request_cases() + bronze_record_cases() + code_run_cases()) + matrix_cases()
     checks = allowlist_checks("six family", documents, FAMILIES) + allowlist_checks("train only", train_only, ["train"])
+    checks += allowlist_checks("six family and drift", drift, DRIFT_FAMILIES)
     checks += evaluate_role(documents, rows)
     checks += evaluate_role(train_only, train_only_cases())
+    checks += evaluate_role(drift, drift_record_cases())
     checks += size_checks("six family", documents) + size_checks("nine family", role_documents(directory, ALL_FAMILIES))
     defects = []
-    for name, label, changed in widenings(documents) + planted(documents):
-        if changed == documents[name]:
+    drift_widenings = [item for item in widenings(drift) if item[0] == "drift_records"] + planted_drift(drift["drift_records"])
+    plans = [(documents, FAMILIES, rows, item) for item in widenings(documents) + planted(documents)]
+    plans += [(drift, DRIFT_FAMILIES, drift_record_cases(), item) for item in drift_widenings]
+    for base, families, cases, (name, label, changed) in plans:
+        if changed == base[name]:
             defects.append({"defect": f"{name}_{label}", "caught": False, "failed_cases": ["the planted change left the policy as it was"]})
             continue
-        widened = {**documents, name: changed}
-        outside = allowlist_problems(widened, FAMILIES)
+        widened = {**base, name: changed}
+        outside = allowlist_problems(widened, families)
         try:
-            failures = [item["case"] for item in evaluate_role(widened, rows) if not item["passed"]]
+            failures = [item["case"] for item in evaluate_role(widened, cases) if not item["passed"]]
         except UnsupportedPolicyElement as error:
             failures = [f"the evaluator refuses the policy: {error}"]
         defects.append({"defect": f"{name}_{label}", "caught": bool(failures) and bool(outside), "allowlist": outside[:2], "failed_cases": failures[:3]})

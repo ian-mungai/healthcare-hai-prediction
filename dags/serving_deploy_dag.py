@@ -1,4 +1,4 @@
-"""Deploy a registered model version beside the production model as a canary, or roll the canary back, through the broker."""
+"""Deploy a registered model version beside the production model as a canary, or roll the canary back, through the direct ECS launch library."""
 
 from __future__ import annotations
 

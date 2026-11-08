@@ -1,4 +1,4 @@
-"""Fit and evaluate a recorded analysis plan through fixed local broker jobs."""
+"""Fit and evaluate a recorded analysis plan through the training job of the direct ECS launch library."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ with DAG(
         "population": Param("primary", type="string", enum=["primary", "sensitivity"]),
         "hai_types": Param(list(HAI_TYPES), type="array", minItems=1, maxItems=6, uniqueItems=True, items={"enum": list(HAI_TYPES)}),
         "trigger": Param("manual", type="string", pattern=r"^(manual|drift:[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
-        "mlflow": Param("local", type="string", enum=["local", "aws"]),
+        "mlflow": Param("aws", type="string", enum=["local", "aws"]),
     },
     default_args={"retries": 0},
 ) as dag:

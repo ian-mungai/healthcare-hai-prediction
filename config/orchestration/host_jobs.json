@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "scratch_note": "Silver, gold and features ask for 55 GiB so they fit the 60 GiB host scratch volume (scratch_volume_gb of infra/platform) after filesystem overhead (owner A, Nov 7 2026). The 100 GiB they had copied the Fargate ephemeral storage, not a measurement. A measured host layer run sets the final numbers and the volume size.",
+  "jobs": {
+    "silver": {
+      "cpu_units": 3072,
+      "memory_mib": 16384,
+      "scratch_gib": 55
+    },
+    "gold": {
+      "cpu_units": 3072,
+      "memory_mib": 16384,
+      "scratch_gib": 55
+    },
+    "features": {
+      "cpu_units": 3072,
+      "memory_mib": 16384,
+      "scratch_gib": 55
+    },
+    "bronze": {
+      "cpu_units": 3072,
+      "memory_mib": 16384,
+      "scratch_gib": 50
+    },
+    "train": {
+      "cpu_units": 3072,
+      "memory_mib": 16384,
+      "scratch_gib": 50
+    },
+    "drift": {
+      "cpu_units": 2048,
+      "memory_mib": 8192,
+      "scratch_gib": 30
+    },
+    "promote": {
+      "cpu_units": 1024,
+      "memory_mib": 4096,
+      "scratch_gib": 21
+    },
+    "serve": {
+      "cpu_units": 1024,
+      "memory_mib": 4096,
+      "scratch_gib": 21
+    },
+    "metadata": {
+      "cpu_units": 1024,
+      "memory_mib": 2048,
+      "scratch_gib": 1,
+      "containers": {
+        "ingest": [
+          "RUN_ID",
+          "POLARIS_URI"
+        ]
+      },
+      "log_container": "ingest"
+    }
+  },
+  "dags": {
+    "silver_transform_dag": "silver",
+    "gold_transform_dag": "gold",
+    "gold_maintenance_dag": "gold",
+    "features_transform_dag": "features",
+    "feature_store_dag": "features",
+    "drift_monitoring_dag": "drift",
+    "training_dag": "train",
+    "model_promotion_dag": "promote",
+    "serving_deploy_dag": "serve",
+    "metadata_ingest_dag": "metadata",
+    "bronze_chain_dag": "chain"
+  }
+}

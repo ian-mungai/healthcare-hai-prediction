@@ -1020,6 +1020,26 @@ def job_project_cases() -> Iterator[Case]:
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
             False,
         )
+    # The services apply registers the Airflow scheduler's task definition with the Airflow launch role as its task role (infra/services/main.tf).
+    yield Case(
+        "airflow launch pass: airflow_launch_task to ECS tasks",
+        request("iam:PassRole", role("airflow_launch_task"), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+        True,
+        "PassAirflowLaunchRole",
+    )
+    for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+        yield Case(
+            f"airflow launch pass: airflow_launch_task to {service}",
+            request("iam:PassRole", role("airflow_launch_task"), extra={"iam:PassedToService": service}, region=None),
+            False,
+        )
+    yield Case("airflow launch pass: airflow_launch_task without a service", request("iam:PassRole", role("airflow_launch_task"), region=None), False)
+    for name in ("airflow_launch_task_extra", "airflow_launch", "job_airflow_launch_task"):
+        yield Case(
+            f"airflow launch pass: refuse {name}",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            False,
+        )
     for name in ("job_train_task_extra", "mlflow_task_extra", "job_train", "mlflow"):
         yield Case(
             f"training pass: refuse {name}",
@@ -2569,6 +2589,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def broker_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassBrokerRole")["Condition"]
 
+    def airflow_launch_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "iam", "PassAirflowLaunchRole")["Condition"]
+
     def training_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassTrainingRoles")["Condition"]
 
@@ -2754,6 +2777,14 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             ),
             "broker PassRole resource widened": ("broker pass: refuse broker_task_extra", job_resource("iam", "PassBrokerRole", 0, role("broker_task*"))),
             "broker PassRole service condition removed": ("broker pass: broker_task without a service", broker_pass_without_service_condition),
+            "airflow launch PassRole resource widened": (
+                "airflow launch pass: refuse airflow_launch_task_extra",
+                job_resource("iam", "PassAirflowLaunchRole", 0, role("airflow_launch_task*")),
+            ),
+            "airflow launch PassRole service condition removed": (
+                "airflow launch pass: airflow_launch_task without a service",
+                airflow_launch_pass_without_service_condition,
+            ),
             "training PassRole service condition removed": ("training pass: job_train_task without a service", training_pass_without_service_condition),
             "layer PassRole writer-family wildcard": (
                 "job pass: refuse job_write_other_task",

@@ -1,12 +1,12 @@
 variable "airflow_launch_prepared" {
-  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest, the job logs and the record of the signed first publishes, read the run record of each bronze run when bronze is named, and write each launch record once under its own prefix."
+  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest, the job logs and the record of the signed first publishes, read and create once the code run binding of a run, read the run record of each bronze run when bronze is named and the drift records when drift is named, and write each launch record once under its own prefix."
   type        = bool
   default     = false
   nullable    = false
 }
 
 variable "airflow_launch_families" {
-  description = "The job families the launch role may start. Each family is one host task definition <project>_<environment>_job_<family>_host and one task role."
+  description = "The job families the launch role may start. Each family is one host task definition <project>_<environment>_job_<family>_host and one task role. The Airflow DAG launches need train, promote, serve and drift."
   type        = list(string)
   default     = ["train"]
   nullable    = false
@@ -121,8 +121,29 @@ resource "aws_iam_role_policy" "airflow_launch_bronze_record" {
   policy = templatefile("${path.module}/owner_policies/airflow_launch_bronze_record.json", local.airflow_launch_policy_values)
 }
 
+# Every job's launch reads lakehouse/run_stage/<run>/inputs/code_run.json, the run whose staged code the run uses (orchestration/ecs_preflight.py,
+# S3CodeRuns). The chain gate and the drift step create it once. The list grant on that key alone makes a missing binding answer 404, which reads as the
+# run's own code, instead of 403, which the step never reads as missing.
+resource "aws_iam_role_policy" "airflow_launch_code_runs" {
+  count = var.airflow_launch_prepared ? 1 : 0
+
+  name   = "airflow_launch_code_runs"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_code_runs.json", local.airflow_launch_policy_values)
+}
+
+# The drift DAG's decision step runs in the Airflow scheduler and reads the records the drift task published under drift/. The scheduler runs as the launch
+# role, so a launch role that may start the drift family reads them with the same document as the drift stack's read. The control-plane role gains nothing.
+resource "aws_iam_role_policy" "airflow_launch_drift_records" {
+  count = var.airflow_launch_prepared && contains(var.airflow_launch_families, "drift") ? 1 : 0
+
+  name   = "airflow_launch_drift_records"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = local.drift_policy_documents.drift_records_read
+}
+
 output "airflow_launch_roles" {
-  description = "The prepared launch role name, ARN and unique ID, the job families it may start and its record prefix. Empty until airflow_launch_prepared is true. The services stack takes the ARN as the scheduler's task role."
+  description = "The prepared launch role name, ARN and unique ID, the job families it may start and its record prefix. Empty until airflow_launch_prepared is true. The services stack takes the ARN as airflow_launch_task_role_arn, the task role of the Airflow scheduler."
   value = {
     for role in aws_iam_role.airflow_launch_task : "airflow_launch_task" => {
       name          = role.name

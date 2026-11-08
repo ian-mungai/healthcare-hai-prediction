@@ -107,6 +107,17 @@ class FakeLaunchBucket:
             raise ReadTimeoutError(endpoint_url="https://s3.invalid")
         return {"ETag": '"stand-in"'}
 
+    def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
+        """The keys under a prefix inside the allowed prefix, in key order, ``MaxKeys`` (at most 1000) at a time, as S3 lists them."""
+        self._enter("list_objects_v2", arguments, arguments.get("Prefix", ""))
+        keys = sorted(key for key in self.objects if key.startswith(arguments.get("Prefix", "")))
+        start = int(arguments.get("ContinuationToken", "0"))
+        size = min(int(arguments.get("MaxKeys", 1000)), 1000)
+        reply: dict[str, Any] = {"Contents": [{"Key": key} for key in keys[start : start + size]], "IsTruncated": start + size < len(keys)}
+        if reply["IsTruncated"]:
+            reply["NextContinuationToken"] = str(start + size)
+        return reply
+
     def get_object(self, **arguments: Any) -> dict[str, Any]:
         self._enter("get_object", arguments, arguments["Key"])
         if self.read_hook is not None:

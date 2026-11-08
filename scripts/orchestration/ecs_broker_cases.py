@@ -1,23 +1,20 @@
-"""End-to-end cases for the lean ECS broker: a DAG task reaches the real HTTP listener, which reaches the fake ECS client.
+"""End-to-end cases for the lean ECS broker: a request reaches the real HTTP listener, which reaches the fake ECS client.
 
-The airflow SDK is replaced by a small stand-in (the package is not installed here), so ``orchestration.dag_runtime.run_step`` runs unchanged against
-the real ``BrokerClient``. Cluster time is the fake's poll count and the broker's clock is a list the cases move by hand. Nothing leaves the machine.
+The DAGs no longer reach the broker (they launch through the direct ECS launch library), so no case runs ``orchestration.dag_runtime``. Cluster time is the
+fake's poll count and the broker's clock is a list the cases move by hand. Nothing leaves the machine.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import hashlib
-import importlib
 import json
 import re
-import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -138,56 +135,7 @@ def wait_for(current: Rig, handle: Handle, limit: int = 20) -> Any:
     raise AssertionError("the submission never ended")
 
 
-@contextmanager
-def dag_runtime(current: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[Callable[[str], str]]:
-    """``run_step`` of the unchanged DAG runtime, with the SDK stand-in and the rig's client."""
-    sdk = ModuleType("airflow.sdk")
-    for name, value in (
-        ("Asset", str),
-        ("TriggerRule", SimpleNamespace(ALL_SUCCESS="all_success", ALL_DONE="all_done")),
-        ("task", lambda **_: lambda f: f),
-        ("get_current_context", dict),
-    ):
-        setattr(sdk, name, value)
-    previous = sys.modules.pop("orchestration.dag_runtime", None)
-    try:
-        with mock.patch.dict(sys.modules, {"airflow": ModuleType("airflow"), "airflow.sdk": sdk}):
-            runtime = importlib.import_module("orchestration.dag_runtime")
-            instance = SimpleNamespace(try_number=1, dag_id=dag_id, task_id="step", run_id="manual__test")
-            with (
-                mock.patch.object(runtime, "get_current_context", return_value={"params": params, "ti": instance}),
-                mock.patch.object(runtime.BrokerClient, "from_session", return_value=current.client),
-                mock.patch.object(runtime, "POLL_SECONDS", 0.01),
-            ):
-                yield runtime.run_step
-    finally:
-        sys.modules.pop("orchestration.dag_runtime", None)
-        if previous is not None:
-            sys.modules["orchestration.dag_runtime"] = previous
-
-
 TRAIN_PARAMS = {"run_id": RUN, "mode": "real", **PARAMETERS}
-
-
-def task_runs_through_the_broker() -> None:
-    with rig() as current, dag_runtime(current, "training_dag", TRAIN_PARAMS) as run_step:
-        require(run_step("guard") == "succeeded", "the first training step did not pass")
-        require(len(current.ecs.tasks) == 1, "the first step did not start exactly one task")
-        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
-        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
-        require(sent["taskDefinition"] == "example_dev_job_train", "the train step ran another definition")
-        require(values["fetch"] == {"RUN_ID": RUN, "CODE_RUN_ID": RUN, "CODE_SHA256": DIGEST}, f"fetch variables are wrong: {values['fetch']}")
-        require(
-            json.loads(values["prepare"]["TRAINING_PARAMETERS"]) == {**PARAMETERS, "mlflow": "aws"},
-            "the training parameters did not reach the prepare container",
-        )
-        require(
-            values["extract"]["POLARIS_URI"] == "http://10.0.0.5:8181/api/catalog" and values["train"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100",
-            "wrong URIs",
-        )
-        for step in ("extract", "fit", "log_run"):
-            require(run_step(step) == "succeeded", f"{step} did not pass")
-        require(len(current.ecs.tasks) == 1, "later steps of the job started more tasks")
 
 
 def repeated_submit_one_task() -> None:
@@ -207,17 +155,6 @@ def finished_job_is_not_started_again() -> None:
         new_attempt = current.client.submit(request("guard", attempt=2))
         wait_for(current, new_attempt)
         require(len(current.ecs.tasks) == 2, "a new attempt did not start its own task")
-
-
-def container_failure_fails_the_job() -> None:
-    with rig() as current:
-        current.ecs.plan = {"init": 0, "fetch": 0, "prepare": 0, "extract": 0, "train": 3}
-        status = wait_for(current, current.client.submit(request("fit")))
-        require(status.state == State.FAILED and status.exit_code == 3, f"a failing container did not fail the job: {status}")
-        joined = wait_for(current, current.client.submit(request("log_run")))
-        require(joined.state == State.FAILED and joined.exit_code == 3 and len(current.ecs.tasks) == 1, "a later step did not report the same failure")
-        with dag_runtime(current, "training_dag", TRAIN_PARAMS) as run_step:
-            raises(RuntimeError, lambda: run_step("guard"))
 
 
 def deadline_stops_the_task() -> None:
@@ -265,25 +202,6 @@ def refusals() -> None:
         raises(BrokerUnavailable, lambda: wrong.health())
 
 
-def throttled_start_is_retried() -> None:
-    with rig() as current:
-        current.ecs.faults["run_task"] = [client_error("ThrottlingException", "RunTask")]
-        try:
-            current.client.submit(request("guard"))
-        except BrokerUnavailable as error:
-            require("answered 503" in str(error), f"a throttled start was not a 503: {error}")
-        else:
-            raise AssertionError("a throttled start was accepted")
-        handle = current.client.submit(request("guard"))
-        require(wait_for(current, handle).state == State.SUCCEEDED and len(current.ecs.tasks) == 1, "the retry after throttling did not run one task")
-    with rig() as other, dag_runtime(other, "training_dag", TRAIN_PARAMS) as run_step:
-        other.ecs.faults["run_task"] = [client_error("ThrottlingException", "RunTask")]
-        require(
-            run_step("guard") == "succeeded" and len(other.ecs.tasks) == 1 and other.ecs.count("run_task") == 2,
-            "the DAG task did not ride out a throttled call",
-        )
-
-
 def lost_reply_and_restart() -> None:
     with rig() as current:
         current.ecs.lose_reply_once = True
@@ -318,19 +236,6 @@ def missing_code_digest_is_retryable() -> None:
             require("answered 503" in str(error) and not current.ecs.calls, f"a missing digest was not a retryable 503: {error}")
         else:
             raise AssertionError("a run without a staged digest started")
-
-
-def silver_job_runs_its_family() -> None:
-    params = {"run_id": SILVER_RUN, "mode": "real"}
-    with rig() as current, dag_runtime(current, "silver_transform_dag", params) as run_step:
-        require(run_step("acquire_run") == "succeeded" and not current.ecs.calls, "a control step reached the cloud")
-        require(run_step("pin_bronze") == "succeeded", "the silver job did not pass")
-        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
-        names = [item["name"] for item in sent["overrides"]["containerOverrides"]]
-        require(sent["taskDefinition"] == "example_dev_job_silver" and "publish" in names, f"the silver job ran the wrong definition: {names}")
-        for step in ("silver_build", "silver_commit", "record_silver_snapshot"):
-            require(run_step(step) == "succeeded", f"{step} did not pass")
-        require(len(current.ecs.tasks) == 1, "silver steps started more than one task")
 
 
 def silver_request(run: str = SILVER_RUN) -> SubmissionRequest:
@@ -411,20 +316,6 @@ def current_prerequisite_attempt_must_have_passed() -> None:
         third = SubmissionRequest("pin_bronze", SILVER_RUN, "real", 3, "silver_transform_dag", "pin_bronze", "manual__test", None, None, None)
         wait_for(current, current.client.submit(third))
         require(wait_for(current, current.client.submit(gold_request())).state == State.SUCCEEDED, "a passing current attempt did not reopen the way")
-
-
-def later_gold_steps_recover_the_bound_input() -> None:
-    params = {"run_id": GOLD_RUN, "mode": "real", "silver_snapshot_run": SILVER_RUN}
-    with rig() as current, dag_runtime(current, "gold_transform_dag", params) as run_step:
-        wait_for(current, current.client.submit(silver_request()))
-        require(run_step("pin_silver") == "succeeded", "the pin step did not pass")
-        require(run_step("read_silver") == "succeeded", "a later step without the silver run was refused")
-        require(run_step("gold_build") == "succeeded" and len(current.ecs.tasks) == 2, "later steps did not join the gold job")
-        wait_for(current, current.client.submit(silver_request(FEATURES_RUN)))
-        other = gold_request(FEATURES_RUN)
-        raises(SubmissionRefused, partial(current.client.submit, other))
-        unbound = request("read_silver", run=SILVER_RUN, dag="gold_transform_dag")
-        raises(SubmissionRefused, partial(current.client.submit, unbound))
 
 
 def start_from_a_later_step_uses_the_bound_input() -> None:
@@ -651,20 +542,6 @@ def network_classes_match_the_services_stack_and_the_iam_outputs() -> None:
     require('output "training_network"' in (ROOT / "infra/iam/training.tf").read_text(), "the IAM stack has no training_network output")
 
 
-def drift_triggered_training_fetches_the_drift_runs_code() -> None:
-    """The drift DAG derives the training run ID from the drift run ID. That run has no staged code of its own: it must fetch the code of the drift run."""
-    from orchestration.training_contract import training_run_id
-
-    training = training_run_id(DRIFT_RUN)
-    with rig() as current, dag_runtime(current, "drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}) as drift_step:
-        drift_step("drift_run")
-        with dag_runtime(current, "training_dag", {**TRAIN_PARAMS, "run_id": training}) as run_step:
-            require(run_step("guard") == "succeeded", "the drift-triggered training step did not pass")
-        sent = [arguments for name, arguments in current.ecs.calls if name == "run_task"][-1]
-        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
-        require(values["fetch"]["CODE_RUN_ID"] == DRIFT_RUN and values["fetch"]["RUN_ID"] == training, f"the training fetch names {values['fetch']}")
-
-
 def silver_of(bronze: str) -> str:
     return derived_run_id(bronze, "silver")
 
@@ -703,28 +580,6 @@ def promotion_needs_the_owners_approval() -> None:
             "wrong job or parameters",
         )
         require(values["promote"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", "the promote container has no MLflow address")
-
-
-def drift_dag_step_reaches_the_drift_job() -> None:
-    """The step the drift DAG sends is ``drift_run``, the template of the broker table. The real selector must map it to the drift job."""
-    params = {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}
-    with rig() as current, dag_runtime(current, "drift_monitoring_dag", params) as run_step:
-        require(run_step("drift_run") == "succeeded", "the drift DAG step did not pass")
-        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
-        names = [item["name"] for item in sent["overrides"]["containerOverrides"]]
-        require(
-            sent["taskDefinition"] == "example_dev_job_drift" and names == ["fetch", "baseline", "current", "check", "publish"],
-            f"the drift step overrides containers that the task does not have: {names}",
-        )
-        require(len(current.ecs.tasks) == 1, "the drift step started more than one task")
-
-
-def promotion_runs_through_the_dag_runtime() -> None:
-    params = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "local"}
-    with rig() as current, dag_runtime(current, "model_promotion_dag", params) as run_step:
-        approve(current)
-        require(run_step("acquire_run") == "succeeded" and run_step("promote") == "succeeded", "the promotion DAG steps did not pass")
-        require(len(current.ecs.tasks) == 1, "the promotion started more than one task")
 
 
 def another_promotion_is_not_approved() -> None:
@@ -1062,29 +917,6 @@ def serve_request(attempt: int = 1, run: str = SERVE_RUN, template: str = "serve
     return SubmissionRequest(template, run, "real", attempt, "serving_deploy_dag", template, "manual__test", None, None, None)
 
 
-def serving_dag_step_reaches_the_serve_job() -> None:
-    """The step the serving DAG sends is ``serve_deploy``. The real selector maps it to the serve job, whose containers are the ones the task has."""
-    params = {"run_id": SERVE_RUN, "mode": "real"}
-    with rig(SERVE_FAMILIES) as current, dag_runtime(current, "serving_deploy_dag", params) as run_step:
-        current.s3.objects[f"lakehouse/run_stage/{SERVE_RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
-        stage_serving_request(current, SERVING_REQUEST)
-        for control in ("acquire_run", "snapshot_serving"):
-            require(run_step(control) == "succeeded" and not current.ecs.calls, f"the control step {control} reached the cloud")
-        require(run_step("serve_deploy") == "succeeded", "the serving DAG step did not pass")
-        sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
-        values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
-        require(sent["taskDefinition"] == "example_dev_job_serve" and list(values) == ["fetch", "serve"], f"the serve step overrides {list(values)}")
-        require(values["fetch"] == {"RUN_ID": SERVE_RUN, "CODE_RUN_ID": SERVE_RUN, "CODE_SHA256": DIGEST}, f"fetch variables are wrong: {values['fetch']}")
-        require(json.loads(values["serve"]["SERVING_REQUEST"]) == SERVING_REQUEST, "the checked request did not reach the serve container")
-        require(values["serve"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", f"the serve container has no MLflow address: {values['serve']}")
-        networks = sent["networkConfiguration"]["awsvpcConfiguration"]["securityGroups"]
-        require(networks == ["sg-0train"], f"the serve job ran in {networks}, not in the training network")
-        require(len(current.ecs.tasks) == 1, "the serve step started more than one task")
-        for gate in ("serving_final_gate_accepted", "release_accepted", "catalog_release"):
-            require(run_step(gate) == "succeeded", f"the control step {gate} failed")
-        require(len(current.ecs.tasks) == 1, "a control step of the serving DAG started a task")
-
-
 def serve_job_is_off_unless_enabled() -> None:
     with rig() as current:
         stage_serving_request(current, SERVING_REQUEST)
@@ -1169,26 +1001,21 @@ def missing_task_list_before_a_retry() -> None:
 
 
 CASES: dict[str, Callable[[], None]] = {
-    "task_runs_through_the_broker": task_runs_through_the_broker,
     "repeated_submit_one_task": repeated_submit_one_task,
     "finished_job_is_not_started_again": finished_job_is_not_started_again,
-    "container_failure_fails_the_job": container_failure_fails_the_job,
     "deadline_stops_the_task": deadline_stops_the_task,
     "cancel_stops_the_task": cancel_stops_the_task,
     "control_step_starts_nothing": control_step_starts_nothing,
     "refusals": refusals,
-    "throttled_start_is_retried": throttled_start_is_retried,
     "lost_reply_and_restart": lost_reply_and_restart,
     "denied_start_closes_the_submission": denied_start_closes_the_submission,
     "missing_code_digest_is_retryable": missing_code_digest_is_retryable,
-    "silver_job_runs_its_family": silver_job_runs_its_family,
     "gold_job_gets_its_input_run": gold_job_gets_its_input_run,
     "chain_is_closed_until_the_first_publishes_are_signed": chain_is_closed_until_the_first_publishes_are_signed,
     "acceptance_check_failure_stops_the_chain": acceptance_check_failure_stops_the_chain,
     "missing_acceptance_check_fails_the_job": missing_acceptance_check_fails_the_job,
     "each_chain_step_needs_the_one_before_to_have_passed": each_chain_step_needs_the_one_before_to_have_passed,
     "current_prerequisite_attempt_must_have_passed": current_prerequisite_attempt_must_have_passed,
-    "later_gold_steps_recover_the_bound_input": later_gold_steps_recover_the_bound_input,
     "start_from_a_later_step_uses_the_bound_input": start_from_a_later_step_uses_the_bound_input,
     "refused_stop_is_not_recorded_as_a_timeout": refused_stop_is_not_recorded_as_a_timeout,
     "refused_stop_does_not_cancel": refused_stop_does_not_cancel,
@@ -1199,14 +1026,11 @@ CASES: dict[str, Callable[[], None]] = {
     "each_family_runs_in_its_approved_network": each_family_runs_in_its_approved_network,
     "broker_settings_name_the_networks_of_the_enabled_families": broker_settings_name_the_networks_of_the_enabled_families,
     "network_classes_match_the_services_stack_and_the_iam_outputs": network_classes_match_the_services_stack_and_the_iam_outputs,
-    "drift_triggered_training_fetches_the_drift_runs_code": drift_triggered_training_fetches_the_drift_runs_code,
     "code_digest_is_read_once_per_start": code_digest_is_read_once_per_start,
     "cancel_waits_for_the_task_to_stop": cancel_waits_for_the_task_to_stop,
     "stop_that_never_completes_blocks_the_retry": stop_that_never_completes_blocks_the_retry,
     "deadline_stop_waits_for_the_task_to_stop": deadline_stop_waits_for_the_task_to_stop,
     "promotion_needs_the_owners_approval": promotion_needs_the_owners_approval,
-    "drift_dag_step_reaches_the_drift_job": drift_dag_step_reaches_the_drift_job,
-    "promotion_runs_through_the_dag_runtime": promotion_runs_through_the_dag_runtime,
     "another_promotion_is_not_approved": another_promotion_is_not_approved,
     "training_needs_no_promotion_approval": training_needs_no_promotion_approval,
     "logs_hide_the_token": logs_hide_the_token,
@@ -1227,7 +1051,6 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_unresolved_start_keeps_its_binding_and_its_stop": bronze_unresolved_start_keeps_its_binding_and_its_stop,
     "bronze_retry_waits_for_the_stop_of_the_first_task": bronze_retry_waits_for_the_stop_of_the_first_task,
     "every_fetch_container_names_its_code_run": every_fetch_container_names_its_code_run,
-    "serving_dag_step_reaches_the_serve_job": serving_dag_step_reaches_the_serve_job,
     "serve_job_is_off_unless_enabled": serve_job_is_off_unless_enabled,
     "serve_refuses_a_bad_or_missing_request": serve_refuses_a_bad_or_missing_request,
     "serve_later_attempts_are_bound_to_the_first_request": serve_later_attempts_are_bound_to_the_first_request,

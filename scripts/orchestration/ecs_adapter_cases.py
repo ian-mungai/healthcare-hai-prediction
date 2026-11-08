@@ -451,11 +451,14 @@ def unknown_reply_is_told_from_an_unsent_call() -> None:
     require(ecs2.count("run_task") == 0, "and no RunTask call was made")
 
 
+TRAIN_HOST = "example_dev_job_train_host"
+
+
 def lookup_finds_running_and_stopped_tasks() -> None:
     adapter, ecs, _ = host_build()
-    require(adapter.lookup(KEY) is None, "a task was found where none was started")
+    require(adapter.lookup(KEY, TRAIN_HOST) is None, "a task was found where none was started")
     arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
-    found = adapter.lookup(KEY)
+    found = adapter.lookup(KEY, TRAIN_HOST)
     require(found is not None and found.arn == arn and found.created_at is None, f"running task not found: {found}")
     ecs.finish(arn)
     require(adapter.find(KEY) is None, "the running listing must miss a stopped task: that is what lookup has to cover")
@@ -463,11 +466,54 @@ def lookup_finds_running_and_stopped_tasks() -> None:
         decoy = adapter.start("train", KEY.replace(":1", f":{number + 2}"), ENVIRONMENT, "training", placement="host")
         ecs.finish(decoy)
     ecs.list_page = 2
-    found = adapter.lookup(KEY)
+    found = adapter.lookup(KEY, TRAIN_HOST)
     require(found is not None and found.arn == arn, f"a stopped task past the first listing page was not found: {found}")
-    require(adapter.lookup(KEY.replace(":1", ":9")) is None, "another identity found a task")
+    require(adapter.lookup(KEY.replace(":1", ":9"), TRAIN_HOST) is None, "another identity found a task")
     ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
-    raises(TaskUnavailable, lambda: adapter.lookup(KEY))
+    raises(TaskUnavailable, lambda: adapter.lookup(KEY, TRAIN_HOST))
+
+
+def lookup_describes_only_its_own_family() -> None:
+    """The launch role may describe only tasks tagged with a family it may start (airflow_launch_jobs.json), so the stopped listing names the task
+    definition family before any task is described: a stopped task of another family in the cluster is never described."""
+    ecs, logs = FakeEcs(), FakeLogs()
+    adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider, families=frozenset({"train", "silver"})))
+    for number in range(3):
+        other = adapter.start("silver", KEY.replace(":train:1", f":silver:{number + 1}"), {"layer": {"RUN_ID": "x"}}, "lakehouse", placement="host")
+        ecs.finish(other)
+    arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    ecs.finish(arn)
+    ecs.calls.clear()
+    found = adapter.lookup(KEY, TRAIN_HOST)
+    require(found is not None and found.arn == arn, f"the stopped train task was not found: {found}")
+    listings = [arguments for name, arguments in ecs.calls if name == "list_tasks" and arguments.get("desiredStatus") == "STOPPED"]
+    require(listings and all(item.get("family") == TRAIN_HOST for item in listings), f"the stopped listing does not name the family: {listings}")
+    described = [arn for name, arguments in ecs.calls if name == "describe_tasks" for arn in arguments["tasks"]]
+    others = [item for item in described if "silver" in str(ecs.tasks[item]["request"]["taskDefinition"])]
+    require(not others, f"a task of another family was described: {others}")
+
+
+def unstopped_lists_running_and_stopping_tasks_of_the_family() -> None:
+    """A task of the family is idle only when ECS shows its last status STOPPED: a running task and a stopping one (desired STOPPED, containers still
+    running) both count, another family's task never does, and a describe reply that leaves a listed task out is no evidence (round 2 review, H1)."""
+    ecs, logs = FakeEcs(), FakeLogs()
+    adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider, families=frozenset({"train", "silver"})))
+    require(adapter.unstopped(TRAIN_HOST) == [], "an empty cluster has an unstopped task")
+    ecs.hold = True
+    running = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    other = adapter.start("silver", KEY.replace(":train:1", ":silver:1"), {"layer": {"RUN_ID": "x"}}, "lakehouse", placement="host")
+    require(adapter.unstopped(TRAIN_HOST) == [running], f"the running task of the family is not named, or another family's is: {adapter.unstopped(TRAIN_HOST)}")
+    ecs.stop_lag = 5
+    ecs.stop_task(cluster=CLUSTER, task=running, reason="stop")
+    require(ecs.tasks[running]["desiredStatus"] == "STOPPED", "the stand-in task is not stopping")
+    require(adapter.unstopped(TRAIN_HOST) == [running], "a stopping task of the family was taken as idle")
+    ecs.describe_overrides = [{"tasks": [], "failures": []}]
+    raises(TaskUnavailable, lambda: adapter.unstopped(TRAIN_HOST))
+    while ecs.tasks[running]["lastStatus"] != "STOPPED":
+        ecs.describe_tasks(cluster=CLUSTER, tasks=[running])
+    require(adapter.unstopped(TRAIN_HOST) == [] and other in ecs.tasks, "a stopped task of the family still counts")
+    ecs.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
+    raises(TaskUnavailable, lambda: adapter.unstopped(TRAIN_HOST))
 
 
 def fake_refuses_a_wrong_shape() -> None:
@@ -541,6 +587,8 @@ CASES: dict[str, Callable[[], None]] = {
     "guard_runs_just_before_the_send": guard_runs_just_before_the_send,
     "unknown_reply_is_told_from_an_unsent_call": unknown_reply_is_told_from_an_unsent_call,
     "lookup_finds_running_and_stopped_tasks": lookup_finds_running_and_stopped_tasks,
+    "lookup_describes_only_its_own_family": lookup_describes_only_its_own_family,
+    "unstopped_lists_running_and_stopping_tasks_of_the_family": unstopped_lists_running_and_stopping_tasks_of_the_family,
     "runtask_sends_once_through_the_sdk": runtask_sends_once_through_the_sdk,
     "retrying_runtask_client_refused": retrying_runtask_client_refused,
 }

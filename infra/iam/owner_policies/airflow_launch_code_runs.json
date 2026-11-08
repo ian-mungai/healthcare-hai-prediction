@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadCodeRunBindings",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/code_run.json"
+    },
+    {
+      "Sid": "BindCodeRunsOnce",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/code_run.json",
+      "Condition": { "StringEquals": { "s3:if-none-match": "*" } }
+    },
+    {
+      "Sid": "ListCodeRunBindings",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": { "StringLike": { "s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"] } }
+    }
+  ]
+}

@@ -192,7 +192,6 @@ def prepare_checkout(folder: Path) -> Path:
     shutil.copy2(ROOT / "scripts" / "orchestration" / "db_dump.py", folder / "scripts" / "orchestration" / "db_dump.py")
     for name in ("__init__.py", "interface.py", "client.py"):
         shutil.copy2(ROOT / "orchestration" / name, folder / "orchestration" / name)
-    shutil.copy2(ROOT / "dags" / "broker_probe_dag.py", folder / "dags" / "broker_probe_dag.py")
     (folder / "dags" / "broker_probe_auto.py").write_text(TEST_DAG)
     cases = folder.parent / "cases"
     (folder.parent / "packages").mkdir()

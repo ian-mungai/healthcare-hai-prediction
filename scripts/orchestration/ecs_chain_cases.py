@@ -171,7 +171,9 @@ def triggers_send_derived_ids() -> None:
     require(conf["run_silver"] == {"run_id": run("silver"), "mode": "real"}, f"silver settings: {conf['run_silver']}")
     require(conf["run_gold"] == {"run_id": run("gold"), "mode": "real", "silver_snapshot_run": run("silver")}, f"gold settings: {conf['run_gold']}")
     require(conf["run_features"] == {"run_id": run("features"), "mode": "real", "gold_snapshot_run": run("gold")}, f"features settings: {conf['run_features']}")
-    require(conf["run_drift"] == {"run_id": run("drift"), "mode": "real", "mlflow": "local"}, f"drift settings: {conf['run_drift']}")
+    require(
+        conf["run_drift"] == {"run_id": run("drift"), "mode": "real", "mlflow": "aws"}, f"drift settings (launch mode names the aws lane): {conf['run_drift']}"
+    )
 
 
 def a_retried_bronze_run_names_the_same_runs() -> None:

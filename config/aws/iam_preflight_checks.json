@@ -162,7 +162,8 @@
       ],
       "policies": [
         "owner_policies/airflow_launch_jobs.json",
-        "owner_policies/airflow_launch_records.json"
+        "owner_policies/airflow_launch_records.json",
+        "owner_policies/airflow_launch_code_runs.json"
       ],
       "attachments": [
         {
@@ -173,6 +174,11 @@
         {
           "policy": "owner_policies/airflow_launch_records.json",
           "resource": "airflow_launch_records",
+          "flag": "airflow_launch_prepared"
+        },
+        {
+          "policy": "owner_policies/airflow_launch_code_runs.json",
+          "resource": "airflow_launch_code_runs",
           "flag": "airflow_launch_prepared"
         }
       ]
@@ -579,6 +585,14 @@
       "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_SIGNED_PARAMETER_NAME}"
     },
     {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_airflow_launch_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
       "role": "airflow_launch",
       "action": "ecs:RunTask",
       "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train_host:1",
@@ -703,6 +717,27 @@
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
       "context": {
         "s3:prefix": "${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code_run.json"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code_run.json",
+      "context": {
+        "s3:if-none-match": "*"
+      }
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:ListBucket",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/run_stage/example_run/inputs/code_run.json"
       }
     },
     {

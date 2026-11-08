@@ -35,6 +35,12 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    reports it. A cancel is a durable request first, so a launch call that is still starting its task stops that task; the cancel then confirms the stop
    before it records ``cancelled``.
 
+11. Family gate (owner, Nov 7 2026): the host keeps one scratch folder per family, which the first container of the task empties. Before a new run claims
+   a launch, it is refused (``FamilyBusy``, nothing claimed, so the run can launch later) while ECS lists a task of the family's host definition that it
+   does not show STOPPED (running, pending or stopping) or while a run in the write-once family index has a claimed attempt without an end record. A
+   listing that fails refuses too. An unresolved launch is ended by the owner's settle (``owner_settle``), which needs the window over, the family
+   stopped and the owner's statement of what was checked.
+
 Every wait has a deadline. The library calls no process and starts no thread.
 """
 
@@ -88,6 +94,7 @@ DENIED_CODES = frozenset({"AccessDenied", "Forbidden", "403"})
 CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "orchestration" / "ecs_launch.json"
 PREFIX_PATTERN = re.compile(r"[a-z0-9_]+(/[a-z0-9_]+)*")
 REPORT_LIMIT = 300
+OWNER_STATEMENT_MIN = 20
 RETRYABLE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout", "ConditionalRequestConflict", "ThrottlingException"})
 LIVE = ("pending", "running")
 ENDED = ("succeeded", "failed")  # the states of a task shown STOPPED
@@ -99,6 +106,11 @@ class LaunchError(Exception):
 
 class LaunchRefused(LaunchError):
     """The request cannot be launched as it stands."""
+
+
+class FamilyBusy(LaunchRefused):
+    """Another launch of the family may still use the family's host scratch folder: a task of its host definition runs, or an earlier claimed launch has no
+    end record. Nothing was claimed, so the same run can launch once the family is free."""
 
 
 class LaunchUnavailable(LaunchError):
@@ -196,6 +208,14 @@ class LaunchStore(Protocol):
         """Replace the decision record if it still has the given version. False when it changed."""
         ...
 
+    def index_family(self, claim: Mapping[str, Any]) -> None:
+        """Record once, in the family index of the claim's job, that the run is about to claim a launch of the family. It is written before the claim."""
+        ...
+
+    def family_runs(self, job: str) -> list[str]:
+        """The runs in the family index of the job: every run that claimed, or was about to claim, a launch of the family. The one listing the store makes."""
+        ...
+
 
 class FitProbe(Protocol):
     """What the host has free now."""
@@ -240,6 +260,26 @@ def outcome_of(record: Mapping[str, Any], adopted: bool = False) -> Outcome:
     return Outcome(record["outcome"], record["exit_code"], record["reason"], record.get("task_arn", ""), adopted)
 
 
+def parse_family_record(raw: bytes, where: str) -> dict[str, Any]:
+    """A family index entry as a validated dict: exactly the fields ``index_family`` writes. Anything else stops the launch with its key."""
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        raise LaunchError(f"family index entry {where} is not JSON") from None
+    fields: dict[str, type] = {"schema_version": int, "event": str, "run_id": str, "job": str, "attempt": int, "at": str}
+    if (
+        not isinstance(record, dict)
+        or set(record) != set(fields)
+        or not all(isinstance(record[name], kind) for name, kind in fields.items())
+        or record["event"] != "family"
+        or record["schema_version"] != 1
+        or not RUN_ID.fullmatch(record["run_id"])
+        or not where.endswith(f"/families/{record['job']}/{record['run_id']}.json")
+    ):
+        raise LaunchError(f"family index entry {where} is invalid")
+    return dict(record)
+
+
 def parse_record(raw: bytes, where: str) -> dict[str, Any]:
     """A stored record as a validated dict. A record that does not parse or does not fit its event stops the launch with its key."""
     try:
@@ -273,7 +313,9 @@ class S3LaunchStore:
 
     Every write sends ``IfNoneMatch="*"`` (a 412 means the record exists), nothing is deleted, the decision record is the only one ever replaced (with
     ``IfMatch`` on the version it was read at), and only known keys are read. The code never
-    lists. A record is missing only when S3 answers NoSuchKey. A denied read (403) is never read as missing: it means the history cannot be read, so it
+    lists, except the family index ``<prefix>/families/<job>/<run>.json`` (write-once, one key per run that claimed a launch of the family), which the
+    family gate lists before a claim; S3 lists strongly consistently, so a run indexed before the listing is in it. A record is missing only when S3
+    answers NoSuchKey. A denied read (403) is never read as missing: it means the history cannot be read, so it
     refuses. S3 answers NoSuchKey instead of AccessDenied for an absent key only when the role may list the prefix, so the store checks that once with a key
     that cannot exist, and refuses to work with a role that cannot tell the two apart.
     """
@@ -312,7 +354,7 @@ class S3LaunchStore:
             raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
         raise LaunchError("a record that cannot exist was read")
 
-    def get_with_etag(self, key: str) -> tuple[dict[str, Any], str] | None:
+    def get_with_etag(self, key: str, parse: Callable[[bytes, str], dict[str, Any]] = parse_record) -> tuple[dict[str, Any], str] | None:
         self.require_distinguishable()
         try:
             reply = self.client.get_object(Bucket=self.bucket, Key=key)
@@ -326,7 +368,7 @@ class S3LaunchStore:
             raise self.refusal(code) from None
         except BotoCoreError as error:
             raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
-        return parse_record(body, key), str(reply.get("ETag", ""))
+        return parse(body, key), str(reply.get("ETag", ""))
 
     def get(self, key: str) -> dict[str, Any] | None:
         found = self.get_with_etag(key)
@@ -387,6 +429,45 @@ class S3LaunchStore:
         keys = [self.key_of(run_id, job, attempt, event) for attempt in attempts for event in ("intent", "started", "end")]
         return [record for key in keys if (record := self.get(key)) is not None]
 
+    def family_prefix(self, job: str) -> str:
+        return f"{self.prefix}/families/{job}/"
+
+    def index_family(self, claim: Mapping[str, Any]) -> None:
+        body = {"schema_version": 1, "event": "family", "run_id": claim["run_id"], "job": claim["job"], "attempt": claim["attempt"], "at": claim["at"]}
+        key = f"{self.family_prefix(str(claim['job']))}{claim['run_id']}.json"
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(body, sort_keys=True).encode(), IfNoneMatch="*")
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code != "PreconditionFailed":
+                raise self.refusal(code) from None
+        except BotoCoreError:
+            if self.get_with_etag(key, parse_family_record) is None:
+                raise LaunchUnavailable("launch record store: the family index write is not confirmed") from None
+
+    def family_runs(self, job: str) -> list[str]:
+        prefix = self.family_prefix(job)
+        runs: list[str] = []
+        token: str | None = None
+        try:
+            while True:
+                page = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
+                for item in page.get("Contents", []):
+                    name = str(item["Key"])[len(prefix) :].removesuffix(".json")
+                    if not RUN_ID.fullmatch(name):
+                        raise LaunchRefused(f"the family index of {job} holds an unexpected key: {item['Key']}")
+                    runs.append(name)
+                if not page.get("IsTruncated"):
+                    return runs
+                token = str(page["NextContinuationToken"])
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code in DENIED_CODES:
+                raise LaunchRefused(f"the family index of {job} cannot be listed ({code}): a launch never starts beside launches it cannot see") from None
+            raise self.refusal(code) from None
+        except BotoCoreError as error:
+            raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
+
 
 class EcsFitProbe:
     """The free CPU and memory of the host's container instance with the most free memory, and the free scratch bytes from ``scratch_free``."""
@@ -428,13 +509,17 @@ class Launcher:
         probe: FitProbe,
         clock: Clock | None = None,
         cleanup: Callable[[JobSpec], None] | None = None,
+        scratch_usage: Callable[[], Mapping[str, int]] | None = None,
     ) -> None:
-        """``cleanup`` runs once after a successful job (the scratch wipe). It raises ``CleanupFailed`` when it cannot finish."""
+        """``cleanup`` runs once after a successful job. It raises ``CleanupFailed`` when it cannot finish. ``scratch_usage`` gives the bytes each family's
+        scratch folder holds (owner decision A, Nov 7 2026): the launching family's own bytes count as free, because the gate has shown the family idle and
+        the task's first container empties that folder; another family's bytes never count, and the fit report names the families that hold any."""
         self.adapter = adapter
         self.store = store
         self.probe = probe
         self.clock = clock or Clock()
         self.cleanup = cleanup
+        self.scratch_usage = scratch_usage
 
     def validate(self, spec: JobSpec) -> None:
         """Refuse a malformed request before any record or cloud call."""
@@ -487,7 +572,7 @@ class Launcher:
     def lookup(self, claim: Mapping[str, Any]) -> TaskFound | None:
         """The task started under the identity of the claim's attempt, running or stopped. None only when ECS lists no such task."""
         try:
-            return self.adapter.lookup(f"{claim['run_id']}:{claim['job']}:{claim['attempt']}")
+            return self.adapter.lookup(f"{claim['run_id']}:{claim['job']}:{claim['attempt']}", self.adapter.definition(str(claim["job"]), HOST))
         except TaskUnavailable as error:
             raise LaunchUnavailable(f"the task of attempt {claim['attempt']} cannot be looked up now ({error})") from None
 
@@ -600,6 +685,39 @@ class Launcher:
         launch.arn, launch.started_at, launch.deadline_seconds = started["task_arn"], stamp(started["job_started_at"]), intent["deadline_seconds"]
         launch.owner = claim["attempt"]
 
+    def unstopped_tasks(self, definition: str, consequence: str) -> list[str]:
+        """The tasks of the family's host definition that ECS does not show STOPPED (running, pending or stopping). A listing that fails is no evidence."""
+        try:
+            return self.adapter.unstopped(definition)
+        except TaskUnavailable as error:
+            raise LaunchUnavailable(f"the tasks of {definition} cannot be listed now ({error}); {consequence}") from None
+        except TaskRefused as error:
+            raise LaunchRefused(f"the tasks of {definition} cannot be read ({error}); {consequence}") from None
+
+    def require_family_free(self, spec: JobSpec) -> None:
+        """Refuse a new launch, before its claim, while another launch of the family may use the family's host scratch folder (owner, Nov 7 2026): while
+        ECS lists a task of the family's host definition that it does not show STOPPED (running, pending or stopping), or while a run in the family index
+        has a claimed attempt with no end record (an index entry
+        with no claim started nothing: a task starts only under a claim). A listing that fails refuses too. Two runs that pass this gate at the same moment
+        are kept apart by the one-slot Airflow pool of host jobs, which runs one launching step at a time. The run is not claimed, so it launches once the
+        earlier launch is settled (its own step run again, or the owner path)."""
+        definition = self.adapter.definition(spec.job, HOST)
+        busy = self.unstopped_tasks(definition, "nothing was claimed")
+        if busy:
+            raise FamilyBusy(
+                f"a task of {definition} has not stopped ({busy[0]}): the {spec.job} family shares one host scratch folder, which the next task empties, so "
+                f"run {spec.run_id} waits until ECS shows that task STOPPED. Nothing was claimed"
+            )
+        for run in self.store.family_runs(spec.job):
+            if run == spec.run_id:
+                continue
+            claim = self.store.run_record(run, spec.job, "claim")
+            if claim is not None and "end" not in self.events(run, spec.job, int(claim["attempt"])):
+                raise FamilyBusy(
+                    f"the {spec.job} launch of run {run} (attempt {claim['attempt']}) has no end record, so its task may still use the family's scratch "
+                    f"folder. Settle that launch first (run its step again so it reattaches, or the owner path); run {spec.run_id} was not claimed"
+                )
+
     def admit(self, launch: Launch) -> bool:
         """Claim the one launch of the run and job with a conditional create, the single step that lets a caller start a task. Returns False when another
         caller holds the claim. The claim that stands is checked against this request before anything else happens."""
@@ -616,6 +734,7 @@ class Launcher:
             "acceptance": list(spec.acceptance),
             "need": asdict(spec.need),
         }
+        self.store.index_family(body)  # before the claim, so a claimed launch is always in the index; an entry with no claim started nothing
         stored = self.store.put_once(body)
         self.check_bound(spec, stored)
         if stored["attempt"] != spec.attempt:
@@ -630,6 +749,8 @@ class Launcher:
         spec = launch.spec
         if launch.outcome is not None or launch.arn is not None:
             return
+        if launch.claim is None and self.store.run_record(spec.run_id, spec.job, "claim") is None:
+            self.require_family_free(spec)
         if launch.claim is None and not self.admit(launch):
             self.settle(launch, self.store.run_record(spec.run_id, spec.job, "claim"), self.events(spec.run_id, spec.job, spec.attempt))
             if launch.outcome is not None or launch.arn is not None:
@@ -697,13 +818,20 @@ class Launcher:
             fits = True
             try:
                 free = self.probe.free()
+                held = dict(self.scratch_usage()) if self.scratch_usage is not None else {}
             except TaskUnavailable as error:
                 fits, last = False, f"host capacity unreadable ({error})"
             except TaskRefused as error:
                 self.give_up(launch, claim, False, "", f"fit_probe_refused:{error}")
                 return None
+            except OSError as error:
+                fits, last = False, f"scratch folders unreadable ({type(error).__name__})"
             else:
-                short = shortfalls(need, free)
+                credited = Resources(free.cpu_units, free.memory_mib, free.scratch_bytes + max(0, int(held.get(job, 0))))
+                short = shortfalls(need, credited)
+                others = {family: size for family, size in held.items() if family != job and size > 0}
+                if short and need.scratch_bytes > credited.scratch_bytes and others:
+                    short.append("scratch held by other families: " + ", ".join(f"{family} {size / 2**30:.1f} GiB" for family, size in sorted(others.items())))
                 if short:
                     fits, last = False, "; ".join(short)
             if fits:
@@ -736,8 +864,10 @@ class Launcher:
         return LaunchUnavailable(
             f"{prefix}A RunTask call may have been sent for attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']} and no task has been "
             f"found, so the launch stays unresolved and nothing else will start. Manual owner path: stop every sender of this launch, inspect ECS for "
-            f"the tasks started by {self.adapter.identity(key)} (the client token is the SHA-256 of {key}), check the job's evidence in the bucket, then "
-            "start a new run."
+            f"the tasks started by {self.adapter.identity(key)} (the client token is the SHA-256 of {key}) and CloudTrail for its RunTask calls, check "
+            "the job's evidence in the bucket, then settle the launch after its send window: in the Airflow scheduler container, "
+            f"python -m orchestration.airflow_steps settle --run {claim['run_id']} --job {claim['job']} --statement '<what you checked>'. The settle "
+            "records a cancel and a failed_closed end, so the family admits a new run."
         )
 
     def win_send(self, launch: Launch, claim: Mapping[str, Any]) -> bool:
@@ -900,6 +1030,37 @@ class Launcher:
         self.start(launch)
         self.wait(launch)
         return self.conclude(launch)
+
+    def owner_settle(self, run_id: str, job: str, attempt: int | None, statement: str) -> Outcome:
+        """The owner's path for a launch that stays unresolved (round 2 review, M7). It first cancels, which settles the launch whenever its task is found.
+        When none is found, it ends the launch durably only with three pieces of evidence: the send window is over and the cancel is recorded, so no
+        sender of the launch may send again (the guard checks both immediately before every RunTask call); ECS shows every task of the family's host
+        definition STOPPED; and the owner states what was checked (the ECS console and CloudTrail for the launch's identity). The claim then gets a
+        ``failed_closed`` end record, so every later caller reports it and the family admits a new run."""
+        if len(statement.strip()) < OWNER_STATEMENT_MIN:
+            raise LaunchRefused(f"name what was checked (at least {OWNER_STATEMENT_MIN} characters): the settle ends a launch on the owner's evidence")
+        claim = self.store.run_record(run_id, job, "claim")
+        if claim is None:
+            raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to settle")
+        attempt = int(claim["attempt"]) if attempt is None else attempt
+        try:
+            return self.cancel(run_id, job, attempt, reason=f"owner settle: {statement}")
+        except LaunchUnavailable:
+            if "started" in self.events(run_id, job, int(claim["attempt"])):
+                raise  # the launch's task is known: only its confirmed stop ends the launch, never a statement
+
+        window_end = stamp(claim["at"]) + FIT_WAIT_SECONDS
+        if self.clock.wall() < window_end:
+            raise LaunchUnavailable(
+                f"the send window of {job} in run {run_id} is open until {iso(window_end)}: a sender may still send. The cancel is recorded, so none will "
+                "after its next check; settle again after the window"
+            )
+        definition = self.adapter.definition(job, HOST)
+        busy = self.unstopped_tasks(definition, "nothing was settled")
+        if busy:
+            raise FamilyBusy(f"a task of {definition} has not stopped ({busy[0]}): stop it and wait until ECS shows it STOPPED, then settle again")
+        end = self.finalize(claim, claim["attempt"], attempt, "failed_closed", CLOSED_EXIT, f"owner_settled: {statement}"[:REPORT_LIMIT], "")
+        return outcome_of(end, adopted=attempt != claim["attempt"])
 
     def cancel(self, run_id: str, job: str, attempt: int, reason: str = "cancel") -> Outcome:
         """Cancel the run and job's launch. A durable cancel request comes first, so a sender that holds the send token sees it before every RunTask call and

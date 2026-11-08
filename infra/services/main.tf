@@ -118,8 +118,9 @@ locals {
         containers    = local.airflow_apiserver_containers
         volumes       = merge(local.airflow_code_volumes, local.airflow_state_volumes)
       }
+      # Under the LocalExecutor every DAG step runs in the scheduler's task, so the scheduler alone takes the launch role (owner, Nov 7 2026).
       airflow_scheduler = {
-        task_role_arn = var.control_plane_task_role_arn
+        task_role_arn = coalesce(var.airflow_launch_task_role_arn, var.control_plane_task_role_arn)
         containers    = local.airflow_scheduler_containers
         volumes       = merge(local.airflow_code_volumes, local.airflow_state_volumes)
       }

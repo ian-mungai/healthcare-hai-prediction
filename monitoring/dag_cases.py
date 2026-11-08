@@ -2,7 +2,7 @@
 
 The real DAG file runs against stand-ins for ``airflow.sdk``, the standard provider's ``TriggerDagRunOperator`` and ``AirflowSkipException``, as the other
 DAG cases do. The stand-ins record the graph the file declares and keep each task's function, so the cases run the real task bodies with a chosen DAG run
-context. The broker is stood in by a captured ``submit_and_wait``. What this proves: the declared graph, the trigger arguments, the decision from records,
+context. The launch library is stood in by a captured ``launch_step``. What this proves: the declared graph, the trigger arguments, the decision from records,
 the training configuration against the real validators, and the skip for nothing to monitor. What it does not prove: that Airflow accepts the graph, maps the
 trigger over the list, or starts ``training_dag``. That needs ``airflow dags test`` in the orchestration image.
 """
@@ -25,9 +25,7 @@ from typing import Any, ClassVar
 from unittest import mock
 
 from monitoring.aws_cases import MemoryS3
-from orchestration.interface import Handle, State, Status
-from orchestration.training_contract import RUN_ID
-from scripts.orchestration.trigger_dag import run_conf
+from orchestration.training_contract import LAUNCH_LANES, RUN_ID, parameters_for
 
 ROOT = Path(__file__).resolve().parents[1]
 DAG_FILE = ROOT / "dags/drift_monitoring_dag.py"
@@ -178,12 +176,33 @@ def bucket_with(records: list[dict[str, Any]], *, marker: bool = True, marker_ru
     return s3
 
 
-def decide(module: Any, s3: MemoryS3, *, mlflow: str = "local") -> list[dict[str, Any]]:
+def decide(module: Any, s3: MemoryS3, *, mlflow: str = "aws") -> list[dict[str, Any]]:
     """Run the real ``decide`` task body for the DRIFT_RUN against the in-memory bucket."""
     CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": mlflow}}
-    with mock.patch.dict(os.environ, {"DATA_BUCKET_NAME": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
+    with mock.patch.dict(os.environ, {"HAI_LAUNCH_BUCKET": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
+        os.environ.pop("DATA_BUCKET_NAME", None)
         result: list[dict[str, Any]] = module.dag.task_dict["decide"].function()
     return result
+
+
+def decide_reads_the_launch_bucket(folder: Path) -> Problems:
+    """The services environment names the data bucket in HAI_LAUNCH_BUCKET (infra/services/airflow.tf) and sets no DATA_BUCKET_NAME, so decide reads it."""
+    with loaded_dag() as module:
+        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}}
+        s3 = bucket_with([record("HAI_1")])
+        with mock.patch.dict(os.environ, {"DATA_BUCKET_NAME": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
+            os.environ.pop("HAI_LAUNCH_BUCKET", None)
+            try:
+                module.dag.task_dict["decide"].function()
+            except RuntimeError as error:
+                if "HAI_LAUNCH_BUCKET" not in str(error):
+                    return [f"the refusal does not name HAI_LAUNCH_BUCKET: {error}"]
+            else:
+                return ["decide read a bucket without HAI_LAUNCH_BUCKET"]
+    text = (ROOT / "infra/services/airflow.tf").read_text()
+    if "HAI_LAUNCH_BUCKET" not in text:
+        return ["the services environment no longer sets HAI_LAUNCH_BUCKET"]
+    return []
 
 
 def graph_is_declared(folder: Path) -> Problems:
@@ -213,15 +232,43 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
         if len(requests) != 1:
             return [f"expected one trigger request, got {len(requests)}"]
         request = requests[0]
-        training = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": f"drift:{DRIFT_RUN}", "mlflow": "local"}
+        training = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": f"drift:{DRIFT_RUN}", "mlflow": "aws"}
         problems = []
         if request["trigger_run_id"] != f"drift__{DRIFT_RUN}":
             problems.append(f"the trigger run id is {request['trigger_run_id']}")
-        if request["conf"] != run_conf("training_dag", "real", request["conf"]["run_id"], None, training):
-            problems.append(f"the training conf differs from the established builder's: {request['conf']}")
+        if request["conf"] != {"run_id": request["conf"]["run_id"], "mode": "real", **training}:
+            problems.append(f"the training conf is not the run, the real mode and the training parameters: {request['conf']}")
         if not re.fullmatch(RUN_ID, request["conf"]["run_id"]) or request["conf"]["run_id"] == DRIFT_RUN:
             problems.append("the training run id is malformed or equals the drift run id")
         return problems
+
+
+def aws_decision_reaches_a_training_request(folder: Path) -> Problems:
+    """Round 2 review H4: with the aws lane (the only one a launched DAG step accepts) a drifted type becomes a training request whose parameters the
+    training DAG's launch step accepts, instead of an error before the request is built."""
+    with loaded_dag() as module:
+        try:
+            requests = decide(module, bucket_with([record("HAI_2", triggered=True)]), mlflow="aws")
+        except Exception as error:
+            return [f"decide raised before the training request with mlflow=aws: {type(error).__name__}: {error}"]
+        if len(requests) != 1 or requests[0]["conf"].get("mlflow") != "aws":
+            return [f"expected one training request on the aws lane, got {requests}"]
+        conf = requests[0]["conf"]
+        try:
+            parameters_for("training_dag", {name: conf[name] for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}, LAUNCH_LANES)
+        except ValueError as error:
+            return [f"the training DAG's launch step would refuse the request: {error}"]
+        return []
+
+
+def local_lane_is_refused_by_name(folder: Path) -> Problems:
+    """A drift run that names mlflow=local is refused by name: a launched training step would refuse it anyway, so no request carries it."""
+    with loaded_dag() as module:
+        try:
+            requests = decide(module, bucket_with([record("HAI_1", triggered=True)]), mlflow="local")
+        except ValueError as error:
+            return [] if "mlflow=aws" in str(error) else [f"the refusal does not name the aws lane: {error}"]
+        return [f"a drift run on the local lane built training requests: {requests}"]
 
 
 def several_drifted_types_share_one_run(folder: Path) -> Problems:
@@ -270,25 +317,21 @@ def a_changed_record() -> MemoryS3:
     return s3
 
 
-def broker_step(folder: Path) -> Problems:
-    """The one step reaches the broker as the template drift_run for this DAG, in real mode and without training parameters."""
+def launch_step(folder: Path) -> Problems:
+    """The one step reaches the launch library as the template drift_run for this DAG, in real mode and without training parameters."""
     sent: list[Any] = []
 
-    def wait(client: Any, request: Any) -> tuple[Handle, Status]:
+    def launched(request: Any, context: Any, selections: Any) -> str:
         sent.append(request)
-        handle = Handle(request.submission_id, request.container_name)
-        return handle, Status(handle, State.SUCCEEDED, 0, None)
+        return "succeeded"
 
     with loaded_dag() as module:
         instance = SimpleNamespace(try_number=1, dag_id="drift_monitoring_dag", task_id="drift_run", run_id="manual")
-        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "local"}, "ti": instance}
-        with (
-            mock.patch.object(module.dag_runtime.BrokerClient, "from_session", return_value=SimpleNamespace()),
-            mock.patch.object(module.dag_runtime, "submit_and_wait", side_effect=wait),
-        ):
+        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}, "ti": instance}
+        with mock.patch.object(module.dag_runtime, "launch_module", return_value=SimpleNamespace(launch_step=launched)):
             module.dag.task_dict["drift_run"].function()
     shape = [(request.template, request.dag_id, request.mode, request.training) for request in sent]
-    return [] if shape == [("drift_run", "drift_monitoring_dag", "real", None)] else [f"the broker received {shape}"]
+    return [] if shape == [("drift_run", "drift_monitoring_dag", "real", None)] else [f"the launch library received {shape}"]
 
 
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
@@ -310,5 +353,8 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
             "dag_refuses_a_sensitivity_record_that_triggers",
             refuses("population", lambda: bucket_with([record("HAI_1", triggered=True, population="sensitivity")])),
         ),
-        ("dag_step_reaches_the_broker", broker_step),
+        ("dag_step_reaches_the_launch_library", launch_step),
+        ("dag_aws_decision_reaches_a_training_request", aws_decision_reaches_a_training_request),
+        ("dag_local_lane_is_refused_by_name", local_lane_is_refused_by_name),
+        ("dag_decide_reads_the_launch_bucket", decide_reads_the_launch_bucket),
     ]

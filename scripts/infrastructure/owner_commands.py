@@ -29,7 +29,7 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT = "111111111111"
-SHELL_TOOLS = ("printf", "date", "openssl", "cat", "basename", "shasum", "mkdir", "cmp")
+SHELL_TOOLS = ("printf", "date", "openssl", "cat", "basename", "shasum", "mkdir", "cmp", "cp", "grep", "git")
 PARSE_FAILURES = re.compile(
     "|".join(
         (
@@ -85,6 +85,14 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "TASK_ID": task,
         "SUBNET_ID": "subnet-0123456789abcdef0",
         "LAKEHOUSE_SECURITY_GROUP": "sg-0123456789abcdef0",
+        "TRAINING_SUBNET_ID": "subnet-0123456789abcdef1",
+        "TRAINING_SECURITY_GROUP": "sg-0123456789abcdef1",
+        "FEATURES_RUN_ID": "20261031T110000Z-3456789a",
+        "HAI_TYPE": "HAI_1",
+        "MODEL_VERSION": "1",
+        "APPROVED_ON": "2026-10-31",
+        "MANIFEST_PREFIX": "serving/deployments",
+        "CODE_REVISION": "0123456789abcdef0123456789abcdef01234567",
         "PLAN": "silver_step.tfplan",
         "OWNER": "Example Owner",
         "ANALYTICS_IMAGE": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:{'d' * 64}",
@@ -285,6 +293,8 @@ def example_json(body: str) -> dict[str, Any] | None:
         "GOLD_SECRET_NAME": "/example_project/aws_polaris_gold_client_secret",
         "FEATURES_ID_NAME": "/example_project/aws_polaris_features_client_id",
         "FEATURES_SECRET_NAME": "/example_project/aws_polaris_features_client_secret",
+        "TRAINING_REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_training_dev@sha256:{'c' * 64}",
+        "TRAIN_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_train_task_dev",
     }
     try:
         return json.loads(filled(found.group(1), table))
