@@ -20,7 +20,6 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 8. The launch services come from the named environment, with the session adapter (``services_come_from_named_environment``,
    ``services_build_the_session_adapter``).
 9. The metadata job sends overrides only for the one container of its host definition (``metadata_uses_the_host_containers``).
-10. The gold maintenance DAG has no job of its own on AWS: every step of it refuses by name and launches nothing (``gold_maintenance_dag_refuses_by_name``).
 """
 
 from __future__ import annotations
@@ -85,7 +84,11 @@ RUN_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
 LAUNCH_MOUNT = re.compile(r'=\s*"orchestration/([A-Za-z0-9_]+\.py)"')
 DAG_ID = re.compile(r'dag_id="([a-z_]+)"')
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
-HOST_METADATA = re.compile(r'host_metadata_containers\s*=\s*\[\{\s*name\s*=\s*"([a-z_]+)"')
+HOST_METADATA = re.compile(r"host_metadata_containers\s*=\s*\[(.*?)\n  \]", re.DOTALL)
+CONTAINER_NAME = re.compile(r'^      name\s*=\s*"([a-z_]+)"', re.MULTILINE)
+LAYER_PHASES = re.compile(r"layer_phases\s*=\s*\{(.*?)\n  \}", re.DOTALL)
+PHASE_LAYER = re.compile(r"^\s*([a-z_]+)\s*=\s*\[", re.MULTILINE)
+INIT_WIPE = 'container.name == "init"'
 POLARIS = "http://10.0.0.5:8181/api/catalog"
 MLFLOW = "http://10.0.0.5:5100"
 
@@ -117,12 +120,25 @@ class StageBucket(FakeS3):
         self.objects[RUN_KEY.format(run=run, name=name)] = body if isinstance(body, bytes) else json.dumps(body).encode()
 
 
-def host_definitions(table: dict[str, Any]) -> dict[str, frozenset[str]]:
-    """The containers of each host task definition the rig's fake ECS knows: a job's containers and its guard, and for metadata the one client container
-    that ``infra/jobs/host.tf`` defines."""
-    metadata = HOST_METADATA.findall((ROOT / "infra/jobs/host.tf").read_text())
-    require(len(metadata) == 1, f"infra/jobs/host.tf does not name one metadata host container: {metadata}")
-    found = {f"example_dev_job_{job}_host": frozenset({*row["containers"], "guard"}) for job, row in table["jobs"].items()}
+def host_definitions(table: dict[str, Any], host: dict[str, Any]) -> dict[str, frozenset[str]]:
+    """The containers of each host task definition the rig's fake ECS knows, read from ``infra/jobs``: every definition starts with the init step that wipes
+    the family's scratch folders (``host_containers`` applies the wipe to the container named init), the layer jobs end with their guard, a job's other
+    containers are the ones its table row names (the host table's where it names them) and the metadata job's are the ones
+    ``host_metadata_containers`` lists."""
+    host_text, layers_text = (ROOT / "infra/jobs/host.tf").read_text(), (ROOT / "infra/jobs/layers.tf").read_text()
+    require(INIT_WIPE in host_text, "infra/jobs/host.tf no longer applies the scratch wipe to the init container of every host definition")
+    metadata_block = HOST_METADATA.findall(host_text)
+    require(len(metadata_block) == 1, f"infra/jobs/host.tf does not hold one host_metadata_containers list: {len(metadata_block)}")
+    metadata = CONTAINER_NAME.findall(metadata_block[0])
+    require(metadata[:1] == ["init"] and len(metadata) > 1, f"the metadata host containers are not an init step and its clients: {metadata}")
+    phases = LAYER_PHASES.findall(layers_text)
+    require(len(phases) == 1, "infra/jobs/layers.tf does not hold one layer_phases map")
+    layers = set(PHASE_LAYER.findall(phases[0]))
+    require(layers == {"silver", "gold", "features"}, f"the layer jobs with a guard are not the three the rig knows: {sorted(layers)}")
+    found = {}
+    for job, row in table["jobs"].items():
+        names = host["jobs"].get(job, {}).get("containers") or row["containers"]
+        found[f"example_dev_job_{job}_host"] = frozenset({"init", *names, *(["guard"] if job in layers else [])})
     found["example_dev_job_metadata_host"] = frozenset(metadata)
     return found
 
@@ -138,7 +154,7 @@ class Rig:
         self.time = FakeClock()
         self.ecs.clock = lambda: self.time.now
         table, host = preflight.load_tables(ROOT)
-        self.ecs.definitions = host_definitions(table)
+        self.ecs.definitions = host_definitions(table, host)
         settings = EcsSettings(
             cluster=CLUSTER,
             family_prefix="example_dev_job_",
@@ -722,7 +738,7 @@ def promotion_and_serving_dags_run_end_to_end() -> None:
         with world(rig, dag_id, params) as current:
             states = current.run_dag(file)
             failed = {name: state for name, state in states.items() if state != "success"}
-            require(states and not failed and current.results["release_run"] == "released", f"{dag_id} did not finish: {failed} {current.results}")
+            require(bool(states) and not failed and current.results["release_run"] == "released", f"{dag_id} did not finish: {failed} {current.results}")
     require(rig.tasks_started() == 2, f"one task per job was expected: {rig.tasks_started()} tasks")
     for run, job in ((PROMOTE_RUN, "promote"), (SERVE_RUN, "serve")):
         require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{job} has no success record")
@@ -935,22 +951,6 @@ def dags_hold_no_broker_client() -> None:
     require(sent == [("pin_bronze", "silver_transform_dag")] and not rig.ecs.calls, f"the step did not go to the launch library alone: {sent}")
 
 
-def gold_maintenance_dag_refuses_by_name() -> None:
-    """Gold maintenance moves into the gold job as its last container. Until the DAG file is gone, a trigger of it fails every step by name, before any
-    staged-input read, record or ECS call."""
-    rig = Rig()
-    with world(rig, "gold_maintenance_dag", {"run_id": GOLD_RUN, "mode": "real"}) as current:
-        states = current.run_dag("gold_maintenance_dag.py")
-    ran = {name: state for name, state in states.items() if state != "upstream_failed"}
-    require(ran and all(state == "failed" for state in ran.values()), f"a gold maintenance step did not fail: {states}")
-    reasons = {name: str(current.results.get(name)) for name in ran}
-    require(
-        all("gold_maintenance_dag" in reason and "gold job" in reason for reason in reasons.values()),
-        f"a gold maintenance step did not name why it refuses: {reasons}",
-    )
-    require(not rig.ecs.calls and not rig.records.calls and not rig.stage.reads and not rig.stage.puts, "a gold maintenance step reached the cloud")
-
-
 CASES: dict[str, Callable[[], None]] = {
     "dags_hold_no_broker_client": dags_hold_no_broker_client,
     "pool_only_when_configured": pool_only_when_configured,
@@ -979,5 +979,4 @@ CASES: dict[str, Callable[[], None]] = {
     "services_build_the_session_adapter": services_build_the_session_adapter,
     "scratch_usage_counts_only_what_it_can_read": scratch_usage_counts_only_what_it_can_read,
     "metadata_uses_the_host_containers": metadata_uses_the_host_containers,
-    "gold_maintenance_dag_refuses_by_name": gold_maintenance_dag_refuses_by_name,
 }

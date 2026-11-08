@@ -6,7 +6,6 @@ launch. A failed job fails each step, and trying again needs a new run. A contro
 gate launch nothing: the gate checks the signed first publishes and binds the code runs of the chain. A staged input that is not there yet (``InputNotReady``)
 is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause. A ``LaunchUnavailable`` from the launch library means the launch is not
 finished: the step fails with it at once and nothing repeats it, because only the library's own evidence or its manual owner path resolves the launch.
-A DAG in ``RETIRED_DAGS`` has no job on AWS (gold maintenance runs inside the gold job): each of its steps refuses by name and launches nothing.
 The owner ends an unresolved launch with ``python -m orchestration.airflow_steps settle`` in the scheduler container (``Launcher.owner_settle``).
 """
 
@@ -41,8 +40,6 @@ from orchestration.ecs_preflight import (
 from orchestration.interface import SubmissionRequest
 
 UNAVAILABLE_SECONDS = 600.0
-# DAGs whose steps have no job on AWS: every step refuses by name before anything is read or launched.
-RETIRED_DAGS = {"gold_maintenance_dag": "gold maintenance runs as the last container of the gold job, not as its own DAG"}
 UNAVAILABLE_POLL_SECONDS = 15.0
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = (
@@ -157,8 +154,6 @@ def selected_input(preflight: Preflight, request: SubmissionRequest, params: Map
 
 def launch_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
     """Run the step through the launch library and return its successful state."""
-    if request.dag_id in RETIRED_DAGS:
-        raise LaunchRefused(f"{request.dag_id} does not run on AWS: {RETIRED_DAGS[request.dag_id]}. Its step {request.template} launches nothing")
     launch = services()
     request = replace(request, input_run_id=selected_input(launch.preflight, request, context["params"], selections))
     end = launch.clock.monotonic() + UNAVAILABLE_SECONDS

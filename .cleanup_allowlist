@@ -97,3 +97,5 @@ airflow scripts/training/step_records.py -- step and catalog_up stay live task a
 airflow services/hai/bootstrap/outputs.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow tests/orchestration/fixtures/combined_dag.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 python dags/drift_monitoring_dag.py -- dag_runtime is the live runtime module the DAG imports; the change removed only a test helper function of the same name -- expires 2026-11-30
+config scripts/orchestration/run_features_pipeline_light.py -- the check requires the retired gold_maintenance_dag to stay gone from the pipeline graph -- expires 2026-11-30
+config scripts/orchestration/run_publish_contracts.py -- the check requires the retired gold_maintenance_dag to stay undeclared -- expires 2026-11-30
