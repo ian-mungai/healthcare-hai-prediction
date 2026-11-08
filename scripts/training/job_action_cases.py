@@ -794,9 +794,11 @@ def fit_cases(cases: Any, folder: Path) -> None:
 
         class HandleRegressor:
             def __init__(self) -> None:
-                self._Booster = HandleBooster()
+                self.booster = HandleBooster()
 
-        held = bundle.pipeline_types(HandleRegressor())
+        regressor = HandleRegressor()
+        require(isinstance(regressor.booster.handle, NativeHandle), "the stand-in does not hold its handle as an attribute")
+        held = bundle.pipeline_types(regressor)
         require(not any(name.endswith("NativeHandle") for name in held), f"the trust check read an attribute the saved state replaces: {sorted(held)}")
         require(any(name.endswith("HandleBooster") for name in held), f"the trust check did not reach the object the saved state holds: {sorted(held)}")
 
