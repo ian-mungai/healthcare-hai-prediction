@@ -778,7 +778,30 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require(code == job.EXIT_FAILED and failure_of(error) == "untrusted_model_type" and "FoldPreprocessor" in error, f"{code} {error}")
         require(listing(fixture.out) == [], "a fit with an untrusted candidate wrote output")
 
+    def serialized_state_trusted() -> None:
+        """XGBoost's Booster keeps a ctypes handle in __dict__ and replaces it with raw bytes in __getstate__, which skops saves; only the saved state
+        counts. Training run 6 stopped in fit when the check walked __dict__ instead."""
+
+        class NativeHandle:
+            """Stands in for the ctypes.c_void_p handle of a live Booster."""
+
+        class HandleBooster:
+            def __init__(self) -> None:
+                self.handle = NativeHandle()
+
+            def __getstate__(self) -> dict[str, Any]:
+                return {**self.__dict__, "handle": bytearray(b"raw model")}
+
+        class HandleRegressor:
+            def __init__(self) -> None:
+                self._Booster = HandleBooster()
+
+        held = bundle.pipeline_types(HandleRegressor())
+        require(not any(name.endswith("NativeHandle") for name in held), f"the trust check read an attribute the saved state replaces: {sorted(held)}")
+        require(any(name.endswith("HandleBooster") for name in held), f"the trust check did not reach the object the saved state holds: {sorted(held)}")
+
     cases.check("job_fit_writes_results_and_done", fitted)
+    cases.check("job_fit_trust_check_reads_saved_state", serialized_state_trusted)
     cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
     cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)
     cases.check("job_fit_result_is_reproducible", reproducible)
