@@ -24,6 +24,8 @@ SLOTS = ("m1_ols", "m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m
 ALL_ROW_BRIDGES = frozenset(("hai_outcome_measures_bridge.csv", "validation_measures_bridge.csv"))
 EXCLUDED_DECISIONS = frozenset(("exclude_primary", "comparison_only"))
 CMI_COLUMNS = frozenset(("cmi", "cmi_cases", "has_cmi", "is_cmi_held"))
+# Counties nest in states, so their one-hot columns are collinear; geography enters through county context and the spatial test instead.
+LOCATION_COLUMNS = frozenset(("state_code", "county_fips"))
 
 
 class GuardError(ValueError):
@@ -153,6 +155,8 @@ def _references(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any
             raise GuardError(f"reference: not registered in a predictor view: {reference}")
         if _is_excluded(_control(column), excluded):
             raise GuardError(f"reference: excluded control {_control(column)} in {reference}")
+        if column["name"] in LOCATION_COLUMNS:
+            raise GuardError(f"reference: location identity {reference} cannot be a predictor")
     expected = {
         reference
         for reference, (table, column) in columns.items()
@@ -160,6 +164,7 @@ def _references(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any
         and column["role"] == "predictor"
         and reference in servable
         and not _is_excluded(_control(column), excluded)
+        and column["name"] not in LOCATION_COLUMNS
         and (
             document["scope"] == "all"
             or table.get("family") == "care_compare"

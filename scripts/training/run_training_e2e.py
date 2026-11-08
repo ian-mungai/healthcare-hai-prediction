@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SLOTS = ("m1_ols", "m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m6_fixed_effects", "rq4_reduced")
 CMS = ["feature_matrix_care_compare:c119__value__number", "feature_matrix_hospital_window:bed_count"]
 ALL = sorted([*CMS, "feature_matrix_hospital:c001__value__number", "feature_matrix_hospital_window:cmi"])
+# Registered and servable, but location identity never enters a feature list (owner decision, Nov 8 2026).
+LOCATION = ["feature_matrix_hospital_window:county_fips", "feature_matrix_hospital_window:state_code"]
 TRAINING_PINS = {
     "mlflow": "3.17.0",
     "scikit-learn": "1.9.1",
@@ -108,7 +110,7 @@ def _fixture(folder: Path) -> None:
         "feature_matrix_hospital_window": {
             "family": "hospital_window",
             "role": "predictor",
-            "columns": [_column(name, "feature_matrix_hospital_window") for name in ("bed_count", "cmi")],
+            "columns": [_column(name, "feature_matrix_hospital_window") for name in ("bed_count", "cmi", "state_code", "county_fips")],
         },
         "label_matrix_hai_outcomes": {"family": "hai_outcomes", "role": "label", "columns": [], "label_views": {}},
     }
@@ -119,7 +121,7 @@ def _fixture(folder: Path) -> None:
         column["pivot"] = {"kind": "number", "match": {"hai_type": f"HAI_{number}"}, "value_column": "sir"}
         labels["columns"].append(column)
         labels["label_views"][f"label_hai_{number}"] = [name]
-    _write(folder / "data_contracts/features/feature_schema.json", {"schema": 1, "tables": tables, "servable": ALL})
+    _write(folder / "data_contracts/features/feature_schema.json", {"schema": 1, "tables": tables, "servable": sorted([*ALL, *LOCATION])})
     for slot in SLOTS:
         path = folder / f"config/training/feature_lists/{slot}.json"
         _edit(path, partial(_set_references, references=sorted(CMS if slot in ("m1_ols", "rq4_reduced") else ALL)))
@@ -369,6 +371,13 @@ def _guard_cases(report: Report, scratch: Path) -> None:
     run("label_reference", lambda f: refs(f, "label_hai_1:hai_1__sir__number"), "reference: label", "E11")
     run("bare_reference", lambda f: refs(f, "c119__value__number"), "references", "E11")
     run("duplicate_reference", lambda f: refs(f, CMS[0]), "references", "E11")
+    run("state_code_reference", lambda f: refs(f, LOCATION[1]), "location identity", "E11")
+    run(
+        "county_fips_in_cms_baseline",
+        partial(_edit_config, filename="feature_lists/m1_ols.json", change=lambda d: d["references"].append(LOCATION[0])),
+        "location identity",
+        "E11",
+    )
     run(
         "curated_cms_subset",
         partial(_edit_config, filename="feature_lists/m1_ols.json", change=lambda d: d["references"].remove("feature_matrix_hospital_window:bed_count")),

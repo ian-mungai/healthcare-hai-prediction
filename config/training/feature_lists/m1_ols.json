@@ -55,13 +55,11 @@
     "feature_matrix_hospital_window:bed_count",
     "feature_matrix_hospital_window:certified_bed_count",
     "feature_matrix_hospital_window:control_type_code",
-    "feature_matrix_hospital_window:county_fips",
     "feature_matrix_hospital_window:has_pos_snapshot",
     "feature_matrix_hospital_window:is_active",
     "feature_matrix_hospital_window:is_critical_access",
     "feature_matrix_hospital_window:is_veterans_affairs",
-    "feature_matrix_hospital_window:provider_subtype_code",
-    "feature_matrix_hospital_window:state_code"
+    "feature_matrix_hospital_window:provider_subtype_code"
   ],
   "schema": 1,
   "scope": "cms_only",
