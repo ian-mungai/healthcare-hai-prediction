@@ -487,7 +487,7 @@ def lookup_describes_only_its_own_family() -> None:
     found = adapter.lookup(KEY, TRAIN_HOST)
     require(found is not None and found.arn == arn, f"the stopped train task was not found: {found}")
     listings = [arguments for name, arguments in ecs.calls if name == "list_tasks" and arguments.get("desiredStatus") == "STOPPED"]
-    require(listings and all(item.get("family") == TRAIN_HOST for item in listings), f"the stopped listing does not name the family: {listings}")
+    require(bool(listings) and all(item.get("family") == TRAIN_HOST for item in listings), f"the stopped listing does not name the family: {listings}")
     described = [arn for name, arguments in ecs.calls if name == "describe_tasks" for arn in arguments["tasks"]]
     others = [item for item in described if "silver" in str(ecs.tasks[item]["request"]["taskDefinition"])]
     require(not others, f"a task of another family was described: {others}")
