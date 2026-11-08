@@ -78,6 +78,8 @@ unused-code orchestration/ecs_launch_provider.py -- Airflow's DAG parser imports
 unused-code orchestration/ecs_launch_operator.py -- the provider operator's execute calls the four hooks by name, the task runner calls on_kill, and the unused started_by argument is part of the hook signature
 unused-code scripts/orchestration/ecs_launch_standin.py -- the stand-in keeps the signatures of the provider operator, so unused arguments and the hook names stay
 unused-code scripts/lakehouse/run_gold_publish_runner_cases.py -- the tempfile.mkdtemp stand-in keeps the dir keyword of the real signature, so callers that pass dir= still work
+unused-code scripts/training/mlflow_alias_read.py -- urllib calls http_open and https_open of the deadline handlers by scheme name and http.client reads response_class of the deadline connections -- permanent
+unused-code scripts/training/mlflow_alias_stand_in.py -- http.server calls do_GET of the loopback MLflow alias stand-in and reads daemon_threads of its server -- permanent
 config scripts/quality/ci_hooks.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
 config scripts/quality/pre_push.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
 config scripts/quality/run_ci_groups_e2e.py -- local_ci is the id of the pre-commit hook that runs the local CI aggregate, not the name of the retired hosted Core job
