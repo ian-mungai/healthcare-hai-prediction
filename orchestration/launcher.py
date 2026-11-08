@@ -152,6 +152,7 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_LINE = 1 << 20
 SESSION_BUFFER_LIMIT = 128 * 1024
+HOLDER_CHECK_SECONDS = 1.0
 INPUT_CHUNK = 16 * 1024
 DEFAULT_IMAGE_LABEL = "hai.deadline_entrypoint"
 DEFAULT_IMAGE_IMPLEMENTATION = "hai.deadline_implementation"
@@ -3495,6 +3496,7 @@ class Launcher:
         self.copy_threads: dict[str, threading.Thread] = {}
         self.copy_cancel: set[str] = set()
         self.last_stale_check = 0.0
+        self.holders_alive: dict[tuple[str, int, str], float] = {}
         self.main_checkout = config.root
         self.image_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.secret_results: dict[str, tuple[float, dict[str, Fetched]]] = {}
@@ -6653,8 +6655,16 @@ class Launcher:
         for allocation_id, allocation in state["allocations"].items():
             if allocation["kind"] != "shared" or allocation["state"] not in ("held", "planning"):
                 continue
-            if run_lock.process_start(int(allocation["holder_pid"])) == allocation["holder_start"]:
+            # Reading a holder's start time starts ps, and this pass runs on every loop wake (each relayed session chunk is one), so a holder found
+            # alive is checked again only after HOLDER_CHECK_SECONDS: a dead holder is still found within that time.
+            holder = (allocation_id, int(allocation["holder_pid"]), allocation["holder_start"])
+            now = time.monotonic()
+            if now - self.holders_alive.get(holder, -HOLDER_CHECK_SECONDS) < HOLDER_CHECK_SECONDS:
                 continue
+            if run_lock.process_start(holder[1]) == holder[2]:
+                self.holders_alive[holder] = now
+                continue
+            self.holders_alive.pop(holder, None)
             allocation["holder_dead"] = True
             for attempt in state["attempts"].values():
                 if attempt["owner"] == f"alloc:{allocation_id}" and is_open(attempt):
