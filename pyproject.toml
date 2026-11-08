@@ -1043,6 +1043,7 @@ training = [
   "shap; sys_platform == 'linux'",
   "skops==0.16.0; sys_platform == 'linux'",
   "spreg; sys_platform == 'linux'",
+  "esda==2.10.0; sys_platform == 'linux'",
   "linearmodels; sys_platform == 'linux'",
   "duckdb==1.5.6; sys_platform == 'linux'",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
