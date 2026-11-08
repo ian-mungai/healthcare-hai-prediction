@@ -262,6 +262,48 @@ def seed_for(master: int, hai_type: str, purpose: str) -> int:
     return int.from_bytes(hashlib.sha256(f"{master}|{hai_type}|{purpose}".encode()).digest()[:4], "big")
 
 
+DEPENDENCE_RELATIVE_TOLERANCE = 1e-9
+
+
+def pivoted_rank(matrix: Array) -> tuple[int, Array]:
+    """The pivoted QR rank and column order of a design, with the diagnostic tolerance."""
+    r, pivots = importlib.import_module("scipy.linalg").qr(matrix, mode="r", pivoting=True)
+    diagonal = np.abs(np.diag(r))
+    tolerance = float(diagonal[0]) * max(matrix.shape) * float(np.finfo(np.float64).eps) if diagonal.size else 0.0
+    return int(np.count_nonzero(diagonal > tolerance)), np.asarray(pivots)
+
+
+def dependent_positions(matrix: Array, order: Sequence[int]) -> tuple[int, ...]:
+    """Columns of a design (without its intercept) that are exact combinations of the intercept and earlier columns of ``order``.
+
+    The columns are taken in ``order``, so a column earlier in it is kept and a later one that depends on it is dropped. A column is dependent when its
+    unpivoted QR diagonal is below ``DEPENDENCE_RELATIVE_TOLERANCE`` of its own norm. Pivoted QR then confirms that the kept columns and the intercept have
+    full rank; a dependence it still finds (a near-exact one) drops the latest kept column in ``order`` among those it names, until the rank is full.
+    """
+    if matrix.shape[1] == 0:
+        return ()
+    ordered = [int(index) for index in order]
+    if sorted(ordered) != list(range(matrix.shape[1])):
+        raise ModelError("dependence order must name every design column once")
+    design = with_intercept(matrix[:, ordered])
+    diagonal = np.abs(np.diag(np.linalg.qr(design, mode="r")))
+    norms = np.linalg.norm(design, axis=0)
+    dropped = {
+        ordered[position - 1] for position in range(1, design.shape[1]) if diagonal[position] <= DEPENDENCE_RELATIVE_TOLERANCE * max(norms[position], 1.0)
+    }
+    for _ in range(matrix.shape[1]):
+        kept = [index for index in ordered if index not in dropped]
+        candidate = with_intercept(matrix[:, kept])
+        rank, pivots = pivoted_rank(candidate)
+        if rank == candidate.shape[1]:
+            break
+        named = {kept[position - 1] for position in pivots[rank:].tolist() if position > 0}
+        if not named:
+            raise NotEstimable("the intercept depends on the design columns")
+        dropped.add(max(named, key=ordered.index))
+    return tuple(sorted(dropped))
+
+
 def full_rank(matrix: Array) -> None:
     """Refuse a likelihood design with no residual degrees of freedom or deficient rank."""
     if not np.isfinite(matrix).all() or matrix.shape[0] <= matrix.shape[1] or np.linalg.matrix_rank(matrix) != matrix.shape[1]:

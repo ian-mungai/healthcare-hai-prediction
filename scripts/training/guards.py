@@ -139,7 +139,22 @@ def _is_excluded(control: str, excluded: set[str]) -> bool:
     return control in excluded or control.split(".", 1)[0] in excluded
 
 
-def _references(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any], dict[str, Any]]], servable: set[str], excluded: set[str]) -> None:
+def _redundant(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any], dict[str, Any]]], servable: set[str]) -> None:
+    """Check the reviewed references that repeat or derive from kept predictors: each must be a servable predictor, and each kept one too and not removed."""
+    removed = [entry["reference"] for entry in document["features"]]
+    if len(removed) != len(set(removed)):
+        raise GuardError("redundant_features.json: a reference is listed twice")
+    for entry in document["features"]:
+        for reference in (entry["reference"], *entry["kept"]):
+            if reference not in columns or reference not in servable or columns[reference][1]["role"] != "predictor":
+                raise GuardError(f"redundant_features.json: {reference} is not a registered servable predictor")
+            if reference in entry["kept"] and reference in removed:
+                raise GuardError(f"redundant_features.json: the kept reference {reference} is itself listed as redundant")
+
+
+def _references(
+    document: dict[str, Any], columns: dict[str, tuple[dict[str, Any], dict[str, Any]]], servable: set[str], excluded: set[str], redundant: frozenset[str]
+) -> None:
     references = document["references"]
     for reference in references:
         if reference.startswith("label_"):
@@ -157,6 +172,8 @@ def _references(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any
             raise GuardError(f"reference: excluded control {_control(column)} in {reference}")
         if column["name"] in LOCATION_COLUMNS:
             raise GuardError(f"reference: location identity {reference} cannot be a predictor")
+        if reference in redundant:
+            raise GuardError(f"reference: redundant feature {reference} is listed in redundant_features.json and cannot be a predictor")
     expected = {
         reference
         for reference, (table, column) in columns.items()
@@ -165,6 +182,7 @@ def _references(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any
         and reference in servable
         and not _is_excluded(_control(column), excluded)
         and column["name"] not in LOCATION_COLUMNS
+        and reference not in redundant
         and (
             document["scope"] == "all"
             or table.get("family") == "care_compare"
@@ -201,7 +219,7 @@ def check(root: Path = ROOT, *, feature_schema: Path | None = None, git_commit: 
     config, contracts = root / "config/training", root / "data_contracts/training"
     documents: dict[str, dict[str, Any]] = {}
     paths: dict[str, Path] = {}
-    for name in ("models", "promotion", "census_regions", "excluded_controls", "targets"):
+    for name in ("models", "promotion", "census_regions", "excluded_controls", "redundant_features", "targets"):
         paths[name] = config / f"{name}.json"
         documents[name] = _validate(paths[name], contracts / f"{name}.schema.json")
     for name in ("bundle", "model_contract"):
@@ -222,15 +240,17 @@ def check(root: Path = ROOT, *, feature_schema: Path | None = None, git_commit: 
         raise GuardError("targets: " + "; ".join(problems))
     forbidden = excluded | {entry["control"] for entries in lists.values() for entry in entries} | set(feature.get("excluded_controls", []))
     _labels(feature, lists)
+    redundant = frozenset(entry["reference"] for entry in documents["redundant_features"]["features"])
     for slot in SLOTS:
         key = f"feature_lists/{slot}"
         paths[key] = config / f"{key}.json"
         document = _validate(paths[key], contracts / "feature_list.schema.json")
         if document["slot"] != slot:
             raise GuardError(f"{slot}.json: slot does not match the filename")
-        _references(document, columns, servable, forbidden)
+        _references(document, columns, servable, forbidden, redundant)
         if slot != "rq4_reduced" and not set(documents["models"]["slots"][slot]["forced_references"]).issubset(document["references"]):
             raise GuardError(f"{slot}: a forced covariate is missing from the feature list")
+    _redundant(documents["redundant_features"], columns, servable)
     file_hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in sorted(paths.items())}
     config_hashes = {name: value for name, value in file_hashes.items() if name not in ("bundle", "model_contract")}
     return {

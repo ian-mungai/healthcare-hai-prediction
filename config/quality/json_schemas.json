@@ -47,6 +47,12 @@
       ]
     },
     {
+      "schema": "data_contracts/training/redundant_features.schema.json",
+      "files": [
+        "config/training/redundant_features.json"
+      ]
+    },
+    {
       "schema": "data_contracts/training/hac_year_mapping.schema.json",
       "files": [
         "config/training/hac_year_mapping.json"

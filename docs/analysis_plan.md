@@ -26,6 +26,8 @@ Every training run follows this plan. The plan changes during development, so ea
 - The predictor families are Care Compare process and structure measures (RQ1), hospital characteristics and operations, HCRIS cost-report ratios and the Case Mix Index (CMI) (RQ4 additions) and county context (RQ4 additions). County context covers SVI, ACS, SAIPE, SAHIE, BLS, PLACES, Medicare geographic variation, CDC WONDER, the Mapping Medicare Disparities data, HPSA and MUA designations, RUCC and RUCA.
 - CMI is a covariate in every model from Elastic Net on.
 - These are never predictors: the parts of the outcome itself, the HAC Reduction Program and VBP scores, readmissions, complications and deaths. PSI-90 and PSI-13 enter only as the RQ3 mediator.
+- A source field that two controls carry appears once in the feature lists. A column that is a fixed sum or midpoint of kept columns is left out: the BLS labor force, ACS occupied housing units and the SAIPE estimates between their 90 percent bounds. `config/training/redundant_features.json` lists each removed reference, the references kept in its place and the reason.
+- The OLS, mixed effects, spatial and fixed-effects models drop any remaining column that is an exact linear combination of the others, found by QR decomposition on the fitting rows only. The full side of the RQ4 test does the same. Value columns are kept before missing-value indicators and category levels. CMI is never dropped. The RQ4 test keeps its CMS-only columns. The same columns are dropped from the holdout and prediction rows. Every fold and final fit records the dropped columns.
 
 ## Missing values
 

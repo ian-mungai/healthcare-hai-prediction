@@ -129,7 +129,7 @@ def nested_comparison(request: ModelRequest) -> dict[str, Any]:
     ):
         raise ModelError("nested reduced list must be CMS-only without CMI or other full-model additions")
     training, holdout = request.data.split()
-    transform = FoldPreprocessor(request.features_for("m2_elastic_net"), forced=(request.cmi_reference,))
+    transform = FoldPreprocessor(request.features_for("m2_elastic_net"), forced=(request.cmi_reference,), drop_dependent=True, protected=tuple(reduced))
     full_design = transform.fit_transform(training.rows)
     full_holdout = transform.transform(holdout.rows)
     selected = list(full_design.columns_for(reduced))
@@ -172,6 +172,9 @@ def nested_comparison(request: ModelRequest) -> dict[str, Any]:
         "holdout_rows": len(holdout.rows),
         "reduced_references": list(reduced),
         "full_references": list(full),
+        "reduced_references_fitted": sorted(set(reduced_design.references)),
+        "dependent_columns": list(transform.dependent_records_),
+        "dependent_column_count": len(transform.dependent_records_),
         "cmi_in_reduced": False,
         "reduced_rmse": left_metrics["rmse"],
         "full_rmse": right_metrics["rmse"],

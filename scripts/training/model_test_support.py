@@ -226,6 +226,28 @@ class Tail:
         return math.exp(-max(0.0, float(statistic)))
 
 
+def _pivoted_qr(matrix: Any, mode: str = "r", pivoting: bool = False) -> Any:
+    """QR with column pivoting (Businger and Golub) in NumPy, for the small synthetic designs; it returns ``(R, pivots)`` as SciPy does."""
+    if mode != "r" or not pivoting:
+        raise ValueError("the stand-in supports mode='r' with pivoting only")
+    work = np.array(matrix, dtype=np.float64, copy=True)
+    rows, columns = work.shape
+    pivots = np.arange(columns)
+    for step in range(min(rows, columns)):
+        norms = np.linalg.norm(work[step:, step:], axis=0)
+        best = step + int(np.argmax(norms))
+        work[:, [step, best]] = work[:, [best, step]]
+        pivots[[step, best]] = pivots[[best, step]]
+        vector = work[step:, step].copy()
+        length = np.linalg.norm(vector)
+        if length == 0:
+            continue
+        vector[0] += math.copysign(length, vector[0] or 1.0)
+        vector /= np.linalg.norm(vector)
+        work[step:, step:] -= 2.0 * np.outer(vector, vector @ work[step:, step:])
+    return np.triu(work[: min(rows, columns)]), pivots
+
+
 @contextmanager
 def libraries() -> Any:
     """Substitute only absent numerical libraries and retain every production model wrapper."""
@@ -237,6 +259,7 @@ def libraries() -> Any:
         "xgboost": SimpleNamespace(XGBRegressor=Tree),
         "statsmodels.api": SimpleNamespace(OLS=OLS, MixedLM=MixedLM),
         "scipy.stats": SimpleNamespace(chi2=Tail(), f=Tail()),
+        "scipy.linalg": SimpleNamespace(qr=_pivoted_qr),
         "libpysal.weights": SimpleNamespace(W=W),
         "esda": SimpleNamespace(Moran=_moran),
         "shap": SimpleNamespace(TreeExplainer=TreeExplainer),

@@ -1,0 +1,322 @@
+{
+  "schema": 1,
+  "features": [
+    {
+      "reference": "feature_matrix_county_context:c175_01__s1701_c03_001e__number",
+      "kept": [
+        "feature_matrix_county_context:c175__s1701_c03_001e__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same ACS field S1701_C03_001E as C175; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177_01__dp03_0009pe__number",
+      "kept": [
+        "feature_matrix_county_context:c177__dp03_0009pe__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same ACS field DP03_0009PE as C177; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177_01__ep_unemp__number",
+      "kept": [
+        "feature_matrix_county_context:c177__ep_unemp__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_unemp as C177; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177_02__employed__number",
+      "kept": [
+        "feature_matrix_county_context:c177__employed__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same BLS field employed as C177; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177_02__labor_force__number",
+      "kept": [
+        "feature_matrix_county_context:c177__employed__number",
+        "feature_matrix_county_context:c177__unemployed__number"
+      ],
+      "relation": "derived",
+      "reason": "the same BLS labor force, employed plus unemployed, which are kept"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177_02__unemployed__number",
+      "kept": [
+        "feature_matrix_county_context:c177__unemployed__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same BLS field unemployed as C177; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177_02__unemployment_rate__number",
+      "kept": [
+        "feature_matrix_county_context:c177__unemployment_rate__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same BLS field unemployment_rate as C177; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c177__labor_force__number",
+      "kept": [
+        "feature_matrix_county_context:c177__employed__number",
+        "feature_matrix_county_context:c177__unemployed__number"
+      ],
+      "relation": "derived",
+      "reason": "the BLS labor force is employed plus unemployed, which are kept"
+    },
+    {
+      "reference": "feature_matrix_county_context:c180_01__ep_hburd__number",
+      "kept": [
+        "feature_matrix_county_context:c180__ep_hburd__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_hburd as C180; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c180__s2503_c01_001e__number",
+      "kept": [
+        "feature_matrix_county_context:c180_02__b25070_001e__number",
+        "feature_matrix_county_context:c180_02__b25091_001e__number"
+      ],
+      "relation": "derived",
+      "reason": "ACS occupied housing units are the renter-occupied total plus the owner-occupied total, which are kept"
+    },
+    {
+      "reference": "feature_matrix_county_context:c183_01__ep_limeng__number",
+      "kept": [
+        "feature_matrix_county_context:c183__ep_limeng__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_limeng as C183; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c183_02__c16001_001e__number",
+      "kept": [
+        "feature_matrix_county_context:c183__b16005_001e__number"
+      ],
+      "relation": "duplicate",
+      "reason": "ACS C16001_001E and B16005_001E are both the county population aged 5 and over"
+    },
+    {
+      "reference": "feature_matrix_county_context:c185_01__e_age65__number",
+      "kept": [
+        "feature_matrix_county_context:c185__e_age65__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field e_age65 as C185; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c185_02__ep_age65__number",
+      "kept": [
+        "feature_matrix_county_context:c185__ep_age65__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_age65 as C185; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c186_01__e_age17__number",
+      "kept": [
+        "feature_matrix_county_context:c186__e_age17__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field e_age17 as C186; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c186_02__ep_age17__number",
+      "kept": [
+        "feature_matrix_county_context:c186__ep_age17__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_age17 as C186; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c191__e_totpop__number",
+      "kept": [
+        "feature_matrix_county_context:c188__e_totpop__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field e_totpop as C188, which both controls use"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_01__ep_hisp__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_hisp__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_hisp as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_02__ep_afam__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_afam__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_afam as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_03__ep_asian__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_asian__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_asian as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_04__ep_aian__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_aian__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_aian as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_05__ep_nhpi__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_nhpi__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_nhpi as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_06__ep_twomore__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_twomore__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_twomore as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_07__ep_otherrace__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_otherrace__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_otherrace as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_08__ep_minrty__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_minrty__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_minrty as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c192_09__ep_minrty__number",
+      "kept": [
+        "feature_matrix_county_context:c192__ep_minrty__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same SVI field ep_minrty as C192; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c199_01__primary_ruca__number",
+      "kept": [
+        "feature_matrix_county_context:c199__primary_ruca__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same RUCA field primary_ruca as C199; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c199_02__secondary_ruca__number",
+      "kept": [
+        "feature_matrix_county_context:c199__secondary_ruca__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same RUCA field secondary_ruca as C199; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c199_03__primary_ruca__number",
+      "kept": [
+        "feature_matrix_county_context:c199__primary_ruca__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same RUCA field primary_ruca as C199; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c199_03__secondary_ruca__number",
+      "kept": [
+        "feature_matrix_county_context:c199__secondary_ruca__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same RUCA field secondary_ruca as C199; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_context:c200__poverty_all_pct__number",
+      "kept": [
+        "feature_matrix_county_context:c200__poverty_all_pct_lb90__number",
+        "feature_matrix_county_context:c200__poverty_all_pct_ub90__number"
+      ],
+      "relation": "derived",
+      "reason": "the SAIPE estimate is the midpoint of its 90 percent bounds, which are kept"
+    },
+    {
+      "reference": "feature_matrix_county_context:c201__median_household_income__number",
+      "kept": [
+        "feature_matrix_county_context:c201__median_household_income_lb90__number",
+        "feature_matrix_county_context:c201__median_household_income_ub90__number"
+      ],
+      "relation": "derived",
+      "reason": "the SAIPE estimate is the midpoint of its 90 percent bounds, which are kept"
+    },
+    {
+      "reference": "feature_matrix_county_measures:c256_01__benes_snf_pct__number",
+      "kept": [
+        "feature_matrix_county_measures:c256__benes_snf_pct__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare geographic variation field benes_snf_pct as C256; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_measures:c256_02__snf_cvrd_stays_per_1000_benes__number",
+      "kept": [
+        "feature_matrix_county_measures:c256__snf_cvrd_stays_per_1000_benes__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare geographic variation field snf_cvrd_stays_per_1000_benes as C256; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_measures:c256_03__snf_cvrd_days_per_1000_benes__number",
+      "kept": [
+        "feature_matrix_county_measures:c256__snf_cvrd_days_per_1000_benes__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare geographic variation field snf_cvrd_days_per_1000_benes as C256; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_measures:c257_01__benes_hh_pct__number",
+      "kept": [
+        "feature_matrix_county_measures:c257__benes_hh_pct__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare geographic variation field benes_hh_pct as C257; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_measures:c257_02__hh_episodes_per_1000_benes__number",
+      "kept": [
+        "feature_matrix_county_measures:c257__hh_episodes_per_1000_benes__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare geographic variation field hh_episodes_per_1000_benes as C257; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_county_measures:c257_03__hh_visits_per_1000_benes__number",
+      "kept": [
+        "feature_matrix_county_measures:c257__hh_visits_per_1000_benes__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare geographic variation field hh_visits_per_1000_benes as C257; a control and its sub-control carry one copy each"
+    },
+    {
+      "reference": "feature_matrix_hospital:c087__tot_dschrgs__number",
+      "kept": [
+        "feature_matrix_hospital:c038__tot_dschrgs__number"
+      ],
+      "relation": "duplicate",
+      "reason": "the same Medicare inpatient field tot_dschrgs as C038, which both controls use"
+    }
+  ]
+}

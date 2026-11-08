@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from scripts.training.models.common import EstimatorParameters, Feature, ModelError, NotEstimable, Prepared
+from scripts.training.models.common import EstimatorParameters, Feature, ModelError, NotEstimable, Prepared, dependent_positions
 
 
 def records(values: Any) -> tuple[Mapping[str, Any], ...]:
@@ -80,6 +80,15 @@ class FeatureBatch:
         )
 
 
+def column_kind(name: str) -> str:
+    """The kind of a design column from its name: a missing-value flag, a category level or a value."""
+    if name.endswith("__missing"):
+        return "missing_flag"
+    if name.rsplit("__", 1)[-1].startswith("category_"):
+        return "category_level"
+    return "value"
+
+
 class FoldPreprocessor(EstimatorParameters):
     """Fit every learned preprocessing choice on this pipeline's fitting rows only."""
 
@@ -90,9 +99,12 @@ class FoldPreprocessor(EstimatorParameters):
         native_missing: bool = False,
         category_levels: Mapping[str, tuple[str | None, ...]] | None = None,
         indicator_aliases: Mapping[str, str] | None = None,
+        drop_dependent: bool = False,
+        protected: tuple[str, ...] = (),
     ) -> None:
         self.features, self.forced, self.native_missing = features, forced, native_missing
         self.category_levels, self.indicator_aliases = category_levels, indicator_aliases
+        self.drop_dependent, self.protected = drop_dependent, protected
 
     def fit(self, values: Any, y: Any = None) -> FoldPreprocessor:
         """Learn selectors, numeric statistics, exact indicator aliases and categories from fitting rows."""
@@ -146,7 +158,27 @@ class FoldPreprocessor(EstimatorParameters):
                     self.indicator_aliases_[indicator] = indicators[signature]
                 else:
                     indicators[signature] = indicator
+        self.dependent_records_: list[dict[str, str]] = []
+        if self.drop_dependent:
+            self._find_dependent(batch)
         return self
+
+    def _find_dependent(self, batch: FeatureBatch) -> None:
+        """Drop the fitting-row columns that are exact combinations of others: forced, protected and value columns are kept before flags and levels."""
+        design = self.transform(batch)
+        forced, protected = set(self.forced), set(self.protected)
+
+        def rank(position: int) -> tuple[int, int]:
+            reference, kind = design.references[position], column_kind(design.names[position])
+            group = 0 if reference in forced else 1 if reference in protected else 3
+            return (group + (kind != "value"), position)
+
+        dropped = dependent_positions(design.matrix, sorted(range(len(design.names)), key=rank))
+        if any(design.references[position] in forced for position in dropped):
+            raise NotEstimable("a forced covariate is an exact combination of other fitting-row columns")
+        self.dependent_records_ = [
+            {"name": design.names[position], "reference": design.references[position], "kind": column_kind(design.names[position])} for position in dropped
+        ]
 
     def transform(self, values: Any) -> Prepared:
         """Apply frozen fitting-row choices and count unknown categorical values."""
@@ -189,6 +221,10 @@ class FoldPreprocessor(EstimatorParameters):
                     columns.append(np.asarray(column == category if codes is None else codes == index, dtype=np.float64))
                     names.append(name)
                     references.append(feature.reference)
+        dropped = {record["name"] for record in getattr(self, "dependent_records_", [])}
+        if dropped:
+            kept = [index for index, name in enumerate(names) if name not in dropped]
+            columns, names, references = [columns[index] for index in kept], [names[index] for index in kept], [references[index] for index in kept]
         matrix = np.column_stack(columns) if columns else np.empty((len(batch.rows), 0))
         indicator_references = {feature.name + "__missing": feature.reference for feature in self.features}
         alias_references: dict[str, tuple[str, ...]] = {}

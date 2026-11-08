@@ -26,6 +26,7 @@ CMS = ["feature_matrix_care_compare:c119__value__number", "feature_matrix_hospit
 ALL = sorted([*CMS, "feature_matrix_hospital:c001__value__number", "feature_matrix_hospital_window:cmi"])
 # Registered and servable, but location identity never enters a feature list (owner decision, Nov 8 2026).
 LOCATION = ["feature_matrix_hospital_window:county_fips", "feature_matrix_hospital_window:state_code"]
+REDUNDANT = "feature_matrix_hospital:c001_01__value__number"
 TRAINING_PINS = {
     "mlflow": "3.17.2",
     "scikit-learn": "1.9.1",
@@ -86,6 +87,15 @@ def _column(name: str, view: str, role: str = "predictor", control: str | None =
     return {"name": name, "view": view, "role": role, "pivot": {"match": match}}
 
 
+def _redundant_entry() -> dict[str, Any]:
+    return {
+        "reference": REDUNDANT,
+        "kept": ["feature_matrix_hospital:c001__value__number"],
+        "relation": "duplicate",
+        "reason": "the same cost report field as C001 in the synthetic fixture",
+    }
+
+
 def _fixture(folder: Path) -> None:
     shutil.copytree(ROOT / "config/training", folder / "config/training")
     shutil.copytree(ROOT / "data_contracts/training", folder / "data_contracts/training")
@@ -105,7 +115,10 @@ def _fixture(folder: Path) -> None:
         "feature_matrix_hospital": {
             "family": "hospital",
             "role": "predictor",
-            "columns": [_column("c001__value__number", "feature_matrix_hospital", control="C001", source="cost_report")],
+            "columns": [
+                _column("c001__value__number", "feature_matrix_hospital", control="C001", source="cost_report"),
+                _column("c001_01__value__number", "feature_matrix_hospital", control="C001.01", source="cost_report"),
+            ],
         },
         "feature_matrix_hospital_window": {
             "family": "hospital_window",
@@ -121,7 +134,8 @@ def _fixture(folder: Path) -> None:
         column["pivot"] = {"kind": "number", "match": {"hai_type": f"HAI_{number}"}, "value_column": "sir"}
         labels["columns"].append(column)
         labels["label_views"][f"label_hai_{number}"] = [name]
-    _write(folder / "data_contracts/features/feature_schema.json", {"schema": 1, "tables": tables, "servable": sorted([*ALL, *LOCATION])})
+    _write(folder / "data_contracts/features/feature_schema.json", {"schema": 1, "tables": tables, "servable": sorted([*ALL, *LOCATION, REDUNDANT])})
+    _write(folder / "config/training/redundant_features.json", {"schema": 1, "features": [_redundant_entry()]})
     for slot in SLOTS:
         path = folder / f"config/training/feature_lists/{slot}.json"
         _edit(path, partial(_set_references, references=sorted(CMS if slot in ("m1_ols", "rq4_reduced") else ALL)))
@@ -235,7 +249,15 @@ def _guard_cases(report: Report, scratch: Path) -> None:
         report.assertion("exact_plan_bytes_are_recorded", first.get("analysis_plan_sha256") == plan_hash)
         expected_hashes = {
             name: hashlib.sha256((baseline / "config/training" / f"{name}.json").read_bytes()).hexdigest()
-            for name in ["models", "promotion", "census_regions", "excluded_controls", "targets", *(f"feature_lists/{slot}" for slot in SLOTS)]
+            for name in [
+                "models",
+                "promotion",
+                "census_regions",
+                "excluded_controls",
+                "redundant_features",
+                "targets",
+                *(f"feature_lists/{slot}" for slot in SLOTS),
+            ]
         }
         for name in ("bundle", "model_contract"):
             expected_hashes[name] = hashlib.sha256((baseline / f"data_contracts/training/{name}.json").read_bytes()).hexdigest()
@@ -368,6 +390,37 @@ def _guard_cases(report: Report, scratch: Path) -> None:
         _edit(folder / "config/training/feature_lists/m2_elastic_net.json", lambda d: d["references"].append(reference))
 
     run("unknown_reference", lambda f: refs(f, "unknown_view:unknown_column"), "reference: not registered", "E11")
+    run("redundant_reference_in_list", lambda f: refs(f, REDUNDANT), "redundant feature", "E11")
+    run(
+        "unlisted_redundant_removal",
+        partial(_edit_config, filename="redundant_features.json", change=lambda d: d.update(features=[])),
+        "feature list differs",
+        "E11",
+    )
+    run(
+        "redundant_record_names_unknown_reference",
+        partial(
+            _edit_config,
+            filename="redundant_features.json",
+            change=lambda d: d["features"].append({**d["features"][0], "reference": "feature_matrix_hospital:c999__value__number"}),
+        ),
+        "redundant_features.json",
+        "E11",
+    )
+    run(
+        "redundant_record_keeps_a_removed_reference",
+        partial(_edit_config, filename="redundant_features.json", change=lambda d: d["features"][0].update(kept=[REDUNDANT])),
+        "redundant_features.json",
+        "E11",
+    )
+    run(
+        "redundant_record_keeps_an_unlisted_reference",
+        partial(
+            _edit_config, filename="redundant_features.json", change=lambda d: d["features"][0].update(kept=["feature_matrix_hospital:c999__value__number"])
+        ),
+        "redundant_features.json",
+        "E11",
+    )
     run("label_reference", lambda f: refs(f, "label_hai_1:hai_1__sir__number"), "reference: label", "E11")
     run("bare_reference", lambda f: refs(f, "c119__value__number"), "references", "E11")
     run("duplicate_reference", lambda f: refs(f, CMS[0]), "references", "E11")

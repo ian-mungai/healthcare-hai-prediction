@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "features": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kept": {
+            "items": {
+              "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "reason": {
+            "minLength": 10,
+            "type": "string"
+          },
+          "reference": {
+            "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_]+$",
+            "type": "string"
+          },
+          "relation": {
+            "enum": [
+              "duplicate",
+              "derived"
+            ]
+          }
+        },
+        "required": [
+          "reference",
+          "kept",
+          "relation",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "const": 1
+    }
+  },
+  "required": [
+    "schema",
+    "features"
+  ],
+  "title": "Redundant features",
+  "type": "object"
+}

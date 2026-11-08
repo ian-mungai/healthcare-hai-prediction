@@ -37,6 +37,9 @@ from scripts.training.models.preprocessing import FoldPreprocessor, missing
 from scripts.training.models.spatial import SpatialRegressor, build_weights, moran_test
 from scripts.training.models.trees import TreeRegressor, shap_values
 
+# The likelihood models need a full-rank design, so their preprocessing drops the fitting-row columns that are exact combinations of others.
+LIKELIHOOD_SLOTS = frozenset(("m1_ols", "m3_mixed", "m5_spatial", "m6_fixed_effects"))
+
 
 def folds_for(data: Dataset, config: Mapping[str, Any], seed: int) -> list[tuple[Any, Any]]:
     """Create seeded, shuffled folds that keep all windows of one hospital together."""
@@ -61,7 +64,7 @@ def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], f
     forced = () if slot == "m1_ols" else (request.cmi_reference,)
     if forced and not set(forced).issubset(feature.reference for feature in features):
         raise NotEstimable("forced covariate CMI is absent from the model specification")
-    prepare = FoldPreprocessor(features, forced=forced, native_missing=slot == "m4_boosting")
+    prepare = FoldPreprocessor(features, forced=forced, native_missing=slot == "m4_boosting", drop_dependent=slot in LIKELIHOOD_SLOTS)
     seed = seed_for(request.config["master_seed"], request.data.hai_type, "forest" if forest else slot)
     if slot == "m1_ols":
         estimator: Any = OLSRegressor()
@@ -128,6 +131,7 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
             "selected_references": list(prepare.kept_references_),
             "indicator_aliases": dict(prepare.indicator_aliases_),
             "constant_columns": dict(prepare.constant_columns_),
+            "dependent_columns": list(prepare.dependent_records_),
         }
         cached.append((fitting_design, fitting.y, validation_design, validation.y, record))
         request.deadline.check()
@@ -193,6 +197,8 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         "training_missing_fraction": prepare.missing_rates_,
         "indicator_aliases": dict(prepare.indicator_aliases_),
         "constant_columns": dict(prepare.constant_columns_),
+        "dependent_columns": list(prepare.dependent_records_),
+        "dependent_column_count": len(prepare.dependent_records_),
         "unknown_holdout_categories": prepare.transform(holdout.rows).unknown_categories,
         "tuning": audit,
         "selected_parameters": parameters,

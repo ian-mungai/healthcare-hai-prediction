@@ -119,6 +119,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
     from scripts.training import hac_validation, mediation, research_tests
     from scripts.training.models import panel, spatial, suite
     from scripts.training.models.common import SLOTS, Dataset, Deadline, Feature, seed_for
+    from scripts.training.models.linear import OLSRegressor
     from scripts.training.models.preprocessing import FeatureBatch, FoldPreprocessor
     from scripts.training.models.trees import shap_values
 
@@ -298,7 +299,80 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         changed = replace(req, data=data, feature_lists={**req.feature_lists, "m1_ols": tuple(feature.reference for feature in data.features)})
         with libraries():
             result = suite.fit_slot(changed, "m1_ols")
-        require(result.status == "not_estimable" and "rank" in result.reason, "collinear OLS silently used a pseudoinverse")
+        require(
+            result.status == "fitted" and [entry["name"] for entry in result.details["dependent_columns"]] == ["extra"],
+            "collinear OLS did not drop and record the duplicate column",
+        )
+        training, _ = changed.data.split()
+        design = FoldPreprocessor(changed.features_for("m1_ols")).fit_transform(training.rows)
+        with libraries():
+            rejects(lambda: OLSRegressor().fit(design, training.y), "rank")
+
+    def dependent_request() -> Any:
+        """The base panel plus an exact duplicate, an exact sum and a category level that mirrors a missing-value flag."""
+        rows = []
+        for row in req.data.rows:
+            gap = int(row["ccn"]) % 5 == 0 and row["window_year"] % 2 == 0
+            rows.append(
+                dict(
+                    row,
+                    copy=row["process"],
+                    total=row["process"] + row["extra"],
+                    sparse=None if gap else row["extra"] * 0.5 + row["cmi"],
+                    kind="gap" if gap else "full",
+                )
+            )
+        added = (
+            Feature("feature_matrix_county_context:copy", "number", "C177.01", "county_context"),
+            Feature("feature_matrix_county_context:total", "number", "C177", "county_context"),
+            Feature("feature_matrix_county_context:sparse", "number", "C200", "county_context"),
+            Feature("feature_matrix_county_context:kind", "category", "C201", "county_context"),
+        )
+        features = (*req.data.features, *added)
+        references = tuple(feature.reference for feature in features)
+        lists = {**req.feature_lists, **{slot: references for slot in SLOTS if slot not in ("m1_ols", "rq4_reduced")}}
+        return replace(req, data=Dataset(tuple(rows), features, "HAI_1"), feature_lists=lists)
+
+    def dependent_columns_dropped_and_recorded() -> None:
+        changed = dependent_request()
+        expected = {"copy", "total", "kind__category_1"}
+        for slot in ("m3_mixed", "m5_spatial", "m6_fixed_effects"):
+            with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+                result = suite.fit_slot(changed, slot)
+            require(result.status == "fitted", f"{slot} with dependent columns is {result.status}: {result.reason}")
+            dropped = {entry["name"] for entry in result.details["dependent_columns"]}
+            require(dropped == expected, f"{slot} dropped {sorted(dropped)}, not the duplicate, the sum and the mirrored category level")
+            require(result.details["dependent_column_count"] == len(expected), f"{slot} dependent column count is wrong")
+            kinds = {entry["name"]: entry["kind"] for entry in result.details["dependent_columns"]}
+            require(kinds == {"copy": "value", "total": "value", "kind__category_1": "category_level"}, f"{slot} dependent column kinds are wrong")
+            names = result.pipeline.named_steps["prepare"].transform(changed.data.split()[1].rows).names
+            require(not expected & set(names) and {"process", "extra", "cmi", "sparse__missing"} <= set(names), f"{slot} holdout design kept a dropped column")
+            folds = [record for attempt in result.details["tuning"] for record in attempt.get("folds", [])]
+            require(all("dependent_columns" in record for record in folds), f"{slot} tuning folds do not record their dependent columns")
+        with libraries():
+            nested = research_tests.nested_comparison(changed)
+        require(nested["status"] == "fitted", "nested comparison with dependent columns did not fit")
+        require({entry["name"] for entry in nested["dependent_columns"]} == expected, "nested comparison dropped other columns")
+        require(nested["reduced_references_fitted"] == sorted(changed.feature_lists["rq4_reduced"]), "nested comparison dropped a reduced-list column")
+
+    def dependent_step_uses_fitting_rows_only() -> None:
+        with libraries():
+            dependent_step_on_rows(dependent_request())
+
+    def dependent_step_on_rows(changed: Any) -> None:
+        training, holdout = changed.data.split()
+        features = changed.features_for("m3_mixed")
+        transform = FoldPreprocessor(features, forced=(changed.cmi_reference,), drop_dependent=True)
+        transform.fit_transform(training.rows)
+        shifted = tuple(dict(row, copy=row["process"] + 1.0 + index % 3) for index, row in enumerate(holdout.rows))
+        require("copy" not in transform.transform(shifted).names, "a column dropped on the fitting rows came back on other rows")
+        independent = tuple(dict(row, copy=row["process"] * (1 + index % 2)) for index, row in enumerate(training.rows))
+        fresh = FoldPreprocessor(features, forced=(changed.cmi_reference,), drop_dependent=True)
+        fresh.fit_transform(independent)
+        require("copy" not in {entry["name"] for entry in fresh.dependent_records_}, "the step dropped a column that is independent on the fitting rows")
+        require("copy" in fresh.transform(holdout.rows).names, "a duplicate only in the holdout rows changed the fitted design")
+        plain = FoldPreprocessor(features, forced=(changed.cmi_reference,))
+        require("copy" in plain.fit_transform(training.rows).names, "the step ran on a model that did not ask for it")
 
     def forced_elastic() -> None:
         from scripts.training.models.elastic import ElasticRegressor
@@ -1433,6 +1507,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("seeded_hospital_and_time_folds", folds),
         ("six_slot_caller_and_repeatability", complete_suite),
         ("rank_deficient_ols", collinear_ols),
+        ("dependent_columns_dropped_and_recorded", dependent_columns_dropped_and_recorded),
+        ("dependent_step_uses_fitting_rows_only", dependent_step_uses_fitting_rows_only),
         ("unpenalized_cmi", forced_elastic),
         ("singleton_ownership", ownership_singleton),
         ("rmse_selection_and_registration", tied_selection),

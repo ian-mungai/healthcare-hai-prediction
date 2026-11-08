@@ -11,7 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from scripts.training.models.common import Array, ModelError, NotEstimable, Prepared, Regressor, full_rank, with_intercept
+from scripts.training.models.common import Array, ModelError, NotEstimable, Prepared, Regressor, dependent_positions, full_rank, with_intercept
+from scripts.training.models.preprocessing import column_kind
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,11 @@ class PanelRegressor(Regressor):
         if not self.kept_indices_:
             raise NotEstimable("all panel predictors are absorbed by hospital effects: " + ", ".join(absorbed))
         within = centered[:, self.kept_indices_]
+        order = sorted(range(len(self.kept_indices_)), key=lambda position: (column_kind(design.names[self.kept_indices_[position]]) != "value", position))
+        dependent = set(dependent_positions(within, order))
+        self.within_dependent_ = [design.names[self.kept_indices_[position]] for position in sorted(dependent)]
+        self.kept_indices_ = tuple(index for position, index in enumerate(self.kept_indices_) if position not in dependent)
+        within = centered[:, self.kept_indices_]
         if np.linalg.matrix_rank(within) != len(self.kept_indices_):
             raise NotEstimable("within-hospital panel design has deficient rank")
         matrix = with_intercept(design.matrix[:, self.kept_indices_])
@@ -106,6 +112,8 @@ class PanelRegressor(Regressor):
         self.details_ = {
             "coefficients": {name: float(result.fixed[name]) for name in names},
             "absorbed_columns": absorbed,
+            "within_dependent_columns": list(self.within_dependent_),
+            "within_dependent_column_count": len(self.within_dependent_),
             "training_hospitals": len(unique),
             "training_hospitals_by_window_count": {str(windows): count for windows, count in sorted(Counter(Counter(entities).values()).items())},
             "hausman": comparison,
