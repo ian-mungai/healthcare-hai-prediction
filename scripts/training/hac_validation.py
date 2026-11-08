@@ -17,7 +17,8 @@ from scripts.training.models.common import Deadline, ModelError
 
 
 def _key(value: Any) -> tuple[str, int]:
-    if not isinstance(value, str) or (match := re.fullmatch(r"([0-9]{6}):([12][0-9]{3})", value)) is None:
+    # A CCN is five digits and a digit or letter: Veterans Affairs CCNs end in F (the training extract's key pattern).
+    if not isinstance(value, str) or (match := re.fullmatch(r"([0-9]{5}[0-9A-Z]):([12][0-9]{3})", value)) is None:
         raise ModelError("HAC validation requires a hospital-window key")
     return match[1], int(match[2])
 
@@ -165,6 +166,9 @@ def validate_hac(predictions: Sequence[Mapping[str, Any]], hac_rows: Sequence[Ma
     for row in hac_rows:
         deadline.check()
         ccn, _ = _key(row.get("spine_key"))
+        if row.get("alignment_status") != "aligned":
+            # A hospital-window that HAC did not publish, or whose period did not match, has no program year and no flag, so its flag stays missing.
+            continue
         fiscal_year = row.get("fiscal_year")
         if type(fiscal_year) is not int:
             raise ModelError("HAC source lacks a program fiscal year")
