@@ -6,6 +6,10 @@
    The groups are ownership type, hospital subtype, census region and bed-size band.
    A hospital with no value in a dimension is in no group of that dimension and is counted.
 
+With no champion, the reference is the intercept + CMI baseline fitted on the training years (``reference="baseline"``). Its predictions fill the
+reference column of the same rows, and only conditions 1 and 2 apply: there is no production model whose hospital groups could regress. A pass is
+``pass_baseline``, which makes a version promotable only while no champion exists.
+
 The rule reads comparison rows only. The promotion check and the promote action call the same function on the same written rows.
 """
 
@@ -38,6 +42,8 @@ COLUMNS = {
     "bed_size_band": "varchar",
 }
 PLACES = 12
+# The verdict a candidate gets when it passes against each reference. Only a champion pass may replace a champion.
+REFERENCES = {"champion": "pass", "baseline": "pass_baseline"}
 
 
 class PromotionError(ValueError):
@@ -95,22 +101,26 @@ def _finite(values: Sequence[Any], name: str) -> np.ndarray[Any, Any]:
     return array
 
 
-def evaluate(rows: Sequence[Mapping[str, Any]], config: Mapping[str, Any], *, seed: int, deadline: Deadline) -> dict[str, Any]:
-    """Judge comparison rows by the three conditions and return the verdict with each condition's value."""
+def evaluate(rows: Sequence[Mapping[str, Any]], config: Mapping[str, Any], *, seed: int, deadline: Deadline, reference: str = "champion") -> dict[str, Any]:
+    """Judge comparison rows against the champion (three conditions) or the baseline (two) and return the verdict with each condition's value."""
+    if reference not in REFERENCES:
+        raise PromotionError(f"unknown comparison reference {reference}")
     if not rows:
         raise PromotionError("there are no holdout comparison rows")
     observed = _finite([row["observed_sir"] for row in rows], "the observed SIR")
     challenger = _finite([row["challenger_prediction"] for row in rows], "the challenger prediction")
     present = [row["champion_prediction"] is not None for row in rows]
-    summary: dict[str, Any] = {"rows": len(rows), "hospitals": len({str(row["spine_key"]).split(":")[0] for row in rows})}
+    summary: dict[str, Any] = {"rows": len(rows), "hospitals": len({str(row["spine_key"]).split(":")[0] for row in rows}), "reference": reference}
+    if reference == "baseline" and not all(present):
+        raise PromotionError("the baseline must predict every holdout row")
     if not any(present):
         return {**summary, "verdict": "no_champion", "failed": [], "conditions": {}}
     if not all(present):
         raise PromotionError("the champion predicts some rows only")
-    champion = _finite([row["champion_prediction"] for row in rows], "the champion prediction")
+    champion = _finite([row["champion_prediction"] for row in rows], f"the {reference} prediction")
     champion_rmse, challenger_rmse = _rmse(observed, champion), _rmse(observed, challenger)
     if champion_rmse <= 0:
-        raise PromotionError("the champion RMSE is zero, so a relative improvement is undefined")
+        raise PromotionError(f"the {reference} RMSE is zero, so a relative improvement is undefined")
     improvement = (champion_rmse - challenger_rmse) / champion_rmse
     minimum = float(config["minimum_rmse_improvement"])
     settings = config["bootstrap"]
@@ -122,8 +132,7 @@ def evaluate(rows: Sequence[Mapping[str, Any]], config: Mapping[str, Any], *, se
         draws.append((base - other) / base if base > 0 else 0.0)
     tail = (1 - float(settings["confidence_level"])) / 2
     lower, upper = (float(value) for value in np.quantile(draws, [tail, 1 - tail], method="linear"))
-    groups = _groups(rows, observed, champion, challenger, config, champion_rmse, challenger_rmse)
-    conditions = {
+    conditions: dict[str, Any] = {
         "rmse_improvement": {"value": improvement, "threshold": minimum, "passed": round(improvement, PLACES) >= round(minimum, PLACES)},
         "interval": {
             "lower": lower,
@@ -133,18 +142,19 @@ def evaluate(rows: Sequence[Mapping[str, Any]], config: Mapping[str, Any], *, se
             "seed": seed,
             "passed": lower > 0,
         },
-        "groups": groups,
     }
+    if reference == "champion":
+        conditions["groups"] = _groups(rows, observed, champion, challenger, config, champion_rmse, challenger_rmse)
     failed = [
         name
         for name, key in (("rmse_improvement", "rmse_improvement"), ("interval", "interval"), ("group_regression", "groups"))
-        if not conditions[key]["passed"]
+        if key in conditions and not conditions[key]["passed"]
     ]
     return {
         **summary,
-        "verdict": "fail" if failed else "pass",
+        "verdict": "fail" if failed else REFERENCES[reference],
         "failed": failed,
-        "champion_rmse": champion_rmse,
+        f"{reference}_rmse": champion_rmse,
         "challenger_rmse": challenger_rmse,
         "conditions": conditions,
     }

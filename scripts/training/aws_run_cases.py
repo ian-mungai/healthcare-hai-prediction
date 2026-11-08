@@ -1562,6 +1562,29 @@ def promote_cases(cases: Any, folder: Path) -> None:
         )
         require(code == 2 and "not held" in error, f"a second resolution was not refused: {code} {error}")
 
+    def first_champion_promoted() -> None:
+        fixture, bucket = Fixture(folder / "first_champion"), receipt_bucket()
+        store = fixture.tracking
+        store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
+        for tags in ({"promotion_verdict": "fail:rmse_improvement"}, {"promotion_verdict": "pass_baseline"}):
+            store.create_model_version(MODEL, "runs:/x/model", run_id="x", tags=tags)
+        store.set_registered_model_alias(MODEL, "challenger", "2")
+        store.calls.clear()
+        code, _, error = promote_in(fixture, folder / "first_champion_work", bucket)
+        require(code == 0 and alias(fixture) == "2", f"a version that passed against the baseline did not become the first champion: {code} {error}")
+        require(stored_receipt(bucket)["previous_version"] is None, f"the first promotion names a previous version: {stored_receipt(bucket)}")
+        code, _, error = promote_call(fixture, folder / "first_champion_new_task")
+        require(code == 0 and alias(fixture) == "2", f"a rerun after the first champion's alias moved was refused: {code} {error}")
+
+    def baseline_pass_needs_no_champion() -> None:
+        fixture = registry_fixture(folder / "baseline_after_champion")
+        fixture.tracking.find_version(MODEL, "2")["tags"]["promotion_verdict"] = "pass_baseline"
+        code, _, error = promote_call(fixture, folder / "baseline_after_champion_work")
+        require(code != 0 and "version_not_promotable" in error and "baseline" in error, f"a baseline pass replaced a champion: {code} {error}")
+        require(alias(fixture) == "1" and not writes(fixture), "a baseline pass moved production while a champion exists")
+
+    cases.check("promote_first_champion_from_a_baseline_pass", first_champion_promoted)
+    cases.check("promote_refuses_a_baseline_pass_once_a_champion_exists", baseline_pass_needs_no_champion)
     cases.check("promote_refuses_a_second_run_while_an_interrupted_run_is_unresolved", rolled_back_run_cannot_repeat_the_move)
     cases.check("promote_pending_alias_request_cannot_revert_a_later_promotion", pending_alias_request_cannot_revert_a_later_promotion)
     cases.check("promote_owner_resolution_needs_a_finished_mlflow_restart", resolution_needs_a_finished_restart)

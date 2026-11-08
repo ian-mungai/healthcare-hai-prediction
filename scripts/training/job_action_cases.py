@@ -32,6 +32,7 @@ from scripts.training import (
     promotion_cases,
     promotion_check,
     registry,
+    research_tests,
     run_tracking,
 )
 from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
@@ -40,7 +41,7 @@ from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
-from scripts.training.models.common import REGISTRABLE, SLOTS
+from scripts.training.models.common import REGISTRABLE, SLOTS, NotEstimable
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
@@ -177,6 +178,7 @@ class Fixture:
         self.late_mediator = late_mediator
         self.tracking = FileTracking(folder / "tracking")
         self.champion: Predictor | None = None
+        self.candidate: Any = None
         self.write_extract(mediator=mediator, hac=hac)
 
     def code_root(self) -> None:
@@ -1273,6 +1275,28 @@ class Predictor:
         return [self.constant if self.constant is not None else row[self.label] + (self.offset or 0.0) for row in rows]
 
 
+class Mapped:
+    """A stand-in candidate that predicts a fixed value for each hospital-window key."""
+
+    def __init__(self, values: dict[str, float]) -> None:
+        self.values = values
+
+    def predict(self, rows: Any) -> Any:
+        return [self.values[row["spine_key"]] for row in rows]
+
+
+def baseline_of(fixture: Fixture) -> tuple[dict[str, float], dict[str, float]]:
+    """The intercept + CMI baseline's holdout predictions and the observed SIRs, keyed by hospital-window, fitted the way the fit step fits it."""
+    config = job_inputs.config_of(fixture.root)
+    built = job_inputs.model_request(HAI_TYPE, fixture.rows, (), config, 60.0, fixture.root)
+    holdout = built.data.split()[1]
+    with libraries():
+        predictions = research_tests.intercept_cmi_predictions(built)
+    return dict(zip(holdout.keys, (float(value) for value in predictions), strict=True)), dict(
+        zip(holdout.keys, (float(value) for value in holdout.y), strict=True)
+    )
+
+
 def seed_champion(fixture: Fixture, *, newest_window: str = "2023", columns: tuple[str, ...] = ("process", "cmi", "extra")) -> str:
     """Put a production version of the type in the registry stand-in, with the source run and feature list the check reads."""
     store = fixture.tracking
@@ -1310,7 +1334,7 @@ def run_promotion(fixture: Fixture, **patches: Any) -> tuple[int, str, str]:
             if fixture.champion is None:
                 raise OSError("synthetic champion cannot be loaded")
             return fixture.champion
-        return SAVED[(Path(uri) / "model.bin").read_text()]
+        return fixture.candidate if fixture.candidate is not None else SAVED[(Path(uri) / "model.bin").read_text()]
 
     del label
     with mock.patch.object(promotion_check, "load_pipeline", side_effect=loader):
@@ -1323,12 +1347,16 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
 
     def first_version() -> None:
         fixture = promoted(folder / "first")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
         code, out, error = run_promotion(fixture)
         require(code == 0, f"promotion_check failed: {error}")
         store = fixture.tracking
         version = store.models[name]["versions"][0]
-        require(version["version"] == "1" and version["tags"]["promotion_verdict"] == "no_champion", f"version: {version}")
-        require(store.models[name]["aliases"] == {}, f"a first version must not set an alias: {store.models[name]['aliases']}")
+        require(version["version"] == "1" and version["tags"]["promotion_verdict"] == "pass_baseline", f"version: {version}")
+        require(
+            store.models[name]["aliases"] == {"challenger": "1"},
+            f"a first version that beat the baseline must be the challenger only: {store.models[name]['aliases']}",
+        )
         require(
             set(version["tags"])
             >= {
@@ -1346,7 +1374,10 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(store.models[name]["tags"] == {}, "the pending marker was left behind")
         document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
         require(
-            document["champion_version"] is None and document["challenger_version"] == "1" and document["verdict"]["verdict"] == "no_champion",
+            document["champion_version"] is None
+            and document["challenger_version"] == "1"
+            and document["reference"] == "baseline"
+            and document["verdict"]["verdict"] == "pass_baseline",
             f"comparison: {document}",
         )
         require(
@@ -1354,7 +1385,18 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             "the comparison hash tag differs",
         )
         table = read_parquet(fixture.out / f"comparison_{HAI_TYPE}.parquet")
-        require(set(table[0]) == set(promotion.COLUMNS) and all(row["champion_prediction"] is None for row in table), f"comparison rows: {sorted(table[0])}")
+        expected, _ = baseline_of(fixture)
+        require(set(table[0]) == set(promotion.COLUMNS), f"comparison rows: {sorted(table[0])}")
+        require(
+            all(abs(row["champion_prediction"] - expected[row["spine_key"]]) < 1e-9 for row in table),
+            "the reference column does not hold the intercept + CMI baseline of the fit's training years",
+        )
+        logged = json.dumps(json.loads((fixture.folder / "in/fit" / BUNDLE / "result.json").read_text()))
+        research = re.search(r'"intercept_cmi_rmse": ([0-9.eE+-]+)', logged)
+        require(
+            research is None or abs(float(research[1]) - document["verdict"]["baseline_rmse"]) < 1e-9,
+            f"the baseline RMSE differs from the fit's RQ1 intercept + CMI RMSE: {research and research[1]} {document['verdict'].get('baseline_rmse')}",
+        )
         promotion_run = [run for run in store.active().values() if run["tags"].get("step_key") == "promotion"]
         require(
             len(promotion_run) == 1 and promotion_run[0]["status"] == "FINISHED" and "bundle_sha256" in promotion_run[0]["tags"],
@@ -1443,11 +1485,59 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
 
     def dirty_code() -> None:
         fixture = promoted(folder / "dirty")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
         next(iter(fixture.tracking.parents().values()))["tags"]["git_dirty"] = "true"
         code, _, error = run_promotion(fixture)
         require(code == 0, f"promotion_check failed: {error}")
         verdict = fixture.tracking.models[name]["versions"][0]["tags"]["promotion_verdict"]
-        require(verdict.startswith("fail:") and "provenance" in verdict, f"a dirty tree was not failed: {verdict}")
+        require(verdict == "fail:provenance", f"a dirty tree that beat the baseline was not failed on provenance alone: {verdict}")
+        require(fixture.tracking.models[name]["aliases"] == {}, "a dirty first version got an alias")
+
+    def first_one_percent() -> None:
+        fixture = promoted(folder / "first_one_percent")
+        baseline, observed = baseline_of(fixture)
+        fixture.candidate = Mapped({key: value + 0.01 * (observed[key] - value) for key, value in baseline.items()})
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        verdict = fixture.tracking.models[name]["versions"][0]["tags"]["promotion_verdict"]
+        require(verdict.startswith("fail:") and "rmse_improvement" in verdict, f"a candidate 1 percent better than the baseline was not refused: {verdict}")
+        improvement = output_of(fixture, f"comparison_{HAI_TYPE}.json")["verdict"]["conditions"]["rmse_improvement"]["value"]
+        require(abs(improvement - 0.01) < 1e-9, f"the case did not build a 1 percent gain: {improvement}")
+        require(fixture.tracking.models[name]["aliases"] == {}, "a refused first version got an alias")
+
+    def first_interval() -> None:
+        fixture = promoted(folder / "first_interval")
+        baseline, observed = baseline_of(fixture)
+        worst = max(baseline, key=lambda key: abs(observed[key] - baseline[key]))
+        fixture.candidate = Mapped({**baseline, worst: observed[worst]})
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        verdict = fixture.tracking.models[name]["versions"][0]["tags"]["promotion_verdict"]
+        conditions = output_of(fixture, f"comparison_{HAI_TYPE}.json")["verdict"]["conditions"]
+        require(conditions["rmse_improvement"]["passed"], f"the case did not build a gain of at least 2 percent: {conditions['rmse_improvement']}")
+        require(verdict == "fail:interval", f"a gain from one hospital passed although its interval touches zero: {verdict} {conditions['interval']}")
+
+    def baseline_not_estimable() -> None:
+        fixture = promoted(folder / "baseline_not_estimable")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
+        with mock.patch.object(research_tests, "intercept_cmi_predictions", side_effect=NotEstimable("forced covariate exceeds the half-missing threshold")):
+            code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
+        verdict = fixture.tracking.models[name]["versions"][0]["tags"]["promotion_verdict"]
+        require(
+            verdict == "no_champion" and document["baseline"]["status"] == "not_estimable",
+            f"an unfitted baseline did not leave the type without a reference: {verdict}",
+        )
+        require(fixture.tracking.models[name]["aliases"] == {}, "a version got an alias without a reference")
+
+    def champion_rule_unchanged() -> None:
+        fixture = promoted(folder / "champion_rule", Predictor(LABEL, constant=3.0))
+        fixture.candidate = Predictor(LABEL, offset=0.0)
+        require(run_promotion(fixture)[0] == 0, "promotion_check failed")
+        document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
+        require(document["reference"] == "champion" and "groups" in document["verdict"]["conditions"], f"the champion rule changed: {document['verdict']}")
+        require(fixture.tracking.models[name]["versions"][1]["tags"]["promotion_verdict"] == "pass", "a candidate better than the champion did not pass")
 
     def retried() -> None:
         fixture = promoted(folder / "retried")
@@ -1573,7 +1663,11 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             code, _, error = call(fixture.arguments("promotion_check"))
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_uri_missing", f"{code} {error}")
 
-    cases.check("job_promotion_check_registers_first_version_without_alias", first_version)
+    cases.check("job_promotion_check_first_version_passes_against_the_baseline", first_version)
+    cases.check("job_promotion_check_first_version_one_percent_better_than_baseline_refused", first_one_percent)
+    cases.check("job_promotion_check_first_version_interval_touching_zero_refused", first_interval)
+    cases.check("job_promotion_check_champion_rule_unchanged", champion_rule_unchanged)
+    cases.check("job_promotion_check_unfitted_baseline_keeps_no_champion", baseline_not_estimable)
     cases.check("job_promotion_check_sets_challenger_on_pass", better_challenger)
     cases.check("job_promotion_check_fails_worse_challenger_without_alias", worse_challenger)
     cases.check("job_promotion_check_never_moves_production", production_untouched)

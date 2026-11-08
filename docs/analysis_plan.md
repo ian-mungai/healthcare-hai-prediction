@@ -76,6 +76,7 @@ For Moran's I, two hospitals are neighbours when their counties are the same or 
   1. Its RMSE is at least 2% lower.
   2. The bootstrap 95% interval of the improvement excludes zero.
   3. Its RMSE is at most 5% worse in every hospital group of at least 100 holdout hospitals. The groups are ownership type, hospital subtype, census region and bed-size band (under 100, 100 to 299, 300 and over).
+- While a type has no champion, its candidate is compared with the intercept and CMI model fitted on the training years instead. It can become the first champion when its provenance check passed and conditions 1 and 2 hold against that model.
 - A promoted model then goes through the canary.
 
 ## Reproducibility

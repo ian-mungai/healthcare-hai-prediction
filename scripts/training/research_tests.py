@@ -84,8 +84,8 @@ def joint_significance(pipeline: Any, process_references: Sequence[str]) -> dict
     }
 
 
-def intercept_cmi_comparison(request: ModelRequest, elastic_predictions: tuple[float, ...]) -> dict[str, Any]:
-    """Score the Elastic Net against an intercept-plus-CMI model on the same holdout rows."""
+def intercept_cmi_predictions(request: ModelRequest) -> Array:
+    """Fit the intercept-plus-CMI model on the training years and predict the newest-year holdout rows, in their extract order."""
     training, holdout = request.data.split()
     features = tuple(feature for feature in request.data.features if feature.reference == request.cmi_reference)
     if len(features) != 1:
@@ -94,7 +94,13 @@ def intercept_cmi_comparison(request: ModelRequest, elastic_predictions: tuple[f
     design = transform.fit_transform(training.rows)
     baseline = OLSRegressor().fit(design, training.y)
     request.deadline.check()
-    baseline_metric = metrics(holdout.y, baseline.predict(transform.transform(holdout.rows)))["rmse"]
+    return np.asarray(baseline.predict(transform.transform(holdout.rows)), dtype=np.float64).reshape(-1)
+
+
+def intercept_cmi_comparison(request: ModelRequest, elastic_predictions: tuple[float, ...]) -> dict[str, Any]:
+    """Score the Elastic Net against an intercept-plus-CMI model on the same holdout rows."""
+    holdout = request.data.split()[1]
+    baseline_metric = metrics(holdout.y, intercept_cmi_predictions(request))["rmse"]
     expanded_metric = metrics(holdout.y, np.asarray(elastic_predictions))["rmse"]
     return {
         "status": "fitted",

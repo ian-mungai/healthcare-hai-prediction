@@ -1,6 +1,8 @@
 """The promotion_check action: register each type's candidate, score it against the champion on the same holdout and record the verdict.
 
-It never moves the ``production`` alias. A pass sets the alias ``challenger`` on the new version. Promotion to production is the ``promote`` action, which needs
+With no champion, the candidate is scored against the intercept + CMI baseline instead, fitted on the same training years as the fit step's RQ1 test; a pass
+is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias. A pass sets the alias ``challenger`` on the
+new version. Promotion to production is the ``promote`` action, which needs
 the owner's approval record. The comparison files are written and checked before any version tag or alias. The check reads the written Parquet file back and
 repeats the rule on it.
 """
@@ -17,9 +19,9 @@ from typing import Any
 
 import numpy as np
 
-from scripts.training import bundle, job_actions, job_inputs, promotion, registry, run_tracking, step_records
+from scripts.training import bundle, job_actions, job_inputs, promotion, registry, research_tests, run_tracking, step_records
 from scripts.training.job_failure import JobFailure
-from scripts.training.models.common import Deadline, seed_for
+from scripts.training.models.common import Deadline, ModelError, seed_for
 
 PROMOTION_SECONDS = 600.0
 
@@ -67,6 +69,24 @@ def champion_predictions(
     return predict(pipeline, rows)
 
 
+def baseline_predictions(hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path) -> tuple[dict[str, float] | None, dict[str, Any]]:
+    """With no champion, fit the intercept + CMI baseline the fit step's RQ1 test fits, on the same training years, and predict the holdout.
+
+    A baseline that cannot be fitted leaves the type without a reference, so its verdict stays no_champion and nothing becomes promotable.
+    """
+    try:
+        request = job_inputs.model_request(hai_type, rows, (), config, PROMOTION_SECONDS, root)
+        values = research_tests.intercept_cmi_predictions(request)
+    except (job_inputs.InputError, ModelError) as error:
+        return None, {"model": "intercept_cmi", "status": "not_estimable", "reason": str(error)}
+    keys = request.data.split()[1].keys
+    return dict(zip(keys, (float(value) for value in values), strict=True)), {
+        "model": "intercept_cmi",
+        "status": "fitted",
+        "cmi_reference": request.cmi_reference,
+    }
+
+
 def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[str, Any], hai_type: str, store: Any, scratch: Path) -> dict[str, bytes]:
     """Run the whole check for one type and return its comparison files."""
     inputs = job_inputs.input_root(context.parameters)
@@ -110,11 +130,17 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     holdout = [row for row in extract_rows if row["window_year"] == year]
     challenger = predict(load_pipeline(str(base / "model")), holdout)
     current = registry.champion(store, name)
-    rival = None if current is None else champion_predictions(store, current, name, manifest, holdout, year, scratch)
+    config = job_inputs.config_of(root)
+    baseline: dict[str, Any] | None = None
+    if current is None:
+        rival, baseline = baseline_predictions(hai_type, extract_rows, config, root)
+    else:
+        rival = champion_predictions(store, current, name, manifest, holdout, year, scratch)
+    reference = "baseline" if current is None and rival is not None else "champion"
     regions = job_inputs.read_json(root / "config/training/census_regions.json", "promotion_config")["states"]
-    seed = seed_for(job_inputs.config_of(root)["master_seed"], hai_type, "promotion_bootstrap")
+    seed = seed_for(config["master_seed"], hai_type, "promotion_bootstrap")
     rows = promotion.comparison_rows(holdout, manifest["label_column"], challenger, rival, rules, regions)
-    verdict = promotion.evaluate(rows, rules, seed=seed, deadline=Deadline.after(PROMOTION_SECONDS))
+    verdict = promotion.evaluate(rows, rules, seed=seed, deadline=Deadline.after(PROMOTION_SECONDS), reference=reference)
     missing = [tag for tag in contract["required_run_tags"] if tag not in run_tags]
     provenance = {"passed": not missing and run_tags.get("git_dirty") != "true", "missing_tags": missing, "git_dirty": run_tags.get("git_dirty")}
     parquet_name = names_for(hai_type)[0]
@@ -126,6 +152,8 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
         "registered_model": name,
         "champion_version": None if current is None else str(current.version),
         "challenger_version": str(version.version),
+        "reference": reference,
+        "baseline": baseline,
         "extract_sha256": manifest["sha256"],
         "manifest_sha256": step_records.file_sha256(inputs / "extract" / f"manifest_{hai_type}.json"),
         "holdout_year": year,
@@ -137,7 +165,7 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
         "verdict": verdict,
         "provenance": provenance,
     }
-    again = promotion.evaluate(job_inputs.read_rows(table), rules, seed=seed, deadline=Deadline.after(PROMOTION_SECONDS))
+    again = promotion.evaluate(job_inputs.read_rows(table), rules, seed=seed, deadline=Deadline.after(PROMOTION_SECONDS), reference=reference)
     if {key: again[key] for key in ("verdict", "conditions")} != {key: verdict[key] for key in ("verdict", "conditions")}:
         raise JobFailure("comparison_mismatch", "the rule gives another verdict on the written comparison file than in memory")
     document = job_actions.text(comparison)
@@ -154,7 +182,7 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     run_tracking.log_child(store, experiment, parent, spec, context.run, bundle_hash)
     store.set_model_version_tag(name, str(version.version), "promotion_verdict", label)
     store.set_model_version_tag(name, str(version.version), "comparison_sha256", hashlib.sha256(document).hexdigest())
-    if label == "pass":
+    if label in promotion.REFERENCES.values():
         store.set_registered_model_alias(name, registry.CHALLENGER_ALIAS, str(version.version))
     return {parquet_name: table.read_bytes(), json_name: document}
 

@@ -153,6 +153,57 @@ def gate_cases(cases: Any) -> None:
         rows = rows_for(600, 1.0, 0.5, noise=0.05)
         require(evaluate(rows) == evaluate(rows), "the same rows gave different verdicts")
 
+    def baseline(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        config = copy.deepcopy(CONFIG)
+        config["bootstrap"]["draws"] = 200
+        return promotion.evaluate(rows, config, seed=11, deadline=Deadline.after(60), reference="baseline")
+
+    def baseline_passes() -> None:
+        verdict = baseline(rows_for(600, 1.0, 0.5, noise=0.05))
+        require(verdict["verdict"] == "pass_baseline" and verdict["failed"] == [] and verdict["reference"] == "baseline", f"{verdict}")
+        require(
+            set(verdict["conditions"]) == {"rmse_improvement", "interval"},
+            f"the baseline rule judged more than two conditions: {sorted(verdict['conditions'])}",
+        )
+
+    def baseline_small_gain() -> None:
+        verdict = baseline(rows_for(600, 1.0, 0.99, noise=0.05))
+        require(verdict["verdict"] == "fail" and "rmse_improvement" in verdict["failed"], f"a 1 percent gain over the baseline passed: {verdict['failed']}")
+
+    def baseline_interval() -> None:
+        verdict = baseline(rows_for(600, 1.0, 1.0))
+        require(verdict["verdict"] == "fail" and "interval" in verdict["failed"], f"an interval touching zero passed against the baseline: {verdict['failed']}")
+
+    def baseline_groups_not_judged() -> None:
+        rows = rows_for(600, 1.0, 0.5, noise=0.05)
+        for row in rows:
+            if row["control_type_code"] == "0":
+                row["challenger_prediction"] = row["observed_sir"] + 1.06
+        verdict = baseline(rows)
+        require(verdict["verdict"] == "pass_baseline", f"the baseline rule judged hospital groups: {verdict['failed']}")
+
+    def champion_reference_unchanged() -> None:
+        verdict = evaluate(rows_for(600, 1.0, 0.5, noise=0.05))
+        require(verdict["verdict"] == "pass" and "groups" in verdict["conditions"], "the champion rule changed")
+        require(verdict["reference"] == "champion", "the champion verdict does not name its reference")
+
+    def baseline_needs_predictions() -> None:
+        rows = rows_for(600, 1.0, 0.5)
+        for row in rows:
+            row["champion_prediction"] = None
+        try:
+            baseline(rows)
+        except promotion.PromotionError as error:
+            require("baseline" in str(error), f"{error}")
+        else:
+            raise ValueError("a baseline comparison without baseline predictions was judged")
+
+    cases.check("promotion_baseline_passes_clear_improvement", baseline_passes)
+    cases.check("promotion_baseline_fails_one_percent_gain", baseline_small_gain)
+    cases.check("promotion_baseline_fails_interval_touching_zero", baseline_interval)
+    cases.check("promotion_baseline_judges_no_groups", baseline_groups_not_judged)
+    cases.check("promotion_champion_rule_unchanged", champion_reference_unchanged)
+    cases.check("promotion_baseline_needs_predictions", baseline_needs_predictions)
     cases.check("promotion_rule_passes_clear_improvement", passes)
     cases.check("promotion_rule_fails_small_gain", small_gain)
     cases.check("promotion_rule_accepts_exact_two_percent", exact_boundary)

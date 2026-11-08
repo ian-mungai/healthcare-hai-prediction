@@ -45,11 +45,21 @@ def parameters_of(path: Any) -> dict[str, Any]:
         raise JobFailure("parameters_refused", f"the promotion parameters are unusable: {error}") from None
 
 
-def check_version(version: Any, mode: str, number: str) -> None:
-    """Refuse a forward promotion of an unpassed version and a rollback to a version that never ran in production."""
+def check_version(version: Any, mode: str, number: str, current: str | None) -> None:
+    """Refuse a forward promotion of an unpassed version and a rollback to a version that never ran in production.
+
+    A version that passed against the intercept + CMI baseline (``pass_baseline``) can become only the first champion: once production names another
+    version, a new version must pass against that champion. Production naming this version already (a retry after the alias moved) is accepted.
+    """
     tags = dict(getattr(version, "tags", {}) or {})
-    if mode == "promote" and tags.get(VERDICT_TAG) != "pass":
-        raise JobFailure("version_not_promotable", f"version {number} has the verdict {tags.get(VERDICT_TAG, 'none')}, not pass")
+    verdict = tags.get(VERDICT_TAG, "none")
+    if mode == "promote" and verdict == "pass_baseline" and current not in (None, number):
+        raise JobFailure(
+            "version_not_promotable",
+            f"version {number} passed against the baseline only, and production already names version {current}; it must pass against that champion",
+        )
+    if mode == "promote" and verdict not in ("pass", "pass_baseline"):
+        raise JobFailure("version_not_promotable", f"version {number} has the verdict {verdict}, not pass")
     if mode == "rollback" and PROMOTED_TAG not in tags:
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")
 
@@ -119,8 +129,9 @@ def inspect(store: Any, request: Mapping[str, Any]) -> str | None:
     if target is None:
         raise JobFailure("version_missing", f"{name} has no version {number}")
     current = registry.champion(store, name)
-    check_version(target, request["mode"], number)
-    return None if current is None else str(current.version)
+    observed = None if current is None else str(current.version)
+    check_version(target, request["mode"], number, observed)
+    return observed
 
 
 def start_attempt(client: Any, bucket: str, request: Mapping[str, Any], observed: str | None) -> None:
