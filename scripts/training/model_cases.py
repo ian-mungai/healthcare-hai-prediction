@@ -480,6 +480,19 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         other = hac_validation.HacPlan(2023, 2024, 2021, (2023,))
         require(hac_validation.validate_hac(predictions, flags, other, Deadline.after(10))["status"] == "not_run", "wrong program year joined")
         rejects(lambda: hac_validation.validate_hac(predictions, (*flags, flags[0]), plan, Deadline.after(10)), "duplicate HAC")
+        # The extract keeps the hospital-windows that HAC did not publish or whose period did not match: they carry no fiscal year and no flag.
+        unaligned = (
+            {"spine_key": "990007:2023", "fiscal_year": None, "value_number": None, "alignment_status": "not_in_source"},
+            {"spine_key": "990007:2022", "fiscal_year": None, "value_number": None, "alignment_status": "not_in_source"},
+            {"spine_key": "990008:2023", "fiscal_year": None, "value_number": None, "alignment_status": "no_matching_period"},
+            # Veterans Affairs CCNs end in a letter; HAC does not publish them.
+            {"spine_key": "99001F:2023", "fiscal_year": None, "value_number": None, "alignment_status": "not_in_source"},
+        )
+        kept = hac_validation.validate_hac(predictions, (*flags, *unaligned), plan, Deadline.after(10))
+        compared = ("status", "matched_hospitals", "missing_flags", "auc", "top_quartile_flagged_share")
+        require({key: kept[key] for key in compared} == {key: output[key] for key in compared}, "unaligned HAC rows without a fiscal year changed the result")
+        aligned_without_year = {"spine_key": "990007:2023", "fiscal_year": None, "value_number": 1, "alignment_status": "aligned"}
+        rejects(lambda: hac_validation.validate_hac(predictions, (*flags, aligned_without_year), plan, Deadline.after(10)), "lacks a program fiscal year")
         rejects(lambda: hac_validation.plan_validation({2023: 8, 2022: 8, 2021: 8}, {}, {2025: (2022, 2023)}), "year mapping")
 
     def shared_missing_indicators() -> None:
