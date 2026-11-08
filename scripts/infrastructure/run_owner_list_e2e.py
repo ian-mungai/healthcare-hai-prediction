@@ -36,6 +36,7 @@ from scripts.process import run_command
 
 OWNER_LISTS = ROOT / "config/aws/owner_command_lists.json"
 SILVER, GOLD, FEATURES = "Silver first run", "Gold after silver", "Features after gold"
+CODE = "Code checkout on the host"
 IAM_FLAGS = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True, "job_features_image_prepared": True}
 STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs")
 
@@ -219,12 +220,16 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
         "jobs_gold.json": gold_sample(sample) if sample else {},
         "jobs_features.json": features_sample,
         "platform_features.json": platform_sample(),
+        "services_code.json": owner_commands.example_json(owner_commands.section(text, CODE)) or {},
     }
     wrapper = make_wrapper(workspace, samples)
+    code_example = owner_commands.example_json(owner_commands.section(text, CODE)) or {}
     checks: dict[str, bool] = {
-        "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample
+        "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample,
+        "the reviewed services file of the code list names the code one-shot role and the bucket": code_example.get("root") == "services"
+        and sorted(code_example.get("variables", {})) == ["code_bucket_name", "code_fetch_task_role_arn"],
     }
-    for heading in (SILVER, GOLD, FEATURES):
+    for heading in (SILVER, GOLD, FEATURES, CODE):
         problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
         count = len(problems)
         checks[f"{heading}: {count} printed commands were found"] = count >= 5

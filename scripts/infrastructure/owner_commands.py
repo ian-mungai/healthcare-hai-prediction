@@ -299,6 +299,7 @@ def example_json(body: str) -> dict[str, Any] | None:
         "FEATURES_SECRET_NAME": "/example_project/aws_polaris_features_client_secret",
         "TRAINING_REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_training_dev@sha256:{'c' * 64}",
         "TRAIN_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_train_task_dev",
+        "CODE_FETCH_ROLE_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_host_code_fetch_task_dev",
     }
     try:
         return json.loads(filled(found.group(1), table))

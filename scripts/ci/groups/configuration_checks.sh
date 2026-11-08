@@ -22,6 +22,7 @@ configuration_checks() {
   timed "configuration_checks: monitoring files E2E" "$python_bin" -m scripts.infrastructure.run_monitoring_e2e
   timed "configuration_checks: host session E2E" "$python_bin" -m scripts.infrastructure.run_host_session_e2e
   timed "configuration_checks: host session plants" "$python_bin" -m scripts.infrastructure.host_session_plants
+  timed "configuration_checks: host code one-shot E2E" "$python_bin" -m scripts.infrastructure.run_code_fetch_e2e
   timed "configuration_checks: AWS catalog setup E2E" "$python_bin" -m scripts.lakehouse.run_aws_catalog_setup_e2e --out "$quality_output/aws_catalog_setup" --mutations
   timed "configuration_checks: Glue mirror E2E" "$python_bin" -m scripts.lakehouse.run_glue_mirror_e2e --out "$quality_output/glue_mirror"
   timed "configuration_checks: install the pinned DVC" "$python_bin" -m scripts.quality.install_dvc

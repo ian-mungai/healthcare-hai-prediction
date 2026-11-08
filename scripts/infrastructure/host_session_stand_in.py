@@ -27,6 +27,7 @@ FAMILIES = {"host_prepare": "stand-in-host-prepare", "polaris_bootstrap": "stand
 SERVICES = {"airflow_scheduler": "stand-in-airflow-scheduler", "polaris": "stand-in-polaris", "postgres": "stand-in-postgres"}
 OPENMETADATA_SERVICE = "stand-in-openmetadata"
 OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
+CODE_FETCH_FAMILY = "stand-in-code-fetch"
 ACCOUNT_MARK = "arn:aws:ecs:stand-in:000000000000:"
 BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
@@ -86,9 +87,14 @@ class StandInHost:
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
-    def __init__(self, faults: set[str] | None = None, openmetadata: bool = False) -> None:
+    def __init__(self, faults: set[str] | None = None, openmetadata: bool = False, code_fetch: bool = False, checkout: str | None = None) -> None:
         self.faults = set(faults or ())
-        self.families = dict(FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}))
+        self.families = dict(
+            FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}), **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {})
+        )
+        # The code digest that /data/repo shows. The code one-shot changes it only when it exits 0 with a digest in its overrides, and exits 1 without
+        # overrides on a host that has none, as infra/services/scripts/code_fetch.py does.
+        self.checkout = checkout
         self.now = 0.0
         self.desired = 0
         self.instance_up_at: float | None = None
@@ -297,11 +303,24 @@ class StandInHost:
             (int(fault.split("=")[1]) for fault in self.faults if fault.startswith(f"exit_code:{key}=")),
             1 if key == "polaris_bootstrap" and self.bootstrap_runs > 1 else 0,
         )
+        if key == "code_fetch":
+            code = self.code_fetch_exit(options, code)
         arn = f"{ACCOUNT_MARK}task/{key}-{len(self.tasks)}"
         self.tasks[arn] = {"key": key, "family": family, "status": "RUNNING", "stops_at": self.now + TASK_SECONDS, "exit": code, "options": options}
         if token:
             self.tokens[token] = arn
         return {"tasks": [{"taskArn": arn}], "failures": []}
+
+    def code_fetch_exit(self, options: dict[str, list[str]], code: int) -> int:
+        """The exit code of the code one-shot; a successful fetch moves the checkout to the digest of its overrides."""
+        containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
+        environment = {item["name"]: item["value"] for container in containers for item in container.get("environment", [])}
+        if code != 0:
+            return code
+        if "CODE_SHA256" in environment:
+            self.checkout = environment["CODE_SHA256"]
+            return 0
+        return 0 if self.checkout is not None else 1
 
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         found: list[dict[str, Any]] = []

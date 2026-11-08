@@ -7,6 +7,7 @@ the calls the stand-in saw and the state it ended in.
 from __future__ import annotations
 
 import importlib
+import json
 import re
 import tempfile
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from scripts.infrastructure import host_session_group_signal
 from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, Session
 from scripts.infrastructure.host_session_stand_in import (
     CLUSTER,
+    CODE_FETCH_FAMILY,
     FAMILIES,
     GROUP,
     OPENMETADATA_FAMILY,
@@ -40,19 +42,23 @@ def session_module() -> Any:
     return importlib.import_module("scripts.infrastructure.host_session")
 
 
-def names(openmetadata: bool = False) -> Names:
-    """The names the stand-in knows; ``openmetadata`` adds the persistent catalog service and its bootstrap task."""
+def names(openmetadata: bool = False, code_fetch: bool = False) -> Names:
+    """The names the stand-in knows; ``openmetadata`` adds the persistent catalog service and its bootstrap task, ``code_fetch`` the code one-shot."""
     services = dict(SERVICES, **({"openmetadata": OPENMETADATA_SERVICE} if openmetadata else {}))
-    families = dict(FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}))
+    families = dict(
+        FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}), **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {})
+    )
     return Names(CLUSTER, GROUP, PROVIDER, PROJECT, dict(sorted(services.items(), key=lambda item: item[0] != "postgres")), families)
 
 
-def build(faults: set[str] | None = None, marker: Path | None = None, openmetadata: bool = False) -> tuple[StandInHost, Session, list[str]]:
-    """A stand-in host and a session wired to it; the third value collects the session's report lines."""
-    host, lines = StandInHost(faults, openmetadata=openmetadata), list[str]()
+def build(
+    faults: set[str] | None = None, marker: Path | None = None, openmetadata: bool = False, code_fetch: bool = False, checkout: str | None = None
+) -> tuple[StandInHost, Session, list[str]]:
+    """A stand-in host and a session wired to it; the third value collects the report lines; ``checkout`` is the code digest the host shows."""
+    host, lines = StandInHost(faults, openmetadata=openmetadata, code_fetch=code_fetch, checkout=checkout), list[str]()
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
     marker = marker or Path(tempfile.mkdtemp(prefix="host_session_case_")) / "polaris_bootstrap.launched"
-    return host, Session(cli, names(openmetadata), Clock(lambda: host.now, host.advance), marker, lines.append), lines
+    return host, Session(cli, names(openmetadata, code_fetch), Clock(lambda: host.now, host.advance), marker, lines.append), lines
 
 
 def failure(action: Callable[[], object]) -> str | None:
@@ -586,6 +592,134 @@ def terminal_interrupt_during_host_off() -> dict[str, bool]:
     return host_session_group_signal.run(session_module())
 
 
+CODE_RUN = "20261108T120000Z-aaaaaaaa"
+CODE_SHA = "a" * 64
+OLD_SHA = "b" * 64
+
+
+def runs_of(host: StandInHost, family: str) -> list[dict[str, list[str]]]:
+    return [entry["options"] for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [family]]
+
+
+def code_environment(options: dict[str, list[str]]) -> dict[str, str] | None:
+    """The environment that the RunTask overrides give the code container, or None without overrides."""
+    if "--overrides" not in options:
+        return None
+    containers = json.loads(options["--overrides"][0])["containerOverrides"]
+    return {item["name"]: item["value"] for container in containers if container["name"] == "code_fetch" for item in container["environment"]}
+
+
+def code_start_passes_the_run_and_digest() -> dict[str, bool]:
+    host, session, lines = build(code_fetch=True)
+    session.start(code=(CODE_RUN, CODE_SHA))
+    order = [
+        entry["options"]["--task-definition"][0] if entry["operation"] == "run-task" else entry["operation"]
+        for entry in host.log
+        if entry["operation"] in {"run-task", "update-service"}
+    ]
+    runs = runs_of(host, CODE_FETCH_FAMILY)
+    return {
+        "the code one-shot runs once": len(runs) == 1,
+        "its overrides carry exactly the run ID and the code digest": code_environment(runs[0]) == {"CODE_RUN_ID": CODE_RUN, "CODE_SHA256": CODE_SHA},
+        "it runs after host_prepare and before every deployment": order[:2] == [FAMILIES["host_prepare"], CODE_FETCH_FAMILY]
+        and set(order[2:]) == {"update-service"},
+        "it uses the Project tag and propagation": runs[0].get("--tags") == [f"key=Project,value={PROJECT}"]
+        and runs[0].get("--propagate-tags") == ["TASK_DEFINITION"],
+        "the host shows the new code": host.checkout == CODE_SHA,
+        "every service runs": all(service["running"] == 1 for service in host.services.values()),
+        "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def code_start_without_code_keeps_the_checkout() -> dict[str, bool]:
+    host, session, _ = build(code_fetch=True, checkout=OLD_SHA)
+    session.start()
+    runs = runs_of(host, CODE_FETCH_FAMILY)
+    return {
+        "the code one-shot still runs, to check the checkout": len(runs) == 1,
+        "it has no overrides": code_environment(runs[0]) is None,
+        "the host keeps its checkout": host.checkout == OLD_SHA,
+        "every service runs": all(service["running"] == 1 for service in host.services.values()),
+    }
+
+
+def code_start_without_code_on_an_empty_host_is_refused() -> dict[str, bool]:
+    host, session, _ = build(code_fetch=True)
+    message = failure(session.start)
+    return {
+        "start fails": message is not None and "code_fetch" in message,
+        "no service is deployed": not any(entry["operation"] == "update-service" for entry in host.log),
+        "the host is turned off again": host.desired == 0,
+    }
+
+
+def code_fetch_failure_keeps_the_old_checkout() -> dict[str, bool]:
+    host, session, _ = build({"exit_code:code_fetch=1"}, code_fetch=True, checkout=OLD_SHA)
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "a refused fetch (hash mismatch or failed download) fails start": message is not None and "code_fetch" in message,
+        "no service is deployed on a half-known checkout": not any(entry["operation"] == "update-service" for entry in host.log),
+        "the host keeps the old checkout": host.checkout == OLD_SHA,
+        "the host is turned off again": host.desired == 0,
+    }
+
+
+def code_start_repeated_for_the_same_code() -> dict[str, bool]:
+    host, session, _ = build(code_fetch=True)
+    session.start(code=(CODE_RUN, CODE_SHA))
+    session.start(code=(CODE_RUN, CODE_SHA))
+    runs = runs_of(host, CODE_FETCH_FAMILY)
+    return {
+        "both starts succeed and run the one-shot with the same overrides": len(runs) == 2 and code_environment(runs[0]) == code_environment(runs[1]),
+        "each start uses a new client token": runs[0]["--client-token"] != runs[1]["--client-token"],
+        "the host shows the same code": host.checkout == CODE_SHA,
+    }
+
+
+def code_given_without_the_one_shot_is_refused() -> dict[str, bool]:
+    host, session, _ = build()
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "start refuses code it cannot place": message is not None and "code_fetch" in message,
+        "the host is never turned on": not any(entry["operation"] == "set-desired-capacity" for entry in host.log),
+    }
+
+
+def code_options_are_checked_before_any_call() -> dict[str, bool]:
+    module = session_module()
+    refused = {
+        "a run ID without a digest": ["start", "--code-run", CODE_RUN],
+        "a digest without a run ID": ["start", "--code-sha256", CODE_SHA],
+        "a malformed run ID": ["start", "--code-run", "latest", "--code-sha256", CODE_SHA],
+        "a malformed digest": ["start", "--code-run", CODE_RUN, "--code-sha256", "A" * 64],
+    }
+    started: list[dict[str, Any]] = []
+
+    class Recorder:
+        def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
+            started.append({"keep_on": keep_on, "code": code})
+
+    def exit_code(argv: list[str]) -> int:
+        try:
+            return module.main(argv)
+        except SystemExit as error:
+            return int(error.code or 0)
+
+    original, restore = module.open_session, module.install_termination_handler
+    module.open_session = Recorder
+    module.install_termination_handler = lambda: lambda: None
+    try:
+        codes = {name: exit_code(argv) for name, argv in refused.items()}
+        accepted = exit_code(["start", "--code-run", CODE_RUN, "--code-sha256", CODE_SHA])
+    finally:
+        module.open_session, module.install_termination_handler = original, restore
+    return {
+        **{f"{name} is a usage error": code == 2 for name, code in codes.items()},
+        "a refused option opens no session": len(started) <= 1,
+        "a well-formed pair reaches start as the code to place": accepted == 0 and started == [{"keep_on": False, "code": (CODE_RUN, CODE_SHA)}],
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "happy_start": happy_start,
     "registration_timeout": registration_timeout,
@@ -619,4 +753,11 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "stop_without_the_catalog_only_turns_the_host_off": stop_without_the_catalog_only_turns_the_host_off,
     "interrupted_catalog_stop": interrupted_catalog_stop,
     "terminal_interrupt_during_host_off": terminal_interrupt_during_host_off,
+    "code_start_passes_the_run_and_digest": code_start_passes_the_run_and_digest,
+    "code_start_without_code_keeps_the_checkout": code_start_without_code_keeps_the_checkout,
+    "code_start_without_code_on_an_empty_host_is_refused": code_start_without_code_on_an_empty_host_is_refused,
+    "code_fetch_failure_keeps_the_old_checkout": code_fetch_failure_keeps_the_old_checkout,
+    "code_start_repeated_for_the_same_code": code_start_repeated_for_the_same_code,
+    "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
+    "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
 }

@@ -22,29 +22,29 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], local.code_fetch_on ? ["training"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
 
   # The monitoring containers are added only while monitoring_enabled is true, so the default plan needs no monitoring log group.
   container_component = merge({
-    "postgres"                         = "postgres"
-    "postgres_databases"               = "postgres"
-    "redis"                            = "redis"
-    "polaris"                          = "polaris"
-    "airflow_migrate"                  = "airflow"
-    "airflow_apiserver"                = "airflow"
-    "airflow_scheduler"                = "airflow"
-    "airflow_dag_processor"            = "airflow"
-    "airflow_triggerer"                = "airflow"
-    "marquez_api"                      = "marquez"
-    "marquez_web"                      = "marquez"
-    "model_api"                        = "airflow"
-    "streamlit"                        = "airflow"
-    "host_prepare"                     = "airflow"
-    "polaris_bootstrap"                = "polaris"
-    }, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "marquez" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {}, {
+    "postgres"                              = "postgres"
+    "postgres_databases"                    = "postgres"
+    "redis"                                 = "redis"
+    "polaris"                               = "polaris"
+    "airflow_migrate"                       = "airflow"
+    "airflow_apiserver"                     = "airflow"
+    "airflow_scheduler"                     = "airflow"
+    "airflow_dag_processor"                 = "airflow"
+    "airflow_triggerer"                     = "airflow"
+    "marquez_api"                           = "marquez"
+    "marquez_web"                           = "marquez"
+    "model_api"                             = "airflow"
+    "streamlit"                             = "airflow"
+    "host_prepare"                          = "airflow"
+    "polaris_bootstrap"                     = "polaris"
+    }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "marquez" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {}, {
     for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter"] : name => "monitoring" if var.monitoring_enabled
   })
 

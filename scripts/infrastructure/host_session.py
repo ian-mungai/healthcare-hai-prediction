@@ -48,6 +48,10 @@ HOST_PREPARE = "host_prepare"
 POLARIS_BOOTSTRAP = "polaris_bootstrap"
 OPENMETADATA_SERVICE = "openmetadata"
 OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
+CODE_FETCH = "code_fetch"
+CODE_FETCH_SECONDS = 1200
+CODE_RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
 OPENMETADATA_BOOTSTRAP_SECONDS = 1500
 OPENMETADATA_STOP_SECONDS = 300
 FAILED_ROLLOUT = "FAILED"
@@ -183,7 +187,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
         services=ordered,
         one_shot={
             key: str(one_shot[key]["task_definition"])
-            for key in (HOST_PREPARE, POLARIS_BOOTSTRAP, *([OPENMETADATA_BOOTSTRAP] if OPENMETADATA_BOOTSTRAP in one_shot else []))
+            for key in (HOST_PREPARE, POLARIS_BOOTSTRAP, *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH) if optional in one_shot))
         },
     )
 
@@ -321,9 +325,10 @@ class Session:
         self.wait("host termination", gone, TERMINATE_SECONDS, POLL_SECONDS)
         self.step("host_off_verified")
 
-    def run_task(self, key: str, family: str) -> dict[str, Any]:
+    def run_task(self, key: str, family: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         """RunTask with a client token kept until a reply arrives, so a launch whose reply was lost is retried as the same launch, never a second one."""
         token = self.launch_tokens.setdefault(key, uuid.uuid4().hex)
+        extra = ["--overrides", json.dumps(overrides, separators=(",", ":"), sort_keys=True)] if overrides else []
         arguments = [
             "--cluster",
             self.names.cluster,
@@ -338,6 +343,7 @@ class Session:
             f"key=Project,value={self.names.project_tag}",
             "--client-token",
             token,
+            *extra,
         ]
         for attempt in range(RUN_TASK_ATTEMPTS):
             try:
@@ -352,7 +358,7 @@ class Session:
             return launched
         raise HostSessionError(f"{key} RunTask unconfirmed after {RUN_TASK_ATTEMPTS} attempts; the task may be running")
 
-    def one_shot(self, key: str, seconds: int) -> None:
+    def one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None = None) -> None:
         """Run a one-shot task once (a running task of the same family is awaited, never doubled) and require exit code 0."""
         family = self.names.one_shot[key]
         running = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--family", family, "--desired-status", "RUNNING"]).get("taskArns", [])
@@ -360,7 +366,7 @@ class Session:
             task = running[0]
             self.step(key, "a task of this family is already running; waiting for it")
         else:
-            launched = self.run_task(key, family)
+            launched = self.run_task(key, family, overrides)
             tasks = launched.get("tasks", [])
             if launched.get("failures") or len(tasks) != 1:
                 reasons = [run_task_code(item.get("reason")) for item in launched.get("failures", [])]
@@ -480,12 +486,27 @@ class Session:
         except HostSessionError as error:
             self.step("host_off_failed", f"the host may still be on; run stop ({error})")
 
-    def start(self, keep_on: bool = False) -> None:
-        """Host on, host_prepare, every service redeployed and stable. Any failure, interruption or SIGTERM stops the host unless ``keep_on``."""
+    def place_code(self, code: tuple[str, str] | None) -> None:
+        """Run the code one-shot after host_prepare: with ``code`` (run ID, code digest) it shows that archive as /data/repo, without it it keeps the
+        existing checkout and fails on a host that has none. A failed fetch leaves the previous checkout, and start stops before any service."""
+        if CODE_FETCH not in self.names.one_shot:
+            return
+        overrides = None
+        if code is not None:
+            environment = [{"name": "CODE_RUN_ID", "value": code[0]}, {"name": "CODE_SHA256", "value": code[1]}]
+            overrides = {"containerOverrides": [{"name": CODE_FETCH, "environment": environment}]}
+        self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, overrides)
+
+    def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
+        """Host on, host_prepare, the code checkout, every service redeployed and stable. Any failure, interruption or SIGTERM stops the host unless
+        ``keep_on``. ``code`` (run ID, code digest) needs the code one-shot, so start refuses it before the host turns on when the stack has none."""
+        if code is not None and CODE_FETCH not in self.names.one_shot:
+            raise HostSessionError("--code-run needs the code_fetch one-shot; apply the services stack with code_fetch_task_role_arn first")
         succeeded = False
         try:
             self.host_on()
             self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
+            self.place_code(code)
             self.deploy_services()
             self.openmetadata_bootstrap()
             succeeded = True
@@ -541,8 +562,10 @@ def build_parser() -> argparse.ArgumentParser:
     """The command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    start = commands.add_parser("start", help="host on, host_prepare, redeploy every service, wait until stable")
+    start = commands.add_parser("start", help="host on, host_prepare, the code checkout, redeploy every service, wait until stable")
     start.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
+    start.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
+    start.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
     bootstrap = commands.add_parser("bootstrap", help="run polaris_bootstrap once")
     bootstrap.add_argument("--again", action="store_true", help="run it again although it already ran")
     bootstrap.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
@@ -554,6 +577,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Run one subcommand and return 0 on success, 1 on a failed, interrupted or terminated step, 2 on a configuration error."""
     arguments = build_parser().parse_args(argv)
+    code = None
+    if arguments.command == "start" and (arguments.code_run is not None or arguments.code_sha256 is not None):
+        if not CODE_RUN_ID.fullmatch(arguments.code_run or "") or not CODE_SHA256.fullmatch(arguments.code_sha256 or ""):
+            sys.stderr.write("usage: give --code-run <run ID> and --code-sha256 <64 lowercase hex characters> together\n")
+            return 2
+        code = (arguments.code_run, arguments.code_sha256)
     try:
         session = open_session()
     except ConfigurationError as error:
@@ -562,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     restore = install_termination_handler()
     try:
         if arguments.command == "start":
-            session.start(arguments.keep_on)
+            session.start(arguments.keep_on, code=code)
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "stop":

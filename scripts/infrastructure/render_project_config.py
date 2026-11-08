@@ -42,6 +42,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "openmetadata_marquez_reachable",
     "openmetadata_persistent_prepared",
     "serve_prepared",
+    "host_code_fetch_prepared",
 )
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
 OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix", "airflow_launch_record_prefix")

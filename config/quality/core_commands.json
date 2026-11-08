@@ -18,6 +18,7 @@
     "\"$python_bin\" -m scripts.infrastructure.host_session_plants",
     "\"$python_bin\" -m scripts.infrastructure.run_activation_inputs_e2e --out \"$quality_output/activation_inputs\"",
     "\"$python_bin\" -m scripts.infrastructure.run_aws_tasks_e2e",
+    "\"$python_bin\" -m scripts.infrastructure.run_code_fetch_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_e2e --output-directory \"$e2e_output\"",
     "\"$python_bin\" -m scripts.infrastructure.run_host_session_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_iam_preflight_e2e --output-directory \"$quality_output/iam_preflight\"",

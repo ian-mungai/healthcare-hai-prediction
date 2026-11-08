@@ -105,7 +105,9 @@ locals {
           containers    = local.openmetadata_bootstrap_containers
         }
       } : key => task if local.om_on
-  })
+    },
+    local.code_fetch_on ? { code_fetch = local.code_fetch_task } : {},
+  )
 }
 
 resource "aws_ecs_task_definition" "one_shot" {
