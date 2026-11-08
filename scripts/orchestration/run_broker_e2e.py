@@ -211,6 +211,8 @@ class BrokerEnv(Env):
 
 Case = Callable[[BrokerEnv], dict[str, bool]]
 CASES: dict[str, tuple[Case, dict[str, Any]]] = {}
+# A listener answer under gate load: the broker's launcher exchanges each wait up to their own deadlines, so one request can take several seconds.
+SLOW_ANSWER_SECONDS = 6.0
 
 
 def case(name: str, **settings: Any) -> Callable[[Case], Case]:
@@ -813,7 +815,7 @@ def lose_submit_reply(env: BrokerEnv, request: SubmissionRequest, session: str) 
         return answer
 
     with mock.patch.object(broker.client, "call", lose_reply):
-        code, _ = try_post(listener.port, session, "/v1/submit", json.dumps(request.as_dict()).encode())
+        code, _ = answer_post(listener.port, session, "/v1/submit", json.dumps(request.as_dict()).encode())
     launch = broker_module.launch_id_of(request.submission_id)
     accepted = env.wait(lambda: next(iter(attempts_of(env, launch)), None), 10, "the launcher holds the accepted attempt")
     env.wait_phase(accepted["id"], ("started",))
@@ -876,7 +878,7 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
         handle = Handle(request.submission_id, request.container_name)
         after_restart = events(env, request.submission_id)
         state = state_of(fresh, handle)
-        cancel_code, _ = try_post(port, session, "/v1/cancel", json.dumps({"submission_id": request.submission_id}).encode())
+        cancel_code, _ = answer_post(port, session, "/v1/cancel", json.dumps({"submission_id": request.submission_id}).encode())
         final = cancelled_status(fresh, handle)
         ended = env.attempt(accepted["id"])
         container = env.daemon.containers.get(ended.get("container_id") or "")
@@ -926,10 +928,10 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
         except Exception as error:
             summary = {"error": f"{type(error).__name__}: {error}"}
         port = env.listener_for(unresolved, session).port
-        status_code, _ = try_post(port, session, "/v1/status", json.dumps({"submission_id": request.submission_id}).encode())
-        cancel_code, _ = try_post(port, session, "/v1/cancel", json.dumps({"submission_id": request.submission_id}).encode())
+        status_code, _ = answer_post(port, session, "/v1/status", json.dumps({"submission_id": request.submission_id}).encode())
+        cancel_code, _ = answer_post(port, session, "/v1/cancel", json.dumps({"submission_id": request.submission_id}).encode())
         while_down = events(env, request.submission_id)
-    resumed_code, _ = try_post(port, session, "/v1/cancel", json.dumps({"submission_id": request.submission_id}).encode())
+    resumed_code, _ = answer_post(port, session, "/v1/cancel", json.dumps({"submission_id": request.submission_id}).encode())
     resumed = cancelled_status(unresolved, handle)
     ended = env.attempt(accepted["id"])
     stop_attempt(env, accepted["id"])
@@ -986,6 +988,27 @@ def hide_token_store(kind: str, root: Path, run_id: str, aside: Path) -> Callabl
     return lambda: None
 
 
+@case("slow_answer_is_read")
+def slow_answer_is_read(env: BrokerEnv) -> dict[str, bool]:
+    """A listener answer that takes longer than a quick request (the broker waits on the launcher under load) is still read as the answer, not as a
+    lost connection: the cancel and status checks of the inventory and token store cases read their answers this way."""
+    broker = env.new_broker()
+    broker.start()
+    session = "f" * 64
+    listener = env.listener_for(broker, session)
+    original = broker_module.dispatch
+
+    def slow(target: Broker, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if operation == "health":
+            time.sleep(SLOW_ANSWER_SECONDS)
+        return original(target, operation, payload)
+
+    with mock.patch.object(broker_module, "dispatch", slow):
+        code, body = answer_post(listener.port, session, "/v1/health", b"{}")
+    env.stop_brokers()
+    return {f"an answer after {SLOW_ANSWER_SECONDS:g} s is read": code == 200 and body == {"broker": "ok"}}
+
+
 @case("cancel_after_token_store_loss")
 def cancel_after_token_store_loss(env: BrokerEnv) -> dict[str, bool]:
     """931a: the launcher accepts a submit, its reply is lost and the inventory row changes while the run's token file is missing or its folder cannot be
@@ -1019,16 +1042,16 @@ def cancel_after_token_store_loss(env: BrokerEnv) -> dict[str, bool]:
                     summary = {"error": f"{type(error).__name__}: {error}"}
                 port = env.listener_for(fresh, session).port
                 after_restart = events(env, request.submission_id)
-                status_code, _ = try_post(port, session, "/v1/status", payload)
+                status_code, _ = answer_post(port, session, "/v1/status", payload)
                 after_status = events(env, request.submission_id)
-                first_cancel, _ = try_post(port, session, "/v1/cancel", payload)
+                first_cancel, _ = answer_post(port, session, "/v1/cancel", payload)
                 cancel_only = ended_only_by_cancel(env, request.submission_id)
                 held = env.attempt(accepted["id"])
                 container = env.daemon.containers.get(held.get("container_id") or "")
                 running = bool(container and container["State"]["Running"])
             finally:
                 restore()
-            second_cancel, _ = try_post(port, session, "/v1/cancel", payload)
+            second_cancel, _ = answer_post(port, session, "/v1/cancel", payload)
             final = cancelled_status(fresh, handle)
             ended = env.attempt(accepted["id"])
             container = env.daemon.containers.get(ended.get("container_id") or "")
@@ -1745,6 +1768,12 @@ def try_post(
         return post(port, token, path, body, extra, timeout=timeout)
     except (OSError, http.client.HTTPException, ValueError) as error:
         return None, {"transport": type(error).__name__}
+
+
+def answer_post(port: int, token: str | None, path: str, body: bytes) -> tuple[int | None, dict[str, Any]]:
+    """A request whose answer a case checks: ``try_post`` with a wait as long as an answer may take while the broker works. The client waits as long as
+    the listener keeps a request open (``HANDLER_TIMEOUT_SECONDS``) plus a margin, so a slow but valid answer is never read as a lost connection."""
+    return try_post(port, token, path, body, timeout=broker_module.HANDLER_TIMEOUT_SECONDS + 5.0)
 
 
 def state_of(broker: Broker, handle: Handle) -> State | None:
@@ -2533,6 +2562,7 @@ ALL_CASES = (
     cancel_after_lost_submit_reply,
     noop_crash_recovery,
     cancel_after_inventory_drift,
+    slow_answer_is_read,
     cancel_after_token_store_loss,
     cancel_after_marker_ancestor_loss,
     cancel_after_marker_write_replacement,
