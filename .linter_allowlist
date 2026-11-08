@@ -29,7 +29,7 @@ osv-scanner uv.lock:urllib3==2.7.0 -- pin upgrade changes a built image or tool 
 osv-scanner uv.lock:uv==0.12.13 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
 osv-scanner uv.lock:virtualenv==21.7.9 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
 osv-scanner uv.lock:werkzeug==3.1.8 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it
-zizmor .github/workflows/ci.yml:self-repository -- style suggestion to write the local setup action as $/.github/actions/setup; workflow edits belong to the CI change, so revisit it there
+zizmor .github/workflows/ci.yml:self-repository -- style suggestion for the local setup action reference ./.github/actions/setup; workflow edits belong to the CI change, so revisit it there
 osv-scanner uv.lock:diskcache==5.6.3 -- no fixed release exists and dvc-data requires it, so the project accepts the advisory while it uses DVC
 osv-scanner uv.lock:joserfc==1.7.5 -- pin upgrade changes a built image and needs its own E2E, so it moves with the next orchestration image rebuild
 osv-scanner uv.lock:mlflow==3.17.0 -- fixed in 3.17.2 (GHSA-wqmh-qccw-pqwf, FileStore only); the server uses a Postgres backend store and training uses a client, so it moves to 3.17.2 at the owner's next lock update, before any MLflow image is pushed
