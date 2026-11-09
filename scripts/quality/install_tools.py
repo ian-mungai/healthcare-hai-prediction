@@ -4,25 +4,33 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import logging
+import math
 import os
 import platform
 import re
+import secrets
+import ssl
 import stat
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_BINARY = 192 * 1024 * 1024  # trivy is about 160 MB.
+READ_CHUNK = 1024 * 1024
+TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 LOGGER = logging.getLogger(__name__)
 
 
@@ -41,7 +49,105 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def archive_bytes(release: dict[str, Any], directory: Path | None) -> bytes:
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Bound a download: attempts, one total deadline, doubling waits with jitter and a cap on each attempt's wait for the network."""
+
+    attempts: int = 5
+    deadline: float = 240.0
+    base_delay: float = 2.0
+    max_delay: float = 30.0
+    attempt_timeout: float = 60.0
+
+    def __post_init__(self) -> None:
+        seconds = (self.deadline, self.base_delay, self.max_delay, self.attempt_timeout)
+        if type(self.attempts) is not int or self.attempts < 1 or not all(math.isfinite(value) and value > 0 for value in seconds):
+            raise ValueError("Invalid retry policy")
+
+
+RETRY_POLICY = RetryPolicy()
+
+
+class DownloadFailed(Exception):
+    """Transient download failures outlasted the retry policy; the message names the tool, the attempts, the reason and the last status."""
+
+    def __init__(self, tool: str, attempts: int, reason: str, last: str) -> None:
+        super().__init__(f"tool={tool} attempts={attempts} reason={reason} last={last}")
+
+
+def transient_status(error: BaseException) -> str | None:
+    """Name a failure worth retrying (a retryable HTTP status, a timeout or a lost connection), or return None for a permanent one."""
+    if isinstance(error, urllib.error.HTTPError):
+        return str(error.code) if error.code in TRANSIENT_STATUSES else None
+    if isinstance(error, urllib.error.URLError):
+        if isinstance(error.reason, ssl.SSLCertVerificationError):
+            return None
+        return "timeout" if isinstance(error.reason, TimeoutError) else "connection_error"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, (ConnectionError, http.client.IncompleteRead, http.client.BadStatusLine)):
+        return "connection_error"
+    return None
+
+
+def verified(content: bytes, limit: int, expected_sha256: str) -> bytes:
+    """Return the bytes only when they fit the size limit and match the pinned hash."""
+    if len(content) > limit or sha256(content) != expected_sha256:
+        raise ValueError("Archive size or SHA-256 mismatch")
+    return content
+
+
+def fetch_once(opener: urllib.request.OpenerDirector, url: str, limit: int, expected_sha256: str, timeout: float, deadline_at: float) -> bytes:
+    """Make one bounded request and verify the whole body; a body shorter than its announced length is a lost connection, not a bad hash."""
+    with opener.open(url, timeout=timeout) as response:
+        announced = response.headers.get("Content-Length", "")
+        chunks: list[bytes] = []
+        size = 0
+        while size <= limit:
+            chunk = response.read(min(READ_CHUNK, limit + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+            if time.monotonic() > deadline_at:
+                raise TimeoutError("Download deadline passed while reading")
+    content = b"".join(chunks)
+    if announced.isdecimal() and size <= limit and size < int(announced):
+        raise http.client.IncompleteRead(content, int(announced) - size)
+    return verified(content, limit, expected_sha256)
+
+
+def download_verified(
+    opener: urllib.request.OpenerDirector, url: str, *, tool: str, expected_sha256: str, limit: int, policy: RetryPolicy = RETRY_POLICY
+) -> bytes:
+    """Download and hash-check an archive, retrying only transient failures within the policy's attempts and deadline."""
+    started = time.monotonic()
+    deadline_at = started + policy.deadline
+    last = "none"
+    for attempt in range(1, policy.attempts + 1):
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise DownloadFailed(tool, attempt - 1, "deadline", last)
+        try:
+            return fetch_once(opener, url, limit, expected_sha256, min(policy.attempt_timeout, remaining), deadline_at)
+        except (OSError, http.client.HTTPException) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()
+            status = transient_status(error)
+            if status is None:
+                raise
+            last = status
+        if attempt == policy.attempts:
+            raise DownloadFailed(tool, attempt, "attempt_limit", last)
+        wait = min(policy.max_delay, policy.base_delay * 2 ** (attempt - 1)) * secrets.SystemRandom().uniform(0.5, 1.0)
+        if wait >= deadline_at - time.monotonic():
+            raise DownloadFailed(tool, attempt, "deadline", last)
+        LOGGER.warning("event=quality_download_retry tool=%s attempt=%d of %d status=%s wait_seconds=%.1f", tool, attempt, policy.attempts, last, wait)
+        time.sleep(wait)
+    raise DownloadFailed(tool, policy.attempts, "attempt_limit", last)
+
+
+def archive_bytes(release: dict[str, Any], directory: Path | None, tool: str) -> bytes:
     """Load bounded publisher bytes and reject unexpected hashes before extraction."""
     url = urllib.parse.urlsplit(release["url"])
     if url.scheme != "https" or url.hostname != "github.com" or url.username or url.password or url.query or url.fragment:
@@ -56,14 +162,9 @@ def archive_bytes(release: dict[str, Any], directory: Path | None) -> bytes:
         raise ValueError("Invalid archive size limit")
     if directory is not None:
         with (directory / Path(url.path).name).open("rb") as source:
-            content = source.read(limit + 1)
-    else:
-        opener = urllib.request.build_opener(HTTPSRedirect())
-        with opener.open(release["url"], timeout=60) as response:
-            content = response.read(limit + 1)
-    if len(content) > limit or sha256(content) != release["sha256"]:
-        raise ValueError("Archive size or SHA-256 mismatch")
-    return content
+            return verified(source.read(limit + 1), limit, release["sha256"])
+    opener = urllib.request.build_opener(HTTPSRedirect())
+    return download_verified(opener, release["url"], tool=tool, expected_sha256=release["sha256"], limit=limit)
 
 
 def binary_bytes(content: bytes, kind: str, name: str) -> bytes:
@@ -139,7 +240,7 @@ def install(manifest: Path, destination: Path, archives: Path | None, tools: lis
         if not re.fullmatch(r"\d+\.\d+\.\d+", tool["version"]):
             raise ValueError("Stable tool version required")
         release = tool["releases"][selected]
-        content = binary_bytes(archive_bytes(release, archives), release["format"], release.get("member", name))
+        content = binary_bytes(archive_bytes(release, archives, name), release["format"], release.get("member", name))
         if not content or len(content) > MAX_BINARY:
             raise ValueError("Invalid executable size")
         receipt = {"version": tool["version"], "platform": selected, "archive_sha256": release["sha256"], "binary_sha256": sha256(content)}
@@ -167,6 +268,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         install(args.manifest, args.destination, args.archive_directory, args.tool)
+    except DownloadFailed as error:
+        LOGGER.error("event=quality_install status=failed error_type=DownloadFailed %s", error)
+        raise SystemExit(1) from None
     except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, zipfile.BadZipFile, urllib.error.URLError) as error:
         LOGGER.error("event=quality_install status=failed error_type=%s", type(error).__name__)
         raise SystemExit(1) from None

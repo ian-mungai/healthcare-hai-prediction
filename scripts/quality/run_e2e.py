@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import http.server
+import importlib
 import importlib.metadata
 import io
 import json
@@ -15,10 +17,17 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
 import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import Any, NamedTuple, cast
 
 from scripts.process import TimeoutExpired, run_command
 
@@ -224,6 +233,242 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     check(not rejected_destination.exists(), "Rejected archive created an installation")
 
 
+ARCHIVE_FIXTURE = b"synthetic archive fixture; never executed\n"
+WRONG_FIXTURE = b"synthetic wrong bytes; never executed\n"
+RESPONSE_ECHO = "SENTINEL_RESPONSE_HEADER"
+QUERY_ECHO = "SENTINEL_URL_QUERY"
+RUNAWAY_REQUESTS = 40
+
+
+class ScriptedHandler(http.server.BaseHTTPRequestHandler):
+    """Answer each request with the next scripted step, so a case controls every attempt."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return None
+
+    def do_GET(self) -> None:
+        server = cast(Any, self.server)
+        with server.guard:
+            index = len(server.requests)
+            server.requests.append(self.path)
+        # A client that never stops retrying meets a permanent answer, so a planted unbounded loop ends and is counted.
+        kind, value = server.script[min(index, len(server.script) - 1)] if index < RUNAWAY_REQUESTS else ("status", 404)
+        try:
+            self.answer(kind, value)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def answer(self, kind: str, value: Any) -> None:
+        if kind == "stall":
+            time.sleep(value)
+            kind, value = "status", 504
+        if kind == "drop":
+            self.close_connection = True
+            return
+        if kind == "status" or kind == "redirect":
+            self.send_response(value if kind == "status" else 302)
+            if kind == "redirect":
+                self.send_header("Location", value)
+            self.send_header("X-Echo", RESPONSE_ECHO)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = value if kind == "body" else value[: len(value) // 2]
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(value)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.close_connection = True
+
+
+@contextmanager
+def loopback_server(script: list[tuple[str, Any]]) -> Iterator[tuple[str, list[str]]]:
+    """Serve scripted answers on 127.0.0.1 only and always stop the server and its thread."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ScriptedHandler)
+    server.daemon_threads = True
+    cast(Any, server).script = script
+    cast(Any, server).requests = []
+    cast(Any, server).guard = threading.Lock()
+    thread = threading.Thread(target=server.serve_forever, name="loopback_download_server", daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", cast(Any, server).requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+        check(not thread.is_alive(), "Loopback download server did not stop")
+
+
+class Attempt(NamedTuple):
+    """One download's result or error, request count, duration and retry log lines."""
+
+    outcome: bytes | BaseException
+    requests: int
+    seconds: float
+    log: list[str]
+
+
+def download_attempt(
+    tools: ModuleType, script: list[tuple[str, Any]], policy: Any, *, limit: int | None = None, payload: bytes = ARCHIVE_FIXTURE, query: str = ""
+) -> Attempt:
+    """Download once through the installer's verified download and return the result or error, the request count, the seconds and the log."""
+    messages: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    capture = Capture(level=logging.DEBUG)
+    tools.LOGGER.addHandler(capture)
+    tools.LOGGER.setLevel(logging.DEBUG)
+    started = time.monotonic()
+    try:
+        with loopback_server(script) as (base, requests):
+            opener = urllib.request.build_opener(tools.HTTPSRedirect())
+            outcome: bytes | BaseException
+            try:
+                outcome = tools.download_verified(
+                    opener,
+                    f"{base}/asset.tar.gz{query}",
+                    tool="example_tool",
+                    expected_sha256=hashlib.sha256(payload).hexdigest(),
+                    limit=len(payload) if limit is None else limit,
+                    policy=policy,
+                )
+            except (ValueError, OSError, tools.DownloadFailed) as error:
+                outcome = error
+            count = len(requests)
+    finally:
+        tools.LOGGER.removeHandler(capture)
+    return Attempt(outcome, count, time.monotonic() - started, messages)
+
+
+def transient_statuses_are_retried(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """Each transient answer is retried and the bytes that follow are accepted after a hash check."""
+    for status in (429, 500, 502, 503, 504):
+        attempt = download_attempt(tools, [("status", status), ("status", status), ("body", ARCHIVE_FIXTURE)], policy)
+        check(attempt.outcome == ARCHIVE_FIXTURE and attempt.requests == 3, f"HTTP {status} was not retried until the bytes arrived")
+        retries = [line for line in attempt.log if "tool=example_tool" in line and f"status={status}" in line]
+        check([("attempt=1" in line, "attempt=2" in line) for line in retries] == [(True, False), (False, True)], f"HTTP {status} retries were not logged")
+    return {"statuses": [429, 500, 502, 503, 504], "requests_each": 3}
+
+
+def connection_failures_are_retried(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """A silent close, a truncated body and a stalled answer are transient and the next attempt succeeds."""
+    quick_timeout = tools.RetryPolicy(attempts=5, deadline=30.0, base_delay=0.01, max_delay=0.05, attempt_timeout=0.3)
+    for name, script, used in (
+        ("dropped_connection", [("drop", None), ("body", ARCHIVE_FIXTURE)], policy),
+        ("truncated_body", [("truncated", ARCHIVE_FIXTURE), ("body", ARCHIVE_FIXTURE)], policy),
+        ("read_timeout", [("stall", 1.5), ("body", ARCHIVE_FIXTURE)], quick_timeout),
+    ):
+        attempt = download_attempt(tools, script, used)
+        check(attempt.outcome == ARCHIVE_FIXTURE and attempt.requests == 2, f"{name} was not retried")
+    return {"failures": ["dropped_connection", "truncated_body", "read_timeout"], "requests_each": 2}
+
+
+def gives_up_at_attempt_limit(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """Persistent 504 answers stop at the attempt limit with an error that names the tool, the count and the status."""
+    limited = tools.RetryPolicy(attempts=3, deadline=30.0, base_delay=0.01, max_delay=0.05, attempt_timeout=5.0)
+    attempt = download_attempt(tools, [("status", 504)], limited)
+    check(isinstance(attempt.outcome, tools.DownloadFailed), "Exhausted retries did not raise the download error")
+    check(attempt.requests == 3, f"Expected exactly 3 requests, saw {attempt.requests}")
+    text = str(attempt.outcome)
+    check("tool=example_tool" in text and "attempts=3" in text and "reason=attempt_limit" in text and "last=504" in text, "Give-up error is not clear")
+    return {"requests": attempt.requests}
+
+
+def permanent_answers_are_not_retried(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """A client error, a refused redirect, an oversized body and a wrong hash each end after one request."""
+    for status in (400, 403, 404):
+        attempt = download_attempt(tools, [("status", status)], policy)
+        check(
+            isinstance(attempt.outcome, urllib.error.HTTPError) and attempt.outcome.code == status and attempt.requests == 1,
+            f"HTTP {status} was retried or hidden",
+        )
+    attempt = download_attempt(tools, [("redirect", "http://127.0.0.1:9/elsewhere")], policy)
+    check(isinstance(attempt.outcome, ValueError) and "redirect" in str(attempt.outcome) and attempt.requests == 1, "A refused redirect was retried")
+    attempt = download_attempt(tools, [("body", ARCHIVE_FIXTURE)], policy, limit=len(ARCHIVE_FIXTURE) - 1)
+    check(isinstance(attempt.outcome, ValueError) and "mismatch" in str(attempt.outcome) and attempt.requests == 1, "An oversized body was retried")
+    attempt = download_attempt(tools, [("body", WRONG_FIXTURE), ("body", ARCHIVE_FIXTURE)], policy)
+    check(isinstance(attempt.outcome, ValueError) and "mismatch" in str(attempt.outcome) and attempt.requests == 1, "A hash mismatch was retried or accepted")
+    return {"requests_each": 1}
+
+
+def hash_is_checked_after_retry(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """Wrong bytes that follow a transient failure are rejected, so no attempt skips the hash check."""
+    attempt = download_attempt(tools, [("status", 504), ("body", WRONG_FIXTURE), ("body", ARCHIVE_FIXTURE)], policy)
+    check(isinstance(attempt.outcome, ValueError) and "mismatch" in str(attempt.outcome) and attempt.requests == 2, "Bytes after a retry were not hash-checked")
+    attempt = download_attempt(tools, [("truncated", ARCHIVE_FIXTURE), ("body", WRONG_FIXTURE)], policy)
+    check(
+        isinstance(attempt.outcome, ValueError) and "mismatch" in str(attempt.outcome) and attempt.requests == 2,
+        "Bytes after a truncated body were not hash-checked",
+    )
+    return {"requests_each": 2}
+
+
+def deadline_is_honoured(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """With attempts to spare, the total deadline ends the retries on time with a clear error."""
+    short = tools.RetryPolicy(attempts=1000, deadline=1.0, base_delay=0.3, max_delay=0.3, attempt_timeout=5.0)
+    attempt = download_attempt(tools, [("status", 504)], short)
+    check(
+        isinstance(attempt.outcome, tools.DownloadFailed) and "reason=deadline" in str(attempt.outcome),
+        "The deadline did not end the retries with a clear error",
+    )
+    check(2 <= attempt.requests < 10, f"Deadline ran {attempt.requests} requests")
+    check(attempt.seconds < 2.5, f"Deadline of 1.0 s took {attempt.seconds:.2f} s")
+    stalled = tools.RetryPolicy(attempts=1000, deadline=1.0, base_delay=0.1, max_delay=0.1, attempt_timeout=30.0)
+    stall = download_attempt(tools, [("stall", 5.0)], stalled)
+    check(isinstance(stall.outcome, tools.DownloadFailed) and "reason=deadline" in str(stall.outcome), "A stalled answer outlived the deadline")
+    check(stall.seconds < 2.5, f"A stalled answer held the download for {stall.seconds:.2f} s")
+    return {"requests": attempt.requests, "seconds": round(attempt.seconds, 2), "stalled_seconds": round(stall.seconds, 2)}
+
+
+def default_policy_is_bounded(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """The policy that runs in CI has a few attempts and a deadline of minutes, never an open end."""
+    defaults = tools.RETRY_POLICY
+    check(
+        2 <= defaults.attempts <= 10 and 60 <= defaults.deadline <= 300 and 0 < defaults.attempt_timeout <= defaults.deadline,
+        "Default retry policy is unbounded",
+    )
+    return {"attempts": defaults.attempts, "deadline_seconds": defaults.deadline}
+
+
+def retry_log_hides_url_and_headers(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """The retry log line carries the tool, the attempt and the status, and never the URL query, host or response headers."""
+    attempt = download_attempt(tools, [("status", 504), ("body", ARCHIVE_FIXTURE)], policy, query=f"?token={QUERY_ECHO}")
+    check(attempt.outcome == ARCHIVE_FIXTURE and attempt.requests == 2, "Retry with a query did not succeed")
+    logged = "\n".join(attempt.log)
+    check("tool=example_tool" in logged and "attempt=1" in logged and "status=504" in logged, "Retry log lacks tool, attempt or status")
+    check(not any(secret in logged for secret in (QUERY_ECHO, RESPONSE_ECHO, "127.0.0.1", "token=")), "Retry log disclosed the URL or response headers")
+    return {"log_lines": len(attempt.log)}
+
+
+def download_retry_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
+    """Verify the installer's download retry against a loopback server; every case runs, and any failure names its case."""
+    tools = importlib.import_module("scripts.quality.install_tools")
+    scenarios: list[tuple[str, Callable[[ModuleType, Any], dict[str, Any]]]] = [
+        ("retry_succeeds_after_transient_statuses", transient_statuses_are_retried),
+        ("retry_succeeds_after_connection_failures", connection_failures_are_retried),
+        ("retry_gives_up_at_attempt_limit", gives_up_at_attempt_limit),
+        ("no_retry_on_permanent_failures", permanent_answers_are_not_retried),
+        ("hash_checked_on_every_attempt", hash_is_checked_after_retry),
+        ("retry_deadline_is_honoured", deadline_is_honoured),
+        ("default_retry_policy_is_bounded", default_policy_is_bounded),
+        ("retry_log_hides_url_and_headers", retry_log_hides_url_and_headers),
+    ]
+    failed: list[str] = []
+    for name, scenario in scenarios:
+        try:
+            policy = tools.RetryPolicy(attempts=5, deadline=30.0, base_delay=0.01, max_delay=0.05, attempt_timeout=5.0)
+            cases.append({"name": name, "passed": True, **scenario(tools, policy)})
+        except (ValueError, OSError, AttributeError, TypeError) as error:
+            failed.append(name)
+            cases.append({"name": name, "passed": False, "error_type": type(error).__name__, "error": str(error)[:300]})
+    check(not failed, f"Download retry cases failed: {', '.join(failed)}")
+
+
 def secret_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     """Exercise a real Gitleaks process and pre-commit hook against a temporary index."""
     git = shutil.which("git")
@@ -324,8 +569,8 @@ def main() -> None:
         "cases": cases,
         "fixtures": "Generic synthetic data only",
         "aws_calls": 0,
-        "tested_boundary": "Real installer, scanner and pre-commit subprocesses; offline synthetic archives",
-        "untested": ["Publisher or AWS ingestion", "Network interruption during binary download"],
+        "tested_boundary": "Real installer, scanner and pre-commit subprocesses; offline synthetic archives; installer download retry on loopback",
+        "untested": ["Publisher or AWS ingestion", "Real GitHub release hosts; download retry is proven on loopback only"],
         "reproduce": [".venv/bin/python", "-m", "scripts.quality.run_e2e", "--output-directory", "<new_directory>"],
         "prerequisites": "Install pinned requirements and project-local quality tools before running.",
         "runtime": {"python": platform.python_version(), "platform": sys.platform},
@@ -335,6 +580,7 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix="quality_e2e_") as temporary:
             workspace = Path(temporary)
             installation_cases(workspace, cases)
+            download_retry_cases(workspace, cases)
             secret_cases(workspace, cases)
             terraform_cases(workspace, cases)
         report["status"] = "passed"
