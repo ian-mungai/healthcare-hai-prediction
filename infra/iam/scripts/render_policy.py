@@ -9,6 +9,8 @@ The secret, parameter and lakehouse role names are not in any template. A list e
 or ``${MANAGED_PARAMETER_NAME}`` is repeated once per name. A single name is a placeholder that is its variable's name in upper case, for example
 ``${LAKEHOUSE_READER_ROLE_NAME}`` or ``${POSTGRES_PASSWORD_NAME}``. All of them are the defaults of the root variables in ``infra/iam/variables.tf``, the same
 variables the Terraform stack and ``scripts/infrastructure/secret_store.py`` use. Add a secret there and its policy follows.
+The two catalog password names and the two features pair names are the defaults of the IAM variable files beside it (``secret_store.openmetadata_names``
+and ``secret_store.features_pair_names``).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
-from scripts.infrastructure.secret_store import SecretStoreError, openmetadata_names, policy_names, variable_names
+from scripts.infrastructure.secret_store import SecretStoreError, features_pair_names, openmetadata_names, policy_names, variable_names
 
 POLICIES_DIRECTORY = Path(__file__).resolve().parents[1] / "policies"
 VARIABLES_FILE = Path(__file__).resolve().parents[1] / "variables.tf"
@@ -56,7 +58,7 @@ def non_whitespace_length(document: Mapping[str, Any]) -> int:
 def terraform_names(variables: Path = VARIABLES_FILE) -> dict[str, Sequence[str]]:
     """The names of the Terraform variable defaults, by placeholder: the three name lists, and each single name as a string."""
     try:
-        return {**policy_names(variables), **variable_names(variables), **openmetadata_names(variables)}
+        return {**policy_names(variables), **variable_names(variables), **openmetadata_names(variables), **features_pair_names(variables)}
     except (OSError, SecretStoreError) as error:
         raise PolicyRenderError(f"the names cannot be read from {variables.name}: {error}") from None
 

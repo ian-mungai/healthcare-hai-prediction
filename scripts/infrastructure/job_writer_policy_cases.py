@@ -88,7 +88,7 @@ def cases() -> list[Case]:
         for suffix in ("client_id", "client_secret"):
             name = f"aws_polaris_{principal}_{suffix}"
             for folder in (PARAMETER, "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/"):
-                configured = principal != "features" and folder.endswith("/healthcare_hai_prediction/")
+                configured = folder.endswith("/healthcare_hai_prediction/")
                 for action in ("ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter"):
                     allowed = configured and action in ("ssm:GetParameter", "ssm:PutParameter")
                     label = "sets up" if allowed else "excludes"

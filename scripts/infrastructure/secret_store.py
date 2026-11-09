@@ -76,7 +76,8 @@ SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name")
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
 JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
-# The twelve AWS Polaris pair names: outside the 22 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
+# Twelve of the fourteen AWS Polaris pair names: outside the 22 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
+# The other two, the features pair, are declared beside the job writer variables (FEATURES_PAIR_VARIABLES).
 AWS_POLARIS_VARIABLES = (
     *JOB_READER_VARIABLES,
     *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold", "serving") for part in ("id", "secret")),
@@ -85,6 +86,8 @@ ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
 # The two catalog password names are declared beside the catalog's own IAM variables, not in variables.tf. Only the setup that creates them writes them.
 OPENMETADATA_VARIABLES = ("openmetadata_admin_password_name", "openmetadata_db_password_name")
 OPENMETADATA_FILES = ("openmetadata.tf", "openmetadata_persistent.tf")
+FEATURES_PAIR_VARIABLES = ("aws_polaris_features_client_id_name", "aws_polaris_features_client_secret_name")
+FEATURES_PAIR_FILES = ("job_writer_variables.tf",)
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
 VARIABLES = "infra/iam/variables.tf"
 LOOPBACK = {"127.0.0.1", "localhost"}
@@ -190,21 +193,34 @@ def variable_names(variables: Path) -> dict[str, str]:
     return {name.upper(): defaults[name] for name in wanted}
 
 
+def beside_names(variables: Path, files: tuple[str, ...], wanted: tuple[str, ...]) -> dict[str, str]:
+    """The defaults of the wanted variables by placeholder, read from IAM variable files beside ``variables.tf``."""
+    found: dict[str, str] = {}
+    for file in files:
+        try:
+            found.update(terraform_variables(variables.parent / file))
+        except OSError:
+            raise SecretStoreError(f"{file} is missing beside {variables.name}") from None
+    missing = [name for name in wanted if name not in found]
+    if missing:
+        raise SecretStoreError(f"{variables.parent.name}/ has no default for: {', '.join(missing)}")
+    return {name.upper(): found[name] for name in wanted}
+
+
 def openmetadata_names(variables: Path) -> dict[str, str]:
     """The two catalog password names by placeholder, read from the catalog's IAM variable files beside ``variables.tf``.
 
     Only the policy renderer needs them (``render_policy.terraform_names``), so ``variable_names`` stays readable from a lone ``variables.tf``.
     """
-    found: dict[str, str] = {}
-    for file in OPENMETADATA_FILES:
-        try:
-            found.update(terraform_variables(variables.parent / file))
-        except OSError:
-            raise SecretStoreError(f"{file} is missing beside {variables.name}") from None
-    missing = [name for name in OPENMETADATA_VARIABLES if name not in found]
-    if missing:
-        raise SecretStoreError(f"{variables.parent.name}/ has no default for: {', '.join(missing)}")
-    return {name.upper(): found[name] for name in OPENMETADATA_VARIABLES}
+    return beside_names(variables, OPENMETADATA_FILES, OPENMETADATA_VARIABLES)
+
+
+def features_pair_names(variables: Path) -> dict[str, str]:
+    """The two features pair names by placeholder, read from the job writer variables beside ``variables.tf``.
+
+    Only the policy renderer needs them (``render_policy.terraform_names``), for the project user's AWS Polaris pair grant.
+    """
+    return beside_names(variables, FEATURES_PAIR_FILES, FEATURES_PAIR_VARIABLES)
 
 
 def project_settings(root: Path) -> dict[str, str]:
