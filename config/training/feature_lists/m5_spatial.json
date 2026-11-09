@@ -487,6 +487,7 @@
     "feature_matrix_hospital_window:is_veterans_affairs",
     "feature_matrix_hospital_window:log_bed_count",
     "feature_matrix_hospital_window:or_per_100_beds",
+    "feature_matrix_hospital_window:rn_per_bed",
     "feature_matrix_hospital_window:ownership_class",
     "feature_matrix_hospital_window:provider_subtype_code",
     "feature_matrix_operations:c067__value__category",

@@ -82,13 +82,13 @@ DERIVED_REPORTS = (
     ("DR8", CONFLICT_CCN, 2021, 10000.0, 2000.0),
     ("DR9", CONFLICT_CCN, 2022, 10000.0, 3000.0),
 )
-# (snapshot period end, beds, operating rooms, control type) of 990009: the own snapshot of window 2022 ends 2021-12-31; the row ending on the start of
-# window 2023 is never read for that window.
+# (snapshot period end, beds, operating rooms, control type, registered nurses) of 990009: the own snapshot of window 2022 ends 2021-12-31; the row ending
+# on the start of window 2023 is never read for that window. The nurses are 400 on 200 beds, 50 on 0 beds and 0 on 150 beds (an RN count of 0 is missing).
 DERIVED_SNAPSHOTS = (
-    (date(2021, 12, 31), 200, 10, "04"),
-    (date(2022, 12, 31), 0, 10, "02"),
-    (date(2023, 1, 1), 999, 99, "08"),
-    (date(2023, 12, 31), 150, 0, "07"),
+    (date(2021, 12, 31), 200, 10, "04", 400.0),
+    (date(2022, 12, 31), 0, 10, "02", 50.0),
+    (date(2023, 1, 1), 999, 99, "08", 999.0),
+    (date(2023, 12, 31), 150, 0, "07", 0.0),
 )
 # Case-mix index by data fiscal year, with its cases: window 2023 gets 1.8 minus 1.5; window 2022 has no earlier year; window 2024 has no 2023 year.
 DERIVED_CMI = ((2021, 1.5, 1000.0), (2022, 1.8, 0.0))
@@ -226,8 +226,8 @@ def domain_report(number: str, year: int, denominator: float | None, numerator: 
 def derived_rows(rows: Rows) -> None:
     """The gold rows of the package 3 cases: POS snapshots with operating rooms, case-mix indexes, cost reports a year, three years and no year apart,
     occupational-mix surveys, Care Compare minutes and volumes, change of ownership events, SVI editions and rural-urban continuum codes."""
-    for ending, beds, rooms, control in DERIVED_SNAPSHOTS:
-        rows["fct_pos_snapshot"].append(snapshot(DERIVED_CCN, ending, bed_count=beds, operating_room_count=rooms, control_type_code=control))
+    for ending, beds, rooms, control, nurses in DERIVED_SNAPSHOTS:
+        rows["fct_pos_snapshot"].append(snapshot(DERIVED_CCN, ending, bed_count=beds, operating_room_count=rooms, control_type_code=control, rn_count=nurses))
     for year, cmi, cases in DERIVED_CMI:
         rows["fct_cmi_observation"].append(
             {
@@ -412,8 +412,10 @@ def gold_rows(version: int = 1) -> Rows:
             "is_connecticut": True,
         }
     )
-    # 990005: the own snapshot has no ZIP; only a later snapshot gives one.
-    rows["fct_pos_snapshot"].append(snapshot("990005", date(2021, 12, 31), state_code="FL", zip_code=None, county_fips="12001"))
+    # 990005: the own snapshot has no ZIP and no bed count (400 registered nurses on no beds is missing, not infinite); only a later snapshot gives a ZIP.
+    rows["fct_pos_snapshot"].append(
+        snapshot("990005", date(2021, 12, 31), state_code="FL", zip_code=None, county_fips="12001", bed_count=None, operating_room_count=3, rn_count=400.0)
+    )
     rows["fct_pos_snapshot"].append(snapshot("990005", date(2023, 6, 30), state_code="FL", zip_code="33101", county_fips="12001"))
     # 990003: enrollment only; the row starts before the window and ends inside it.
     if version == 1:

@@ -63,6 +63,7 @@ pos as (
         bed_count,
         certified_bed_count,
         operating_room_count,
+        rn_count,
         is_active
     from {{ ref('fct_pos_snapshot') }}
 ),
@@ -149,6 +150,7 @@ located as (
         pos.bed_count,
         pos.certified_bed_count,
         pos.operating_room_count,
+        pos.rn_count,
         pos.is_active,
         pos.ccn is not null as has_pos_snapshot,
         coalesce(pos.state_code, earlier.state_code, enrollment.state) as state_code,
@@ -287,12 +289,15 @@ joined as (
         located.bed_count,
         located.certified_bed_count,
         located.operating_room_count,
+        located.rn_count,
         located.is_active,
         -- Derived hospital-window fields (design 2.5, 2.10 and 2.11). A log needs a value above 0. ORs per 100 beds needs beds above 0; an operating room count
         -- of 0 stays 0. The ownership class maps the POS control type of the chosen snapshot. The CMI change is the data year Y-1 minus Y-2 and is null when
-        -- either year has none, so a missing year is never bridged by an older one. RNs per bed is not built: an RN count of 0 is an open owner decision.
+        -- either year has none, so a missing year is never bridged by an older one. RNs per bed needs beds above 0 and an RN count above 0: a snapshot
+        -- that reports 0 nurses counts as missing (owner decision of Nov 9 2026).
         case when located.bed_count > 0 then ln(located.bed_count) end as log_bed_count,
         case when located.bed_count > 0 then 100.0 * located.operating_room_count / located.bed_count end as or_per_100_beds,
+        case when located.bed_count > 0 and located.rn_count > 0 then located.rn_count / located.bed_count end as rn_per_bed,
         {{ ownership_class('located.control_type_code') }} as ownership_class,
         case when cmi.cases > 0 then ln(cmi.cases) end as cmi_cases_log,
         cmi.cmi - earlier_cmi.cmi as cmi_change,

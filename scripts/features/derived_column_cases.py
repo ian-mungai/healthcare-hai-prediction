@@ -26,12 +26,16 @@ CCN = feature_fixture.DERIVED_CCN
 GAP = feature_fixture.GAP_CCN
 NEGATIVE = feature_fixture.NEGATIVE_CCN
 CONFLICT = feature_fixture.CONFLICT_CCN
-# The wide hospital-window columns by spine key: (ORs per 100 beds, log beds, ownership class, log CMI cases, CMI change); None is a null.
+# The wide hospital-window columns by spine key: (ORs per 100 beds, log beds, ownership class, log CMI cases, CMI change, RNs per bed); None is a null.
+# 990009 has 400 nurses on 200 beds (2.0), 50 nurses on 0 beds (null: no beds) and 0 nurses on 150 beds (null: an RN count of 0 is missing, while the
+# 0 operating rooms of the same row stay 0). 990005 has 400 nurses and no bed count (null). 990001 has no nurse count at all (null).
 WINDOW = {
-    f"{CCN}:2022": (5.0, math.log(200), "for_profit", math.log(1000.0), None),
-    f"{CCN}:2023": (None, None, "nonprofit", None, 1.8 - 1.5),
-    f"{CCN}:2024": (0.0, math.log(150), "government", None, None),
+    f"{CCN}:2022": (5.0, math.log(200), "for_profit", math.log(1000.0), None, 2.0),
+    f"{CCN}:2023": (None, None, "nonprofit", None, 1.8 - 1.5, None),
+    f"{CCN}:2024": (0.0, math.log(150), "government", None, None, None),
 }
+# RNs per bed of the windows that only prove a null: 990005 (nurses and no bed count) and 990001 (a bed count and no nurse count).
+RN_NULLS = ("990005:2022", "990001:2022")
 # The derived hospital columns by spine key and column name. Report values: 990009 has FY2020 (denominator 20000, share 500), FY2021 (10000, 2000) and FY2022
 # (denominator 0); 990010 has FY2019 (10000, 1000) and FY2022 (10000, 3000); 990011 has FY2022 (-5, 100). C038 is the denominator, C057 is 1, C054 and C045 are
 # the share, C040 is 10000 over the denominator and C028 is 10 over the denominator per 365 days.
@@ -86,7 +90,7 @@ CHOW = {
     "990002:2023": (0.0, 0.0),
 }
 WINDOW_SQL = (
-    "select spine_key, or_per_100_beds, log_bed_count, ownership_class, cmi_cases_log, cmi_change "
+    "select spine_key, or_per_100_beds, log_bed_count, ownership_class, cmi_cases_log, cmi_change, rn_per_bed "
     "from feature_matrix_hospital_window where spine_key like '9900%'"
 )
 WIDE_SQL = "select spine_key, {columns} from {table}"
@@ -100,13 +104,16 @@ def same(found: float | None, wanted: float | None) -> bool:
 
 
 def window_cases(report: Any, connection: Any) -> None:
-    """The hospital-window columns: ORs per 100 beds, log beds, ownership class, log CMI cases and CMI change."""
+    """The hospital-window columns: ORs per 100 beds, RNs per bed, log beds, ownership class, log CMI cases and CMI change."""
     found = {row[0]: row[1:] for row in connection.execute(WINDOW_SQL).fetchall()}
     wrong = sorted(
         f"{key} {name}"
         for key, wanted in WINDOW.items()
         for name, got, want in zip(
-            ("or_per_100_beds", "log_bed_count", "ownership_class", "cmi_cases_log", "cmi_change"), found.get(key, (None,) * 5), wanted, strict=True
+            ("or_per_100_beds", "log_bed_count", "ownership_class", "cmi_cases_log", "cmi_change", "rn_per_bed"),
+            found.get(key, (None,) * 6),
+            wanted,
+            strict=True,
         )
         if not (got == want if isinstance(want, str) else same(got, want))
     )
@@ -127,7 +134,16 @@ def window_cases(report: Any, connection: Any) -> None:
         row[0]
         for row in connection.execute("select column_name from information_schema.columns where table_name = 'feature_matrix_hospital_window'").fetchall()
     }
-    report.case("E01", "P3-3", "RNs per bed is not a column of the window table", "rn_per_bed" not in columns)
+    report.case("E01", "P3-3", "RNs per bed is a column of the window table", "rn_per_bed" in columns)
+    report.case(
+        "E01",
+        "P3-3a",
+        "RNs per bed is missing for an RN count of 0, for nurses on 0 beds or no bed count, and for no nurse count; 400 nurses on 200 beds give 2",
+        same(found.get(f"{CCN}:2022", (None,) * 6)[5], 2.0)
+        and found.get(f"{CCN}:2024", (1,) * 6)[5] is None
+        and found.get(f"{CCN}:2023", (1,) * 6)[5] is None
+        and all(key in found and found[key][5] is None for key in RN_NULLS),
+    )
 
 
 def derived_cases(report: Any, connection: Any) -> None:

@@ -183,6 +183,7 @@ WINDOW_COLUMNS: tuple[tuple[str, str, str, str, str], ...] = (
     ("is_veterans_affairs", "boolean", "predictor", "is_veterans_affairs", "none"),
     ("log_bed_count", "double", "predictor", "log_bed_count", "none"),
     ("or_per_100_beds", "double", "predictor", "or_per_100_beds", "none"),
+    ("rn_per_bed", "double", "predictor", "rn_per_bed", "none"),
     ("ownership_class", "varchar", "predictor", "ownership_class", "own_snapshot_classification"),
     ("cmi_cases_log", "double", "predictor", "cmi_cases_log", "none"),
     ("cmi_change", "double", "predictor", "cmi_change", "none"),
@@ -208,6 +209,10 @@ WINDOW_DESCRIPTIONS = {
     "or_per_100_beds": (
         "Operating rooms per 100 beds of the own POS snapshot; null without a snapshot, when the beds are not above 0 or when the operating room count is "
         "missing. A count of 0 operating rooms stays 0."
+    ),
+    "rn_per_bed": (
+        "Registered nurses per bed of the own POS snapshot; null without a snapshot, when the beds are not above 0, when the RN count is missing or "
+        "when it is 0 (a snapshot that reports 0 nurses counts as missing)."
     ),
     "ownership_class": (
         "Ownership class from the control type of the own POS snapshot: nonprofit (01 to 03), for_profit (04 and 09) or government (05 to 08 and 10); "
@@ -236,6 +241,7 @@ WINDOW_SOURCE_GROUPS = {
     "is_veterans_affairs": "ccn",
     "log_bed_count": "pos",
     "or_per_100_beds": "pos",
+    "rn_per_bed": "pos",
     "ownership_class": "pos",
     "cmi_cases_log": "cmi",
     "cmi_change": "cmi",

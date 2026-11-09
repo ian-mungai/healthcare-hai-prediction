@@ -43,6 +43,7 @@ PREDICTOR_VIEWS: dict[str, tuple[tuple[str, str], ...]] = {
         ("is_veterans_affairs", "Bool"),
         ("log_bed_count", "Float64"),
         ("or_per_100_beds", "Float64"),
+        ("rn_per_bed", "Float64"),
         ("ownership_class", "String"),
         ("cmi_cases_log", "Float64"),
         ("cmi_change", "Float64"),

@@ -20,6 +20,7 @@ attributes as (
         is_veterans_affairs,
         log_bed_count,
         or_per_100_beds,
+        rn_per_bed,
         cmi_cases_log,
         cmi_change,
         (window_start::timestamp) at time zone 'UTC' as event_timestamp,
@@ -52,6 +53,7 @@ select
     is_veterans_affairs,
     log_bed_count,
     or_per_100_beds,
+    rn_per_bed,
     ownership_class,
     cmi_cases_log,
     cmi_change

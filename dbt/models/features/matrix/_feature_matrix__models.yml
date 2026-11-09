@@ -70,6 +70,9 @@ models:
       - name: or_per_100_beds
         data_type: double
         description: Operating rooms per 100 beds of the own POS snapshot; null without a snapshot, when the beds are not above 0 or when the operating room count is missing. A count of 0 operating rooms stays 0.
+      - name: rn_per_bed
+        data_type: double
+        description: Registered nurses per bed of the own POS snapshot; null without a snapshot, when the beds are not above 0, when the RN count is missing or when it is 0 (a snapshot that reports 0 nurses counts as missing).
       - name: ownership_class
         data_type: varchar
         description: "Ownership class from the control type of the own POS snapshot: nonprofit (01 to 03), for_profit (04 and 09) or government (05 to 08 and 10); null when the classification was filled from another snapshot."

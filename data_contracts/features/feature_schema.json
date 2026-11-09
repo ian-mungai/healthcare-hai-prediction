@@ -77,6 +77,7 @@
     "feature_matrix_hospital_window:is_veterans_affairs",
     "feature_matrix_hospital_window:log_bed_count",
     "feature_matrix_hospital_window:or_per_100_beds",
+    "feature_matrix_hospital_window:rn_per_bed",
     "feature_matrix_hospital_window:ownership_class",
     "feature_matrix_hospital_window:cmi_cases_log",
     "feature_matrix_hospital_window:cmi_change",
@@ -1252,6 +1253,7 @@
         {"description": "Whether the CCN is that of a Veterans Affairs hospital (fixed by the CCN).", "feast_type": "Bool", "mask": "none", "name": "is_veterans_affairs", "pivot": {"copy": "is_veterans_affairs"}, "role": "predictor", "source_group": "ccn", "type": "boolean", "view": "feature_matrix_hospital_window"},
         {"description": "Natural log of the beds of the own POS snapshot; null without a snapshot or when the beds are not above 0.", "feast_type": "Float64", "mask": "none", "name": "log_bed_count", "pivot": {"copy": "log_bed_count"}, "role": "predictor", "source_group": "pos", "type": "double", "view": "feature_matrix_hospital_window"},
         {"description": "Operating rooms per 100 beds of the own POS snapshot; null without a snapshot, when the beds are not above 0 or when the operating room count is missing. A count of 0 operating rooms stays 0.", "feast_type": "Float64", "mask": "none", "name": "or_per_100_beds", "pivot": {"copy": "or_per_100_beds"}, "role": "predictor", "source_group": "pos", "type": "double", "view": "feature_matrix_hospital_window"},
+        {"description": "Registered nurses per bed of the own POS snapshot; null without a snapshot, when the beds are not above 0, when the RN count is missing or when it is 0 (a snapshot that reports 0 nurses counts as missing).", "feast_type": "Float64", "mask": "none", "name": "rn_per_bed", "pivot": {"copy": "rn_per_bed"}, "role": "predictor", "source_group": "pos", "type": "double", "view": "feature_matrix_hospital_window"},
         {"description": "Ownership class from the control type of the own POS snapshot: nonprofit (01 to 03), for_profit (04 and 09) or government (05 to 08 and 10); null when the classification was filled from another snapshot.", "feast_type": "String", "mask": "own_snapshot_classification", "name": "ownership_class", "pivot": {"copy": "ownership_class"}, "role": "predictor", "source_group": "pos", "type": "varchar", "view": "feature_matrix_hospital_window"},
         {"description": "Natural log of the discharges behind the case-mix index; null when none is chosen or the discharges are not above 0.", "feast_type": "Float64", "mask": "none", "name": "cmi_cases_log", "pivot": {"copy": "cmi_cases_log"}, "role": "predictor", "source_group": "cmi", "type": "double", "view": "feature_matrix_hospital_window"},
         {"description": "Case-mix index of the data fiscal year before the window minus that of the year before it; null when either year has none.", "feast_type": "Float64", "mask": "none", "name": "cmi_change", "pivot": {"copy": "cmi_change"}, "role": "predictor", "source_group": "cmi", "type": "double", "view": "feature_matrix_hospital_window"}

@@ -557,6 +557,7 @@ WINDOW_GROUPS = {
     "is_veterans_affairs": "ccn",
     "log_bed_count": "pos",
     "or_per_100_beds": "pos",
+    "rn_per_bed": "pos",
     "ownership_class": "pos",
     "cmi_cases_log": "cmi",
     "cmi_change": "cmi",
@@ -1020,6 +1021,7 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
 PACKAGE_THREE_WINDOW = {
     "log_bed_count": ("double", "none", "pos"),
     "or_per_100_beds": ("double", "none", "pos"),
+    "rn_per_bed": ("double", "none", "pos"),
     "ownership_class": ("varchar", "own_snapshot_classification", "pos"),
     "cmi_cases_log": ("double", "none", "cmi"),
     "cmi_change": ("double", "none", "cmi"),
@@ -1082,7 +1084,7 @@ def register_coverage_cases(report: Report) -> None:
 
 def package_three_cases(report: Report, base: Path, schema: dict[str, Any]) -> None:
     """R9: the hospital-window and derived columns of package 3 (design 2.5, 2.6, 2.10, 2.11): their names, kinds and masks, the computed-field list, the
-    generated seed that tells the long models which derived rows to write, and RNs per bed, which stays out until the owner decides item 13."""
+    generated seed that tells the long models which derived rows to write, and RNs per bed (an RN count of 0 is missing, owner decision of Nov 9 2026)."""
     window = columns_of(schema, schema_module.WINDOW_TABLE)
     found = {
         name: (window[name]["type"], window[name]["mask"], window[name].get("source_group"))
@@ -1092,11 +1094,16 @@ def package_three_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
     report.case(
         "R9",
         "G18",
-        "the window table has log beds, ORs per 100 beds, ownership class, log CMI cases and CMI change with their masks",
+        "the window table has log beds, ORs per 100 beds, RNs per bed, ownership class, log CMI cases and CMI change with their masks",
         found == PACKAGE_THREE_WINDOW,
         found=sorted(found),
     )
-    report.case("R9", "G18", "RNs per bed is not built while an RN count of 0 is an open owner decision", "rn_per_bed" not in window)
+    report.case(
+        "R9",
+        "G18",
+        "RNs per bed is a predictor of the window table, and the table holds neither the RN count nor the operating room count",
+        "rn_per_bed" in window and window["rn_per_bed"]["role"] == "predictor" and not {"rn_count", "operating_room_count"} & set(window),
+    )
     for table, wanted in PACKAGE_THREE_COLUMNS.items():
         columns = columns_of(schema, table)
         right = all(

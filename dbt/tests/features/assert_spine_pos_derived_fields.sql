@@ -2,7 +2,8 @@
 -- does not end before the window start (design 2.5 and 2.11). The expected values come from fct_pos_snapshot and literal rules, not from the spine model:
 -- ORs per 100 beds is 100 * operating rooms / beds and is null when the beds are null or not above 0 (an operating room count of 0 stays 0), the log of
 -- beds is null when the beds are not above 0, and the ownership class maps the POS control type (01 to 03 nonprofit, 04 and 09 for profit, 05 to 08 and 10
--- government). RNs per bed is not built: whether an RN count of 0 is missing or a real 0 is an open owner decision.
+-- government). RNs per bed is the RN count over the beds and is null when the RN count is null or 0 (a snapshot that reports 0 nurses counts as missing, owner
+-- decision of Nov 9 2026) and when the beds are null or not above 0.
 
 with
 
@@ -12,9 +13,11 @@ expected as (
         pos.period_end as pos_period_end,
         spine.window_start,
         spine.or_per_100_beds,
+        spine.rn_per_bed,
         spine.log_bed_count,
         spine.ownership_class,
         case when pos.bed_count > 0 then 100.0 * pos.operating_room_count / pos.bed_count end as expected_or_per_100_beds,
+        case when pos.bed_count > 0 and pos.rn_count > 0 then pos.rn_count / pos.bed_count end as expected_rn_per_bed,
         case when pos.bed_count > 0 then ln(pos.bed_count) end as expected_log_bed_count,
         case
             when spine.control_type_code in ('01', '02', '03') then 'nonprofit'
@@ -34,6 +37,7 @@ select
         when pos_period_end >= window_start then 'snapshot not before the start'
         when (or_per_100_beds is null) <> (expected_or_per_100_beds is null) or abs(or_per_100_beds - expected_or_per_100_beds) > 0.000000001
             then 'wrong ORs per 100 beds'
+        when (rn_per_bed is null) <> (expected_rn_per_bed is null) or abs(rn_per_bed - expected_rn_per_bed) > 0.000000001 then 'wrong RNs per bed'
         when (log_bed_count is null) <> (expected_log_bed_count is null) or abs(log_bed_count - expected_log_bed_count) > 0.000000001 then 'wrong log of beds'
         else 'wrong ownership class'
     end as failure
@@ -42,6 +46,8 @@ where
     pos_period_end >= window_start
     or (or_per_100_beds is null) <> (expected_or_per_100_beds is null)
     or abs(or_per_100_beds - expected_or_per_100_beds) > 0.000000001
+    or (rn_per_bed is null) <> (expected_rn_per_bed is null)
+    or abs(rn_per_bed - expected_rn_per_bed) > 0.000000001
     or (log_bed_count is null) <> (expected_log_bed_count is null)
     or abs(log_bed_count - expected_log_bed_count) > 0.000000001
     or ownership_class is distinct from expected_ownership_class
