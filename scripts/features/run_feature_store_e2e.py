@@ -628,7 +628,7 @@ def static(report: Report) -> None:
 # ----------------------------------------------------------------------------------------------------
 # build_local (runs under .tools/sqlfluff/bin/python)
 
-# The interpreter of the build children: the SQLFluff tool environment holds dbt and DuckDB, which .venv does not.
+# The interpreter of the build children: the SQLFluff tool environment holds dbt, which .venv does not.
 TOOL_PYTHON = ROOT / ".tools/sqlfluff/bin/python"
 
 
