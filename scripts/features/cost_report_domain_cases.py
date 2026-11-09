@@ -101,6 +101,13 @@ def same(found: float | None, wanted: float | None) -> bool:
     return math.isclose(found, wanted, rel_tol=1e-12, abs_tol=1e-12)
 
 
+def count_differences(found: dict[tuple[str, int], tuple[int, ...]], wanted: dict[tuple[str, int], tuple[int, ...]], limit: int = 12) -> list[str]:
+    """The control and fiscal year keys where the count model and the expected counts differ, each with both count triples; at most ``limit`` keys."""
+    return [
+        f"{key[0]} {key[1]}: found {found.get(key)} wanted {wanted.get(key)}" for key in sorted(set(found) | set(wanted)) if found.get(key) != wanted.get(key)
+    ][:limit]
+
+
 def built_domains(report: Any, run_folder: Path) -> None:
     """Check every fixture row's status and value, the count model and the build receipt against the expected domain results."""
     duckdb = importlib.import_module("duckdb")
@@ -123,7 +130,10 @@ def built_domains(report: Any, run_folder: Path) -> None:
     report.case("E01", "CR3", "each row publishes the expected value, null outside the domain and below the floor", not wrong_value, wrong=wrong_value[:5])
     report.case("E01", "CR4", "the status column holds only the three statuses", every_status <= set(STATUSES), found=sorted(every_status))
     seen = {(row[0], row[1]): tuple(row[2:]) for row in checks}
-    report.case("E01", "CR5", "the count model equals the expected counts for every control and fiscal year", seen == expected_counts(), rows=len(checks))
+    differing = count_differences(seen, expected_counts())
+    report.case(
+        "E01", "CR5", "the count model equals the expected counts for every control and fiscal year", not differing, rows=len(checks), differing=differing
+    )
     receipt = json.loads((run_folder / "build_receipt.json").read_text())
     published = {
         (row["measure_control"], row["fiscal_year"]): (row["rows_evaluated"], row["rows_out_of_domain"], row["rows_bad_denominator"])

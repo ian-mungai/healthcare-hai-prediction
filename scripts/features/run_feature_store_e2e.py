@@ -47,7 +47,7 @@ from typing import Any
 from unittest import mock
 
 from scripts.features import feature_schema as schema_module
-from scripts.features import features_input, features_publish, features_publish_cases
+from scripts.features import features_input, features_publish, features_publish_cases, rebuild_cases
 from scripts.lakehouse import feature_columns as columns
 from scripts.lakehouse import gold_publish, publish_case_report
 from scripts.lakehouse.gold_publish_record import PublishError
@@ -64,7 +64,6 @@ SUITE_FOLDER = "data_contracts/great_expectations/features"
 # The launcher jobs the publish_offline mode needs from the launcher lane (see the report): none of these exist before lane B adds them.
 Step = dict[str, Any]
 ZERO_COUNT = 'select count(*) from feature_matrix_county_measures where "{column}" = 0'
-TABLE_HASH = 'select count(*), sum(hash(t)::hugeint) from "{table}" as t'
 PARQUET_VALUE = "select c001__value__number from read_parquet('{file}') where c001__value__number is not null order by 1 limit 1"
 PARQUET_SCHEMA = "select name, logical_type from parquet_schema('{file}')"
 
@@ -1920,10 +1919,15 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
             changed == ["features_run_id"],
             changed=changed,
         )
-        same = all(
-            rows(other, TABLE_HASH.format(table=table)) == rows(this, TABLE_HASH.format(table=table)) for table in sorted(contract - {"feature_build_inputs"})
+        differing = rebuild_cases.differing_tables(this, other, contract - {"feature_build_inputs"})
+        report.case(
+            "E06b",
+            "A8",
+            "the data tables of the second build have the same row counts and content hashes",
+            not differing,
+            tables=sorted(differing),
+            details=differing,
         )
-        report.case("E06b", "A8", "the data tables of the second build have the same row counts and content hashes", same)
     finally:
         other.close()
         this.close()
