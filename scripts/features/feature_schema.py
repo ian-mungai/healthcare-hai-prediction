@@ -374,7 +374,9 @@ def kinds_of(family: str, key: Key, categories: set[tuple[str, Key]], both: set[
 def rule_set(entries: list[dict[str, str]], label: str, known: dict[str, set[Key]]) -> set[tuple[str, Key]]:
     """The keys a reviewed list names; a list entry that names no key of the inventory is an error."""
     chosen: set[tuple[str, Key]] = set()
-    for entry in entries:
+    for index, entry in enumerate(entries):
+        if set(entry) - {"family", "source", "control", "field", "reason"}:
+            raise SchemaError(f"{RULES}: {label} entry {index} has an unknown key; it holds only a family, source, control, field and a reason")
         item = (entry["family"], (entry["source"], entry["control"], entry["field"]))
         if item[0] not in known or item[1] not in known[item[0]]:
             raise SchemaError(f"{RULES}: {label} names {entry['family']} {item[1]}, which no control seed gives")

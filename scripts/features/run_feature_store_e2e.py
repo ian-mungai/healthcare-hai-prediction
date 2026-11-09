@@ -963,6 +963,16 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
     report.case(
         "R7", "G16", "a derived field that is already a key stops the generator", refuses(lambda: schema_module.generated_files(existing), "already a key")
     )
+    for listed in ("categories", "both_kinds"):
+        extra_key = planted_root(
+            base, f"{listed}_unknown_key", edit_json(schema_module.RULES, lambda rules, name=listed: rules[name][0].update(unexpected="planted"))
+        )
+        report.case(
+            "R7",
+            "G16",
+            f"an unknown key in a {listed} entry stops the generator",
+            refuses(partial(schema_module.generated_files, extra_key), listed, "unknown key"),
+        )
     ordinal = planted_root(base, "ordinal_of_number", with_rules(ordinal_fields=[HOSPITAL_LOG]))
     report.case("R7", "G16", "an ordinal field of a number key stops the generator", refuses(lambda: schema_module.generated_files(ordinal), "category"))
     twice = planted_root(base, "twice", with_rules(log_fields=[HOSPITAL_LOG, HOSPITAL_LOG]))
