@@ -30,7 +30,8 @@ DEADLINE_SECONDS = 600
 
 def offline_environment() -> dict[str, str]:
     """The caller's environment without AWS credentials or profiles, with empty AWS configuration files, as the Terraform check group runs the stacks."""
-    environment = {name: value for name, value in os.environ.items() if name not in AWS_VARIABLES}
+    # Terraform also reads arguments from TF_CLI_ARGS*; drop them so only this generator's own arguments reach the test, as the stack wrapper does.
+    environment = {name: value for name, value in os.environ.items() if name not in AWS_VARIABLES and not name.startswith("TF_CLI_ARGS")}
     environment.update(
         AWS_CONFIG_FILE="/dev/null", AWS_SHARED_CREDENTIALS_FILE="/dev/null", AWS_EC2_METADATA_DISABLED="true", TF_IN_AUTOMATION="1", TF_INPUT="0"
     )
@@ -76,7 +77,8 @@ def main() -> int:
     try:
         written = summary(planned_definitions(done.stdout))
     except ValueError as error:
-        sys.stderr.write(f"{error}; terraform exit {done.returncode}: {done.stderr.strip()[-300:]}\n")
+        # A fixed reason and the exit code only: Terraform's own output can repeat values from the environment or the stack.
+        sys.stderr.write(f"{error}; terraform exit {done.returncode}\n")
         sys.stderr.write(f"Initialise the stack first: terraform -chdir={stack} init -backend=false -input=false\n")
         return 1
     (stack / FIXTURE).write_text(json.dumps(written, indent=2, sort_keys=True) + "\n", encoding="utf-8")
