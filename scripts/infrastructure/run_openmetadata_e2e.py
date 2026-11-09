@@ -935,7 +935,7 @@ def dag_runs_one_broker_step_with_bounds_and_no_schedule() -> None:
         calls.append(template)
         return "succeeded"
 
-    runtime.__dict__.update(STEP_TIMEOUT=None, run_step=record_step)
+    runtime.__dict__.update(STEP_TIMEOUT=None, run_step=record_step, launch_pool=lambda: "stand_in_pool")
     saved = {name: sys.modules.get(name) for name in ("airflow", "airflow.sdk", "orchestration.dag_runtime")}
     sys.modules.update({"airflow": types.ModuleType("airflow"), "airflow.sdk": sdk, "orchestration.dag_runtime": runtime})
     try:
@@ -956,6 +956,7 @@ def dag_runs_one_broker_step_with_bounds_and_no_schedule() -> None:
     require([item["name"] for item in dag.tasks] == ["metadata_run"], dag.tasks)
     step = dag.tasks[0]
     require(step["retries"] == 0 and 0 < step["execution_timeout"].total_seconds() <= 5 * 3600, step)
+    require(step["pool"] == "stand_in_pool", f"the step must run in the pool the runtime names: {step}")
     require(dag.kwargs["dagrun_timeout"].total_seconds() <= 6 * 3600, "the DAG run must have a bound")
     require(calls == [], "importing the DAG must not start a step")
     require(loaded.LIFETIME_CEILING_SECONDS == 14400, "the DAG bound must follow the Terraform lifetime ceiling")
