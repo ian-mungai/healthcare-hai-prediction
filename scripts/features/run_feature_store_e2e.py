@@ -963,10 +963,12 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
     report.case(
         "R7", "G16", "a derived field that is already a key stops the generator", refuses(lambda: schema_module.generated_files(existing), "already a key")
     )
+
+    def plant_unknown_key(rules: dict[str, Any], name: str) -> None:
+        rules[name][0].update(unexpected="planted")
+
     for listed in ("categories", "both_kinds"):
-        extra_key = planted_root(
-            base, f"{listed}_unknown_key", edit_json(schema_module.RULES, lambda rules, name=listed: rules[name][0].update(unexpected="planted"))
-        )
+        extra_key = planted_root(base, f"{listed}_unknown_key", edit_json(schema_module.RULES, partial(plant_unknown_key, name=listed)))
         report.case(
             "R7",
             "G16",
