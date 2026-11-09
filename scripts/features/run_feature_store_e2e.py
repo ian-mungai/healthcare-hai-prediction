@@ -1483,9 +1483,11 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
         report.case("E01", "H5", "the build wrote staging.duckdb", False)
         return
     task_environment_case(report, build, base, first)
+    from scripts.features.cost_report_domain_cases import built_domains
     from scripts.features.delta_cases import built_support
 
     built_support(report, staging, ROOT, first)
+    built_domains(report, first)
     connection = open_db(staging)
     try:
         tables = {row[0] for row in rows(connection, "select table_name from information_schema.tables where table_schema = 'main'")}

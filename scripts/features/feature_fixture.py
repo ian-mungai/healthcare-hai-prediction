@@ -43,6 +43,23 @@ PLANTED = {
     "on_first_window_year": "990007:2018",
     "after_first_window_year": "990007:2019",
 }
+# Cost-report domain cases (design 3.1): one report each at a hospital outside the spine, so no window reads them. The denominator is the value of every
+# denominator that has a floor (net patient revenue, operating expense, total costs, bed days, discharges, current liabilities, gross patient revenue). The
+# numerator is the value of every share numerator and of the margin numerator. The day-share denominator stays at DOMAIN_DAYS.
+DOMAIN_CCN = "990008"
+DOMAIN_DAYS = 10000.0
+DOMAIN_CASES = (
+    # (report, case, fiscal year, denominator, numerator); a missing denominator is None
+    ("DOM1", "negative_denominator", 2020, -1000.0, 500.0),
+    ("DOM2", "zero_denominator", 2020, 0.0, 500.0),
+    ("DOM3", "tiny_denominator", 2020, 0.5, 100.0),
+    ("DOM4", "above_upper_bound", 2021, 10000.0, 10001.0),
+    ("DOM5", "on_upper_bound", 2021, 10000.0, 10000.0),
+    ("DOM6", "on_lower_bound", 2021, 10000.0, 0.0),
+    ("DOM7", "below_lower_bound", 2021, 10000.0, -1.0),
+    ("DOM8", "inside_bounds", 2021, 10000.0, 5000.0),
+    ("DOM9", "missing_denominator", 2021, None, 5000.0),
+)
 Rows = dict[str, list[dict[str, Any]]]
 INSERT_SQL = 'insert into main."{table}" ({names}) values ({marks})'
 COPY_SQL = "copy (select * from main.\"{table}\") to '{path}' (format parquet)"
@@ -108,6 +125,43 @@ def snapshot(ccn: str, period_end: date, **values: Any) -> dict[str, Any]:
     }
     base.update(values)
     return base
+
+
+def domain_report(number: str, year: int, denominator: float | None, numerator: float) -> dict[str, Any]:
+    """One cost report of the domain cases: every floored denominator and every share numerator at the given values."""
+    return {
+        "rpt_rec_num": number,
+        "ccn": DOMAIN_CCN,
+        "provider_ccn_raw": DOMAIN_CCN,
+        "period_begin": date(year, 1, 1),
+        "period_end": date(year, 12, 31),
+        "file_fiscal_year": year,
+        "fiscal_year": year,
+        "reporting_days": 365,
+        "fte_employees_on_payroll": 10.0,
+        "net_income_from_service_to_patients": numerator,
+        "net_patient_revenue": denominator,
+        "net_revenue_from_medicaid": numerator,
+        "less_total_operating_expense": denominator,
+        "total_salaries_from_worksheet_a": numerator,
+        "contract_labor_direct_patient_care": numerator,
+        "cash_on_hand_and_in_banks": numerator,
+        "total_costs": denominator,
+        "cost_of_charity_care": numerator,
+        "cost_of_uncompensated_care": numerator,
+        "total_patient_revenue": denominator,
+        "total_bad_debt_expense": numerator,
+        "total_bed_days_available": denominator,
+        "total_discharges_v_xviii_xix_unknown": denominator,
+        "total_current_liabilities": denominator,
+        "total_current_assets": numerator,
+        "total_days_v_xviii_xix_unknown": DOMAIN_DAYS,
+        "total_days_title_xviii": numerator,
+        "total_days_title_xix": numerator,
+        "type_of_control": "2",
+        "provider_type": "1",
+        "member_sha256": f"cost-{number}",
+    }
 
 
 def gold_rows(version: int = 1) -> Rows:
@@ -221,6 +275,7 @@ def gold_rows(version: int = 1) -> Rows:
                 "member_sha256": f"cost-{number}",
             }
         )
+    rows["fct_cost_report"] += [domain_report(number, year, denominator, numerator) for number, _, year, denominator, numerator in DOMAIN_CASES]
     # ONC (C071 to C074).
     rows["fct_onc_ehr_product"].append(
         {

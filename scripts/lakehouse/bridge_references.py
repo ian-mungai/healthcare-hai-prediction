@@ -134,7 +134,7 @@ COMMON_RECIPE_COLUMNS = (
     "source_row",
 )
 RECIPE_EXTRAS = {
-    "cost_report_measures": (),
+    "cost_report_measures": ("domain_min", "domain_max", "denominator_floor", "domain_reason"),
     "impact_measures": (),
     "mup_measures": (),
     "occmix_measures": ("output_name", "definition", "source_status"),
@@ -601,6 +601,8 @@ def _row_problems(path: str, row: dict[str, str], controls: set[str], models: di
         problems.append(f"{where}: {row['key_column']} is not the measure-key column of {row['fact']}")
     if row["role"] in BRIDGE_ROLES and (row["fact"] in LONG_FACT_KEYS) != bool(row["key_column"]):
         problems.append(f"{where}: a long fact needs a published-key predicate and a wide fact has none")
+    if "domain_reason" in row:
+        problems += _domain_problems(where, row)
     if models is not None and row["fact"]:
         if row["fact"] not in models:
             problems.append(f"{where}: {row['fact']} is not in the gold contract")
@@ -608,6 +610,37 @@ def _row_problems(path: str, row: dict[str, str], controls: set[str], models: di
             for column in [*row["value_column"].split(), *row["join_keys"].split(), *row["group_by"].split()]:
                 if column not in models[row["fact"]]:
                     problems.append(f"{where}: {column} is not a column of {row['fact']}")
+    return problems
+
+
+def _number(text: str) -> float | None:
+    """Return the number a recipe cell holds, or None when it is not a number."""
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _domain_problems(where: str, row: dict[str, str]) -> list[str]:
+    """Return the problems of the domain and floor cells of one cost-report recipe row: numbers, order, the row they sit on and a reason."""
+    problems: list[str] = []
+    numbers: dict[str, float] = {}
+    for column in ("domain_min", "domain_max", "denominator_floor"):
+        if not row[column]:
+            continue
+        value = _number(row[column])
+        if value is None:
+            problems.append(f"{where}: {column} {row[column]!r} is not a number")
+        else:
+            numbers[column] = value
+    if "domain_min" in numbers and "domain_max" in numbers and numbers["domain_min"] > numbers["domain_max"]:
+        problems.append(f"{where}: domain_min {row['domain_min']} is above domain_max {row['domain_max']}")
+    if (row["domain_min"] or row["domain_max"]) and row["role"] not in ("value", "numerator"):
+        problems.append(f"{where}: domain_min and domain_max belong on the value or numerator row")
+    if row["denominator_floor"] and row["role"] != "denominator":
+        problems.append(f"{where}: denominator_floor belongs on the denominator row")
+    if (row["domain_min"] or row["domain_max"] or row["denominator_floor"]) and not row["domain_reason"]:
+        problems.append(f"{where}: a domain or a floor needs a domain_reason")
     return problems
 
 

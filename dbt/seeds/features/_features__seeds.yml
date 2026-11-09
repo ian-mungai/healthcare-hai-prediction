@@ -21,6 +21,10 @@ seeds:
         period: varchar
         suppression: varchar
         source_row: integer
+        domain_min: double
+        domain_max: double
+        denominator_floor: double
+        domain_reason: varchar
     columns:
       - name: measure_control
         description: The registry measure control the rule belongs to.
@@ -50,6 +54,14 @@ seeds:
         description: How a suppressed or withheld value is treated; empty when none.
       - name: source_row
         description: The data row number of the retired registry-map seed this input came from, counted from 1.
+      - name: domain_min
+        description: The smallest value the control may publish, on the value or numerator row; empty when the control states none. A value below it is removed.
+      - name: domain_max
+        description: The largest value the control may publish, on the value or numerator row; empty when the control states none. A value above it is removed.
+      - name: denominator_floor
+        description: On the denominator row, the number the denominator must be above; empty when the control states none. A missing or lower denominator removes the value.
+      - name: domain_reason
+        description: Why the domain or the floor holds; required whenever one of the three cells is set.
 
   - name: hhs_onc_measures_recipe
     description: >
@@ -490,9 +502,9 @@ seeds:
 
   - name: frozen_hospital_controls
     description: >
-      The 98 source, control and field rows the hospital alignment carried at e918ed7: cost_report_measures (30), impact_measures (12), mup_measures
-      (50) and occmix_measures (6), with each retired rule and column. int_spine_hospital_measures must carry exactly these rows and the formula
-      recipes must give these rules and columns.
+      The 99 source, control and field rows the hospital alignment carries: the 98 of e918ed7 (cost_report_measures 30, impact_measures 12, mup_measures
+      50 and occmix_measures 6) and C051.01 (cost_report_measures row 31), with each rule and column. int_spine_hospital_measures must carry exactly
+      these rows and the formula recipes must give these rules and columns.
     config:
       column_types:
         measure_source: varchar
@@ -580,7 +592,7 @@ seeds:
 
   - name: frozen_registry_controls
     description: >
-      Every registry control of the 15 retired registry-map seeds at e918ed7 (432), with the seeds that listed it. The gold control bridge and the
+      Every registry control of the 15 retired registry-map seeds at e918ed7 (432) and C051.01, with the seeds that listed it. The gold control bridge and the
       formula recipes together must hold exactly the carried ones. C288.payment_adjustment has no measure and is not carried (lead decision,
       design.md step 1 of the feature phase): is_carried is false for it.
     config:

@@ -14,7 +14,8 @@ The build does not call ``feature_columns.run_features``, because that runs ``db
    name could not read one), together with ``feature_build_inputs`` (what this set was built from), ``feature_build_receipt`` (the node statuses) and
    ``validation_own_snapshot`` (the own POS snapshot of each window, for the validation's independent provenance check).
 
-``build_receipt.json`` carries the immutable input identities. Nothing in ``feature_build_inputs`` is a time or an invocation ID, so a retry rebuilds identical
+``build_receipt.json`` carries the immutable input identities and the rows of ``int_cost_report_domain_checks`` (how many cost-report source rows each domain
+and floor removed). Nothing in ``feature_build_inputs`` is a time or an invocation ID, so a retry rebuilds identical
 content.
 """
 
@@ -56,6 +57,11 @@ DEFAULT_PHASE_SECONDS = 4 * 3600  # the time to the deadline when no driver sets
 DEADLINE_VARIABLE = "HAI_PHASE_DEADLINE_EPOCH"  # set by scripts.lakehouse.layer_run: the time (epoch seconds) by which this phase must end
 DBT_CODE = "import sys; from dbt.cli.main import dbtRunner; sys.exit(0 if dbtRunner().invoke(sys.argv[1:]).success else 1)"
 INPUTS_TABLE = "feature_build_inputs"
+DOMAIN_COUNT_KEYS = ("measure_control", "fiscal_year", "rows_evaluated", "rows_out_of_domain", "rows_bad_denominator")
+DOMAIN_COUNTS_SQL = (
+    "select measure_control, fiscal_year, rows_evaluated, rows_out_of_domain, rows_bad_denominator from int_cost_report_domain_checks "
+    "order by measure_control, fiscal_year"
+)
 OWN_SNAPSHOT_SQL = (
     "create table main.validation_own_snapshot as select spine.spine_key, snapshot.state_code, snapshot.county_fips, left(snapshot.zip_code, 5) as zip5, "
     "snapshot.provider_subtype_code, snapshot.control_type_code from {catalog}.main.int_hospital_spine as spine "
@@ -247,6 +253,17 @@ def materialize(
         connection.close()
 
 
+def domain_counts(stage: Path) -> list[dict[str, Any]]:
+    """The rows of ``int_cost_report_domain_checks`` in the build database, in control and fiscal year order, for the build receipt."""
+    duckdb: Any = importlib.import_module("duckdb")
+    connection = duckdb.connect(str(stage), read_only=True)
+    try:
+        rows = connection.execute(DOMAIN_COUNTS_SQL).fetchall()
+    finally:
+        connection.close()
+    return [dict(zip(DOMAIN_COUNT_KEYS, row, strict=True)) for row in rows]
+
+
 def build(args: argparse.Namespace) -> dict[str, Any]:
     """Run the build and return the receipt."""
     duckdb: Any = importlib.import_module("duckdb")
@@ -308,6 +325,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "hai_outcome_controls_sha256": controls_sha,
         "invocation_id": invocation,
         "nodes": len(rows),
+        "cost_report_domain_counts": domain_counts(stage),
     }
     (folder / "build_receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     return receipt

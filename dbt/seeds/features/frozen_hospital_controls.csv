@@ -29,6 +29,7 @@ cost_report,C055,value,value,cost_to_charge_ratio,,,cost_report_measures,27
 cost_report,C056,value,value,health_information_technology_designated_assets,,,cost_report_measures,28
 cost_report,C057,value,ratio,less_total_operating_expense,total_discharges_v_xviii_xix_unknown,,cost_report_measures,29
 cost_report,C058,value,value,depreciation_cost,,,cost_report_measures,30
+cost_report,C051.01,value,ratio,total_bad_debt_expense,total_patient_revenue,,cost_report_measures,31
 ipps_impact,C001,beds,value,beds,,,impact_measures,1
 ipps_impact,C006,resident_to_bed_ratio,value,resident_to_bed_ratio,,,impact_measures,2
 ipps_impact,C021,geographic_labor_market_area,code,geographic_labor_market_area,,,impact_measures,3

@@ -1,7 +1,8 @@
 -- Fails when the hospital finance and operations alignment does not carry exactly the source, control and field rows the retired seeds
--- cost_report_measures, impact_measures, mup_measures and occmix_measures gave at e918ed7 (frozen_hospital_controls, 98 rows), also when a control is
--- swapped for another and the count stays the same; when a formula recipe differs from the frozen rule and columns; and for each hospital-window
--- that does not have exactly one row per source, control and field [576] [582]. The row checks wait for a model with rows; the recipe check always runs.
+-- cost_report_measures, impact_measures, mup_measures and occmix_measures gave at e918ed7 and the C051.01 ratio (frozen_hospital_controls, 99 rows),
+-- also when a control is swapped for another and the count stays the same; when a formula recipe differs from the frozen rule and columns; and for
+-- each hospital-window that does not have exactly one row per source, control and field [576] [582]. The row checks wait for a model with rows;
+-- the recipe check always runs.
 with
 
 frozen as (

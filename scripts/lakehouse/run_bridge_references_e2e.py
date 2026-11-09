@@ -61,6 +61,20 @@ def blank(column: str, control: str, rule: str | None = None) -> Callable[[Rows]
     return change
 
 
+def set_value(column: str, control: str, role: str, value: str) -> Callable[[Rows], Rows]:
+    """Return a change that sets a column to a value on the rows of a control and role; it must change at least one row."""
+
+    def change(rows: Rows) -> Rows:
+        hits = [row for row in rows if row["measure_control"] == control and row["role"] == role]
+        if not hits:
+            raise refs.ReferenceInputError(f"no row of {control} holds role {role!r}")
+        for row in hits:
+            row[column] = value
+        return rows
+
+    return change
+
+
 def drop(control: str, rule: str, role: str | None = None) -> Callable[[Rows], Rows]:
     """Return a change that removes the rows of a control and rule (only one role when named)."""
     return lambda rows: [row for row in rows if not (row["measure_control"] == control and row["rule"] == rule and role in (None, row["role"]))]
@@ -157,6 +171,36 @@ def cases(seeds: Path, recipes: Path) -> list[tuple[str, Callable[[], None], str
         ("blank_onc_suppression", recipe("hhs_onc_measures", blank("suppression", "C071")), "no row carries suppression"),
         ("blank_hhs_period", recipe("hhs_onc_measures", blank("period", "C260")), "no row carries period"),
         ("extra_input", recipe("cost_report_measures", repeat_first("C023", "numerator")), "the inventory says"),
+        (
+            "domain_bound_not_a_number",
+            recipe("cost_report_measures", set_value("domain_max", "C049", "numerator", "one")),
+            "C049 row 21: domain_max 'one' is not a number",
+        ),
+        (
+            "domain_bounds_reversed",
+            recipe("cost_report_measures", set_value("domain_min", "C049", "numerator", "2")),
+            "C049 row 21: domain_min 2 is above domain_max 1",
+        ),
+        (
+            "domain_without_reason",
+            recipe("cost_report_measures", set_value("domain_reason", "C049", "numerator", "")),
+            "C049 row 21: a domain or a floor needs a domain_reason",
+        ),
+        (
+            "floor_not_a_number",
+            recipe("cost_report_measures", set_value("denominator_floor", "C049", "denominator", "zero")),
+            "C049 row 21: denominator_floor 'zero' is not a number",
+        ),
+        (
+            "floor_on_numerator_row",
+            recipe("cost_report_measures", set_value("denominator_floor", "C049", "numerator", "0")),
+            "C049 row 21: denominator_floor belongs on the denominator row",
+        ),
+        (
+            "domain_on_denominator_row",
+            recipe("cost_report_measures", set_value("domain_max", "C049", "denominator", "1")),
+            "C049 row 21: domain_min and domain_max belong on the value or numerator row",
+        ),
         ("invented_long_key", invented_key, "no authoritative source supports measure key 'NOT_A_PLACES_MEASURE'"),
         (
             "places_unrelated_word",

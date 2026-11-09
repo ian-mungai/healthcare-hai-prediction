@@ -1,6 +1,7 @@
 -- One row per cost report and registry measure control of the cost-report recipe whose numerator the report publishes: the value by
 -- the recipe's rule (value, code, ratio, per_day or ratio_per_day_denominator); a zero or missing denominator gives null,
--- never infinity (failure modes 339 and 340). Staging a measure does not make it a predictor.
+-- never infinity (failure modes 339 and 340). The value is also null when the control's denominator is not above the recipe's floor or the value
+-- lies outside the recipe's domain, and domain_status says which. Staging a measure does not make it a predictor.
 
 with
 
@@ -13,6 +14,9 @@ measures as (
         recipe.rule,
         max(case when recipe.role in ('value', 'numerator') then recipe.value_column end) as numerator_column,
         max(case when recipe.role = 'denominator' then recipe.value_column end) as denominator_column,
+        max(case when recipe.role in ('value', 'numerator') then recipe.domain_min end) as domain_min,
+        max(case when recipe.role in ('value', 'numerator') then recipe.domain_max end) as domain_max,
+        max(case when recipe.role = 'denominator' then recipe.denominator_floor end) as denominator_floor,
         any_value(control.review_decision) as review_decision
     from {{ ref('cost_report_measures_recipe') }} as recipe
     inner join {{ ref('dim_registry_control') }} as control on recipe.measure_control = control.measure_control
@@ -57,7 +61,8 @@ codes as (
     ) on type_of_control, provider_type into name column_name value code
 ),
 
-numeric_measures as (
+ruled_measures as (
+    -- The value by the rule before any domain or floor.
     select
         reports.rpt_rec_num,
         reports.ccn,
@@ -68,13 +73,16 @@ numeric_measures as (
         numerators.amount as numerator,
         denominators.amount as denominator,
         cast(null as varchar) as value_code,
+        measures.domain_min,
+        measures.domain_max,
+        measures.denominator_floor,
         case measures.rule
             when 'value' then numerators.amount
             when 'ratio' then numerators.amount / nullif(denominators.amount, 0)
             when 'per_day' then numerators.amount / nullif(reports.reporting_days, 0)
             when 'ratio_per_day_denominator'
                 then numerators.amount / nullif(denominators.amount / nullif(reports.reporting_days, 0), 0)
-        end as value_number
+        end as ruled_value
     from measures
     inner join amounts as numerators on measures.numerator_column = numerators.column_name
     inner join reports on numerators.rpt_rec_num = reports.rpt_rec_num
@@ -83,6 +91,31 @@ numeric_measures as (
             numerators.rpt_rec_num = denominators.rpt_rec_num
             and measures.denominator_column = denominators.column_name
     where measures.rule <> 'code'
+),
+
+numeric_measures as (
+    -- A denominator that is missing or not above the floor, or a value outside the domain, gives a null value and the status that names the cause.
+    select
+        rpt_rec_num,
+        ccn,
+        fiscal_year,
+        measure_control,
+        rule,
+        review_decision,
+        numerator,
+        denominator,
+        value_code,
+        case
+            when denominator_floor is not null and (denominator is null or denominator <= denominator_floor) then null
+            when ruled_value < domain_min or ruled_value > domain_max then null
+            else ruled_value
+        end as value_number,
+        case
+            when denominator_floor is not null and (denominator is null or denominator <= denominator_floor) then 'denominator_not_positive'
+            when ruled_value < domain_min or ruled_value > domain_max then 'out_of_domain'
+            else 'in_domain'
+        end as domain_status
+    from ruled_measures
 ),
 
 code_measures as (
@@ -96,7 +129,8 @@ code_measures as (
         cast(null as double) as numerator,
         cast(null as double) as denominator,
         codes.code as value_code,
-        cast(null as double) as value_number
+        cast(null as double) as value_number,
+        'in_domain' as domain_status
     from measures
     inner join codes on measures.numerator_column = codes.column_name
     inner join reports on codes.rpt_rec_num = reports.rpt_rec_num
