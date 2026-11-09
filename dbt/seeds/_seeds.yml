@@ -114,9 +114,13 @@ seeds:
       - name: value_column
         description: The fact column that holds the value; empty for a closed control.
       - name: vintage_start
-        description: First vintage the identity holds; empty when no reviewed file gives one.
+        description: >
+          First vintage the identity holds; empty when open to the past. For a Care Compare ID that CMS renamed, a vintage is the calendar year in which
+          the measured period starts (the start year of a flu season), so IMM_3 starts in 2018.
       - name: vintage_end
-        description: Last vintage the identity holds; empty when open.
+        description: >
+          Last vintage the identity holds; empty when open. IMM_3_OP_27_FAC_ADHPCT ends in 2017. Two rows of one control must not overlap
+          (assert_registry_bridge_vintages_disjoint).
       - name: measure_control
         description: The registry measure control.
       - name: review_decision

@@ -19,9 +19,10 @@ spine as (
     from {{ ref('int_hospital_spine') }}
 ),
 
-controls as (
-    -- One row per registry control of the Care Compare process and structure families, from the gold control bridge; the review decision comes
-    -- from the registry control dimension. The family is left out until the owner defines it.
+control_keys as (
+    -- One row per registry control and published measure ID of the Care Compare process and structure families, from the gold control bridge; the review
+    -- decision comes from the registry control dimension. The family is left out until the owner defines it. A control that the bridge maps to two IDs
+    -- (C154: IMM_3_OP_27_FAC_ADHPCT, then IMM_3) is one measure under two names, so it has two rows here and one in controls.
     select
         bridge.measure_control,
         measure.fact,
@@ -30,6 +31,14 @@ controls as (
     from {{ ref('feature_bridge_registry_measure_sources') }} as bridge
     inner join {{ ref('dim_measure') }} as measure on bridge.measure_sk = measure.measure_sk
     inner join {{ ref('dim_registry_control') }} as control on bridge.registry_control_sk = control.registry_control_sk
+),
+
+controls as (
+    select distinct
+        measure_control,
+        fact,
+        review_decision
+    from control_keys
 ),
 
 windows as (
@@ -108,7 +117,7 @@ held_before as (
         spine.spine_key,
         controls.measure_control
     from {{ ref('fct_cc_window_hold') }} as holds
-    inner join controls on holds.measure_id = controls.measure_key
+    inner join control_keys as controls on holds.measure_id = controls.measure_key
     inner join spine
         on
             holds.entity_id = spine.ccn

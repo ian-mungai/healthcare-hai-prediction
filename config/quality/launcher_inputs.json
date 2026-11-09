@@ -1034,6 +1034,7 @@
     "dbt/tests/assert_pos_files_have_periods.sql",
     "dbt/tests/assert_pos_values_cast.sql",
     "dbt/tests/assert_program_years_dated.sql",
+    "dbt/tests/assert_registry_bridge_vintages_disjoint.sql",
     "dbt/tests/assert_retired_codes_not_in_latest_list.sql",
     "dbt/tests/assert_sahie_files_consistent.sql",
     "dbt/tests/assert_sheet_selection_is_consistent.sql",

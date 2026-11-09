@@ -395,7 +395,9 @@ seeds:
   - name: frozen_care_compare_controls
     description: >
       The 57 Care Compare process and structure controls of the retired seed registry_measure_sources at e918ed7, with the gold fact, measure
-      key and typed value column that now hold each value. int_spine_care_compare_measures must carry exactly these controls.
+      key and typed value column that now hold each value. int_spine_care_compare_measures must carry exactly these controls. Row 58 is the
+      only row that the retired seed never held: IMM_3_OP_27_FAC_ADHPCT, the Care Compare ID of C154 up to the July 2019 release and one
+      identity with IMM_3 (owner decision of 8 Nov 2026), so C154 has two rows and still one control.
     config:
       column_types:
         measure_control: varchar

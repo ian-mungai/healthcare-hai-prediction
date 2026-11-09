@@ -34,7 +34,7 @@ fct_timely_effective_care_window,SEV_SEP_3HR,score_number,,,C150,hold_definition
 fct_timely_effective_care_window,SEV_SEP_6HR,score_number,,,C151,hold_definition,registry_measure_sources,33
 fct_timely_effective_care_window,SEP_SH_3HR,score_number,,,C152,hold_definition,registry_measure_sources,34
 fct_timely_effective_care_window,SEP_SH_6HR,score_number,,,C153,hold_definition,registry_measure_sources,35
-fct_timely_effective_care_window,IMM_3,score_number,,,C154,retain_conditional,registry_measure_sources,36
+fct_timely_effective_care_window,IMM_3,score_number,2018,,C154,retain_conditional,registry_measure_sources,36
 fct_timely_effective_care_window,VTE_1,score_number,,,C155,retain_conditional,registry_measure_sources,37
 fct_timely_effective_care_window,VTE_2,score_number,,,C156,retain_conditional,registry_measure_sources,38
 fct_timely_effective_care_window,STK_02,score_number,,,C157,retain_conditional,registry_measure_sources,39
@@ -56,3 +56,4 @@ fct_maternal_health_window,PC_02,score_number,,,C168,hold_observations,registry_
 fct_maternal_health_window,PC_07a,score_number,,,C169,hold_observations,registry_measure_sources,55
 fct_maternal_health_window,PC_07b,score_number,,,C170,hold_observations,registry_measure_sources,56
 fct_hgi_release,overall_rating,overall_rating,,,C284,exclude_primary,registry_measure_sources,57
+fct_timely_effective_care_window,IMM_3_OP_27_FAC_ADHPCT,score_number,,2017,C154,retain_conditional,registry_measure_sources,58

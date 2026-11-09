@@ -1533,6 +1533,17 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
             earlier_gold_rows=history,
             spine_years=sorted({int(key.split(":")[1]) for key in by_key}),
         )
+        influenza = dict(
+            rows(connection, "select spine_key, c154__value__number from feature_matrix_care_compare where spine_key in ('990007:2018', '990007:2019')")
+        )
+        report.case(
+            "E14",
+            "IM1",
+            "C154 is one identity over two published IDs: the 2018 window takes the 2016-17 season of the old ID, the 2019 window the 2017-18 season, "
+            "and neither takes the 2018-19 season of IMM_3, which ends after the window starts",
+            influenza == {"990007:2018": 80.0, "990007:2019": 84.0},
+            values=influenza,
+        )
         county = dict(rows(connection, "select spine_key, c203__diabetes_ageadjprv__number from feature_matrix_county_measures"))
         context = {
             row[0]: row[1:]

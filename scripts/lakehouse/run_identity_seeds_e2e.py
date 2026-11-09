@@ -219,6 +219,8 @@ def expected_rules(seed_text: str) -> list[str]:
         ("dim_measure", "PSI_08"): "split",
         ("dim_measure", "HCP_COVID_19"): "split",
         ("dim_measure", "ED_1b"): "single_latest",
+        ("dim_measure", "IMM_3"): "single_latest",
+        ("dim_measure", "IMM_3_OP_27_FAC_ADHPCT"): "single_latest",
         ("dim_rurality_code", "6"): "split",
         ("dim_rurality_code", "9"): "split",
     }
@@ -230,8 +232,8 @@ def expected_rules(seed_text: str) -> list[str]:
     drgs = [row for row in rows if row["dimension"] == "dim_drg"]
     if {row["code"] for row in drgs} != drg_codes or any(row["approval_status"] != "approved" or row["classification"] != "unresolved" for row in drgs):
         problems.append("the eleven DRG policies must be approved without claiming resolved grouper provenance")
-    if counts != {"split": 7, "single_latest": 18, "hold_single_latest": 0}:
-        problems.append(f"rule counts are {counts}, expected 7 split, 18 single_latest and 0 hold_single_latest")
+    if counts != {"split": 7, "single_latest": 20, "hold_single_latest": 0}:
+        problems.append(f"rule counts are {counts}, expected 7 split, 20 single_latest and 0 hold_single_latest")
     return problems
 
 

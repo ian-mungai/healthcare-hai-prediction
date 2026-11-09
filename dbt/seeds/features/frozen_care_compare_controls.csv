@@ -56,3 +56,4 @@ C168,fct_maternal_health_window,PC_02,score_number,registry_measure_sources,54
 C169,fct_maternal_health_window,PC_07a,score_number,registry_measure_sources,55
 C170,fct_maternal_health_window,PC_07b,score_number,registry_measure_sources,56
 C284,fct_hgi_release,overall_rating,overall_rating,registry_measure_sources,57
+C154,fct_timely_effective_care_window,IMM_3_OP_27_FAC_ADHPCT,score_number,registry_measure_sources,58

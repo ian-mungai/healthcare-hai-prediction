@@ -70,6 +70,22 @@ def window(ccn: str, year: int, version: int) -> list[dict[str, Any]]:
     return rows
 
 
+def care_window(ccn: str, measure_id: str, period: tuple[date, date], score: str, released: date) -> dict[str, Any]:
+    """One Care Compare measure window (the timely and effective care and the maternal health facts share these columns)."""
+    return {
+        "entity_id": ccn,
+        "measure_id": measure_id,
+        "window_start": period[0],
+        "window_end": period[1],
+        "score": score,
+        "score_number": float(score) if score.replace(".", "", 1).isdigit() else None,
+        "member_sha256": f"care-{measure_id}-{released.isoformat()}",
+        "release_date": released,
+        "release_file_count": 1,
+        "window_key": f"{ccn}:{measure_id}:{period[0].isoformat()}:{released.isoformat()}",
+    }
+
+
 def snapshot(ccn: str, period_end: date, **values: Any) -> dict[str, Any]:
     """One POS snapshot row."""
     base = {
@@ -154,6 +170,15 @@ def gold_rows(version: int = 1) -> Rows:
                 "release_id": "r1",
             }
         )
+    # C154 (influenza vaccination of healthcare personnel): the old ID for the 2016-17 and 2017-18 seasons, IMM_3 from the 2018-19 season. The 2018 window
+    # takes the 2016-17 season, the 2019 window the 2017-18 season. The 2018-19 season ends after the 2019 window starts, and a period that ends on the start
+    # (the 99 row) is not before it: neither is used for that window.
+    rows["fct_timely_effective_care_window"] += [
+        care_window("990007", "IMM_3_OP_27_FAC_ADHPCT", (date(2016, 10, 1), date(2017, 3, 31)), "80", date(2018, 7, 31)),
+        care_window("990007", "IMM_3_OP_27_FAC_ADHPCT", (date(2017, 10, 1), date(2018, 3, 31)), "84", date(2019, 3, 4)),
+        care_window("990007", "IMM_3_OP_27_FAC_ADHPCT", (date(2018, 7, 1), date(2019, 1, 1)), "99", date(2019, 3, 4)),
+        care_window("990007", "IMM_3", (date(2018, 10, 1), date(2019, 3, 31)), "90", date(2019, 10, 31)),
+    ]
     # Care Compare overall rating (C284): one release before the 2022 window, one dated on its start.
     for released, rating in ((date(2021, 6, 1), 4), (date(2022, 1, 1), 5)):
         rows["fct_hgi_release"].append(
@@ -348,6 +373,7 @@ TABLES = (
     "bridge_zip_county",
     "fct_enrollment_release",
     "fct_hgi_release",
+    "fct_timely_effective_care_window",
     "fct_cost_report",
     "fct_onc_ehr_product",
     "fct_places_county_value",
