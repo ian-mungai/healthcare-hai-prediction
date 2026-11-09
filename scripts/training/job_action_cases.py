@@ -1821,7 +1821,11 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         require(snapshots == {table: str(value) for table, value in manifest["snapshot_set"].items()}, f"snapshot tags differ: {snapshots}")
         require("counts.holdout" in run["metrics"] and run["params"]["selected_model"], f"parent: {sorted(run['metrics'])[:5]} {run['params']}")
         children = {item["tags"]["step_key"]: item for item in store.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
-        require(set(children) == CHILDREN, f"children: {sorted(children)}")
+        contract_children = set(contract["child_runs"]) - {"promotion"}
+        require(
+            set(children) == CHILDREN and contract_children == CHILDREN,
+            f"children differ from the Mundlak names: job {sorted(set(children) ^ CHILDREN)}, contract {sorted(contract_children ^ CHILDREN)}",
+        )
         require(
             all(item["status"] == "FINISHED" and item["tags"]["run_id"] == RUN for item in children.values()), "a child was not finished or lacks its run ID"
         )

@@ -14,7 +14,7 @@
     "rq3_mediation",
     "rq4_nested",
     "rq5_moran",
-    "rq6_hausman",
+    "rq6_mundlak",
     "hac_validation",
     "promotion",
     "research"

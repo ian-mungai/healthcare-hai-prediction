@@ -385,7 +385,7 @@ def child_spec(
 RESEARCH = {
     "rq1_joint": ("joint_process", "process_vs_intercept_cmi"),
     "rq5_moran": ("spatial",),
-    "rq6_hausman": ("hospital_effects",),
+    "rq6_mundlak": ("hospital_effects",),
 }
 
 
