@@ -52,7 +52,8 @@ class Web:
     """Serves synthetic zip bytes by URL and counts requests; overrides make one URL misbehave."""
 
     def __init__(self, bodies: dict[str, bytes]) -> None:
-        self.bodies, self.requests, self.seen = bodies, 0, []
+        self.bodies, self.requests = bodies, 0
+        self.seen: list[str] = []
         self.override: dict[str, Response | Exception] = {}
 
     def open(self, request: Any, timeout: float) -> Response:
@@ -101,12 +102,13 @@ def synthetic_plan(root: Path, served: dict[str, bytes]) -> tuple[dict, Path, st
         for folder in ("2017/10", "2018/07", "2018/10")
     ]
     gate_body = served[zip_url("2019/03")]
-    gate = {"sha256": hashlib.sha256(gate_body).hexdigest(), "bytes": len(gate_body)}
+    gate_sha256 = hashlib.sha256(gate_body).hexdigest()
+    gate = {"sha256": gate_sha256, "bytes": len(gate_body)}
     plan = build(inputs, gate, [])
     path = root / "plan.json"
     write_once(path, encoded_json(plan))
     write_once(path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
-    return plan, path, gate["sha256"]
+    return plan, path, gate_sha256
 
 
 def refusing(action: Any, folder: Path) -> Any:
