@@ -1826,6 +1826,7 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
         and counts.get("pass", 0) > 60
         and record.get("build_file_sha256") == sha256(staging),
         counts=counts,
+        failing=[f"{item['id']} {item['table']}: {item['detail']}"[:300] for item in record.get("expectations", []) if item["level"] == "fail"],
     )
     text = result_path.read_text() if result_path.is_file() else ""
     report.case(
@@ -1835,7 +1836,14 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
         not any(token in text for token in ("990001", "Vendor A", "CEHRT1", "35005")),
     )
     clean = validate_file(staging)
-    report.case("E04", "H8", "validation of the clean build in process has no failing expectation", not failed_checks(clean), expectations=len(clean))
+    report.case(
+        "E04",
+        "H8",
+        "validation of the clean build in process has no failing expectation",
+        not failed_checks(clean),
+        expectations=len(clean),
+        failing=sorted(f"{item_id} {table}" for item_id, table in failed_checks(clean)),
+    )
     work = base / "damage"
     work.mkdir()
     for name, (sql, expected) in DAMAGE.items():

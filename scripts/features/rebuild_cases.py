@@ -22,8 +22,9 @@ def fingerprint(connection: Any, table: str) -> tuple[Any, ...]:
     return tuple(connection.execute(TABLE_HASH.format(table=table)).fetchone())
 
 
-def row_sample(first: Any, second: Any, table: str) -> dict[str, list[str]]:
-    """Rows that only the first or only the second build holds, as column-to-value text, in a fixed order."""
+def row_sample(first: Any, second: Any, table: str) -> dict[str, Any]:
+    """Rows that only the first or only the second build holds, as column-to-value text in a fixed order, and for rows with the same first column in both
+    sets the columns whose values differ."""
     query = TABLE_ROWS.format(table=table)
     names = [column[0] for column in first.execute(query).description]
     in_first = Counter(tuple(row) for row in first.execute(query).fetchall())
@@ -33,7 +34,16 @@ def row_sample(first: Any, second: Any, table: str) -> dict[str, list[str]]:
         texts = sorted(str(dict(zip(names, row, strict=True)))[:SAMPLE_CHARACTERS] for row in rows.elements())
         return texts[:SAMPLE_ROWS]
 
-    return {"only_in_first_build": shown(in_first - in_second), "only_in_second_build": shown(in_second - in_first)}
+    only_first, only_second = in_first - in_second, in_second - in_first
+    second_by_key = {str(row[0]): row for row in only_second.elements()}
+    changed: dict[str, dict[str, list[str]]] = {}
+    for row in sorted(only_first.elements(), key=str):
+        other = second_by_key.get(str(row[0]))
+        if other is not None and len(changed) < SAMPLE_ROWS:
+            changed[str(row[0])] = {
+                name: [str(a)[:SAMPLE_CHARACTERS], str(b)[:SAMPLE_CHARACTERS]] for name, a, b in zip(names, row, other, strict=True) if a != b
+            }
+    return {"only_in_first_build": shown(only_first), "only_in_second_build": shown(only_second), "changed_columns_by_first_column": changed}
 
 
 def differing_tables(first: Any, second: Any, tables: Iterable[str]) -> dict[str, dict[str, Any]]:
