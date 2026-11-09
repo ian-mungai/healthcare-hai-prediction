@@ -596,12 +596,21 @@ LINK_CASES = [
         unresolved(3, " setup.md"),
     ),
     link_case(
-        "padded HTML id and name are anchors",
+        "padded HTML id and name keep their spaces as anchors",
         True,
         {
-            "docs/guide.md": guide_page("See [a](setup.md#custom) and [b](setup.md#old-spot)."),
-            SETUP: '# Setup\n\n<div id=" custom ">x</div>\n\n<a name="\told-spot\n"></a>\n',
+            "docs/guide.md": guide_page("See [a](setup.md#%20custom%20) and [b](setup.md#%20old-spot%20)."),
+            SETUP: '# Setup\n\n<div id=" custom ">x</div>\n\n<a name=" old-spot "></a>\n',
         },
+    ),
+    link_case(
+        "anchor without the spaces of a padded HTML id blocked",
+        False,
+        {
+            "docs/guide.md": guide_page("See [a](setup.md#custom)."),
+            SETUP: '# Setup\n\n<div id=" custom ">x</div>\n',
+        },
+        no_heading(3, "custom", SETUP),
     ),
     link_case(
         "link after a multiline code span reports its own line",

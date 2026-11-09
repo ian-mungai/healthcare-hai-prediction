@@ -185,11 +185,11 @@ class HtmlReader(HTMLParser):
         for name, raw in attrs:
             if raw is None:
                 continue
-            value = raw.strip(HTML_SPACE)
+            # Browsers trim the spaces around a URL attribute, but an id or name is an exact identity.
             if name in ("href", "src"):
-                self.page.destinations.append((line, value))
+                self.page.destinations.append((line, raw.strip(HTML_SPACE)))
             elif name == "id" or (name == "name" and tag == "a"):
-                self.page.ids.add(value)
+                self.page.ids.add(raw)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
