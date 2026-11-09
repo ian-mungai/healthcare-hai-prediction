@@ -32,9 +32,9 @@ from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
-from monitoring import baseline, current_window, drift_check, drift_config
+from monitoring import baseline, current_window, drift_check, drift_config, drift_gate
 from monitoring.drift_check import HAI_TYPES, CheckError, deadline
-from orchestration.training_contract import RUN_ID
+from orchestration.training_contract import MODELS, RUN_ID
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
@@ -92,9 +92,17 @@ def require_baseline(folder: Path, run: str) -> dict[str, Any]:
 
 
 def baseline_phase(
-    store: Any, work: Path, run: str, *, hai_types: tuple[str, ...] = HAI_TYPES, project: Path = ROOT, deadlines: dvc_baseline.Deadlines | None = None
+    store: Any,
+    work: Path,
+    run: str,
+    *,
+    hai_types: tuple[str, ...] = HAI_TYPES,
+    project: Path = ROOT,
+    deadlines: dvc_baseline.Deadlines | None = None,
+    model: str | None = None,
+    feature_list_sha: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch the baseline of every type that has a Production model and record the types that have none."""
+    """Fetch the baseline of every type that has a Production model of the model and record the types that have none, with the reason."""
     folder = run_folder(work, run)
     if (done := read_done(folder, "baseline", run)) is not None:
         return done
@@ -102,14 +110,14 @@ def baseline_phase(
     unmonitored: dict[str, str] = {}
     for hai_type in hai_types:
         try:
-            baseline.fetch(store, hai_type, folder / hai_type, project=project, deadlines=deadlines)
+            baseline.fetch(store, hai_type, folder / hai_type, project=project, deadlines=deadlines, model=model, feature_list_sha=feature_list_sha)
         except CheckError as error:
             if error.code != baseline.NOTHING_TO_MONITOR:
                 raise
             unmonitored[hai_type] = error.name
         else:
             monitored.append(hai_type)
-    done = {"phase": "baseline", "run_id": run, "monitored": monitored, "unmonitored": unmonitored}
+    done = {"phase": "baseline", "run_id": run, "monitored": monitored, "unmonitored": unmonitored} | ({} if model is None else {"model": model})
     write_json(folder / "baseline.done.json", done)
     return done
 
@@ -166,13 +174,15 @@ def publish_phase(client: Any, bucket: str, work: Path, run: str) -> dict[str, A
     folder = run_folder(work, run)
     base = require_baseline(folder, run)
     bodies: dict[str, bytes] = {}
+    records: dict[str, Any] = {}
     for hai_type in base["monitored"]:
         name = f"drift_{hai_type}.json"
         path = folder / "records" / name
         if not path.is_file():
             raise CheckError("record_missing", f"{hai_type} is monitored and has no record at {path}")
         body = path.read_bytes()
-        if json.loads(body).get("run_id") != run:
+        records[hai_type] = json.loads(body)
+        if records[hai_type].get("run_id") != run:
             raise CheckError("record_stale", f"{path} belongs to another run")
         bodies[name] = body
     marker = {
@@ -181,12 +191,28 @@ def publish_phase(client: Any, bucket: str, work: Path, run: str) -> dict[str, A
         "unmonitored": base["unmonitored"],
         "files": {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()},
     }
+    if "model" in base:
+        marker["model"] = base["model"]
+        marker["gate"] = drift_gate.decide(base["model"], base, records)
     for name, body in bodies.items():
         client.put_object(Bucket=bucket, Key=f"drift/{run}/{name}", Body=body, ContentType="application/json")
     client.put_object(
         Bucket=bucket, Key=f"drift/{run}/{MARKER}", Body=(json.dumps(marker, indent=2, sort_keys=True) + "\n").encode(), ContentType="application/json"
     )
     return {"phase": "publish", "run_id": run, "files": sorted(bodies)}
+
+
+def model_feature_list_sha(root: Path, model: str | None) -> str | None:
+    """The hash of the model's predictor definitions as the training extract records it, or None for a run that gates no model."""
+    if model is None:
+        return None
+    from scripts.features import training_extract
+
+    try:
+        schema = json.loads((root / "data_contracts/features/feature_schema.json").read_bytes())
+        return training_extract.model_references(root, schema, model)[2]
+    except (OSError, ValueError, training_extract.ExtractError) as error:
+        raise CheckError("schema_invalid", f"the feature schema of {model} cannot be read: {error}") from None
 
 
 def prepare_environment(bucket: str) -> None:
@@ -220,6 +246,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--bucket", default=os.environ.get("DATA_BUCKET_NAME", ""))
     parser.add_argument("--features-run", default="latest")
+    parser.add_argument(
+        "--model", choices=MODELS, help="gate this model: its Production baseline and feature schema decide, and the marker carries the decision"
+    )
     parser.add_argument("--config", type=Path, default=drift_config.CONFIG)
     arguments = parser.parse_args(argv)
     prepare_environment(arguments.bucket)
@@ -232,7 +261,9 @@ def main(argv: list[str] | None = None) -> int:
         task_capacity.apply()
         with deadline(seconds), contextlib.ExitStack() as stack:
             if arguments.phase == "baseline":
-                result = baseline_phase(open_store(), arguments.work, arguments.run)
+                result = baseline_phase(
+                    open_store(), arguments.work, arguments.run, model=arguments.model, feature_list_sha=model_feature_list_sha(arguments.root, arguments.model)
+                )
             elif arguments.phase == "current":
                 prepare_feature_reader(arguments.bucket, arguments.work)
                 result = current_phase(arguments.root, current_window.open_reader(stack, arguments.root, arguments.features_run), arguments.work, arguments.run)

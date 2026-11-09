@@ -188,8 +188,11 @@ def check_phase_without_evidently_names_it(folder: Path) -> Problems:
     return problems
 
 
-def publish_records(folder: Path, s3: MemoryS3, *, records: bool = True) -> tuple[Path, Any]:
+def publish_records(folder: Path, s3: MemoryS3, *, records: bool = True, gate_model: str | None = None) -> tuple[Path, Any]:
     work = prepared_workspace(folder, current_year=2021)
+    if gate_model is not None:
+        path = work / "drift" / RUN / "baseline.done.json"
+        path.write_text(json.dumps(json.loads(path.read_text()) | {"model": gate_model}) + "\n")
     code, text = run_check(work)
     if code != 0:
         raise ValueError(f"the fixture check failed: {text[:300]}")

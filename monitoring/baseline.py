@@ -54,14 +54,27 @@ def write_json(path: Path, document: Any) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
-def fetch(store: Any, hai_type: str, out: Path, *, project: Path = ROOT, deadlines: dvc_baseline.Deadlines | None = None) -> Baseline:
-    """Write the baseline inputs for ``hai_type`` into ``out`` and return what was fetched."""
+def fetch(
+    store: Any,
+    hai_type: str,
+    out: Path,
+    *,
+    project: Path = ROOT,
+    deadlines: dvc_baseline.Deadlines | None = None,
+    model: str | None = None,
+    feature_list_sha: str | None = None,
+) -> Baseline:
+    """Write the baseline inputs for ``hai_type`` into ``out`` and return what was fetched.
+
+    With ``model`` the Production model must come from that model's run. With ``feature_list_sha`` it must have trained on that feature schema. Either mismatch
+    leaves nothing to monitor and is named, so the drift gate can train.
+    """
     if hai_type not in HAI_TYPES:
         raise CheckError("hai_type_invalid", f"{hai_type} is not one of {', '.join(HAI_TYPES)}")
-    model = json.loads(MODEL_CONTRACT.read_text())["registered_models"][hai_type]
-    version = registry.champion(store, model)
+    registered = json.loads(MODEL_CONTRACT.read_text())["registered_models"][hai_type]
+    version = registry.champion(store, registered)
     if version is None:
-        raise CheckError("no_production_model", f"{model} has no version under the production alias", NOTHING_TO_MONITOR)
+        raise CheckError("no_production_model", f"{registered} has no version under the production alias", NOTHING_TO_MONITOR)
     run_id = str(version.run_id)
     with tempfile.TemporaryDirectory(prefix="baseline_") as temporary:
         scratch = Path(temporary)
@@ -73,6 +86,14 @@ def fetch(store: Any, hai_type: str, out: Path, *, project: Path = ROOT, deadlin
             raise CheckError("no_features", f"the production model of run {run_id} has no features", NOTHING_TO_MONITOR)
         if manifest.get("hai_type") != hai_type or manifest.get("population") not in POPULATIONS or not isinstance(manifest.get("newest_window_year"), int):
             raise CheckError("manifest_invalid", f"the extract manifest of run {run_id} must name {hai_type}, a population and an integer newest_window_year")
+        if model is not None and manifest.get("model") != model:
+            raise CheckError(
+                "production_model_of_another_model", f"the production model of run {run_id} is {manifest.get('model')}, not {model}", NOTHING_TO_MONITOR
+            )
+        if feature_list_sha is not None and manifest.get("feature_list_sha256") != feature_list_sha:
+            raise CheckError(
+                "feature_schema_changed", f"the production model of run {run_id} trained on another feature schema than the {model} set", NOTHING_TO_MONITOR
+            )
         try:
             matrix = dvc_baseline.load(dvc_baseline.Run(store, run_id), project=project, deadlines=deadlines)
         except dvc_baseline.BaselineError as error:
