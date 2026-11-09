@@ -58,6 +58,11 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
 
         verify_cms_owners_capture(receipt, source, lineage, root, evidence_only)
         return
+    if mode == "nber_hospital_compare":
+        from scripts.acquisition.nber_hc_contract import verify_capture as verify_nber_capture
+
+        verify_nber_capture(receipt, source, lineage, root, evidence_only)
+        return
     if mode == "bls_api_v2":
         from scripts.acquisition.bls_api_contract import verify_capture as verify_bls_capture
 

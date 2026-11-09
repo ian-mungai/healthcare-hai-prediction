@@ -1,0 +1,452 @@
+{
+  "versions": [
+    {
+      "version": 1,
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/api_fallbacks.py",
+          "sha256": "d4879dae6a87191033b5c549634a5cda80adda5bde774ae4efcbf7122317deb0"
+        },
+        {
+          "file": "scripts/acquisition/api_keys.py",
+          "sha256": "b0e4d53d316e280beb2232b1155af107ffbd380955f5cde4ad52c1e536f0bcb9"
+        },
+        {
+          "file": "scripts/acquisition/archive_review.py",
+          "sha256": "59a6b2660eb64c96c8003b6dc47b7a3535bc32b07627e99001aaca35157cb6f8"
+        },
+        {
+          "file": "scripts/acquisition/batch.py",
+          "sha256": "9599436cfdb72cbacc4655c941109cffcb57ba8ee65687d359c1b80eb5101905"
+        },
+        {
+          "file": "scripts/acquisition/bls_api_contract.py",
+          "sha256": "45ad41826004329a1a85112b757c315038cd8a5be62fb58b18bdd0562bd4b88f"
+        },
+        {
+          "file": "scripts/acquisition/bls_api_transport.py",
+          "sha256": "dfcadc91607e2e3f55322da38c02e951c990d8a8224e9a856067e3599f4a8620"
+        },
+        {
+          "file": "scripts/acquisition/capture.py",
+          "sha256": "e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_api_contract.py",
+          "sha256": "909ad5114f5eed432bc3cb5281a8cc392bad05b997950a203834b1e0cf31a556"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_api_transport.py",
+          "sha256": "aeaba5379d6f6c4d19f44fadae28848092896046b74a4201b20e3f9cec3aaa51"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_detailed_contract.py",
+          "sha256": "eb6ee929260b10495216d941b9af5947eb0f91ea96c667407e4cba3784500052"
+        },
+        {
+          "file": "scripts/acquisition/cli_tools.py",
+          "sha256": "d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be"
+        },
+        {
+          "file": "scripts/acquisition/cms_owners_contract.py",
+          "sha256": "65b03343088c39489f2175f10fed872809a0b4a7bc7b09e7a7da1dbaef19f1c9"
+        },
+        {
+          "file": "scripts/acquisition/code_closure.py",
+          "sha256": "2af801c4be9a84f9d4c75a27b6334ee3f3969fffea680a9dd666cee9cd6bcc77"
+        },
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_bls_api.py",
+          "sha256": "07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4"
+        },
+        {
+          "file": "scripts/acquisition/collect_census_acs_api.py",
+          "sha256": "c81862d8eed2b2b443db45085a520c2b6a5f69c787a697500d8e296ff9381fb4"
+        },
+        {
+          "file": "scripts/acquisition/collect_census_acs_detailed.py",
+          "sha256": "5dba2005b0522ec147047488982f084fbf828182a909dad89ee60fed0cfe3db7"
+        },
+        {
+          "file": "scripts/acquisition/collect_hud_api.py",
+          "sha256": "72777806719494b2aef64daed5eb4b57ad9593a22dcf2b131e0c52e20202d83b"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b8fae8aa20489404f4614f011e79e56525c61c4f3b38db26d36f1fa18dd1ec20"
+        },
+        {
+          "file": "scripts/acquisition/collection_layout.py",
+          "sha256": "9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693"
+        },
+        {
+          "file": "scripts/acquisition/collector_state.py",
+          "sha256": "9879b4137b41ef3e2adb95d371637a8f38752043d3dfe1749b21213d24856dcd"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "9c88dd608a40d1ea9836c39a77cd852d9227f31806fcebaac6f72db16a2651c6"
+        },
+        {
+          "file": "scripts/acquisition/county_change_pages.py",
+          "sha256": "0222909e6376be38a50c8afc4614e91d07effd9b97f60272a8eda87d2674f2f1"
+        },
+        {
+          "file": "scripts/acquisition/data_paths.py",
+          "sha256": "2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42"
+        },
+        {
+          "file": "scripts/acquisition/dataset_layout.py",
+          "sha256": "f4f2ab6d2a81e9ee387633bf37a4b5b566332e5302df9363a3094f9f8d96d4a8"
+        },
+        {
+          "file": "scripts/acquisition/echo_guard.py",
+          "sha256": "2b7e245c7cf33e1c67aea291ba601dc157be0530aeabd5209ce11d7e8bda834c"
+        },
+        {
+          "file": "scripts/acquisition/hcai_util_contract.py",
+          "sha256": "6da2d4c6ee8618d03fe12293a254a81233006c283cd5c2314322e40fbf34b674"
+        },
+        {
+          "file": "scripts/acquisition/history_redirects.py",
+          "sha256": "c60e0949ce12fcaeb34d96005c27e52304cd23e6a514ed982179157dc24330d1"
+        },
+        {
+          "file": "scripts/acquisition/history_routes.py",
+          "sha256": "a6ca63392135043d56c9267c324278b1f38962817e49fc60f8f5aaf504cdf75e"
+        },
+        {
+          "file": "scripts/acquisition/hud_api_contract.py",
+          "sha256": "a71873027da11e196c7042fef9d786e6294ac68960235b337fb4b53e265c1fbd"
+        },
+        {
+          "file": "scripts/acquisition/hud_api_transport.py",
+          "sha256": "c0d7ebb64aed1c78a4cb7bc800a7481a994af85a251c2b5ba7223aafe3561c63"
+        },
+        {
+          "file": "scripts/acquisition/hud_xlsx_contract.py",
+          "sha256": "aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c"
+        },
+        {
+          "file": "scripts/acquisition/legacy_versions.py",
+          "sha256": "7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d"
+        },
+        {
+          "file": "scripts/acquisition/mapped_archives.py",
+          "sha256": "a19207a1fbb1825013dd06170d8338bc1718122ab2a69819d05ec1b34472aec4"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a"
+        },
+        {
+          "file": "scripts/acquisition/nber_hc_contract.py",
+          "sha256": "0d2d52c8738dfbcf20ac059584c4e5cb10d36211055fd766352219097fcf3cc2"
+        },
+        {
+          "file": "scripts/acquisition/onc_mu_contract.py",
+          "sha256": "b6298fce8ccf72f96bb33486478433bdf129e3fb7d2466c00dc4ced784239353"
+        },
+        {
+          "file": "scripts/acquisition/plan_remaining.py",
+          "sha256": "ec050126249abd99851b475a76f576b141f9ea5c397623e3d8e855e6b053059f"
+        },
+        {
+          "file": "scripts/acquisition/process.py",
+          "sha256": "513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7"
+        },
+        {
+          "file": "scripts/acquisition/redownload_controls.py",
+          "sha256": "97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7"
+        },
+        {
+          "file": "scripts/acquisition/reference_download_contract.py",
+          "sha256": "0611f55c39c801a9ba983f4585954652cc1eb804f130713e55b2702347d11630"
+        },
+        {
+          "file": "scripts/acquisition/registry_additions.py",
+          "sha256": "08deadb91a9750591a3631b8deaaa10ddefbaa59ec25e0c1ff32baaf80b74ee3"
+        },
+        {
+          "file": "scripts/acquisition/reuse_capture.py",
+          "sha256": "6fd14287a568bbc60502f50a22d7689f1970330c1dfadcc5923ef5a6ceeaf543"
+        },
+        {
+          "file": "scripts/acquisition/s3_store.py",
+          "sha256": "dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3"
+        },
+        {
+          "file": "scripts/acquisition/single_copy.py",
+          "sha256": "52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b"
+        },
+        {
+          "file": "scripts/acquisition/source_metadata.py",
+          "sha256": "28de39d7e1f5b503b5c4232f4eee1b5a4419712318c1066495ad72a876865fa6"
+        },
+        {
+          "file": "scripts/acquisition/source_registry.py",
+          "sha256": "cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "732bf1e1c3631323cc4009ce126dfbe048dee5474b18174a07ab8851fd0b61da"
+        },
+        {
+          "file": "scripts/acquisition/store_nber_hc.py",
+          "sha256": "a56d68ea352e30381293bdac521d873b70de3ccb285c1a3168e6a63e4e4f9157"
+        },
+        {
+          "file": "scripts/acquisition/transport.py",
+          "sha256": "5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852"
+        },
+        {
+          "file": "scripts/acquisition/wonder_export_contract.py",
+          "sha256": "68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9"
+        },
+        {
+          "file": "scripts/infrastructure/render_project_config.py",
+          "sha256": "f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
+        },
+        {
+          "file": "scripts/process.py",
+          "sha256": "0cb50d668fc1954f63fd2224fe09c6e8239ce3c0fe82ed156d18b5f3659066d2"
+        }
+      ],
+      "reason": "First version of the NBER Hospital Compare capture: the plan-bound download of the NBER mirror's CMS release zips behind a fidelity gate, with only the reviewed member map stored as data. Written by the build agent and checked by its own E2E cases and planted defects; an independent review is pending. No model-use approval.",
+      "evidence": [
+        "data/e2e/nber_capture/run_10.json",
+        "data/e2e/nber_capture/failing_first_stubs.json"
+      ],
+      "review": "pending: no independent review of this version yet",
+      "reviewed_on": null
+    },
+    {
+      "version": 2,
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/api_fallbacks.py",
+          "sha256": "d4879dae6a87191033b5c549634a5cda80adda5bde774ae4efcbf7122317deb0"
+        },
+        {
+          "file": "scripts/acquisition/api_keys.py",
+          "sha256": "b0e4d53d316e280beb2232b1155af107ffbd380955f5cde4ad52c1e536f0bcb9"
+        },
+        {
+          "file": "scripts/acquisition/archive_review.py",
+          "sha256": "59a6b2660eb64c96c8003b6dc47b7a3535bc32b07627e99001aaca35157cb6f8"
+        },
+        {
+          "file": "scripts/acquisition/batch.py",
+          "sha256": "9599436cfdb72cbacc4655c941109cffcb57ba8ee65687d359c1b80eb5101905"
+        },
+        {
+          "file": "scripts/acquisition/bls_api_contract.py",
+          "sha256": "45ad41826004329a1a85112b757c315038cd8a5be62fb58b18bdd0562bd4b88f"
+        },
+        {
+          "file": "scripts/acquisition/bls_api_transport.py",
+          "sha256": "dfcadc91607e2e3f55322da38c02e951c990d8a8224e9a856067e3599f4a8620"
+        },
+        {
+          "file": "scripts/acquisition/capture.py",
+          "sha256": "e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_api_contract.py",
+          "sha256": "909ad5114f5eed432bc3cb5281a8cc392bad05b997950a203834b1e0cf31a556"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_api_transport.py",
+          "sha256": "aeaba5379d6f6c4d19f44fadae28848092896046b74a4201b20e3f9cec3aaa51"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_detailed_contract.py",
+          "sha256": "eb6ee929260b10495216d941b9af5947eb0f91ea96c667407e4cba3784500052"
+        },
+        {
+          "file": "scripts/acquisition/cli_tools.py",
+          "sha256": "d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be"
+        },
+        {
+          "file": "scripts/acquisition/cms_owners_contract.py",
+          "sha256": "65b03343088c39489f2175f10fed872809a0b4a7bc7b09e7a7da1dbaef19f1c9"
+        },
+        {
+          "file": "scripts/acquisition/code_closure.py",
+          "sha256": "2af801c4be9a84f9d4c75a27b6334ee3f3969fffea680a9dd666cee9cd6bcc77"
+        },
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_bls_api.py",
+          "sha256": "07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4"
+        },
+        {
+          "file": "scripts/acquisition/collect_census_acs_api.py",
+          "sha256": "c81862d8eed2b2b443db45085a520c2b6a5f69c787a697500d8e296ff9381fb4"
+        },
+        {
+          "file": "scripts/acquisition/collect_census_acs_detailed.py",
+          "sha256": "5dba2005b0522ec147047488982f084fbf828182a909dad89ee60fed0cfe3db7"
+        },
+        {
+          "file": "scripts/acquisition/collect_hud_api.py",
+          "sha256": "72777806719494b2aef64daed5eb4b57ad9593a22dcf2b131e0c52e20202d83b"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b8fae8aa20489404f4614f011e79e56525c61c4f3b38db26d36f1fa18dd1ec20"
+        },
+        {
+          "file": "scripts/acquisition/collection_layout.py",
+          "sha256": "9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693"
+        },
+        {
+          "file": "scripts/acquisition/collector_state.py",
+          "sha256": "9879b4137b41ef3e2adb95d371637a8f38752043d3dfe1749b21213d24856dcd"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "9c88dd608a40d1ea9836c39a77cd852d9227f31806fcebaac6f72db16a2651c6"
+        },
+        {
+          "file": "scripts/acquisition/county_change_pages.py",
+          "sha256": "0222909e6376be38a50c8afc4614e91d07effd9b97f60272a8eda87d2674f2f1"
+        },
+        {
+          "file": "scripts/acquisition/data_paths.py",
+          "sha256": "2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42"
+        },
+        {
+          "file": "scripts/acquisition/dataset_layout.py",
+          "sha256": "f4f2ab6d2a81e9ee387633bf37a4b5b566332e5302df9363a3094f9f8d96d4a8"
+        },
+        {
+          "file": "scripts/acquisition/echo_guard.py",
+          "sha256": "2b7e245c7cf33e1c67aea291ba601dc157be0530aeabd5209ce11d7e8bda834c"
+        },
+        {
+          "file": "scripts/acquisition/hcai_util_contract.py",
+          "sha256": "6da2d4c6ee8618d03fe12293a254a81233006c283cd5c2314322e40fbf34b674"
+        },
+        {
+          "file": "scripts/acquisition/history_redirects.py",
+          "sha256": "c60e0949ce12fcaeb34d96005c27e52304cd23e6a514ed982179157dc24330d1"
+        },
+        {
+          "file": "scripts/acquisition/history_routes.py",
+          "sha256": "a6ca63392135043d56c9267c324278b1f38962817e49fc60f8f5aaf504cdf75e"
+        },
+        {
+          "file": "scripts/acquisition/hud_api_contract.py",
+          "sha256": "a71873027da11e196c7042fef9d786e6294ac68960235b337fb4b53e265c1fbd"
+        },
+        {
+          "file": "scripts/acquisition/hud_api_transport.py",
+          "sha256": "c0d7ebb64aed1c78a4cb7bc800a7481a994af85a251c2b5ba7223aafe3561c63"
+        },
+        {
+          "file": "scripts/acquisition/hud_xlsx_contract.py",
+          "sha256": "aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c"
+        },
+        {
+          "file": "scripts/acquisition/legacy_versions.py",
+          "sha256": "7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d"
+        },
+        {
+          "file": "scripts/acquisition/mapped_archives.py",
+          "sha256": "a19207a1fbb1825013dd06170d8338bc1718122ab2a69819d05ec1b34472aec4"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a"
+        },
+        {
+          "file": "scripts/acquisition/nber_hc_contract.py",
+          "sha256": "0d2d52c8738dfbcf20ac059584c4e5cb10d36211055fd766352219097fcf3cc2"
+        },
+        {
+          "file": "scripts/acquisition/onc_mu_contract.py",
+          "sha256": "b6298fce8ccf72f96bb33486478433bdf129e3fb7d2466c00dc4ced784239353"
+        },
+        {
+          "file": "scripts/acquisition/plan_remaining.py",
+          "sha256": "ec050126249abd99851b475a76f576b141f9ea5c397623e3d8e855e6b053059f"
+        },
+        {
+          "file": "scripts/acquisition/process.py",
+          "sha256": "513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7"
+        },
+        {
+          "file": "scripts/acquisition/redownload_controls.py",
+          "sha256": "97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7"
+        },
+        {
+          "file": "scripts/acquisition/reference_download_contract.py",
+          "sha256": "0611f55c39c801a9ba983f4585954652cc1eb804f130713e55b2702347d11630"
+        },
+        {
+          "file": "scripts/acquisition/registry_additions.py",
+          "sha256": "08deadb91a9750591a3631b8deaaa10ddefbaa59ec25e0c1ff32baaf80b74ee3"
+        },
+        {
+          "file": "scripts/acquisition/reuse_capture.py",
+          "sha256": "6fd14287a568bbc60502f50a22d7689f1970330c1dfadcc5923ef5a6ceeaf543"
+        },
+        {
+          "file": "scripts/acquisition/s3_store.py",
+          "sha256": "dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3"
+        },
+        {
+          "file": "scripts/acquisition/single_copy.py",
+          "sha256": "52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b"
+        },
+        {
+          "file": "scripts/acquisition/source_metadata.py",
+          "sha256": "28de39d7e1f5b503b5c4232f4eee1b5a4419712318c1066495ad72a876865fa6"
+        },
+        {
+          "file": "scripts/acquisition/source_registry.py",
+          "sha256": "cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "732bf1e1c3631323cc4009ce126dfbe048dee5474b18174a07ab8851fd0b61da"
+        },
+        {
+          "file": "scripts/acquisition/store_nber_hc.py",
+          "sha256": "dd68c5cc5d73b05628db11c035d7f42d266a0a28796587bc152f8d68ee2680b2"
+        },
+        {
+          "file": "scripts/acquisition/transport.py",
+          "sha256": "5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852"
+        },
+        {
+          "file": "scripts/acquisition/wonder_export_contract.py",
+          "sha256": "68c94357d0a1530f584e7c0ef4c9af164dd23d67bdd33f12c1ece81a8d38bef9"
+        },
+        {
+          "file": "scripts/infrastructure/render_project_config.py",
+          "sha256": "f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
+        },
+        {
+          "file": "scripts/process.py",
+          "sha256": "0cb50d668fc1954f63fd2224fe09c6e8239ce3c0fe82ed156d18b5f3659066d2"
+        }
+      ],
+      "reason": "Review fix round: storage keys are verified under the single-copy policy the writer selected, and a run with neither --fetch nor --execute takes no lock and writes nothing. Written by the build agent and checked by its own E2E cases and planted defects; an independent review of the fixes is pending. No model-use approval.",
+      "evidence": [
+        "data/e2e/acq_review_fix/nber_final_after_fix.json",
+        "data/e2e/acq_review_fix/nber_failing_first_before_fix_v2.json"
+      ],
+      "review": "pending: no independent review of this version yet",
+      "reviewed_on": null
+    }
+  ]
+}
