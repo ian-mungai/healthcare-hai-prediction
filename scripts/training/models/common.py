@@ -48,6 +48,10 @@ class DeadlineExceeded(ModelError):
     """The whole operation exhausted its fixed deadline."""
 
 
+# The expected-count weight column of every HAI type: a training weight, never a predictor of any type's model.
+WEIGHT_COLUMNS = frozenset(f"hai_{number}__predicted__number" for number in range(1, 7))
+
+
 @dataclass(frozen=True)
 class Deadline:
     """Carry one absolute monotonic deadline through folds and analysis calls."""
@@ -121,7 +125,7 @@ class Dataset:
                 raise ModelError("excluded label, outcome component or validation control cannot be a predictor")
             if feature.kind not in ("number", "category") or feature.reference.count(":") != 1:
                 raise ModelError("predictor reference or type is invalid")
-            if feature.name == self.weight_column:
+            if feature.name in WEIGHT_COLUMNS:
                 raise ModelError("the expected-count weight column cannot be a predictor")
         allowed = set(names) | set(GROUP_FIELDS) | {"spine_key", "ccn", "window_year", self.label, self.weight_column}
         keys: set[str] = set()

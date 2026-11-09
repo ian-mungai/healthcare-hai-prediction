@@ -161,6 +161,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         weight_feature = Feature("feature_matrix_hospital:hai_1__predicted__number", "number")
         rejects(lambda: Dataset(weighted, (*req.data.features, weight_feature), "HAI_1"), "weight")
         rejects(lambda: Dataset(weighted, (*req.data.features, Feature("label_hai_1:hai_1__predicted__number", "number")), "HAI_1"), "excluded")
+        other_weight_feature = Feature("feature_matrix_hospital:hai_2__predicted__number", "number")
+        rejects(lambda: Dataset(weighted, (*req.data.features, other_weight_feature), "HAI_1"), "weight")
 
     def folds() -> None:
         training, _ = req.data.split()

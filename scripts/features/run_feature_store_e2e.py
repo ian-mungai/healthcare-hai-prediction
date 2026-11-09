@@ -877,6 +877,20 @@ def restricted_table_cases(report: Report, base: Path) -> None:
         "an unknown key in the earlier-outcome config stops the generator",
         refuses(lambda: schema_module.generated_files(unknown), "earlier_outcomes.json", "schema"),
     )
+    extra = planted_root(base, "history_unknown_key", earlier_config(), with_rules(hai_history_fields=[dict(HISTORY_FIELDS[0], unexpected="planted")]))
+    report.case(
+        "R6",
+        "G15",
+        "an unknown key in a history field entry stops the generator",
+        refuses(lambda: schema_module.generated_files(extra), "hai_history_fields", "unknown key"),
+    )
+    report.case(
+        "R6",
+        "G15",
+        "the refusal of a bad slot names where and why, never the rejected value",
+        refuses(lambda: schema_module.generated_files(slot), "earlier_outcomes.json", "schema")
+        and not refuses(lambda: schema_module.generated_files(slot), "m1_ols"),
+    )
     absent = planted_root(base, "absent", with_rules(hai_history_fields=HISTORY_FIELDS), lambda root: (root / EARLIER_OUTCOMES).unlink(missing_ok=True))
     report.case(
         "R6", "G15", "a missing earlier-outcome config stops the generator", refuses(lambda: schema_module.generated_files(absent), "earlier_outcomes.json")
@@ -931,6 +945,7 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
         ("unknown", dict(HOSPITAL_LOG, control="C999"), ("no control seed gives",)),
         ("log_of_category", dict(CARE_ORDINAL, reason="planted"), ("number",)),
         ("no_reason", {key: value for key, value in HOSPITAL_LOG.items() if key != "reason"}, ("reason",)),
+        ("with_an_unknown_key", dict(HOSPITAL_LOG, unexpected="planted"), ("unknown key",)),
     ):
         planted = planted_root(base, f"derived_{name}", with_rules(log_fields=[entry]))
         report.case(

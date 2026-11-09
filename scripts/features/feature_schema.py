@@ -305,7 +305,8 @@ def earlier_outcomes(root: Path) -> dict[str, Any]:
     errors = sorted(validator.iter_errors(document), key=lambda error: [str(part) for part in error.absolute_path])
     if errors:
         where = ".".join(str(part) for part in errors[0].absolute_path) or "the file"
-        raise SchemaError(f"{EARLIER_OUTCOMES}: violates its schema at {where}: {errors[0].message}")
+        # The rule that failed, never the rejected value: a diagnostic names the path and the constraint only.
+        raise SchemaError(f"{EARLIER_OUTCOMES}: violates its schema at {where}: fails its {errors[0].validator} rule")
     candidates = {row["control"] for row in read_json(root / TARGETS)["earlier_outcome_candidates"]}
     for control in document["controls"]:
         if control not in candidates:
@@ -319,6 +320,8 @@ def history_keys(rules: dict[str, Any], earlier: dict[str, Any]) -> set[Key]:
     for entry in rules.get("hai_history_fields", []):
         if not isinstance(entry, dict) or not entry.get("field") or not entry.get("reason"):
             raise SchemaError(f"{RULES}: a hai_history_fields entry needs a field and a reason")
+        if set(entry) - {"field", "reason"}:
+            raise SchemaError(f"{RULES}: a hai_history_fields entry has an unknown key; it holds only a field and a reason")
         if entry["field"] in fields:
             raise SchemaError(f"{RULES}: hai_history_fields lists the field {entry['field']} twice")
         fields.append(entry["field"])
@@ -334,6 +337,8 @@ def derived_keys(
         for index, entry in enumerate(rules.get(label, [])):
             if not isinstance(entry, dict) or any(not entry.get(name) for name in ("family", "control", "field", "reason")) or "source" not in entry:
                 raise SchemaError(f"{RULES}: {label} entry {index} needs a family, source, control, field and a reason")
+            if set(entry) - {"family", "source", "control", "field", "reason"}:
+                raise SchemaError(f"{RULES}: {label} entry {index} has an unknown key; it holds only a family, source, control, field and a reason")
             family, parent = entry["family"], (entry["source"], entry["control"], entry["field"])
             if family not in inventory or parent not in inventory[family]:
                 raise SchemaError(f"{RULES}: {label} names {family} {parent}, which no control seed gives")
