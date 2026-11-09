@@ -28,6 +28,7 @@ SUITES = [
     "wonder_export",
     "reference_download",
     "cms_owners",
+    "nber_hc",
     "hcai_util",
     "onc_mu",
     "privacy",

@@ -1,0 +1,67 @@
+{
+  "fidelity_gate": {
+    "bytes": 18544644,
+    "expected_sha256": "1a0e71473719b4108796d7f2e42e68011d5fd0560e33b9a35ceb2a7674ce19ef",
+    "registry_route_id": "care-hcahps-cms:file:001",
+    "url": "https://data.nber.org/compare/hospital/2019/03/hospitals_compare_201903.zip"
+  },
+  "governance": {
+    "access_class": "public",
+    "contains_phi": false,
+    "contains_pii": false,
+    "credential_reference": null,
+    "credentials_required": false,
+    "license_or_terms_url": "https://www.usa.gov/government-works",
+    "use_restrictions": [
+      "U.S. government work (CMS flat files); the NBER mirror adds no rights and NBER's site terms are not separately reviewed.",
+      "Original CMS zip bytes from the NBER mirror, checked against the CMS archive by the March 2019 fidelity gate; no NBER conversions are captured.",
+      "Preserve all source and measure holds; no model approval."
+    ]
+  },
+  "model_eligible": false,
+  "pending_releases": [
+    {
+      "folder": "2017/10",
+      "reason": "The zip hash and size are not recorded yet; add them with the plan builder before this release is captured."
+    }
+  ],
+  "registry_sha256": "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25",
+  "releases": [
+    {
+      "bytes": 16203900,
+      "expected_sha256": "0e9c9363114172e81743e74720bfe8f4d4fd2d937264890ecd5280cb52b8806f",
+      "folder": "2018/07",
+      "id": "cf489451cb896548b040d4253d22e69573627868836fda0c1948cfc6031b9530",
+      "members": {
+        "Timely and Effective Care - Hospital.csv": "cms_legacy_timely_and_effective_care_hospital"
+      },
+      "release_date": "2018-06-19",
+      "release_label": "Hospital Compare 2018-07 (NBER mirror)",
+      "route_id": "care-timely-cms:nber:2018-07",
+      "source_id": "care-timely-cms",
+      "url": "https://data.nber.org/compare/hospital/2018/07/hospitals_compare_201807.zip"
+    },
+    {
+      "bytes": 14889985,
+      "expected_sha256": "a9c6cc3c6dc77851a64c7d69c9d30b76dad235ea54c706c7cdc549fded4fa6de",
+      "folder": "2018/10",
+      "id": "e6896da004d0e8e6cbc07a0a4e2286cf237cb7b520f3ecbce57d8a0c6b904144",
+      "members": {
+        "HCAHPS - Hospital.csv": "cms_legacy_hcahps_hospital",
+        "Healthcare Associated Infections - Hospital.csv": "cms_legacy_healthcare_associated_infections_hospital",
+        "Timely and Effective Care - Hospital.csv": "cms_legacy_timely_and_effective_care_hospital"
+      },
+      "release_date": "2018-09-27",
+      "release_label": "Hospital Compare 2018-10 (NBER mirror)",
+      "route_id": "care-timely-cms:nber:2018-10",
+      "source_id": "care-timely-cms",
+      "url": "https://data.nber.org/compare/hospital/2018/10/hospitals_compare_201810.zip"
+    }
+  ],
+  "scope": "Original CMS flat-file zips from the NBER mirror; no NBER conversions.",
+  "source_ids": [
+    "care-hcahps-cms",
+    "care-timely-cms"
+  ],
+  "version": 1
+}
