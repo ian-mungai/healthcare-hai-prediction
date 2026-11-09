@@ -560,6 +560,85 @@ LINK_CASES = [
             **PICTURE,
         },
     ),
+    # Review fixes: folders held by symlinks only, whitespace around HTML URLs, and the line of a link after a multiline construct.
+    link_case(
+        "folder holding only a symlink passes",
+        True,
+        {"docs/guide.md": guide_page("See [a](../folder/)."), "real.txt": "hi\n"},
+        symlinks={"folder/alias.txt": "../real.txt"},
+    ),
+    link_case(
+        "folder holding only a symlink to an ignored file passes as a folder",
+        True,
+        {".gitignore": "hidden.txt\n", "hidden.txt": "hi\n", "docs/guide.md": guide_page("See [a](../folder/).")},
+        symlinks={"folder/alias.txt": "../hidden.txt"},
+    ),
+    link_case(
+        "padded HTML URLs are trimmed before they are classified",
+        True,
+        {
+            "docs/guide.md": '# Guide\n\n<a href=" https://example.invalid/page ">a</a> <a href="\n setup.md#install-steps\t">b</a>\n\n'
+            '<img src=" ../assets/pic.png ">\n',
+            SETUP: LINK_TARGET_PAGE,
+            **PICTURE,
+        },
+    ),
+    link_case(
+        "padded relative HTML URL to a missing file blocked",
+        False,
+        {"docs/guide.md": '# Guide\n\n<a href=" absent.md ">a</a>\n'},
+        unresolved(3, "absent.md"),
+    ),
+    link_case(
+        "percent-encoded space in an HTML URL is kept",
+        False,
+        {"docs/guide.md": '# Guide\n\n<a href="%20setup.md">a</a>\n', SETUP: LINK_TARGET_PAGE},
+        unresolved(3, " setup.md"),
+    ),
+    link_case(
+        "padded HTML id and name are anchors",
+        True,
+        {
+            "docs/guide.md": guide_page("See [a](setup.md#custom) and [b](setup.md#old-spot)."),
+            SETUP: '# Setup\n\n<div id=" custom ">x</div>\n\n<a name="\told-spot\n"></a>\n',
+        },
+    ),
+    link_case(
+        "link after a multiline code span reports its own line",
+        False,
+        {"docs/guide.md": "# Guide\n\n`a\nb` [x](absent.md)\n"},
+        unresolved(4, "absent.md"),
+    ),
+    link_case(
+        "link after a multiline link reports its own line",
+        False,
+        {"docs/guide.md": "# Guide\n\n[ok](\nsetup.md\n) [x](absent.md)\n", SETUP: LINK_TARGET_PAGE},
+        unresolved(5, "absent.md"),
+    ),
+    link_case(
+        "multiline link text reports the line where the link starts",
+        False,
+        {"docs/guide.md": "# Guide\n\n[a\nb](absent.md)\n"},
+        unresolved(3, "absent.md"),
+    ),
+    link_case(
+        "image and inline HTML after a multiline code span report their own line",
+        False,
+        {"docs/guide.md": '# Guide\n\n`a\nb` ![i](assets/absent.png) <a href="absent.md">x</a>\n'},
+        unresolved(4, "assets/absent.png"),
+    ),
+    link_case(
+        "link after a multiline code span in a quote reports its own line",
+        False,
+        {"docs/guide.md": "# Guide\n\n> `a\n> b` [x](absent.md)\n"},
+        unresolved(4, "absent.md"),
+    ),
+    link_case(
+        "link after a multiline code span in a list item reports its own line",
+        False,
+        {"docs/guide.md": "# Guide\n\n- item `c\n  d` [y](gone.md)\n"},
+        unresolved(4, "gone.md"),
+    ),
 ]
 
 

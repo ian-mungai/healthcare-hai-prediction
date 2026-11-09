@@ -16,6 +16,7 @@ import os
 import posixpath
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -23,6 +24,10 @@ from typing import Any
 from urllib.parse import unquote
 
 from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline
+from markdown_it.rules_inline import html_inline as html_inline_rule
+from markdown_it.rules_inline import image as image_rule
+from markdown_it.rules_inline import link as link_rule
 from markdown_it.token import Token
 
 MARKDOWN_SUFFIXES = (".md", ".markdown")
@@ -31,7 +36,27 @@ URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 MAX_SYMLINK_HOPS = 40
 SYMLINK_MODE = "120000"
 GITLINK_MODE = "160000"
+HTML_SPACE = " \t\n\f\r"  # The ASCII whitespace that browsers trim around an HTML URL or id.
+LOCATED_TOKENS = ("link_open", "image", "html_inline")
+
+
+def with_offset(rule: Callable[[StateInline, bool], bool]) -> Callable[[StateInline, bool], bool]:
+    """Wrap an inline rule so the token it makes records where in the inline source it starts: its line is then the line of the construct itself."""
+
+    def located(state: StateInline, silent: bool) -> bool:
+        start, count = state.pos, len(state.tokens)
+        found = rule(state, silent)
+        if found and not silent:
+            first = next(token for token in state.tokens[count:] if token.type in LOCATED_TOKENS)  # Pending text may come before it.
+            first.meta["offset"] = start
+        return found
+
+    return located
+
+
 PARSER = MarkdownIt("commonmark", {"store_labels": True}).enable("table").enable("strikethrough")
+for rule_name, inline_rule in (("link", link_rule), ("image", image_rule), ("html_inline", html_inline_rule)):
+    PARSER.inline.ruler.at(rule_name, with_offset(inline_rule))
 
 
 @dataclass
@@ -68,12 +93,13 @@ def read_tree(index: str) -> Tree:
         mode = info.split(" ")[0]
         if not path or mode == GITLINK_MODE:
             continue
-        if mode == SYMLINK_MODE:
-            if os.path.islink(path):
-                tree.symlinks[path] = os.readlink(path)
-        elif os.path.isfile(path) and not os.path.islink(path):
+        if mode == SYMLINK_MODE and os.path.islink(path):
+            tree.symlinks[path] = os.readlink(path)
+        elif mode != SYMLINK_MODE and os.path.isfile(path) and not os.path.islink(path):
             tree.files.add(path)
-            tree.folders.update(str(parent) for parent in Path(path).parents)
+        else:
+            continue
+        tree.folders.update(str(parent) for parent in Path(path).parents)  # A folder is tracked when any tracked path, a symlink too, lies under it.
     return tree
 
 
@@ -156,9 +182,10 @@ class HtmlReader(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         line = self.first_line + self.getpos()[0] - 1
-        for name, value in attrs:
-            if value is None:
+        for name, raw in attrs:
+            if raw is None:
                 continue
+            value = raw.strip(HTML_SPACE)
             if name in ("href", "src"):
                 self.page.destinations.append((line, value))
             elif name == "id" or (name == "name" and tag == "a"):
@@ -176,15 +203,15 @@ def read_html(content: str, first_line: int, page: Page) -> None:
 
 def read_inline(inline: Token, page: Page) -> None:
     """Links, images and inline HTML of one inline token. A reference-style use is skipped: its definition is checked where it stands."""
-    line = (inline.map[0] if inline.map else 0) + 1
+    first = (inline.map[0] if inline.map else 0) + 1
     for child in inline.children or []:
-        if child.type in ("softbreak", "hardbreak"):
-            line += 1
-        elif child.type in ("link_open", "image") and "label" not in child.meta:
-            page.destinations.append((line, str(child.attrs["href" if child.type == "link_open" else "src"])))
-        elif child.type == "html_inline":
+        if child.type not in LOCATED_TOKENS or child.markup == "autolink":  # An autolink always has a scheme, so it is out of scope.
+            continue
+        line = first + inline.content[: child.meta["offset"]].count("\n")
+        if child.type == "html_inline":
             read_html(child.content, line, page)
-            line += child.content.count("\n")
+        elif "label" not in child.meta:
+            page.destinations.append((line, str(child.attrs["href" if child.type == "link_open" else "src"])))
 
 
 def read_page(text: str) -> Page:
