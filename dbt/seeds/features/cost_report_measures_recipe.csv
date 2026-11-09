@@ -12,26 +12,26 @@ C028,ratio_per_day_denominator,denominator,fct_cost_report,total_bed_days_availa
 C028,ratio_per_day_denominator,divisor,fct_cost_report,reporting_days,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,7,,,,
 C029,value,value,fct_cost_report,number_of_interns_and_residents_fte,,,,,,,,,8,,,,
 C035,value,value,fct_cost_report,contract_labor_direct_patient_care,,,,,,,,,9,,,,
-C036,ratio,numerator,fct_cost_report,total_salaries_adjusted,,,,,,,,,10,,,,
+C036,ratio,numerator,fct_cost_report,total_salaries_adjusted,,,,,,,,,10,10000,1000000,,salary per FTE is in dollars; a value under 10000 or over 1000000 per FTE is a reporting error (owner bound of Nov 9 2026)
 C036,ratio,denominator,fct_cost_report,fte_employees_on_payroll,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,10,,,,
 C037,value,value,fct_cost_report,total_days_v_xviii_xix_unknown,,,,,,,,,11,,,,
 C038,value,value,fct_cost_report,total_discharges_v_xviii_xix_unknown,,,,,,,,,12,,,,
 C039,per_day,numerator,fct_cost_report,total_days_v_xviii_xix_unknown,,,,,,,,,13,,,,
 C039,per_day,divisor,fct_cost_report,reporting_days,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,13,,,,
-C040,ratio,numerator,fct_cost_report,total_days_v_xviii_xix_unknown,,,,,,,,,14,,,,
+C040,ratio,numerator,fct_cost_report,total_days_v_xviii_xix_unknown,,,,,,,,,14,0,1.2,,occupancy is the days over the bed days (a fraction); a value over 1.2 is a reporting error (owner bound of Nov 9 2026)
 C040,ratio,denominator,fct_cost_report,total_bed_days_available,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,14,,,0,bed days must be above 0
 C041,ratio_per_day_denominator,numerator,fct_cost_report,total_discharges_v_xviii_xix_unknown,,,,,,,,,15,,,,
 C041,ratio_per_day_denominator,denominator,fct_cost_report,total_bed_days_available,,,rpt_rec_num,,denominator divided by reporting days is not zero; otherwise the value is null,,,,15,,,0,bed days must be above 0
 C041,ratio_per_day_denominator,divisor,fct_cost_report,reporting_days,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,15,,,,
-C042,ratio,numerator,fct_cost_report,total_days_v_xviii_xix_unknown,,,,,,,,,16,,,,
+C042,ratio,numerator,fct_cost_report,total_days_v_xviii_xix_unknown,,,,,,,,,16,1,60,,average length of stay is in days; a value under 1 or over 60 days is a reporting error (owner bound of Nov 9 2026)
 C042,ratio,denominator,fct_cost_report,total_discharges_v_xviii_xix_unknown,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,16,,,0,discharges must be above 0
-C045,ratio,numerator,fct_cost_report,net_income_from_service_to_patients,,,,,,,,,17,,1,,net income from services cannot exceed net patient revenue
+C045,ratio,numerator,fct_cost_report,net_income_from_service_to_patients,,,,,,,,,17,-2,1,,net income from services cannot exceed net patient revenue; a margin under -2 is a reporting error (owner bound of Nov 9 2026)
 C045,ratio,denominator,fct_cost_report,net_patient_revenue,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,17,,,0,net patient revenue must be above 0
-C046,ratio,numerator,fct_cost_report,total_current_assets,,,,,,,,,18,,,,
+C046,ratio,numerator,fct_cost_report,total_current_assets,,,,,,,,,18,-50,50,,the current ratio is current assets over current liabilities (a ratio); a value beyond 50 either way is a reporting error (owner bound of Nov 9 2026)
 C046,ratio,denominator,fct_cost_report,total_current_liabilities,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,18,,,0,current liabilities must be above 0
-C047,ratio,numerator,fct_cost_report,total_liabilities,,,,,,,,,19,,,,
+C047,ratio,numerator,fct_cost_report,total_liabilities,,,,,,,,,19,-5,5,,liabilities over assets is a ratio; a value beyond 5 either way is a reporting error (owner bound of Nov 9 2026)
 C047,ratio,denominator,fct_cost_report,total_assets,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,19,,,,
-C048,ratio_per_day_denominator,numerator,fct_cost_report,cash_on_hand_and_in_banks,,,,,,,,,20,,,,
+C048,ratio_per_day_denominator,numerator,fct_cost_report,cash_on_hand_and_in_banks,,,,,,,,,20,-1000,1000,,days of cash is in days of operating expense; a value beyond 1000 days either way is a reporting error (owner bound of Nov 9 2026)
 C048,ratio_per_day_denominator,denominator,fct_cost_report,less_total_operating_expense,,,rpt_rec_num,,denominator divided by reporting days is not zero; otherwise the value is null,,,,20,,,0,operating expense must be above 0
 C048,ratio_per_day_denominator,divisor,fct_cost_report,reporting_days,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,20,,,,
 C049,ratio,numerator,fct_cost_report,cost_of_charity_care,,,,,,,,,21,0,1,,a share of a total lies between 0 and 1

@@ -60,6 +60,38 @@ DOMAIN_CASES = (
     ("DOM8", "inside_bounds", 2021, 10000.0, 5000.0),
     ("DOM9", "missing_denominator", 2021, None, 5000.0),
 )
+# Plausibility-bound cases (owner decision of Nov 9 2026): one report each at the domain hospital in fiscal year 2022, on a base of 10000 for every
+# denominator and 5000 for every numerator, with the named amounts replaced so that one control sits exactly on a bound or just outside it (case, amounts).
+BOUND_CASES = (
+    ("BND01", "c045_on_lower", {"net_income_from_service_to_patients": -20000.0}),
+    ("BND02", "c045_below_lower", {"net_income_from_service_to_patients": -20001.0}),
+    ("BND03", "c046_on_upper", {"total_current_assets": 500000.0}),
+    ("BND04", "c046_above_upper", {"total_current_assets": 500001.0}),
+    ("BND05", "c046_on_lower", {"total_current_assets": -500000.0}),
+    ("BND06", "c046_below_lower", {"total_current_assets": -500001.0}),
+    ("BND07", "c047_on_upper", {"total_liabilities": 50000.0}),
+    ("BND08", "c047_above_upper", {"total_liabilities": 50001.0}),
+    ("BND09", "c047_on_lower", {"total_liabilities": -50000.0}),
+    ("BND10", "c047_below_lower", {"total_liabilities": -50001.0}),
+    ("BND11", "c047_zero_assets", {"total_assets": 0.0}),
+    ("BND12", "c048_on_upper", {"less_total_operating_expense": 36500.0, "cash_on_hand_and_in_banks": 100000.0}),
+    ("BND13", "c048_above_upper", {"less_total_operating_expense": 36500.0, "cash_on_hand_and_in_banks": 100001.0}),
+    ("BND14", "c048_on_lower", {"less_total_operating_expense": 36500.0, "cash_on_hand_and_in_banks": -100000.0}),
+    ("BND15", "c048_below_lower", {"less_total_operating_expense": 36500.0, "cash_on_hand_and_in_banks": -100001.0}),
+    ("BND16", "c040_on_upper", {"total_days_v_xviii_xix_unknown": 12000.0}),
+    ("BND17", "c040_above_upper", {"total_days_v_xviii_xix_unknown": 12001.0}),
+    ("BND18", "c040_on_lower", {"total_days_v_xviii_xix_unknown": 0.0}),
+    ("BND19", "c040_below_lower", {"total_days_v_xviii_xix_unknown": -1.0}),
+    ("BND20", "c042_on_upper", {"total_days_v_xviii_xix_unknown": 60000.0, "total_discharges_v_xviii_xix_unknown": 1000.0}),
+    ("BND21", "c042_above_upper", {"total_days_v_xviii_xix_unknown": 60001.0, "total_discharges_v_xviii_xix_unknown": 1000.0}),
+    ("BND22", "c042_below_lower", {"total_days_v_xviii_xix_unknown": 9999.0}),
+    ("BND23", "c036_on_lower", {"total_salaries_adjusted": 100000.0}),
+    ("BND24", "c036_below_lower", {"total_salaries_adjusted": 99999.0}),
+    ("BND25", "c036_on_upper", {"total_salaries_adjusted": 10000000.0}),
+    ("BND26", "c036_above_upper", {"total_salaries_adjusted": 10000010.0}),
+    ("BND27", "c036_zero_fte", {"fte_employees_on_payroll": 0.0}),
+    ("BND28", "c036_negative_fte", {"fte_employees_on_payroll": -10.0}),
+)
 # Package 3 cases (design 2.5, 2.6, 2.10 and 2.11). Hospital 990009 has windows 2022 to 2024, hospital 990010 windows 2022 and 2023 and hospital 990011
 # the window 2023, hospital 990012 the window 2023 after two reports of one period that disagree. Every value is synthetic; the expected results are worked
 # out by hand in scripts/features/derived_column_cases.py.
@@ -188,9 +220,12 @@ def snapshot(ccn: str, period_end: date, **values: Any) -> dict[str, Any]:
     return base
 
 
-def domain_report(number: str, year: int, denominator: float | None, numerator: float, ccn: str = DOMAIN_CCN) -> dict[str, Any]:
-    """One cost report of the domain cases: every floored denominator and every share numerator at the given values."""
-    return {
+def domain_report(
+    number: str, year: int, denominator: float | None, numerator: float, ccn: str = DOMAIN_CCN, overrides: dict[str, float] | None = None
+) -> dict[str, Any]:
+    """One cost report of the domain cases: every floored denominator and every share numerator at the given values. The liabilities, assets and salaries
+    of the ratio controls sit inside their bounds (0.5 and 50000 per FTE); ``overrides`` replaces named amounts, as the bound cases do."""
+    row = {
         "rpt_rec_num": number,
         "ccn": ccn,
         "provider_ccn_raw": ccn,
@@ -217,10 +252,14 @@ def domain_report(number: str, year: int, denominator: float | None, numerator: 
         "total_days_v_xviii_xix_unknown": DOMAIN_DAYS,
         "total_days_title_xviii": numerator,
         "total_days_title_xix": numerator,
+        "total_liabilities": 5000.0,
+        "total_assets": 10000.0,
+        "total_salaries_adjusted": 500000.0,
         "type_of_control": "2",
         "provider_type": "1",
         "member_sha256": f"cost-{number}",
     }
+    return {**row, **(overrides or {})}
 
 
 def derived_rows(rows: Rows) -> None:
@@ -483,6 +522,7 @@ def gold_rows(version: int = 1) -> Rows:
             }
         )
     rows["fct_cost_report"] += [domain_report(number, year, denominator, numerator) for number, _, year, denominator, numerator in DOMAIN_CASES]
+    rows["fct_cost_report"] += [domain_report(number, 2022, 10000.0, 5000.0, overrides=amounts) for number, _, amounts in BOUND_CASES]
     # ONC (C071 to C074).
     rows["fct_onc_ehr_product"].append(
         {

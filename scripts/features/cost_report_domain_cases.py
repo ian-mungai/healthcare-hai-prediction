@@ -2,9 +2,10 @@
 
     .venv/bin/python -m scripts.features.cost_report_domain_cases <run folder> [--output <report.json>]
 
-The run folder is one that ``features_build`` filled from the fixture rows of ``feature_fixture.DOMAIN_CASES``. The expected status and value of every
-control in every case come from the arithmetic and the literal firm domains of design 3.1 below, not from the recipe and not from the model. A recipe that
-widens a domain, a model that lets a value through and a count model that disagrees with the nulls each fail here. The build itself runs the two dbt tests
+The run folder is one that ``features_build`` filled from the fixture rows of ``feature_fixture.DOMAIN_CASES`` and ``feature_fixture.BOUND_CASES``. The
+expected status and value of every control in every case come from the arithmetic, the literal firm domains of design 3.1 and the literal plausibility bounds of
+the owner decision of Nov 9 2026 below, not from the recipe and not from the model. A recipe that widens or drops a bound, a model that lets a value through
+and a count model that disagrees with the nulls each fail here. The build itself runs the two dbt tests
 ``assert_cost_report_in_domain`` and ``assert_cost_report_domain_counts``; these cases add the exact status and value of each fixture row.
 
 The expected counts cover every fixture cost report that holds the domain amounts (the domain cases and the package 3 reports), because the count model
@@ -24,15 +25,43 @@ from typing import Any
 
 from scripts.features import feature_fixture
 
-DAYS = feature_fixture.DOMAIN_DAYS
-FTE = 10.0
-DAYS_PER_YEAR = 365.0
-SHARES = ("C023", "C024", "C049", "C050", "C052", "C053", "C054")
-DOMAIN_MAX = {**dict.fromkeys(SHARES, 1.0), "C045": 1.0}
-DOMAIN_MIN = dict.fromkeys(SHARES, 0.0)
+# The rule of every checked control, worked out from the cost-report amounts and the literal bounds below, not from the recipe: (numerator amount, denominator
+# amount, divisor) where the divisor is the denominator amount per reporting day for the three per-day controls; the floor is above 0 where one is listed.
+RULES = {
+    "C023": ("total_days_title_xviii", "total_days_v_xviii_xix_unknown", False),
+    "C024": ("total_days_title_xix", "total_days_v_xviii_xix_unknown", False),
+    "C028": ("fte_employees_on_payroll", "total_bed_days_available", True),
+    "C036": ("total_salaries_adjusted", "fte_employees_on_payroll", False),
+    "C040": ("total_days_v_xviii_xix_unknown", "total_bed_days_available", False),
+    "C041": ("total_discharges_v_xviii_xix_unknown", "total_bed_days_available", True),
+    "C042": ("total_days_v_xviii_xix_unknown", "total_discharges_v_xviii_xix_unknown", False),
+    "C045": ("net_income_from_service_to_patients", "net_patient_revenue", False),
+    "C046": ("total_current_assets", "total_current_liabilities", False),
+    "C047": ("total_liabilities", "total_assets", False),
+    "C048": ("cash_on_hand_and_in_banks", "less_total_operating_expense", True),
+    "C049": ("cost_of_charity_care", "total_costs", False),
+    "C050": ("cost_of_uncompensated_care", "total_costs", False),
+    "C052": ("net_revenue_from_medicaid", "net_patient_revenue", False),
+    "C053": ("total_salaries_from_worksheet_a", "less_total_operating_expense", False),
+    "C054": ("contract_labor_direct_patient_care", "less_total_operating_expense", False),
+    "C057": ("less_total_operating_expense", "total_discharges_v_xviii_xix_unknown", False),
+}
 FLOORED = ("C028", "C040", "C041", "C042", "C045", "C046", "C048", "C049", "C050", "C052", "C053", "C054", "C057")
-NUMERATOR_IS_DENOMINATOR = ("C041", "C057")
-CHECKED = tuple(sorted({*DOMAIN_MAX, *DOMAIN_MIN, *FLOORED}))
+SHARES = ("C023", "C024", "C049", "C050", "C052", "C053", "C054")
+# The literal bounds: the firm domains of design 3.1 and the owner's plausibility bounds of Nov 9 2026 (unit in brackets). The margin stays at most 1; the
+# balance-sheet ratios C046 and C047 and the days of cash C048 may be negative.
+BOUNDS = {
+    **dict.fromkeys(SHARES, (0.0, 1.0)),
+    "C036": (10000.0, 1000000.0),  # dollars per FTE
+    "C040": (0.0, 1.2),  # fraction of bed days
+    "C042": (1.0, 60.0),  # days per discharge
+    "C045": (-2.0, 1.0),  # fraction of net patient revenue
+    "C046": (-50.0, 50.0),  # ratio
+    "C047": (-5.0, 5.0),  # ratio
+    "C048": (-1000.0, 1000.0),  # days of operating expense
+}
+DAYS_PER_YEAR = 365.0
+CHECKED = tuple(sorted(RULES))
 STATUSES = ("in_domain", "out_of_domain", "denominator_not_positive")
 MEASURES_SQL = (
     "select rpt_rec_num, measure_control, domain_status, value_number from int_cost_report_measures where ccn = ? and list_contains(?, measure_control)"
@@ -43,63 +72,58 @@ CHECKS_SQL = (
 )
 
 
-def raw_value(control: str, denominator: float, numerator: float) -> float | None:
-    """The value of one control for one case by its rule before any bound; the fixture gives every input a number."""
-    if control in ("C023", "C024"):
-        return numerator / DAYS
-    if control in ("C040", "C042"):
-        return DAYS / denominator if denominator else None
-    if control == "C057":
-        return denominator / denominator if denominator else None
-    if control == "C028":
-        return FTE / (denominator / DAYS_PER_YEAR) if denominator else None
-    if control == "C041":
-        return denominator / (denominator / DAYS_PER_YEAR) if denominator else None
-    if control == "C048":
-        return numerator / (denominator / DAYS_PER_YEAR) if denominator else None
+def raw_value(control: str, row: dict[str, Any]) -> float | None:
+    """The value of one control for one report by its rule before any bound; a zero denominator gives None."""
+    numerator_name, denominator_name, per_day = RULES[control]
+    numerator, denominator = row[numerator_name], row[denominator_name]
+    if per_day:
+        denominator = denominator / row["reporting_days"] if denominator is not None else None
     return numerator / denominator if denominator else None
 
 
-def expected_row(control: str, denominator: float | None, numerator: float) -> tuple[str, float | None]:
-    """The status and the published value the firm domains of design 3.1 give for one control and one case."""
+def expected_row(control: str, row: dict[str, Any]) -> tuple[str, float | None]:
+    """The status and the published value the firm domains and plausibility bounds give for one control and one report."""
+    denominator = row[RULES[control][1]]
     if control in FLOORED and (denominator is None or denominator <= 0):
         return "denominator_not_positive", None
-    raw = raw_value(control, denominator or 0.0, numerator)
+    raw = raw_value(control, row)
     if raw is None:
         return "in_domain", None
-    if (control in DOMAIN_MIN and raw < DOMAIN_MIN[control]) or (control in DOMAIN_MAX and raw > DOMAIN_MAX[control]):
+    low, high = BOUNDS.get(control, (None, None))
+    if (low is not None and raw < low) or (high is not None and raw > high):
         return "out_of_domain", None
     return "in_domain", raw
 
 
+def domain_reports() -> list[dict[str, Any]]:
+    """The cost reports of the domain hospital: the domain cases and the bound cases."""
+    return [row for row in feature_fixture.gold_rows()["fct_cost_report"] if row["ccn"] == feature_fixture.DOMAIN_CCN]
+
+
+def has_amount(control: str, row: dict[str, Any]) -> bool:
+    """Whether the report holds the numerator amount of the control; the model gives no row otherwise."""
+    return row.get(RULES[control][0]) is not None
+
+
 def expected_rows() -> dict[tuple[str, str], tuple[str, float | None]]:
-    """The expected status and value by report and control."""
-    return {
-        (report, control): expected_row(control, denominator, numerator)
-        for report, _, _, denominator, numerator in feature_fixture.DOMAIN_CASES
-        for control in CHECKED
-        if not (denominator is None and control in NUMERATOR_IS_DENOMINATOR)
-    }
+    """The expected status and value by report and control, over the domain hospital's reports."""
+    return {(row["rpt_rec_num"], control): expected_row(control, row) for row in domain_reports() for control in CHECKED if has_amount(control, row)}
 
 
-def fixture_reports() -> list[tuple[str, int, float | None, float]]:
-    """Report, fiscal year, denominator and numerator of every fixture cost report that holds the domain amounts; the count model reads all of them."""
-    return [
-        (row["rpt_rec_num"], row["fiscal_year"], row["net_patient_revenue"], row["net_revenue_from_medicaid"])
-        for row in feature_fixture.gold_rows()["fct_cost_report"]
-        if "net_revenue_from_medicaid" in row
-    ]
+def fixture_reports() -> list[dict[str, Any]]:
+    """Every fixture cost report that holds the domain amounts; the count model reads all of them."""
+    return [row for row in feature_fixture.gold_rows()["fct_cost_report"] if "net_revenue_from_medicaid" in row]
 
 
 def expected_counts() -> dict[tuple[str, int], tuple[int, int, int]]:
     """The expected rows evaluated, out of domain and with a bad denominator by control and fiscal year, over every fixture cost report."""
     counts: dict[tuple[str, int], list[int]] = {}
-    for _, year, denominator, numerator in fixture_reports():
+    for row in fixture_reports():
         for control in CHECKED:
-            if denominator is None and control in NUMERATOR_IS_DENOMINATOR:
+            if not has_amount(control, row):
                 continue
-            status = expected_row(control, denominator, numerator)[0]
-            entry = counts.setdefault((control, year), [0, 0, 0])
+            status = expected_row(control, row)[0]
+            entry = counts.setdefault((control, row["fiscal_year"]), [0, 0, 0])
             entry[0] += 1
             entry[1] += status == "out_of_domain"
             entry[2] += status == "denominator_not_positive"
