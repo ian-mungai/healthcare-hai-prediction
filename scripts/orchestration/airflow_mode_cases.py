@@ -19,8 +19,9 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    ``host_table_matches_the_job_table``, ``missing_launch_module_is_named``).
 8. The launch services come from the named environment, with the session adapter (``services_come_from_named_environment``,
    ``services_build_the_session_adapter``).
-9. The metadata job sends overrides only for the one container of its host definition (``metadata_uses_the_host_containers``). The rig reads the host
-   definitions from ``infra/jobs`` (``host_definitions_hold_the_init_step_and_the_layer_guards``).
+9. The metadata job sends overrides only for the one container of its host definition (``metadata_uses_the_host_containers``). The rig's fake ECS holds
+   the containers that Terraform plans for the nine host definitions (``infra/jobs/tests/host_definitions.json``, which a Terraform test keeps equal to the
+   plan) and the case ``host_definitions_hold_the_init_step_and_the_layer_guards`` checks them against what the job table and the owner decisions expect.
 """
 
 from __future__ import annotations
@@ -85,11 +86,8 @@ RUN_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
 LAUNCH_MOUNT = re.compile(r'=\s*"orchestration/([A-Za-z0-9_]+\.py)"')
 DAG_ID = re.compile(r'dag_id="([a-z_]+)"')
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
-HOST_METADATA = re.compile(r"host_metadata_containers\s*=\s*\[(.*?)\n  \]", re.DOTALL)
-CONTAINER_NAME = re.compile(r'^      name\s*=\s*"([a-z_]+)"', re.MULTILINE)
-LAYER_PHASES = re.compile(r"layer_phases\s*=\s*\{(.*?)\n  \}", re.DOTALL)
-PHASE_LAYER = re.compile(r"^\s*([a-z_]+)\s*=\s*\[", re.MULTILINE)
-INIT_WIPE = 'container.name == "init"'
+HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
+LAYER_JOBS = frozenset({"silver", "gold", "features"})
 POLARIS = "http://10.0.0.5:8181/api/catalog"
 MLFLOW = "http://10.0.0.5:5100"
 
@@ -121,27 +119,15 @@ class StageBucket(FakeS3):
         self.objects[RUN_KEY.format(run=run, name=name)] = body if isinstance(body, bytes) else json.dumps(body).encode()
 
 
-def host_definitions(table: dict[str, Any], host: dict[str, Any]) -> dict[str, frozenset[str]]:
-    """The containers of each host task definition the rig's fake ECS knows, read from ``infra/jobs``: every definition starts with the init step that wipes
-    the family's scratch folders (``host_containers`` applies the wipe to the container named init), the layer jobs end with their guard, a job's other
-    containers are the ones its table row names (the host table's where it names them) and the metadata job's are the ones
-    ``host_metadata_containers`` lists."""
-    host_text, layers_text = (ROOT / "infra/jobs/host.tf").read_text(), (ROOT / "infra/jobs/layers.tf").read_text()
-    require(INIT_WIPE in host_text, "infra/jobs/host.tf no longer applies the scratch wipe to the init container of every host definition")
-    metadata_block = HOST_METADATA.findall(host_text)
-    require(len(metadata_block) == 1, f"infra/jobs/host.tf does not hold one host_metadata_containers list: {len(metadata_block)}")
-    metadata = CONTAINER_NAME.findall(metadata_block[0])
-    require(metadata[:1] == ["init"] and len(metadata) > 1, f"the metadata host containers are not an init step and its clients: {metadata}")
-    phases = LAYER_PHASES.findall(layers_text)
-    require(len(phases) == 1, "infra/jobs/layers.tf does not hold one layer_phases map")
-    layers = set(PHASE_LAYER.findall(phases[0]))
-    require(layers == {"silver", "gold", "features"}, f"the layer jobs with a guard are not the three the rig knows: {sorted(layers)}")
-    found = {}
-    for job, row in table["jobs"].items():
-        names = host["jobs"].get(job, {}).get("containers") or row["containers"]
-        found[f"example_dev_job_{job}_host"] = frozenset({"init", *names, *(["guard"] if job in layers else [])})
-    found["example_dev_job_metadata_host"] = frozenset(metadata)
-    return found
+def host_planned_containers() -> dict[str, dict[str, list[str]]]:
+    """The containers of each host family as Terraform plans them: ``containers`` in order and ``start_with_scratch_wipe``, the containers whose first command
+    starts with the scratch wipe (``infra/jobs/tests/host_definitions.json``, written by ``host_definitions_fixture`` from the plan)."""
+    return dict(json.loads(HOST_DEFINITIONS.read_text()))
+
+
+def host_definitions() -> dict[str, frozenset[str]]:
+    """The containers of each host task definition the rig's fake ECS knows, by the family name ECS sees."""
+    return {f"example_dev_job_{family}_host": frozenset(planned["containers"]) for family, planned in host_planned_containers().items()}
 
 
 class Rig:
@@ -155,7 +141,7 @@ class Rig:
         self.time = FakeClock()
         self.ecs.clock = lambda: self.time.now
         table, host = preflight.load_tables(ROOT)
-        self.ecs.definitions = host_definitions(table, host)
+        self.ecs.definitions = host_definitions()
         settings = EcsSettings(
             cluster=CLUSTER,
             family_prefix="example_dev_job_",
@@ -953,17 +939,21 @@ def dags_hold_no_broker_client() -> None:
 
 
 def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
-    """The rig's stand-in ECS knows the containers of main's host definitions: every one holds the init step, only the three layer jobs hold the guard
-    and the metadata job holds its init step and its one client."""
-    definitions = Rig().ecs.definitions
-    require(len(definitions) == 9, f"nine host families were expected: {sorted(definitions)}")
-    require(all("init" in names for names in definitions.values()), f"a host definition lacks the init step: {definitions}")
-    guarded = {family for family, names in definitions.items() if "guard" in names}
+    """The containers that Terraform plans for the host definitions are the ones the job table expects: the init step first and wiping the family's scratch
+    folders, then the containers of the table row (the host table's where it names them), then the guard for the three layer jobs only."""
+    table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
+    planned = host_planned_containers()
+    require(set(planned) == set(table["jobs"]) and len(planned) == 9, f"nine host families were expected: {sorted(planned)}")
+    for job, row in table["jobs"].items():
+        expected = ["init", *(host["jobs"].get(job, {}).get("containers") or row["containers"]), *(["guard"] if job in LAYER_JOBS else [])]
+        require(planned[job]["containers"] == expected, f"the {job} host definition holds {planned[job]['containers']}, expected {expected}")
+        require(
+            planned[job]["start_with_scratch_wipe"] == ["init"],
+            f"the {job} host definition does not start with its scratch wipe in the init step: {planned[job]}",
+        )
     require(
-        guarded == {f"example_dev_job_{layer}_host" for layer in ("silver", "gold", "features")}, f"the guard is not the layer jobs' alone: {sorted(guarded)}"
-    )
-    require(
-        definitions["example_dev_job_metadata_host"] == frozenset({"init", "ingest"}), f"metadata containers: {definitions['example_dev_job_metadata_host']}"
+        host_definitions()["example_dev_job_metadata_host"] == frozenset({"init", "ingest"}),
+        "the metadata host definition is not the init step and its one client",
     )
 
 

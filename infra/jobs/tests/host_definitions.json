@@ -1,0 +1,119 @@
+{
+  "bronze": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "load",
+      "check"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "drift": {
+    "containers": [
+      "init",
+      "fetch",
+      "baseline",
+      "current",
+      "check",
+      "publish"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "features": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "gold": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "maintain",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "metadata": {
+    "containers": [
+      "init",
+      "ingest"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "promote": {
+    "containers": [
+      "init",
+      "fetch",
+      "promote"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "serve": {
+    "containers": [
+      "init",
+      "fetch",
+      "serve"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "silver": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "verify",
+      "export",
+      "publish",
+      "upload",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "train": {
+    "containers": [
+      "init",
+      "fetch",
+      "prepare",
+      "extract",
+      "train"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  }
+}

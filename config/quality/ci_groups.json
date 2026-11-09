@@ -106,6 +106,7 @@
       "^config/orchestration/",
       "^data_contracts/orchestration/",
       "^services/orchestration/",
+      "^infra/jobs/tests/host_definitions\\.json$",
       "^services/lineage/",
       "^scripts/quality/(docker_calls|repo_checks|typecheck)\\.py$",
       "^config/quality/(docker_calls_reviewed|mypy_runtimes)\\.json$",

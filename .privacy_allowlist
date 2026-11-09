@@ -68,3 +68,4 @@ aws-account infra/platform/tests/scratch_replace.tftest.hcl -- synthetic all-one
 aws-account infra/iam/tests/host_network.tftest.hcl -- synthetic all-ones account IDs in the host firewall and boot plan tests; not the project's account -- permanent
 aws-account infra/services/tests/host_capacity.tftest.hcl -- synthetic all-ones account IDs in the service CPU and host folder plan tests; not the project's account -- permanent
 aws-account infra/jobs/tests/host_scratch.tftest.hcl -- synthetic all-ones account IDs in the host init wipe plan tests; not the project's account -- permanent
+aws-account infra/jobs/tests/host_definitions.tftest.hcl -- synthetic all-ones account IDs in the mocked host definition plan test; not the project's account -- permanent
