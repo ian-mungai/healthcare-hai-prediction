@@ -173,6 +173,12 @@ BASE = {
     CONTRACT: json.dumps(CONTRACT_DOCUMENT, indent=2) + "\n",
     BRONZE_MAP: json.dumps(BRONZE, indent=2) + "\n",
 }
+WORKER_FAULTS = {
+    "crash_at_exit": "atexit.register(lambda: os.kill(os.getpid(), signal.SIGSEGV))",
+    "crash_at_start": "os.kill(os.getpid(), signal.SIGSEGV)",
+    "exit_with_message": "sys.stderr.write('injected worker failure\\n'); os._exit(3)",
+    "exit_with_undecodable_message": "os.write(2, b'injected worker failure \\xff\\n'); os._exit(3)",
+}
 ALL_FILES_SCOPE = "all"
 STAGED_SCOPE = "staged"
 CANNOT_RUN_DETAILS = ("Fix:", "ask the owner", "scripts/quality/model_metadata.py")
@@ -190,6 +196,7 @@ class Case:
     delete: tuple[str, ...] = ()
     rename: tuple[tuple[str, str], ...] = ()
     located: str = ""
+    worker_fault: str = ""
 
 
 def replacing(path: str, old: str, new: str) -> tuple[tuple[str, str, str], ...]:
@@ -901,6 +908,22 @@ def make_cases() -> list[Case]:
     )
     return [
         Case("control", code=0),
+        Case("worker_crash_at_exit_keeps_its_result", code=0, worker_fault="crash_at_exit"),
+        Case("worker_killed_names_its_signal", "cannot run", "stopped by signal 11", code=2, worker_fault="crash_at_start"),
+        Case(
+            "worker_exit_names_code_and_stderr",
+            "cannot run",
+            "exited with code 3; stderr tail: injected worker failure",
+            code=2,
+            worker_fault="exit_with_message",
+        ),
+        Case(
+            "worker_exit_with_undecodable_stderr_names_code",
+            "cannot run",
+            "exited with code 3; stderr tail: injected worker failure",
+            code=2,
+            worker_fault="exit_with_undecodable_message",
+        ),
         *future_source_cases(),
         *review_round8_cases(),
         *review_round7_cases(),
@@ -1577,6 +1600,14 @@ def judge(case: Case, exit_code: int, output: str, exact: bool) -> bool:
     return correct
 
 
+def worker_fault_environment(scratch: Path, fault: str) -> dict[str, str]:
+    """Environment that makes only the lineage worker fail as ``fault`` says, through a sitecustomize module that acts on the worker's option."""
+    folder = scratch / "fault"
+    folder.mkdir()
+    (folder / "sitecustomize.py").write_text(f"import atexit, os, signal, sys\nif '--lineage-worker' in sys.argv:\n    {WORKER_FAULTS[fault]}\n")
+    return {"PYTHONPATH": str(folder)}
+
+
 def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = CASE_SECONDS) -> dict[str, Any]:
     """Run a synthetic case through the given hook and checker and return their assertions and diagnostic tails."""
     began = time.monotonic()
@@ -1593,13 +1624,16 @@ def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = C
             "--verbose",
             *(["--all-files"] if case.scope == ALL_FILES_SCOPE else []),
         ]
-        environment = {**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools" / "pre_commit_cache")}
+        fault = worker_fault_environment(Path(scratch), case.worker_fault) if case.worker_fault else {}
+        environment = {**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools" / "pre_commit_cache"), **fault}
         hook = run_command(str(PRE_COMMIT), args, cwd=repo, env=environment, timeout=case_seconds)
         hook_output = hook.stdout + hook.stderr
         hook_correct = judge(case, hook.returncode, hook_output, exact=False)
         direct_correct, direct_code, direct_tail = True, None, []
         if case.scope == ALL_FILES_SCOPE:
-            direct = run_command(str(repo / ".venv" / "bin" / "python"), ["-m", "scripts.quality.model_metadata"], cwd=repo, timeout=case_seconds)
+            direct = run_command(
+                str(repo / ".venv" / "bin" / "python"), ["-m", "scripts.quality.model_metadata"], cwd=repo, env={**os.environ, **fault}, timeout=case_seconds
+            )
             direct_code, direct_output = direct.returncode, direct.stdout + direct.stderr
             direct_correct = judge(case, direct.returncode, direct_output, exact=True)
             direct_tail = direct_output.strip().splitlines()[-6:]

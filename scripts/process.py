@@ -292,9 +292,11 @@ def close_pipes(process: subprocess.Popen[str]) -> None:
             pipe.close()
 
 
-def start(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, new_session: bool, piped_input: bool = False) -> subprocess.Popen[str]:
+def start(
+    argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, new_session: bool, piped_input: bool = False, errors: str = "strict"
+) -> subprocess.Popen[str]:
     """Start a resolved program with closed stdin (a pipe from the caller when ``piped_input`` is set: a lister's input) and captured text output, in a
-    new session or in a new process group."""
+    new session or in a new process group. ``errors`` is how undecodable output bytes are decoded ("replace" keeps a diagnostic readable)."""
     return subprocess.Popen(  # noqa: S603 - the only process launcher: full path, list arguments, no shell, stdin closed or piped, own session or group
         list(argv),
         cwd=cwd,
@@ -303,6 +305,7 @@ def start(argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, 
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors=errors,
         start_new_session=new_session,
         process_group=None if new_session else 0,
     )
@@ -921,6 +924,7 @@ def run_command(
     check: bool = False,
     own_session: bool = False,
     grace_seconds: float | None = None,
+    errors: str = "strict",
 ) -> CompletedProcess[str]:
     """Run ``program`` with ``args`` and return its exit code and captured text output.
 
@@ -944,6 +948,8 @@ def run_command(
         Seconds between TERM and KILL when a nested launch's group is stopped; ``STOP_GRACE_SECONDS`` when omitted. A top-level launch's session stop
         sends KILL to its frozen members without a grace period. A caller whose own deadline must hold
         within a bound shorter than that passes a smaller value.
+    errors : str
+        How undecodable bytes in the captured output are decoded: "strict" (the default) raises, "replace" keeps the rest readable.
 
     Returns
     -------
@@ -973,7 +979,7 @@ def run_command(
     process: subprocess.Popen[str] | None = None
     try:
         with interrupts_deferred():
-            process = start([executable, *args], cwd, child_environment, new_session=not nested)
+            process = start([executable, *args], cwd, child_environment, new_session=not nested, errors=errors)
         stdout, stderr = communicate(process, timeout, cancellation)
     except LaunchCancelled:
         if process is None or cancellation is None:

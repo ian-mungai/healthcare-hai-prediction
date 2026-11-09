@@ -36,6 +36,8 @@ yaml: Any = importlib.import_module("yaml")
 # The lineage worker compiles and parses every model. The whole check takes about 49 s alone on the development Mac,
 # but 225 to 265 s inside full local CI, where other groups run in parallel, and it passed 300 s there once.
 LINEAGE_WORKER_SECONDS = 600
+WORKER_STDERR_LINES = 12
+WORKER_STDERR_CHARACTERS = 1500
 ROOT = Path(__file__).resolve().parents[2]
 DOCUMENT = "scripts/quality/model_metadata.py"
 DBT_DIRECTORY = "dbt"
@@ -823,6 +825,14 @@ def fallback_outputs(sources: dict[str, Entry], inputs: dict[str, frozenset[Ref]
     return found
 
 
+def worker_failure(returncode: int, stderr: str) -> str:
+    """Name how the lineage worker ended and the last lines it wrote to stderr, bounded so the message stays readable."""
+    how = f"was stopped by signal {-returncode}" if returncode < 0 else f"exited with code {returncode}"
+    lines = [line.strip() for line in stderr.strip().splitlines() if line.strip()][-WORKER_STDERR_LINES:]
+    tail = " | ".join(lines)[-WORKER_STDERR_CHARACTERS:]
+    return f"SQL lineage worker did not produce a result: it {how}" + (f"; stderr tail: {tail}" if tail else "; it wrote nothing to stderr")
+
+
 def compiled_lineage(
     root: Path, project: dict[str, Any], sources: dict[str, Entry], models: dict[str, Model], inputs: dict[str, frozenset[Ref]], invalid: bool
 ) -> tuple[dict[str, dict[str, frozenset[str]]], dict[str, str], dict[str, str], dict[str, str]]:
@@ -848,7 +858,13 @@ def compiled_lineage(
             env["DBT_PACKAGES_INSTALL_PATH"] = str(packages)
         try:
             result = run_command(
-                str(runtime), ["-m", "scripts.quality.model_metadata", "--lineage-worker", str(request)], cwd=root, env=env, timeout=LINEAGE_WORKER_SECONDS
+                str(runtime),
+                ["-m", "scripts.quality.model_metadata", "--lineage-worker", str(request)],
+                cwd=root,
+                env=env,
+                timeout=LINEAGE_WORKER_SECONDS,
+                # A worker that fails may write any bytes; the failure must still name its exit code and stderr tail.
+                errors="replace",
             )
         except TimeoutExpired as error:
             raise CannotRun(
@@ -862,7 +878,7 @@ def compiled_lineage(
                 ".tools/sqlfluff", 1, f"SQL lineage worker failed ({type(error).__name__})", "check the installed SQLFluff runtime and retry"
             ) from error
         if result.returncode != 0 or not (scratch / "result.json").is_file():
-            raise CannotRun(".tools/sqlfluff", 1, "SQL lineage worker did not produce a result", "check the installed dbt templater and retry")
+            raise CannotRun(".tools/sqlfluff", 1, worker_failure(result.returncode, result.stderr), "check the installed dbt templater and retry")
         response = load_json("SQL lineage result", (scratch / "result.json").read_text())
         outputs = {name: {column: frozenset(origins) for column, origins in values.items()} for name, values in response["outputs"].items()}
         return outputs, response["conservative"], response["compiled_hashes"], response["analysis_errors"]
@@ -1768,7 +1784,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lineage-worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.lineage_worker is not None:
-        return lineage_worker(args.lineage_worker)
+        status = lineage_worker(args.lineage_worker)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # The worker's whole output is result.json. Python 3.12 can crash with SIGSEGV while it finalizes with dbt, DuckDB and SQLFluff threads alive, after the
+        # result is written, and the parent then rejects the result. Leaving without finalization removes that crash.
+        os._exit(status)
     root = args.root.resolve()
     try:
         project = load(root)
