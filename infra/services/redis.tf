@@ -11,7 +11,7 @@ locals {
   EOT
 
   # While the model API is on, the Redis task also creates the read-only user of the model API from its own password (D18). Redis ACLs cannot bind a database,
-  # so the user may run only the read commands the serving client sends and select databases 1 (the Feast hashes) and 2 (the marker). A connection starts in database 0,
+  # so the user may run only the read commands the serving client sends and select databases 1 (the Feast hashes of the single path), 2 (the markers) and 3 to 5 (the Feast hashes of the online model sets m1, m2 and m4). A connection starts in database 0,
   # which stays empty and which the user cannot write. The password is quoted like the default one. The octal escape 076 is the greater-than sign that starts an
   # ACL password rule, written so that no line holding the secret contains a redirection character.
   redis_script_with_model_api_user = <<-EOT
@@ -19,7 +19,7 @@ locals {
     pw=$${pw//\"/\\\"}
     mp=$${MODEL_API_REDIS_PASSWORD//\\/\\\\}
     mp=$${mp//\"/\\\"}
-    rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2'
+    rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2 +select|3 +select|4 +select|5'
     exec redis-server - < <(
       printf '%s\n' 'bind 0.0.0.0' 'port 6379' 'dir /data' 'save ""' 'maxmemory 2048mb' 'maxmemory-policy noeviction'
       printf 'requirepass "%s"\n' "$pw"

@@ -2716,21 +2716,21 @@ run "redis_creates_a_read_only_user_for_the_model_api" {
     error_message = "The Redis script with the model API user also saves no snapshots."
   }
 
-  # Redis ACLs cannot bind a database, so the user may only run the read commands the serving client sends, select databases 1 (Feast) and 2 (the marker),
+  # Redis ACLs cannot bind a database, so the user may only run the read commands the serving client sends, select databases 1 (Feast, single path), 2 (the markers) and 3 to 5 (the online model sets),
   # and nothing else: no write, no flush, no script, no administration. A connection starts in database 0, which stays empty.
   assert {
     condition = alltrue([
       for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
-      contains(split("\n", container.command[0]), "rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2'")
+      contains(split("\n", container.command[0]), "rules='resetkeys ~* resetchannels -@all +hmget +hget +hgetall +exists +ping +auth +hello +client|setname +select|1 +select|2 +select|3 +select|4 +select|5'")
     ])
-    error_message = "The model API user is read-only: only the listed read commands, and select for the two databases the client uses."
+    error_message = "The model API user is read-only: only the listed read commands, and select for the databases the client uses (1 and 2, and 3 to 5 for the online model sets)."
   }
 
   assert {
     condition = alltrue([
       for container in jsondecode(aws_ecs_task_definition.service["redis"].container_definitions) :
       anytrue([for line in split("\n", container.command[0]) : trimspace(line) == "printf 'user model_api on \"\\076%s\" %s\\n' \"$mp\" \"$rules\""]) &&
-      !anytrue([for word in ["+@", "allkeys", "allcommands", "+set", "+del", "+flush", "+eval", "+config", "+acl", "+keys", "+scan", "+debug", "+shutdown", "+select|0", "+select|3"] : strcontains(container.command[0], word)])
+      !anytrue([for word in ["+@", "allkeys", "allcommands", "+set", "+del", "+flush", "+eval", "+config", "+acl", "+keys", "+scan", "+debug", "+shutdown", "+select|0", "+select|6"] : strcontains(container.command[0], word)])
     ])
     error_message = "The user is created from the password through a printf line, and the command grants no write, no administration and no select of another database."
   }
@@ -2873,7 +2873,7 @@ run "serving_container_definitions_match_the_approved_versions" {
     condition = alltrue([
       for pin in [
         { id = "model_api/model_api", digest = "f87f0f24695ce2d0d9e7a0f9306ccbf81fdc5e6ff2dfd680764e07516c884704" },
-        { id = "redis/redis", digest = "7f52421e0183b5e1bb5b278b45dff274fcc87e3e52c57986cb169bfb71831a46" },
+        { id = "redis/redis", digest = "ff7acaae269a76eb99036e341d3e586f0da7db52a4adb517cd674cb56a489e08" },
         { id = "streamlit/streamlit", digest = "f8e2c6e9514fc5a6205c06cbfed1d52950ddcce9fe60e33034de38c25a0438af" },
       ] : output.execution_digests[pin.id] == pin.digest
     ])
