@@ -1181,15 +1181,18 @@ def checksum_results(base: Path, only: list[str] | None = None) -> list[dict[str
             built = {name: digest for name, digest in after.items() if name not in run.relations}
             folder_models = sources.REPO_ROOT / "dbt/models/features"
             tables = sum("materialized='table'" in path.read_text() for path in folder_models.glob("*.sql"))
+            models = {f"main.{path.stem}" for path in folder_models.rglob("*.sql") if path.parent.name != "bridge"}
             real = {name for name, digest in built.items() if CHECKSUM.fullmatch(digest)}
             with_rows = sorted(name for name, digest in built.items() if (found := CHECKSUM.fullmatch(digest)) and found.group(1))
             results.append(
                 {
                     "case": wanted,
                     "expected": f"{len(built)} built relations, {len(built) - tables} views and {tables} tables, each readable (the md5 is empty without rows)",
+                    "built_without_a_model_file": sorted(set(built) - models),
+                    "model_file_not_built": sorted(models - set(built)),
                     "unreadable": sorted(set(built) - real),
                     "with_rows_and_an_md5": with_rows,
-                    "ok": len(built) == 31 and tables == 4 and real == set(built) and bool(with_rows),
+                    "ok": set(built) == models and tables == 4 and real == set(built) and bool(with_rows),
                 }
             )
             results[-1]["seconds"] = round(time.monotonic() - started, 3)
