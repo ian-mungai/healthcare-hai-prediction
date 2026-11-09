@@ -244,11 +244,12 @@ def reference_union(root: Path, schema: dict[str, Any]) -> tuple[tuple[str, ...]
     predictors = tuple(sorted(references))
     for hai_type in HAI_TYPES:
         number = hai_type.split("_")[1]
-        for field in ("sir__number", "alignment_status__category"):
+        for field, role in (("sir__number", "label"), ("alignment_status__category", "label"), ("predicted__number", "weight")):
             reference = f"label_hai_{number}:hai_{number}__{field}"
             column = columns.get(reference, {})
-            if column.get("role") != "label":
-                raise ExtractError("a published SIR or alignment-status label is not registered")
+            if column.get("role") != role:
+                what = "a published SIR or alignment-status label" if role == "label" else "an expected-count weight column"
+                raise ExtractError(f"{what} is not registered as a {role}")
             references.add(reference)
     if len({reference.split(":", 1)[1] for reference in references}) != len(references):
         raise ExtractError("selected references have ambiguous bare column names")
@@ -257,6 +258,11 @@ def reference_union(root: Path, schema: dict[str, Any]) -> tuple[tuple[str, ...]
         {reference.split(":", 1)[1]: columns[reference] for reference in predictors},
         hashlib.sha256(canonical(predictors)).hexdigest(),
     )
+
+
+def _finite(value: Any) -> bool:
+    """Whether a value is a real, finite number (not a bool, a token or a missing value)."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _unique(rows: Sequence[dict[str, Any]], key: str, label: str) -> dict[str, dict[str, Any]]:
@@ -459,23 +465,36 @@ def extract(
             number = hai_type.split("_")[1]
             label = f"hai_{number}__sir__number"
             status = f"hai_{number}__alignment_status__category"
+            weight = f"hai_{number}__predicted__number"
             rows = []
+            weight_excluded = 0
             for key in flags:
                 source = historical[key]
                 value = source[label]
-                if source[status] != "aligned" or not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
+                if source[status] != "aligned" or not _finite(value):
+                    continue
+                if not _finite(source[weight]) or source[weight] <= 0:
+                    weight_excluded += 1
                     continue
                 match = KEY.fullmatch(key)
                 if match is None:
                     raise ExtractError("a hospital-window key changed during extraction")
                 rows.append(
-                    {**{name: source[name] for name in predictors}, "spine_key": key, "ccn": match[1], "window_year": int(match[2]), label: float(value)}
+                    {
+                        **{name: source[name] for name in predictors},
+                        "spine_key": key,
+                        "ccn": match[1],
+                        "window_year": int(match[2]),
+                        label: float(value),
+                        weight: float(source[weight]),
+                    }
                 )
             columns = {name: column["type"] for name, column in predictors.items()} | {
                 "spine_key": "varchar",
                 "ccn": "varchar",
                 "window_year": "bigint",
                 label: "double",
+                weight: "double",
             }
             file_info = write_table(f"extract_{hai_type}.parquet", rows, columns)
             years = [row["window_year"] for row in rows]
@@ -499,12 +518,14 @@ def extract(
                 "writer_lock_sha256": writer_lock_sha256,
                 **file_info,
                 "label_column": label,
+                "weight_column": weight,
                 "oldest_window_year": min(years) if years else None,
                 "newest_window_year": max(years) if years else None,
                 "counts": {
                     "spine": len(spine),
                     "population_excluded": len(spine) - len(flags),
-                    "label_excluded": len(flags) - len(rows),
+                    "label_excluded": len(flags) - len(rows) - weight_excluded,
+                    "weight_excluded": weight_excluded,
                     "included": len(rows),
                 },
                 "auxiliary_files": auxiliary,

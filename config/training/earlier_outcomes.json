@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "controls": ["C275", "C276", "C277", "C278", "C279", "C280"],
+  "slots": ["m2_elastic_net", "m4_boosting"],
+  "rule": "windows with window_year <= Y-2 whose first release is before the window start; first release only"
+}

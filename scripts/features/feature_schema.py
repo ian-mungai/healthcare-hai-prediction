@@ -15,6 +15,13 @@ The column list is fixed by the registry, never by a run's data. The controls co
 ``assert_*_control_identity`` tests hold them equal to the models); the fields a model writes in SQL and the kind of a key that is not a number come from
 the reviewed ``data_contracts/features/feature_schema_rules.json``. The generator fails, before it writes anything, on two keys that fold to one column
 name, on a name over 128 characters, on a rule that names no key and on a control that is excluded from predictors. It reads no dbt and no Feast.
+
+Roles of a column: ``key``, ``event_time``, ``identifier``, ``predictor``, ``label``, ``weight`` and ``grouping``. Only a predictor is served and
+registered in an online view. A ``label`` and a ``weight`` (the expected count that weights the training fit) sit in the offline-only label views; a
+``grouping`` column is stored and never registered. Every predictor has a ``source_group``, the source whose columns go missing together. The
+earlier-outcome controls are excluded from predictors everywhere except in a restricted table (``restriction``), which
+``config/training/earlier_outcomes.json`` names. A reviewed list of the rules file can add a derived key beside a key of a family: ``log_fields`` and
+``change_fields`` of a number key, ``ordinal_fields`` of a category key.
 """
 
 from __future__ import annotations
@@ -23,10 +30,11 @@ import argparse
 import ast
 import csv
 import hashlib
+import importlib
 import json
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +46,9 @@ SCHEMA = "data_contracts/features/feature_schema.json"
 MATRIX_FOLDER = "dbt/models/features/matrix"
 MATRIX_YAML = f"{MATRIX_FOLDER}/_feature_matrix__models.yml"
 DEFINITIONS = "feature_store/definitions.py"
+EARLIER_OUTCOMES = "config/training/earlier_outcomes.json"
+EARLIER_SCHEMA = "data_contracts/training/earlier_outcomes.schema.json"
+TARGETS = "config/training/targets.json"
 MODEL_PATTERN = re.compile(r"(feature_matrix|label_matrix)_[a-z0-9_]+")
 COLUMN_MAX = 128
 LINE_MAX = 150
@@ -80,10 +91,13 @@ class Family:
     number: str
     category: str
     mask: str
+    restriction: str = ""
 
 
 FAMILIES = (
-    Family("care_compare", "feature_matrix_care_compare", "int_spine_care_compare_measures", ("measure_control",), "value_number", "value_category", "none"),
+    Family(
+        "care_compare", "feature_matrix_care_compare", "int_spine_care_compare_measures", ("measure_control", "field"), "value_number", "value_category", "none"
+    ),
     Family(
         "hospital",
         "feature_matrix_hospital",
@@ -115,7 +129,20 @@ FAMILIES = (
         "county_family",
     ),
 )
+# The restricted table of the earlier outcomes (C275 to C280): built only when the rules list history fields, and only for the controls of the config.
+HISTORY = Family(
+    "hai_history", "feature_matrix_hai_history", "int_spine_hai_history", ("measure_control", "field"), "value_number", "value_text", "none", "earlier_outcome"
+)
 Key = tuple[str, str, str]
+WINDOW_ROLES = ("identifier", "predictor", "grouping")
+OFFLINE_ROLES = ("label", "weight")
+DERIVED = (("log_fields", "log", "number"), ("change_fields", "change", "number"), ("ordinal_fields", "ordinal", "category"))
+DERIVED_NOTES = {
+    "log": "Natural log of field {parent}; null when {parent} is not positive.",
+    "change": "Field {parent} of the latest period minus that of the one before; null when either is missing.",
+    "ordinal": "Field {parent} as its ordered level number; null when {parent} is missing.",
+}
+HISTORY_GROUP = "hai_history"
 
 # The attributes of the hospital-window table: name, SQL type, role, the spine column it copies and the mask it takes.
 WINDOW_COLUMNS: tuple[tuple[str, str, str, str, str], ...] = (
@@ -153,6 +180,25 @@ WINDOW_DESCRIPTIONS = {
     "is_cmi_held": "Whether the case-mix index of the data fiscal year before the window is held (rows disagree).",
     "is_critical_access": "Whether the CCN is that of a critical access hospital (fixed by the CCN).",
     "is_veterans_affairs": "Whether the CCN is that of a Veterans Affairs hospital (fixed by the CCN).",
+}
+
+
+# The source whose columns go missing together, for each predictor column of the hospital-window table.
+WINDOW_SOURCE_GROUPS = {
+    "state_code": "pos",
+    "county_fips": "pos",
+    "provider_subtype_code": "pos",
+    "control_type_code": "pos",
+    "bed_count": "pos",
+    "certified_bed_count": "pos",
+    "is_active": "pos",
+    "has_pos_snapshot": "pos",
+    "cmi": "cmi",
+    "cmi_cases": "cmi",
+    "has_cmi": "cmi",
+    "is_cmi_held": "cmi",
+    "is_critical_access": "ccn",
+    "is_veterans_affairs": "ccn",
 }
 
 
@@ -249,6 +295,68 @@ def excluded_controls(root: Path) -> list[str]:
     return sorted(controls)
 
 
+def earlier_outcomes(root: Path) -> dict[str, Any]:
+    """The reviewed config of the earlier-outcome class: its schema holds, and every control it lifts is an earlier-outcome candidate of ``targets.json``."""
+    path = root / EARLIER_OUTCOMES
+    if not path.is_file():
+        raise SchemaError(f"{EARLIER_OUTCOMES}: the config of the earlier-outcome class is missing")
+    document = read_json(path)
+    validator = importlib.import_module("jsonschema").Draft202012Validator(read_json(root / EARLIER_SCHEMA))
+    errors = sorted(validator.iter_errors(document), key=lambda error: [str(part) for part in error.absolute_path])
+    if errors:
+        where = ".".join(str(part) for part in errors[0].absolute_path) or "the file"
+        raise SchemaError(f"{EARLIER_OUTCOMES}: violates its schema at {where}: {errors[0].message}")
+    candidates = {row["control"] for row in read_json(root / TARGETS)["earlier_outcome_candidates"]}
+    for control in document["controls"]:
+        if control not in candidates:
+            raise SchemaError(f"{EARLIER_OUTCOMES}: control {control} is not an earlier-outcome candidate of {TARGETS}")
+    return dict(document)
+
+
+def history_keys(rules: dict[str, Any], earlier: dict[str, Any]) -> set[Key]:
+    """The keys of the restricted table: every lifted control with every reviewed history field. No field, no key, no table."""
+    fields: list[str] = []
+    for entry in rules.get("hai_history_fields", []):
+        if not isinstance(entry, dict) or not entry.get("field") or not entry.get("reason"):
+            raise SchemaError(f"{RULES}: a hai_history_fields entry needs a field and a reason")
+        if entry["field"] in fields:
+            raise SchemaError(f"{RULES}: hai_history_fields lists the field {entry['field']} twice")
+        fields.append(entry["field"])
+    return {("", control, field) for control in earlier["controls"] for field in fields}
+
+
+def derived_keys(
+    rules: dict[str, Any], inventory: dict[str, set[Key]], categories: set[tuple[str, Key]], both: set[tuple[str, Key]]
+) -> dict[str, dict[Key, str]]:
+    """The derived keys the reviewed lists add, by family: each is a field ``<field>_<transform>`` of a key that the seeds give, with the parent's control."""
+    found: dict[str, dict[Key, str]] = {}
+    for label, transform, need in DERIVED:
+        for index, entry in enumerate(rules.get(label, [])):
+            if not isinstance(entry, dict) or any(not entry.get(name) for name in ("family", "control", "field", "reason")) or "source" not in entry:
+                raise SchemaError(f"{RULES}: {label} entry {index} needs a family, source, control, field and a reason")
+            family, parent = entry["family"], (entry["source"], entry["control"], entry["field"])
+            if family not in inventory or parent not in inventory[family]:
+                raise SchemaError(f"{RULES}: {label} names {family} {parent}, which no control seed gives")
+            if need not in kinds_of(family, parent, categories, both):
+                raise SchemaError(f"{RULES}: {label} names {family} {parent}, which has no {need} column; a {transform} field needs a {need} key")
+            child = (parent[0], parent[1], f"{parent[2]}_{transform}")
+            if child in found.get(family, {}):
+                raise SchemaError(f"{RULES}: {label} lists {family} {child} twice")
+            if child in inventory[family]:
+                raise SchemaError(f"{RULES}: {label} names {family} {child}, which is already a key")
+            found.setdefault(family, {})[child] = transform
+    return found
+
+
+def source_group(family: Family, key: Key, facts: Mapping[str, str]) -> str:
+    """The source whose columns go missing together: the fact of a Care Compare control, the measure source of the other families."""
+    if family.name == "care_compare":
+        return re.sub(r"^fct_|_(window|release)$", "", facts[key[1]])
+    if family.restriction:
+        return HISTORY_GROUP
+    return key[0]
+
+
 def kinds_of(family: str, key: Key, categories: set[tuple[str, Key]], both: set[tuple[str, Key]]) -> tuple[str, ...]:
     """The kinds a key gets: number unless the reviewed lists name it."""
     if (family, key) in both:
@@ -269,17 +377,22 @@ def rule_set(entries: list[dict[str, str]], label: str, known: dict[str, set[Key
     return chosen
 
 
-def describe(family: Family, key: Key, kind: str) -> str:
-    """The description of a pivoted column."""
+def describe(family: Family, key: Key, kind: str, note: str = "") -> str:
+    """The description of a pivoted column; ``note`` is the sentence that says how a derived field is made."""
     source, control, field = key
     value = family.number if kind == "number" else family.category
     where = f"source {source}, " if source else ""
+    if family.restriction:
+        return (
+            f"Earlier outcome {control}, field {field}: {value} of {family.long_table}, built only from windows whose first release is before the "
+            f"window start. Restricted to the models named in {EARLIER_OUTCOMES}; null when there is none."
+        )
     mask = {"none": "", "county_family": " Null unless the window's county is its own POS snapshot's and no planning region is set."}[family.mask]
     if source == "ruca":
         mask = " Null unless the hospital ZIP equals the own POS snapshot's ZIP."
     return (
         f"Control {control}, {where}field {field}: {value} of the latest period that ends before the window start ({family.long_table}); "
-        f"null when there is none.{mask}"
+        f"null when there is none.{mask}{note}"
     )
 
 
@@ -290,7 +403,9 @@ def pivot_match(family: Family, key: Key) -> dict[str, str]:
     return {column: values[column] for column in family.match}
 
 
-def family_columns(family: Family, keys: set[Key], kinds: dict[Key, tuple[str, ...]]) -> list[dict[str, Any]]:
+def family_columns(
+    family: Family, keys: set[Key], kinds: dict[Key, tuple[str, ...]], facts: Mapping[str, str], notes: Mapping[Key, str] | None = None
+) -> list[dict[str, Any]]:
     """The ordered predictor columns of a family."""
     columns = []
     for key in sorted(keys):
@@ -299,12 +414,13 @@ def family_columns(family: Family, keys: set[Key], kinds: dict[Key, tuple[str, .
             sql_type = "double" if kind == "number" else "varchar"
             columns.append(
                 {
-                    "description": describe(family, key, kind),
+                    "description": describe(family, key, kind, (notes or {}).get(key, "")),
                     "feast_type": FEAST_TYPES[sql_type],
                     "mask": mask,
                     "name": column_name(key[1], key[2], kind),
                     "pivot": {"kind": kind, "match": pivot_match(family, key), "value_column": family.number if kind == "number" else family.category},
                     "role": "predictor",
+                    "source_group": source_group(family, key, facts),
                     "type": sql_type,
                     "view": family.table,
                 }
@@ -342,18 +458,21 @@ def window_columns() -> list[dict[str, Any]]:
     """The columns of the hospital-window table."""
     columns = key_columns()
     for name, sql_type, role, source, mask in WINDOW_COLUMNS:
-        columns.append(
-            {
-                "description": WINDOW_DESCRIPTIONS[name],
-                "feast_type": FEAST_TYPES[sql_type] if role == "predictor" else None,
-                "mask": mask,
-                "name": name,
-                "pivot": {"copy": source},
-                "role": role,
-                "type": sql_type,
-                "view": WINDOW_TABLE if role == "predictor" else None,
-            }
-        )
+        if role not in WINDOW_ROLES:
+            raise SchemaError(f"{WINDOW_TABLE}: column {name} has the role {role}, which is not one of {', '.join(WINDOW_ROLES)}")
+        column = {
+            "description": WINDOW_DESCRIPTIONS[name],
+            "feast_type": FEAST_TYPES[sql_type] if role == "predictor" else None,
+            "mask": mask,
+            "name": name,
+            "pivot": {"copy": source},
+            "role": role,
+            "type": sql_type,
+            "view": WINDOW_TABLE if role == "predictor" else None,
+        }
+        if role == "predictor" and name in WINDOW_SOURCE_GROUPS:
+            column["source_group"] = WINDOW_SOURCE_GROUPS[name]
+        columns.append(column)
     return columns
 
 
@@ -364,19 +483,29 @@ def label_columns() -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
     for number, hai_type in enumerate(HAI_TYPES, start=1):
         view = LABEL_VIEW.format(number=number)
         views[view] = []
-        for part, kind, sql_type in (("sir", "number", "double"), ("alignment_status", "category", "varchar")):
+        for part, kind, sql_type, role in (
+            ("sir", "number", "double", "label"),
+            ("alignment_status", "category", "varchar", "label"),
+            ("predicted", "number", "double", "weight"),
+        ):
             name = f"hai_{number}__{part}__{kind}"
             views[view].append(name)
+            what = (
+                f"{part.replace('_', ' ')} of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor."
+                if role == "label"
+                else (
+                    "predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). "
+                    "The training weight of the row: never a predictor, never served."
+                )
+            )
             columns.append(
                 {
-                    "description": (
-                        f"{hai_type}, {part.replace('_', ' ')} of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor."
-                    ),
+                    "description": f"{hai_type}, {what}",
                     "feast_type": FEAST_TYPES[sql_type],
                     "mask": "none",
                     "name": name,
                     "pivot": {"kind": kind, "match": {"hai_type": hai_type}, "value_column": part},
-                    "role": "label",
+                    "role": role,
                     "type": sql_type,
                     "view": view,
                 }
@@ -400,23 +529,40 @@ def check_names(table: str, columns: list[dict[str, Any]]) -> None:
 
 
 def role_problems(schema: dict[str, Any]) -> list[str]:
-    """Problems with the roles of a schema document: only predictor columns have a predictor view, no label, identifier, key or excluded control is
-    served, and every served type is one of the closed four."""
+    """Problems with the roles of a schema document: only predictor columns have a predictor view, no label, weight, grouping, identifier, key or
+    excluded control is served, a restricted table carries only the controls it lifts, every predictor has a source group and every served type is
+    one of the closed four."""
     problems = []
     excluded = {sanitize(control) for control in schema["excluded_controls"]}
+    served_names = {item.split(":", 1)[1] for item in schema["servable"]}
     for name, table in schema["tables"].items():
+        restriction = table.get("restriction")
+        lifted = {sanitize(control) for control in restriction["controls"]} if restriction else set()
+        if restriction and (restriction.get("kind") != "earlier_outcome" or table["role"] != "predictor"):
+            problems.append(f"{name}: a restricted table must be a predictor table of the kind earlier_outcome")
         for column in table["columns"]:
             role, view = column["role"], column["view"]
+            prefix = column["name"].split("__", 1)[0]
             if role == "predictor" and (table["role"] != "predictor" or view != name or column["feast_type"] not in FEAST_TYPES.values()):
                 problems.append(
                     f"{name}.{column['name']}: a predictor must sit in a predictor table, in its own view, with a Float64, Int64, String or Bool type"
                 )
-            if role != "predictor" and column["name"] in {item.split(":", 1)[1] for item in schema["servable"]}:
+            if role != "predictor" and column["name"] in served_names:
                 problems.append(f"{name}.{column['name']}: a {role} column is served")
             if role == "predictor" and column["name"] in IDENTIFIER_NAMES:
                 problems.append(f"{name}.{column['name']}: an identifier or population flag is registered as a predictor")
-            if role == "predictor" and column["name"].split("__", 1)[0] in excluded:
-                problems.append(f"{name}.{column['name']}: control is excluded from predictors")
+            if role == "predictor" and prefix in excluded and prefix not in lifted:
+                problems.append(f"{name}.{column['name']}: control is excluded from predictors; only a restricted table may carry a lifted control")
+            if role == "predictor" and restriction and prefix not in lifted:
+                problems.append(f"{name}.{column['name']}: a restricted table carries only the controls it lifts")
+            if role == "predictor" and not column.get("source_group"):
+                problems.append(f"{name}.{column['name']}: a predictor has no source group")
+            if role != "predictor" and "source_group" in column:
+                problems.append(f"{name}.{column['name']}: only a predictor has a source group")
+            if role == "weight" and (table["role"] != "label" or not str(view).startswith("label_")):
+                problems.append(f"{name}.{column['name']}: a weight column must sit in a label table and a label view")
+            if role == "grouping" and (view is not None or column["feast_type"] is not None):
+                problems.append(f"{name}.{column['name']}: a grouping column is registered in view {view}")
     served = {f"{name}:{column['name']}" for name, table in schema["tables"].items() for column in table["columns"] if column["role"] == "predictor"}
     if served != set(schema["servable"]):
         problems.append("the servable list differs from the registered predictor columns")
@@ -427,11 +573,14 @@ def build_schema(root: Path = REPO_ROOT) -> dict[str, Any]:
     """The schema document, computed from the seeds and the rules. Raises ``SchemaError`` before anything is written."""
     rules = read_json(root / RULES)
     excluded = excluded_controls(root)
+    earlier = earlier_outcomes(root)
     inventory = {family.name: INVENTORY[family.name](root, rules) for family in FAMILIES}
     categories = rule_set(rules["categories"], "categories", inventory)
     both = rule_set(rules["both_kinds"], "both_kinds", inventory)
     if categories & both:
         raise SchemaError(f"{RULES}: a key is in categories and in both_kinds")
+    derived = derived_keys(rules, inventory, categories, both)
+    facts = {row["measure_control"]: row["fact"] for row in read_seed(root, "frozen_care_compare_controls")}
     for row in read_seed(root, "frozen_hospital_controls"):
         if row["rule"] == "code" and ("hospital", (row["measure_source"], row["measure_control"], row["field"])) not in categories | both:
             raise SchemaError(f"{RULES}: hospital rule code {row['measure_source']} {row['measure_control']} {row['field']} is not a category")
@@ -447,13 +596,16 @@ def build_schema(root: Path = REPO_ROOT) -> dict[str, Any]:
         "columns": window,
         "value_columns": None,
     }
-    for family in FAMILIES:
-        keys = inventory[family.name]
-        leaked = sorted({key[1] for key in keys} & set(excluded))
+    history = history_keys(rules, earlier)
+    for family in (*FAMILIES, *([HISTORY] if history else [])):
+        restricted = bool(family.restriction)
+        keys = history if restricted else inventory[family.name] | set(derived.get(family.name, {}))
+        leaked = sorted({key[1] for key in keys} & set(excluded)) if not restricted else []
         if leaked:
             raise SchemaError(f"{family.table}: control {leaked[0]} is excluded from predictors")
-        kinds = {key: kinds_of(family.name, key, categories, both) for key in keys}
-        columns = key_columns() + family_columns(family, keys, kinds)
+        kinds = {key: ("number",) if restricted or key in derived.get(family.name, {}) else kinds_of(family.name, key, categories, both) for key in keys}
+        notes = {key: DERIVED_NOTES[transform].format(parent=f"{key[2].rsplit('_', 1)[0]}") for key, transform in derived.get(family.name, {}).items()}
+        columns = key_columns() + family_columns(family, keys, kinds, facts, notes)
         check_names(family.table, columns)
         tables[family.table] = {
             "family": family.name,
@@ -464,6 +616,13 @@ def build_schema(root: Path = REPO_ROOT) -> dict[str, Any]:
             "columns": columns,
             "value_columns": {"number": family.number, "category": family.category},
         }
+        if restricted:
+            tables[family.table]["restriction"] = {"kind": family.restriction, "controls": list(earlier["controls"]), "slots": list(earlier["slots"])}
+    groups: dict[str, str] = {}
+    for name, table in tables.items():
+        for column in table["columns"]:
+            if column["role"] == "predictor" and "source_group" in column and groups.setdefault(column["source_group"], name) != name:
+                raise SchemaError(f"source group {column['source_group']} is in {groups[column['source_group']]} and in {name}")
     labels, label_views = label_columns()
     check_names(LABEL_TABLE, labels)
     tables[LABEL_TABLE] = {
@@ -744,7 +903,7 @@ def render_definitions(schema: dict[str, Any]) -> str:
         if table["role"] == "predictor":
             predictor[name] = [(column["name"], column["feast_type"]) for column in table["columns"] if column["role"] == "predictor"]
     labels = schema["tables"][LABEL_TABLE]
-    by_name = {column["name"]: column["feast_type"] for column in labels["columns"] if column["role"] == "label"}
+    by_name = {column["name"]: column["feast_type"] for column in labels["columns"] if column["role"] in OFFLINE_ROLES}
     out = [DEFINITIONS_HEAD.format(generated=GENERATED_LINE, event_time=EVENT_TIME) + "PREDICTOR_VIEWS: dict[str, tuple[tuple[str, str], ...]] = {"]
     for name, fields in predictor.items():
         out.append(f'    "{name}": (')

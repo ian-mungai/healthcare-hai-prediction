@@ -14,6 +14,7 @@ measures as (
     select
         measures.spine_key,
         measures.alignment_status,
+        measures.predicted,
         measures.sir,
         measures.hai_type as pivot_key
     from {{ ref('int_spine_hai_outcomes') }} as measures
@@ -24,16 +25,22 @@ pivoted as (
         spine_key,
         max(sir) filter (where pivot_key = 'HAI_1') as hai_1__sir__number,
         max(alignment_status) filter (where pivot_key = 'HAI_1') as hai_1__alignment_status__category,
+        max(predicted) filter (where pivot_key = 'HAI_1') as hai_1__predicted__number,
         max(sir) filter (where pivot_key = 'HAI_2') as hai_2__sir__number,
         max(alignment_status) filter (where pivot_key = 'HAI_2') as hai_2__alignment_status__category,
+        max(predicted) filter (where pivot_key = 'HAI_2') as hai_2__predicted__number,
         max(sir) filter (where pivot_key = 'HAI_3') as hai_3__sir__number,
         max(alignment_status) filter (where pivot_key = 'HAI_3') as hai_3__alignment_status__category,
+        max(predicted) filter (where pivot_key = 'HAI_3') as hai_3__predicted__number,
         max(sir) filter (where pivot_key = 'HAI_4') as hai_4__sir__number,
         max(alignment_status) filter (where pivot_key = 'HAI_4') as hai_4__alignment_status__category,
+        max(predicted) filter (where pivot_key = 'HAI_4') as hai_4__predicted__number,
         max(sir) filter (where pivot_key = 'HAI_5') as hai_5__sir__number,
         max(alignment_status) filter (where pivot_key = 'HAI_5') as hai_5__alignment_status__category,
+        max(predicted) filter (where pivot_key = 'HAI_5') as hai_5__predicted__number,
         max(sir) filter (where pivot_key = 'HAI_6') as hai_6__sir__number,
-        max(alignment_status) filter (where pivot_key = 'HAI_6') as hai_6__alignment_status__category
+        max(alignment_status) filter (where pivot_key = 'HAI_6') as hai_6__alignment_status__category,
+        max(predicted) filter (where pivot_key = 'HAI_6') as hai_6__predicted__number
     from measures
     group by spine_key
 )
@@ -43,15 +50,21 @@ select
     spine.event_timestamp,
     pivoted.hai_1__sir__number,
     pivoted.hai_1__alignment_status__category,
+    pivoted.hai_1__predicted__number,
     pivoted.hai_2__sir__number,
     pivoted.hai_2__alignment_status__category,
+    pivoted.hai_2__predicted__number,
     pivoted.hai_3__sir__number,
     pivoted.hai_3__alignment_status__category,
+    pivoted.hai_3__predicted__number,
     pivoted.hai_4__sir__number,
     pivoted.hai_4__alignment_status__category,
+    pivoted.hai_4__predicted__number,
     pivoted.hai_5__sir__number,
     pivoted.hai_5__alignment_status__category,
+    pivoted.hai_5__predicted__number,
     pivoted.hai_6__sir__number,
-    pivoted.hai_6__alignment_status__category
+    pivoted.hai_6__alignment_status__category,
+    pivoted.hai_6__predicted__number
 from spine
 left join pivoted on spine.spine_key = pivoted.spine_key

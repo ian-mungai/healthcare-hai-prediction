@@ -29,6 +29,7 @@
     "columns",
     "value_content_sha256",
     "label_column",
+    "weight_column",
     "oldest_window_year",
     "newest_window_year",
     "counts",
@@ -155,6 +156,11 @@
       "type": "string",
       "pattern": "^hai_[1-6]__sir__number$"
     },
+    "weight_column": {
+      "description": "The window's predicted infection count of the same type: the training weight of the row, never a predictor.",
+      "type": "string",
+      "pattern": "^hai_[1-6]__predicted__number$"
+    },
     "oldest_window_year": {
       "type": [
         "integer",
@@ -178,6 +184,7 @@
         "spine",
         "population_excluded",
         "label_excluded",
+        "weight_excluded",
         "included"
       ],
       "properties": {
@@ -190,6 +197,11 @@
           "minimum": 0
         },
         "label_excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "weight_excluded": {
+          "description": "Rows with a published SIR whose predicted count is missing, a token or not positive.",
           "type": "integer",
           "minimum": 0
         },

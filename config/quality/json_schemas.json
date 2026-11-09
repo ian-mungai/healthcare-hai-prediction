@@ -41,6 +41,12 @@
       ]
     },
     {
+      "schema": "data_contracts/training/earlier_outcomes.schema.json",
+      "files": [
+        "config/training/earlier_outcomes.json"
+      ]
+    },
+    {
       "schema": "data_contracts/training/excluded_controls.schema.json",
       "files": [
         "config/training/excluded_controls.json"

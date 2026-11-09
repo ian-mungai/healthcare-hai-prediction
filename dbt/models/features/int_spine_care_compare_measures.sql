@@ -122,6 +122,8 @@ select
     spine.window_start,
     controls.measure_control,
     controls.fact,
+    -- The field the matrix model pivots on beside the control; the family has one, so every value is field value.
+    'value' as field,
     controls.review_decision,
     chosen.measure_id,
     case when not chosen.is_release_conflict then chosen.value_text end as value_text,

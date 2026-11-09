@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import copy
 import http.server
 import importlib
 import json
@@ -475,6 +476,47 @@ def case_e11_schema(c: Checker) -> None:
     servable = synthetic_schema()
     servable["servable"].pop()
     c.check("a servable list that differs from the predictors is a problem", any("servable" in item for item in reads.view_problems(servable)))
+    weight = {"name": "hai_1__predicted__number", "role": "weight", "type": "double", "view": "label_hai_1", "feast_type": "Float64"}
+    weighed = synthetic_schema()
+    weighed["tables"]["label_matrix_hai_outcomes"]["columns"].append(weight)
+    c.check(
+        "a weight column is an offline-only reference beside the labels, not a predictor",
+        "label_hai_1:hai_1__predicted__number" in reads.reference_lists(weighed)[1]
+        and "label_hai_1:hai_1__predicted__number" not in reads.reference_lists(weighed)[0]
+        and reads.view_problems(weighed) == [],
+    )
+    misplaced = synthetic_schema()
+    misplaced["tables"]["feature_matrix_window"]["columns"].append({**weight, "view": "feature_matrix_window"})
+    c.check("a weight column in a predictor table is a problem", any("weight" in item for item in reads.view_problems(misplaced)))
+    elsewhere = synthetic_schema()
+    elsewhere["tables"]["label_matrix_hai_outcomes"]["columns"].append({**weight, "view": "feature_matrix_window"})
+    c.check("a weight column outside a label view is a problem", any("weight" in item for item in reads.view_problems(elsewhere)))
+    lifted = {"name": "c275__prior_sir_shrunk__number", "role": "predictor", "type": "double", "view": "feature_matrix_history", "feast_type": "Float64"}
+    restricted = synthetic_schema()
+    restricted["excluded_controls"].append("C275")
+    restricted["tables"]["feature_matrix_history"] = {
+        "role": "predictor",
+        "restriction": {"kind": "earlier_outcome", "controls": ["C275"], "slots": ["m2_elastic_net"]},
+        "columns": [dict(lifted)],
+    }
+    restricted["servable"].append("feature_matrix_history:c275__prior_sir_shrunk__number")
+    c.check("a lifted control in its restricted table is no problem", reads.view_problems(restricted) == [])
+    outside = copy.deepcopy(restricted)
+    outside["tables"]["feature_matrix_measures"]["columns"].append({**lifted, "view": "feature_matrix_measures"})
+    outside["servable"].append("feature_matrix_measures:c275__prior_sir_shrunk__number")
+    c.check("a lifted control outside its restricted table is a problem", any("excluded" in item for item in reads.view_problems(outside)))
+    foreign = copy.deepcopy(restricted)
+    foreign["excluded_controls"].append("C281")
+    foreign["tables"]["feature_matrix_history"]["columns"].append({**lifted, "name": "c281__prior_sir_shrunk__number"})
+    foreign["servable"].append("feature_matrix_history:c281__prior_sir_shrunk__number")
+    c.check(
+        "a control the restriction does not lift is a problem inside the restricted table", any("excluded" in item for item in reads.view_problems(foreign))
+    )
+    grouped = synthetic_schema()
+    grouped["tables"]["feature_matrix_window"]["columns"].append(
+        {"name": "owner_group_id", "role": "grouping", "type": "varchar", "view": "feature_matrix_window", "feast_type": "String"}
+    )
+    c.check("a grouping column registered in a view is a problem", any("grouping column is registered" in item for item in reads.view_problems(grouped)))
 
 
 def case_e11_views(c: Checker) -> None:
@@ -1655,6 +1697,13 @@ def case_e15_refs(c: Checker) -> None:
     schema = synthetic_schema()
     good = ["feature_matrix_window:bed_count", "feature_matrix_measures:c001__value__number", "label_hai_1:hai_1__sir__number"]
     c.check("predictors and labels are accepted", historical.checked_references(schema, good) == tuple(good))
+    weighed = synthetic_schema()
+    weighed["tables"]["label_matrix_hai_outcomes"]["columns"].append(
+        {"name": "hai_1__predicted__number", "role": "weight", "type": "double", "view": "label_hai_1", "feast_type": "Float64"}
+    )
+    weighted = [*good, "label_hai_1:hai_1__predicted__number"]
+    c.check("a weight column is accepted beside the labels", historical.checked_references(weighed, weighted) == tuple(weighted))
+    c.refused("a weight column that the schema does not register is refused", historical.checked_references, "not registered", schema, weighted)
     for reference in (
         "int_spine_validation_measures:value_number",
         "int_county_adjacency:shared_border_length_m",

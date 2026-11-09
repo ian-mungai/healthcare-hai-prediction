@@ -619,6 +619,7 @@ LABEL_VIEWS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         (
             ("hai_1__sir__number", "Float64"),
             ("hai_1__alignment_status__category", "String"),
+            ("hai_1__predicted__number", "Float64"),
         ),
     ),
     "label_hai_2": (
@@ -626,6 +627,7 @@ LABEL_VIEWS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         (
             ("hai_2__sir__number", "Float64"),
             ("hai_2__alignment_status__category", "String"),
+            ("hai_2__predicted__number", "Float64"),
         ),
     ),
     "label_hai_3": (
@@ -633,6 +635,7 @@ LABEL_VIEWS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         (
             ("hai_3__sir__number", "Float64"),
             ("hai_3__alignment_status__category", "String"),
+            ("hai_3__predicted__number", "Float64"),
         ),
     ),
     "label_hai_4": (
@@ -640,6 +643,7 @@ LABEL_VIEWS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         (
             ("hai_4__sir__number", "Float64"),
             ("hai_4__alignment_status__category", "String"),
+            ("hai_4__predicted__number", "Float64"),
         ),
     ),
     "label_hai_5": (
@@ -647,6 +651,7 @@ LABEL_VIEWS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         (
             ("hai_5__sir__number", "Float64"),
             ("hai_5__alignment_status__category", "String"),
+            ("hai_5__predicted__number", "Float64"),
         ),
     ),
     "label_hai_6": (
@@ -654,6 +659,7 @@ LABEL_VIEWS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         (
             ("hai_6__sir__number", "Float64"),
             ("hai_6__alignment_status__category", "String"),
+            ("hai_6__predicted__number", "Float64"),
         ),
     ),
 }

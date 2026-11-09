@@ -483,6 +483,21 @@ def _guard_cases(report: Report, scratch: Path) -> None:
             _edit_config(folder, f"feature_lists/{slot}.json", lambda d: d["references"].append("label_hai_1:x"))
 
     run("label_named_predictor", label_named_predictor, "reference: label", "E11")
+
+    def weight_named_in_lists(folder: Path) -> None:
+        for slot in SLOTS:
+            _edit_config(folder, f"feature_lists/{slot}.json", lambda d: d["references"].append("label_hai_1:hai_1__predicted__number"))
+
+    run("weight_named_in_every_list", weight_named_in_lists, "reference: label", "E11")
+
+    def weight_in_predictor_view(folder: Path) -> None:
+        column = {**_column("hai_1__predicted__number", "feature_matrix_hospital", control="C119"), "role": "weight"}
+        schema_edit(folder, lambda d: d["tables"]["feature_matrix_hospital"]["columns"].append(column))
+        schema_edit(folder, lambda d: d["servable"].append("feature_matrix_hospital:hai_1__predicted__number"))
+        for slot in SLOTS:
+            _edit_config(folder, f"feature_lists/{slot}.json", lambda d: d["references"].append("feature_matrix_hospital:hai_1__predicted__number"))
+
+    run("weight_registered_in_predictor_view", weight_in_predictor_view, "reference: not a predictor", "E11")
     run(
         "wrong_label_field",
         partial(schema_edit, change=lambda d: d["tables"]["label_matrix_hai_outcomes"]["columns"][0]["pivot"].update(value_column="numerator")),

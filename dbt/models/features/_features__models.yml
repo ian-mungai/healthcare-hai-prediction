@@ -1186,6 +1186,10 @@ models:
           - accepted_values:
               arguments:
                 values: [fct_hcahps_window, fct_hgi_release, fct_maternal_health_window, fct_timely_effective_care_window]
+      - name: field
+        data_type: varchar
+        description: The field of the control that the value columns hold (value today); the wide table pivots on it beside the control.
+        data_tests: [not_null]
       - name: review_decision
         data_type: varchar
         description: The registry control's review decision, from dim_registry_control; null when the control has none.

@@ -259,8 +259,11 @@ class Fixture:
         for hai_type in self.hai_types:
             name = f"extract_{hai_type}.parquet"
             label = f"hai_{hai_type.split('_')[1]}__sir__number"
-            rows = [{key: value for key, value in row.items() if key != LABEL} | {label: row[LABEL]} for row in self.rows]
-            columns = {key: kind for key, kind in FIXTURE_COLUMNS.items() if key != LABEL} | {label: "double"}
+            weight = f"hai_{hai_type.split('_')[1]}__predicted__number"
+            rows = [
+                {key: value for key, value in row.items() if key != LABEL} | {label: row[LABEL], weight: 1.0 + index % 5} for index, row in enumerate(self.rows)
+            ]
+            columns = {key: kind for key, kind in FIXTURE_COLUMNS.items() if key != LABEL} | {label: "double", weight: "double"}
             years = [row["window_year"] for row in self.rows]
             manifest = {
                 "schema_version": 1,
@@ -282,9 +285,10 @@ class Fixture:
                 "writer_lock_sha256": "6" * 64,
                 **table_entry(self.extract, name, rows, columns),
                 "label_column": label,
+                "weight_column": weight,
                 "oldest_window_year": min(years),
                 "newest_window_year": max(years),
-                "counts": {"spine": len(self.rows), "population_excluded": 0, "label_excluded": 0, "included": len(self.rows)},
+                "counts": {"spine": len(self.rows), "population_excluded": 0, "label_excluded": 0, "weight_excluded": 0, "included": len(self.rows)},
                 "auxiliary_files": shared,
             }
             (self.extract / f"manifest_{hai_type}.json").write_bytes(canonical(manifest) + b"\n")

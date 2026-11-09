@@ -116,9 +116,14 @@ def fixture(root: Path) -> dict[str, Any]:
         "pivot": {"match": {"measure_control": "C001"}},
     }
     labels = [
-        {"name": f"hai_{number}__{field}", "type": "double" if field == "sir__number" else "varchar", "role": "label", "view": f"label_hai_{number}"}
+        {
+            "name": f"hai_{number}__{field}",
+            "type": "double" if field == "sir__number" else "varchar",
+            "role": "weight" if field == "predicted__number" else "label",
+            "view": f"label_hai_{number}",
+        }
         for number in range(1, 7)
-        for field in ("sir__number", "alignment_status__category")
+        for field in ("sir__number", "alignment_status__category", "predicted__number")
     ]
     schema: dict[str, Any] = {
         "schema": 1,
@@ -188,6 +193,7 @@ class SyntheticReader:
                 for number in range(1, 7):
                     row[f"hai_{number}__sir__number"] = hospital / 10 + number
                     row[f"hai_{number}__alignment_status__category"] = "aligned"
+                    row[f"hai_{number}__predicted__number"] = hospital + number / 10
                 self.rows.append(row)
                 spine.append({"spine_key": key, "window_start": date(year, 1, 1), "is_primary_population": hospital < 3, "is_sensitivity_population": True})
                 for measure, control in (("PSI_90", "E038"), ("PSI_13", "E039")):
@@ -368,12 +374,96 @@ def extract_command_case(source: Path, folder: Path) -> None:
     require(len(verify_done(output, "extract", "a" * 64)["outputs"]) == 15, "the command mixed Feast cache files with its extract outputs")
 
 
+def weight_cases(
+    cases: Cases, source: Path, folder: Path, reader: SyntheticReader, writer: JsonTableStandIn, manifest: dict[str, Any], run: Callable[..., dict[str, Any]]
+) -> None:
+    """The expected-count weight: written beside the label of its own type, never a predictor, dropped and counted when unusable."""
+    column = "hai_1__predicted__number"
+    rows = writer.rows["extract_HAI_1.parquet"]
+    other_types = [f"hai_{other}__predicted__number" for other in range(2, 7)]
+    cases.check(
+        "extract_weight_written_per_type",
+        lambda: require(
+            all(row[column] == float(row["ccn"][-1]) + 0.1 for row in rows)
+            and not any(name in row for row in rows for name in other_types)
+            and "hai_2__predicted__number" in writer.rows["extract_HAI_2.parquet"][0],
+            "the weight column of each type was not written to its own file",
+        ),
+    )
+    cases.check(
+        "extract_weight_manifest_entry",
+        lambda: require(
+            manifest["weight_column"] == column and manifest["columns"].get(column) == "double" and manifest["label_column"] == "hai_1__sir__number",
+            "the manifest does not name the weight column and its type",
+        ),
+    )
+    cases.check(
+        "extract_weight_counts_add_up",
+        lambda: require(
+            manifest["counts"]["spine"]
+            == manifest["counts"]["population_excluded"]
+            + manifest["counts"]["label_excluded"]
+            + manifest["counts"]["weight_excluded"]
+            + manifest["counts"]["included"],
+            "the manifest counts do not add up to the spine",
+        ),
+    )
+    unusable = SyntheticReader(source)
+    for index, value in ((2, float("nan")), (3, None), (4, 0.0), (5, -2.0)):
+        unusable.rows[index]["hai_2__predicted__number"] = value
+    unusable.rows[0]["hai_1__predicted__number"] = None
+    unusable_writer = JsonTableStandIn()
+    run(folder / "unusable_weight", unusable, unusable_writer)
+    second = json.loads((folder / "unusable_weight/manifest_HAI_2.json").read_bytes())
+    first = json.loads((folder / "unusable_weight/manifest_HAI_1.json").read_bytes())
+    cases.check(
+        "extract_unusable_weight_dropped_and_counted",
+        lambda: require(
+            second["counts"] == {"spine": 9, "population_excluded": 3, "label_excluded": 0, "weight_excluded": 4, "included": 2}
+            and [row["spine_key"] for row in unusable_writer.rows["extract_HAI_2.parquet"]] == ["000001:2024", "000001:2025"],
+            "a published SIR with a missing, token, zero or negative predicted count was kept or not counted",
+        ),
+    )
+    cases.check(
+        "extract_label_exclusion_comes_before_weight",
+        lambda: require(
+            first["counts"]["label_excluded"] == 3 and first["counts"]["weight_excluded"] == 0,
+            "a row without a label was counted as a weight exclusion",
+        ),
+    )
+
+
+def weight_reference_cases(cases: Cases, source: Path, folder: Path, schema: dict[str, Any]) -> None:
+    """The weight in the reference union: asked for beside the label, never a predictor, refused when the schema does not register it as a weight."""
+    column = "hai_1__predicted__number"
+    reference = f"label_hai_1:{column}"
+    union = extract.reference_union(source, schema)
+    cases.check(
+        "extract_weight_never_a_predictor",
+        lambda: require(reference in union[0] and column not in union[1], "the weight was read as a predictor or left out of the references"),
+    )
+    listed = folder / "weight_listed"
+    shutil.copytree(source, listed)
+    (listed / "config/training/feature_lists/m1_ols.json").write_bytes(
+        extract.canonical({"references": [reference, "feature_matrix_hospital:c001__score__number"]}) + b"\n"
+    )
+    cases.refuses("extract_weight_in_feature_list_refused", lambda: extract.reference_union(listed, schema), "predictor")
+    for name, change in (
+        ("registered_as_predictor", lambda item: item["tables"]["label_matrix_hai_outcomes"]["columns"][2].update(role="predictor")),
+        ("unregistered", lambda item: item["tables"]["label_matrix_hai_outcomes"]["columns"].pop(2)),
+    ):
+        poisoned = copy.deepcopy(schema)
+        change(poisoned)
+        cases.refuses(f"extract_weight_{name}_refused", partial(extract.reference_union, source, poisoned), "weight")
+
+
 def extraction_cases(cases: Cases, folder: Path) -> None:
     """Exercise the extraction entry point with explicit stand-ins and adversarial publications."""
     source = folder / "source"
     fixture(source)
     cases.check("extract_command_prepares_feast_scratch", lambda: extract_command_case(source, folder))
     reader, writer = SyntheticReader(source), JsonTableStandIn()
+    weight_reference_cases(cases, source, folder, reader.schema)
     output = folder / "extract"
 
     def run(
@@ -391,10 +481,11 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
     cases.check(
         "extract_population_and_finite_sir",
         lambda: require(
-            manifest["counts"] == {"spine": 9, "population_excluded": 3, "label_excluded": 3, "included": 3},
+            manifest["counts"] == {"spine": 9, "population_excluded": 3, "label_excluded": 3, "weight_excluded": 0, "included": 3},
             "population, status or finite published SIR filtering changed",
         ),
     )
+    weight_cases(cases, source, folder, reader, writer, manifest, run)
     cases.check("extract_one_historical_call", lambda: require(reader.historical_calls == 1, "historical helper was not called exactly once"))
     cases.check(
         "extract_pinned_support_scans",

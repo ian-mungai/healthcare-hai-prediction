@@ -154,6 +154,13 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         rejects(lambda: Dataset(tuple(dict(row, psi_90=0.2) for row in req.data.rows), (*req.data.features, bad_feature), "HAI_1"), "excluded")
         extra = tuple(dict(row, hac_flag=1) for row in req.data.rows)
         rejects(lambda: replace(req.data, rows=extra), "unexpected extract column")
+        weighted = tuple(dict(row, hai_1__predicted__number=3.0) for row in req.data.rows)
+        require(replace(req.data, rows=weighted).label == "hai_1__sir__number", "the declared weight column of the type must not change the dataset")
+        other_weight = tuple(dict(row, hai_2__predicted__number=3.0) for row in req.data.rows)
+        rejects(lambda: replace(req.data, rows=other_weight), "unexpected extract column")
+        weight_feature = Feature("feature_matrix_hospital:hai_1__predicted__number", "number")
+        rejects(lambda: Dataset(weighted, (*req.data.features, weight_feature), "HAI_1"), "weight")
+        rejects(lambda: Dataset(weighted, (*req.data.features, Feature("label_hai_1:hai_1__predicted__number", "number")), "HAI_1"), "excluded")
 
     def folds() -> None:
         training, _ = req.data.split()

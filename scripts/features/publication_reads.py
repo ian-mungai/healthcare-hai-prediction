@@ -210,13 +210,13 @@ def base_control(entry: str) -> str:
 
 
 def reference_lists(schema: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """The predictor references (``<view>:<column>``) and the label references that the schema registers, sorted."""
+    """The predictor references (``<view>:<column>``) and the offline-only references (labels and weights) that the schema registers, sorted."""
     predictors, labels = [], []
     for table in schema["tables"].values():
         for column in table["columns"]:
             if column["role"] == "predictor":
                 predictors.append(f"{column['view']}:{column['name']}")
-            elif column["role"] == "label":
+            elif column["role"] in ("label", "weight"):
                 labels.append(f"{column['view']}:{column['name']}")
     return sorted(predictors), sorted(labels)
 
@@ -228,19 +228,20 @@ def view_problems(schema: Mapping[str, Any]) -> list[str]:
     excluded = {base_control(entry) for entry in schema.get("excluded_controls", [])}
     predictors, _ = reference_lists(schema)
     for name, table in schema["tables"].items():
+        lifted = {base_control(entry) for entry in table.get("restriction", {}).get("controls", [])}
         for column in table["columns"]:
             role, view, column_name = column["role"], column.get("view"), column["name"]
-            if role in ("key", "event_time", "identifier") and view is not None:
+            if role in ("key", "event_time", "identifier", "grouping") and view is not None:
                 problems.append(f"{name}.{column_name}: a {role} column is registered in view {view}")
             if role == "predictor":
                 if table["role"] != "predictor" or view != name:
                     problems.append(f"{name}.{column_name}: a predictor column sits outside its own predictor view")
                 if column.get("feast_type") not in FEAST_TYPES:
                     problems.append(f"{name}.{column_name}: the Feast type is not one of {', '.join(FEAST_TYPES)}")
-                if column_name.split("__", 1)[0] in excluded:
+                if column_name.split("__", 1)[0] in excluded - lifted:
                     problems.append(f"{name}.{column_name}: the control is excluded from predictors")
-            if role == "label" and (table["role"] != "label" or not str(view).startswith("label_")):
-                problems.append(f"{name}.{column_name}: a label column sits outside a label view")
+            if role in ("label", "weight") and (table["role"] != "label" or not str(view).startswith("label_")):
+                problems.append(f"{name}.{column_name}: a {role} column sits outside a label view")
     if predictors != sorted(schema["servable"]):
         problems.append("the servable list differs from the registered predictor columns")
     return problems

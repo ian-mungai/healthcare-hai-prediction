@@ -1834,33 +1834,51 @@ models:
       - name: hai_1__alignment_status__category
         data_type: varchar
         description: HAI_1, alignment status of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
+      - name: hai_1__predicted__number
+        data_type: double
+        description: "HAI_1, predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). The training weight of the row: never a predictor, never served."
       - name: hai_2__sir__number
         data_type: double
         description: HAI_2, sir of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
       - name: hai_2__alignment_status__category
         data_type: varchar
         description: HAI_2, alignment status of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
+      - name: hai_2__predicted__number
+        data_type: double
+        description: "HAI_2, predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). The training weight of the row: never a predictor, never served."
       - name: hai_3__sir__number
         data_type: double
         description: HAI_3, sir of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
       - name: hai_3__alignment_status__category
         data_type: varchar
         description: HAI_3, alignment status of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
+      - name: hai_3__predicted__number
+        data_type: double
+        description: "HAI_3, predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). The training weight of the row: never a predictor, never served."
       - name: hai_4__sir__number
         data_type: double
         description: HAI_4, sir of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
       - name: hai_4__alignment_status__category
         data_type: varchar
         description: HAI_4, alignment status of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
+      - name: hai_4__predicted__number
+        data_type: double
+        description: "HAI_4, predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). The training weight of the row: never a predictor, never served."
       - name: hai_5__sir__number
         data_type: double
         description: HAI_5, sir of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
       - name: hai_5__alignment_status__category
         data_type: varchar
         description: HAI_5, alignment status of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
+      - name: hai_5__predicted__number
+        data_type: double
+        description: "HAI_5, predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). The training weight of the row: never a predictor, never served."
       - name: hai_6__sir__number
         data_type: double
         description: HAI_6, sir of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
       - name: hai_6__alignment_status__category
         data_type: varchar
         description: HAI_6, alignment status of the window's published outcome (int_spine_hai_outcomes). A label, never a predictor.
+      - name: hai_6__predicted__number
+        data_type: double
+        description: "HAI_6, predicted count of the window's published outcome (int_spine_hai_outcomes, control C282). The training weight of the row: never a predictor, never served."

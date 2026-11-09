@@ -121,7 +121,9 @@ class Dataset:
                 raise ModelError("excluded label, outcome component or validation control cannot be a predictor")
             if feature.kind not in ("number", "category") or feature.reference.count(":") != 1:
                 raise ModelError("predictor reference or type is invalid")
-        allowed = set(names) | set(GROUP_FIELDS) | {"spine_key", "ccn", "window_year", self.label}
+            if feature.name == self.weight_column:
+                raise ModelError("the expected-count weight column cannot be a predictor")
+        allowed = set(names) | set(GROUP_FIELDS) | {"spine_key", "ccn", "window_year", self.label, self.weight_column}
         keys: set[str] = set()
         for row in self.rows:
             if set(row) - allowed:
@@ -143,6 +145,11 @@ class Dataset:
     def label(self) -> str:
         """Return the type-specific published SIR column, without deriving an outcome."""
         return f"hai_{self.hai_type.split('_')[1]}__sir__number"
+
+    @property
+    def weight_column(self) -> str:
+        """Return the type-specific predicted infection count of the extract: the training weight of a row, never a predictor."""
+        return f"hai_{self.hai_type.split('_')[1]}__predicted__number"
 
     @property
     def y(self) -> Array:

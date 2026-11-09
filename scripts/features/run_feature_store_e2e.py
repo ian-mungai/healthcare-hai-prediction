@@ -103,7 +103,15 @@ def refuses(action: Callable[[], Any], *words: str) -> bool:
 def scratch_root(folder: Path) -> Path:
     """A copy of the files the generator reads and writes, to plant a defect in."""
     root = folder / "root"
-    for name in (schema_module.SEEDS, "data_contracts/features", "data_contracts/lakehouse", schema_module.MATRIX_FOLDER, "feature_store"):
+    for name in (
+        schema_module.SEEDS,
+        "data_contracts/features",
+        "data_contracts/lakehouse",
+        "data_contracts/training",
+        "config/training",
+        schema_module.MATRIX_FOLDER,
+        "feature_store",
+    ):
         shutil.copytree(ROOT / name, root / name)
     return root
 
@@ -519,6 +527,491 @@ def zero_fill(sql: str) -> bool:
     return "coalesce(" in lowered or "ifnull(" in lowered or "nvl(" in lowered or ", 0)" in lowered
 
 
+EARLIER_OUTCOMES = "config/training/earlier_outcomes.json"
+EARLIER_CONTROLS = [f"C{number}" for number in range(275, 281)]
+EARLIER_SLOTS = ["m2_elastic_net", "m4_boosting"]
+HISTORY_FIELDS = [{"field": "prior_sir_shrunk", "reason": "planted"}, {"field": "last_sir", "reason": "planted"}]
+HOSPITAL_LOG = {"family": "hospital", "source": "cost_report", "control": "C038", "field": "value", "reason": "planted"}
+HOSPITAL_CHANGE = {"family": "hospital", "source": "cost_report", "control": "C040", "field": "value", "reason": "planted"}
+CARE_LOG = {"family": "care_compare", "source": "", "control": "C143", "field": "value", "reason": "planted"}
+CARE_ORDINAL = {"family": "care_compare", "source": "", "control": "C141", "field": "value", "reason": "planted"}
+WINDOW_GROUPS = {
+    "state_code": "pos",
+    "county_fips": "pos",
+    "provider_subtype_code": "pos",
+    "control_type_code": "pos",
+    "bed_count": "pos",
+    "certified_bed_count": "pos",
+    "is_active": "pos",
+    "has_pos_snapshot": "pos",
+    "cmi": "cmi",
+    "cmi_cases": "cmi",
+    "has_cmi": "cmi",
+    "is_cmi_held": "cmi",
+    "is_critical_access": "ccn",
+    "is_veterans_affairs": "ccn",
+}
+
+
+def planted_root(base: Path, name: str, *changes: Callable[[Path], None]) -> Path:
+    """A scratch copy of the generator's files with each change applied."""
+    root = scratch_root(base / name)
+    for change in changes:
+        change(root)
+    return root
+
+
+def edit_json(path: str, change: Callable[[dict[str, Any]], None]) -> Callable[[Path], None]:
+    """A change that edits one JSON file of a scratch root."""
+
+    def apply(root: Path) -> None:
+        target = root / path
+        document = json.loads(target.read_text())
+        change(document)
+        target.write_text(json.dumps(document))
+
+    return apply
+
+
+def earlier_config(controls: list[str] | None = None, slots: list[str] | None = None) -> Callable[[Path], None]:
+    """A change that writes the earlier-outcome config of a scratch root (the committed file is not assumed)."""
+
+    def write(root: Path) -> None:
+        document = {"schema": 1, "controls": controls or EARLIER_CONTROLS, "slots": slots or EARLIER_SLOTS, "rule": "planted"}
+        (root / EARLIER_OUTCOMES).write_text(json.dumps(document))
+
+    return write
+
+
+def with_rules(**entries: Any) -> Callable[[Path], None]:
+    """A change that sets keys of the reviewed rules file."""
+    return edit_json(schema_module.RULES, lambda document: document.update(entries))
+
+
+def attempt(root: Path) -> tuple[dict[str, Any] | None, str]:
+    """The schema a root generates, or the text of whatever stopped it."""
+    try:
+        return schema_module.build_schema(root), ""
+    except Exception as error:
+        return None, f"{type(error).__name__}: {error}"
+
+
+def columns_of(schema: dict[str, Any] | None, table: str) -> dict[str, dict[str, Any]]:
+    """The columns of one table by name; empty when the schema or the table is absent."""
+    found = (schema or {"tables": {}})["tables"].get(table)
+    return {column["name"]: column for column in found["columns"]} if found else {}
+
+
+def predictor_copy(schema: dict[str, Any] | None, table: str, name: str) -> dict[str, Any]:
+    """A copy of the first predictor column of a table, or a bare one named ``name`` when the schema or the table is absent."""
+    found = [column for column in columns_of(schema, table).values() if column["role"] == "predictor"]
+    return copy.deepcopy(found[0]) if found else {"name": name, "role": "predictor", "view": None, "feast_type": "Float64", "type": "double"}
+
+
+def role_cases(report: Report) -> None:
+    """R1 to R9: the roles and the format of the feature schema (restricted tables, weight, grouping, source groups, derived fields, field match)."""
+    schema = schema_module.load_schema()
+    care_compare_field_cases(report, schema)
+    label_weight_cases(report, schema)
+    source_group_cases(report, schema)
+    with tempfile.TemporaryDirectory(prefix="role_cases_") as folder:
+        base = Path(folder)
+        restricted_table_cases(report, base)
+        derived_field_cases(report, base, schema)
+        grouping_role_cases(report, base)
+        regeneration_cases(report, base)
+
+
+def care_compare_field_cases(report: Report, schema: dict[str, Any]) -> None:
+    """R1: the Care Compare family matches on control and field; the names of its columns do not change."""
+    table = schema["tables"]["feature_matrix_care_compare"]
+    controls = {row["measure_control"] for row in schema_module.read_seed(ROOT, "frozen_care_compare_controls")}
+    expected = {schema_module.column_name(control, "value", "category" if control == "C141" else "number") for control in controls}
+    names = {column["name"] for column in table["columns"] if column["role"] == "predictor"}
+    report.case("R1", "G12", "the Care Compare column names are the control and the field value, as before", names == expected, columns=len(names))
+    matched = all(
+        column["pivot"]["match"] == {"measure_control": column["pivot"]["match"]["measure_control"], "field": "value"}
+        for column in table["columns"]
+        if column["role"] == "predictor"
+    )
+    report.case(
+        "R1",
+        "G12",
+        "the Care Compare family matches on control and field, field value for every existing column",
+        table["match_columns"] == ["measure_control", "field"] and matched,
+    )
+    text = schema_module.generated_files(ROOT)[f"{schema_module.MATRIX_FOLDER}/feature_matrix_care_compare.sql"]
+    report.case(
+        "R1",
+        "G12",
+        "the generated Care Compare model pivots on control and field",
+        "measures.measure_control || '|' || measures.field as pivot_key" in text and "pivot_key = 'C119|value'" in text,
+    )
+
+
+def label_weight_cases(report: Report, schema: dict[str, Any]) -> None:
+    """R2: the expected-count weight column of each label view is a weight, never a predictor and never served."""
+    labels = schema["tables"][schema_module.LABEL_TABLE]
+    weights = {column["name"]: column for column in labels["columns"] if column["role"] == "weight"}
+    numbers = range(1, 7)
+    names = {f"hai_{number}__predicted__number" for number in numbers}
+    right = all(
+        weights.get(f"hai_{number}__predicted__number", {}).get("view") == f"label_hai_{number}"
+        and weights[f"hai_{number}__predicted__number"]["type"] == "double"
+        and weights[f"hai_{number}__predicted__number"]["feast_type"] == "Float64"
+        and weights[f"hai_{number}__predicted__number"]["pivot"] == {"kind": "number", "match": {"hai_type": f"HAI_{number}"}, "value_column": "predicted"}
+        and f"hai_{number}__predicted__number" in labels["label_views"][f"label_hai_{number}"]
+        for number in numbers
+    )
+    report.case("R2", "G13", "each label view carries its type's predicted count as a weight column", set(weights) == names and right, found=sorted(weights))
+    served = {item.split(":", 1)[1] for item in schema["servable"]}
+    definitions = (ROOT / schema_module.DEFINITIONS).read_text()
+    registered = {item.split(":", 1)[1] for item in schema_module.servable_in_definitions(definitions)}
+    report.case(
+        "R2",
+        "G13",
+        "no weight column is servable or registered in an online view; the offline label views register it",
+        not names & served and not names & registered and all(f'("{name}", "Float64")' in definitions for name in names),
+    )
+    sql = schema_module.generated_files(ROOT)[f"{schema_module.MATRIX_FOLDER}/{schema_module.LABEL_TABLE}.sql"]
+    report.case(
+        "R2",
+        "G13",
+        "the generated label model pivots the predicted count of the window's own outcome",
+        all(f"max(predicted) filter (where pivot_key = 'HAI_{number}') as hai_{number}__predicted__number" in sql for number in numbers),
+    )
+    served_weight = copy.deepcopy(schema)
+    served_weight["servable"].append(f"{schema_module.LABEL_TABLE}:hai_1__predicted__number")
+    report.case(
+        "R2",
+        "G13",
+        "a weight column in the servable list is refused as a weight",
+        any("weight" in problem for problem in schema_module.role_problems(served_weight)),
+    )
+    moved = copy.deepcopy(schema)
+    moved["tables"][schema_module.WINDOW_TABLE]["columns"].append(
+        {
+            "name": "hai_1__predicted__number",
+            "role": "weight",
+            "type": "double",
+            "view": schema_module.WINDOW_TABLE,
+            "feast_type": "Float64",
+            "pivot": {"copy": "x"},
+        }
+    )
+    report.case(
+        "R2",
+        "G13",
+        "a weight column in a predictor table is refused as a weight",
+        any("weight" in problem for problem in schema_module.role_problems(moved)),
+    )
+    wrong_view = copy.deepcopy(schema)
+    for column in wrong_view["tables"][schema_module.LABEL_TABLE]["columns"]:
+        if column["role"] == "weight":
+            column["view"] = schema_module.WINDOW_TABLE
+    report.case(
+        "R2",
+        "G13",
+        "a weight column outside a label view is refused as a weight",
+        any("weight" in problem for problem in schema_module.role_problems(wrong_view)),
+    )
+
+
+def source_group_cases(report: Report, schema: dict[str, Any]) -> None:
+    """R3: every predictor column names its source group, from the seeds; nothing else has one."""
+    columns = [(name, column) for name, table in schema["tables"].items() for column in table["columns"]]
+    predictors = [(name, column) for name, column in columns if column["role"] == "predictor"]
+    others = [column for _, column in columns if column["role"] != "predictor"]
+    report.case(
+        "R3",
+        "G14",
+        "every predictor column has a source group and no other column has one",
+        all(isinstance(column.get("source_group"), str) and column["source_group"] for _, column in predictors)
+        and not any("source_group" in c for c in others),
+    )
+    groups = {
+        name: {column.get("source_group") for table, column in predictors if table == name} for name in schema["tables"] if name != schema_module.LABEL_TABLE
+    }
+    report.case(
+        "R3",
+        "G14",
+        "the Care Compare groups are the facts of its controls",
+        groups["feature_matrix_care_compare"] == {"hcahps", "hgi", "maternal_health", "timely_effective_care"},
+        groups=sorted(map(str, groups["feature_matrix_care_compare"])),
+    )
+    by_source = all(
+        column.get("source_group") == column["pivot"]["match"]["measure_source"]
+        for name, column in predictors
+        if "measure_source" in schema["tables"][name]["match_columns"]
+    )
+    report.case("R3", "G14", "the hospital, operations and county groups are the measure sources", by_source)
+    window = {column["name"]: column.get("source_group") for column in schema["tables"][schema_module.WINDOW_TABLE]["columns"] if column["role"] == "predictor"}
+    report.case("R3", "G14", "the window columns come from pos, cmi or the CCN", window == WINDOW_GROUPS, window=window)
+    seen: dict[str, set[str]] = {}
+    for name, column in predictors:
+        seen.setdefault(str(column.get("source_group")), set()).add(name)
+    report.case("R3", "G14", "a source group never spans two feature tables", all(len(tables) == 1 for tables in seen.values()))
+    missing = {key: value for key, value in WINDOW_GROUPS.items() if key != "bed_count"}
+    with mock.patch.object(schema_module, "WINDOW_SOURCE_GROUPS", missing, create=True):
+        report.case(
+            "R3", "G14", "a window predictor without a source group stops the generator", refuses(lambda: schema_module.build_schema(ROOT), "source group")
+        )
+    spanning = {**WINDOW_GROUPS, "bed_count": "cost_report"}
+    with mock.patch.object(schema_module, "WINDOW_SOURCE_GROUPS", spanning, create=True):
+        report.case("R3", "G14", "a source group in two feature tables stops the generator", refuses(lambda: schema_module.build_schema(ROOT), "source group"))
+
+
+def restricted_table_cases(report: Report, base: Path) -> None:
+    """R4 to R6: the restricted earlier-outcome table, built from the reviewed config; the lifted controls stay refused everywhere else."""
+    history = planted_root(base, "history", earlier_config(), with_rules(hai_history_fields=HISTORY_FIELDS))
+    built, error = attempt(history)
+    table = (built or {"tables": {}})["tables"].get("feature_matrix_hai_history", {})
+    names = {column["name"] for column in table.get("columns", []) if column["role"] == "predictor"}
+    expected = {schema_module.column_name(control, entry["field"], "number") for control in EARLIER_CONTROLS for entry in HISTORY_FIELDS}
+    restriction = {"kind": "earlier_outcome", "controls": EARLIER_CONTROLS, "slots": EARLIER_SLOTS}
+    report.case(
+        "R4",
+        "G15",
+        "an earlier-outcome control is accepted in its restricted table, which carries the config's controls and slots",
+        names == expected and table.get("restriction") == restriction and table.get("family") == "hai_history" and not error,
+        error=error[:120],
+        columns=len(names),
+    )
+    groups = {column.get("source_group") for column in table.get("columns", []) if column["role"] == "predictor"}
+    report.case(
+        "R4",
+        "G15",
+        "the restricted table is one source group and is servable like any predictor table",
+        groups == {"hai_history"} and built is not None and expected <= {item.split(":", 1)[1] for item in built["servable"]},
+    )
+    files = schema_module.generated_files(history) if built else {}
+    report.case(
+        "R4",
+        "G15",
+        "the restricted table has its model, YAML entry and Feast view",
+        f"{schema_module.MATRIX_FOLDER}/feature_matrix_hai_history.sql" in files
+        and "name: feature_matrix_hai_history" in files.get(schema_module.MATRIX_YAML, "")
+        and 'feature_matrix_hai_history = view("feature_matrix_hai_history", True)' in files.get(schema_module.DEFINITIONS, ""),
+    )
+    report.case(
+        "R4",
+        "G15",
+        "a lifted control has no problem in its own table",
+        built is not None and bool(names) and not schema_module.role_problems(built),
+    )
+    committed = schema_module.load_schema()
+    lifted = {control.lower() for control in EARLIER_CONTROLS}
+    report.case(
+        "R4",
+        "G15",
+        "without history fields the committed schema has no restricted table and no lifted control among its columns",
+        not any("restriction" in item for item in committed["tables"].values())
+        and not any(column["name"].split("__", 1)[0] in lifted for item in committed["tables"].values() for column in item["columns"]),
+    )
+
+    def seed_row(root: Path) -> None:
+        with (root / schema_module.SEEDS / "frozen_care_compare_controls.csv").open("a") as handle:
+            handle.write("C275,fct_x,m,v,registry_measure_sources,99\n")
+
+    elsewhere = planted_root(base, "elsewhere", earlier_config(), with_rules(hai_history_fields=HISTORY_FIELDS), seed_row)
+    report.case(
+        "R5",
+        "G15",
+        "a lifted control outside its restricted table still stops the generator",
+        refuses(lambda: schema_module.generated_files(elsewhere), "excluded from predictors"),
+    )
+    outside = copy.deepcopy(built) if built else copy.deepcopy(committed)
+    moved = predictor_copy(built, "feature_matrix_hai_history", "c275__prior_sir_shrunk__number")
+    moved.update(role="predictor", view="feature_matrix_care_compare", feast_type="Float64", type="double")
+    outside["tables"]["feature_matrix_care_compare"]["columns"].append(moved)
+    outside["servable"].append(f"feature_matrix_care_compare:{moved['name']}")
+    report.case(
+        "R5",
+        "G15",
+        "a lifted control column inside another predictor table is refused as a restricted control",
+        any("restricted" in problem for problem in schema_module.role_problems(outside)),
+    )
+    for name, control in (("candidate_c281", "C281"), ("target_c269", "C269"), ("validation_e038", "E038")):
+        planted = planted_root(base, name, earlier_config([*EARLIER_CONTROLS, control]), with_rules(hai_history_fields=HISTORY_FIELDS))
+        report.case(
+            "R5",
+            "G15",
+            f"another outcome control ({control}) named in the earlier-outcome config stops the generator",
+            refuses(partial(schema_module.generated_files, planted), "earlier-outcome candidate"),
+        )
+    foreign = copy.deepcopy(built) if built else copy.deepcopy(committed)
+    other = predictor_copy(built, "feature_matrix_hai_history", "c281__prior_sir_shrunk__number")
+    other.update(name="c281__prior_sir_shrunk__number", role="predictor", view="feature_matrix_hai_history", feast_type="Float64", type="double")
+    foreign["tables"].setdefault("feature_matrix_hai_history", {"role": "predictor", "restriction": restriction, "columns": []})["columns"].append(other)
+    foreign["servable"].append(f"feature_matrix_hai_history:{other['name']}")
+    report.case(
+        "R5",
+        "G15",
+        "a control the config does not lift is refused inside the restricted table",
+        any("restricted" in problem for problem in schema_module.role_problems(foreign)),
+    )
+    plain = copy.deepcopy(built) if built else copy.deepcopy(committed)
+    ordinary = predictor_copy(built, "feature_matrix_hai_history", "c119__prior_sir_shrunk__number")
+    ordinary.update(name="c119__prior_sir_shrunk__number", view="feature_matrix_hai_history")
+    plain["tables"].setdefault("feature_matrix_hai_history", {"role": "predictor", "restriction": restriction, "columns": []})["columns"].append(ordinary)
+    plain["servable"].append("feature_matrix_hai_history:c119__prior_sir_shrunk__number")
+    report.case(
+        "R5",
+        "G15",
+        "a control that is not lifted, even one that is no outcome control, is refused inside the restricted table",
+        any("restricted table carries only" in problem for problem in schema_module.role_problems(plain)),
+    )
+    slot = planted_root(base, "slot", earlier_config(slots=[*EARLIER_SLOTS, "m1_ols"]), with_rules(hai_history_fields=HISTORY_FIELDS))
+    report.case(
+        "R6",
+        "G15",
+        "a slot outside the two prediction models stops the generator",
+        refuses(lambda: schema_module.generated_files(slot), "earlier_outcomes.json", "schema"),
+    )
+    unknown = planted_root(
+        base, "unknown_key", earlier_config(), edit_json(EARLIER_OUTCOMES, lambda d: d.update(unreviewed=True)), with_rules(hai_history_fields=HISTORY_FIELDS)
+    )
+    report.case(
+        "R6",
+        "G15",
+        "an unknown key in the earlier-outcome config stops the generator",
+        refuses(lambda: schema_module.generated_files(unknown), "earlier_outcomes.json", "schema"),
+    )
+    absent = planted_root(base, "absent", with_rules(hai_history_fields=HISTORY_FIELDS), lambda root: (root / EARLIER_OUTCOMES).unlink(missing_ok=True))
+    report.case(
+        "R6", "G15", "a missing earlier-outcome config stops the generator", refuses(lambda: schema_module.generated_files(absent), "earlier_outcomes.json")
+    )
+
+
+def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> None:
+    """R7: log, change and ordinal fields of a control are keys of the same family, named from the field; they carry the parent's control."""
+    rules = {"log_fields": [HOSPITAL_LOG, CARE_LOG], "change_fields": [HOSPITAL_CHANGE], "ordinal_fields": [CARE_ORDINAL]}
+    root = planted_root(base, "derived", with_rules(**rules))
+    built, error = attempt(root)
+    hospital, care = columns_of(built, "feature_matrix_hospital"), columns_of(built, "feature_matrix_care_compare")
+    wanted = {
+        "c038__value_log__number": (hospital, "value_log"),
+        "c040__value_change__number": (hospital, "value_change"),
+        "c143__value_log__number": (care, "value_log"),
+        "c141__value_ordinal__number": (care, "value_ordinal"),
+    }
+    right = all(
+        name in found
+        and found[name]["pivot"]["match"]["field"] == field
+        and found[name]["pivot"]["kind"] == "number"
+        and found[name]["type"] == "double"
+        and found[name]["role"] == "predictor"
+        for name, (found, field) in wanted.items()
+    )
+    report.case(
+        "R7",
+        "G16",
+        "log, change and ordinal fields become number columns that match the derived field",
+        right,
+        error=error[:120],
+        found=sorted(set(wanted) & (set(hospital) | set(care))),
+    )
+    old = {name: set(columns_of(schema, name)) for name in ("feature_matrix_hospital", "feature_matrix_care_compare")}
+    report.case(
+        "R7",
+        "G16",
+        "derived fields only add columns: every existing column keeps its name",
+        built is not None
+        and old["feature_matrix_hospital"] <= set(hospital)
+        and old["feature_matrix_care_compare"] <= set(care)
+        and len(hospital) - len(old["feature_matrix_hospital"]) == 2,
+    )
+    report.case(
+        "R7",
+        "G16",
+        "the derived columns raise no role problem",
+        built is not None and set(wanted) <= set(hospital) | set(care) and not schema_module.role_problems(built),
+    )
+    for name, entry, words in (
+        ("unknown", dict(HOSPITAL_LOG, control="C999"), ("no control seed gives",)),
+        ("log_of_category", dict(CARE_ORDINAL, reason="planted"), ("number",)),
+        ("no_reason", {key: value for key, value in HOSPITAL_LOG.items() if key != "reason"}, ("reason",)),
+    ):
+        planted = planted_root(base, f"derived_{name}", with_rules(log_fields=[entry]))
+        report.case(
+            "R7",
+            "G16",
+            f"a log field that is {name.replace('_', ' ')} stops the generator",
+            refuses(partial(schema_module.generated_files, planted), *words),
+        )
+
+    def seed_key(root: Path) -> None:
+        with (root / schema_module.SEEDS / "frozen_hospital_controls.csv").open("a") as handle:
+            handle.write("cost_report,C038,value_log,value,x,,,cost_report_measures,90\n")
+
+    existing = planted_root(base, "existing_key", seed_key, with_rules(log_fields=[HOSPITAL_LOG]))
+    report.case(
+        "R7", "G16", "a derived field that is already a key stops the generator", refuses(lambda: schema_module.generated_files(existing), "already a key")
+    )
+    ordinal = planted_root(base, "ordinal_of_number", with_rules(ordinal_fields=[HOSPITAL_LOG]))
+    report.case("R7", "G16", "an ordinal field of a number key stops the generator", refuses(lambda: schema_module.generated_files(ordinal), "category"))
+    twice = planted_root(base, "twice", with_rules(log_fields=[HOSPITAL_LOG, HOSPITAL_LOG]))
+    report.case("R7", "G16", "the same derived field listed twice stops the generator", refuses(lambda: schema_module.generated_files(twice), "twice"))
+
+
+def grouping_role_cases(report: Report, base: Path) -> None:
+    """R8: the grouping role is offline only: never a predictor, never in a view, never served."""
+    planted = (*schema_module.WINDOW_COLUMNS, ("owner_group_id", "varchar", "grouping", "owner_group_id", "none"))
+    described = {**schema_module.WINDOW_DESCRIPTIONS, "owner_group_id": "planted group"}
+    with mock.patch.object(schema_module, "WINDOW_COLUMNS", planted), mock.patch.object(schema_module, "WINDOW_DESCRIPTIONS", described):
+        built, error = attempt(ROOT)
+        column = columns_of(built, schema_module.WINDOW_TABLE).get("owner_group_id", {})
+        files = schema_module.generated_files(ROOT) if built else {}
+    report.case(
+        "R8",
+        "G17",
+        "a grouping column is stored in its table with no view, no Feast type, no source group and no place in the servable list",
+        column.get("role") == "grouping"
+        and column.get("view") is None
+        and column.get("feast_type") is None
+        and "source_group" not in column
+        and built is not None
+        and not any(item.endswith(":owner_group_id") for item in built["servable"])
+        and "owner_group_id" not in files.get(schema_module.DEFINITIONS, "")
+        and not schema_module.role_problems(built or {"excluded_controls": [], "tables": {}, "servable": []}),
+        error=error[:120],
+    )
+    broken = copy.deepcopy(built) if built else copy.deepcopy(schema_module.load_schema())
+    for entry in columns_of(broken, schema_module.WINDOW_TABLE).values():
+        if entry["name"] == "owner_group_id":
+            entry.update(view=schema_module.WINDOW_TABLE, feast_type="String")
+    report.case(
+        "R8",
+        "G17",
+        "a grouping column registered in a view is refused as a grouping column",
+        any("grouping" in problem for problem in schema_module.role_problems(broken)),
+    )
+    served = copy.deepcopy(built) if built else copy.deepcopy(schema_module.load_schema())
+    served["servable"].append(f"{schema_module.WINDOW_TABLE}:owner_group_id")
+    report.case(
+        "R8",
+        "G17",
+        "a grouping column in the servable list is refused as a grouping column",
+        any("grouping" in problem for problem in schema_module.role_problems(served)),
+    )
+    unknown = tuple((name, kind, "bogus" if name == "ccn" else role, source, mask) for name, kind, role, source, mask in schema_module.WINDOW_COLUMNS)
+    with mock.patch.object(schema_module, "WINDOW_COLUMNS", unknown):
+        report.case(
+            "R8", "G17", "a window column with a role outside the closed list stops the generator", refuses(lambda: schema_module.build_schema(ROOT), "role")
+        )
+
+
+def regeneration_cases(report: Report, base: Path) -> None:
+    """R9: regeneration is byte-identical to the committed files and to itself."""
+    root = planted_root(base, "regenerate")
+    first = {path: (root / path).read_bytes() for path in schema_module.generate(root)}
+    second = {path: (root / path).read_bytes() for path in schema_module.generate(root)}
+    committed = {path: (ROOT / path).read_bytes() for path in first}
+    report.case(
+        "R9", "G2", "generating twice, and generating from the committed rules, gives the committed bytes", first == second == committed, files=len(first)
+    )
+
+
 def settings_cases(report: Report) -> None:
     """E30: no teardown, closed settings, database numbers."""
     files = [*sorted((ROOT / "feature_store").glob("*.py")), *sorted((ROOT / "scripts/features").glob("*.py"))]
@@ -615,6 +1108,7 @@ def tool_interpreter_case(report: Report) -> None:
 def static(report: Report) -> None:
     """Every static case."""
     generator_cases(report)
+    role_cases(report)
     contract_cases(report)
     pin_cases(report)
     plan_cases(report)
