@@ -1,7 +1,7 @@
 ---
 title: Analysis plan
 description: The outcome, predictors, six models, evaluation and promotion rules used by every training run.
-last_updated: 2026-10-30
+last_updated: 2026-11-08
 ---
 
 # Analysis plan
@@ -41,7 +41,7 @@ Every training run follows this plan. The plan changes during development, so ea
 ## Split and evaluation
 
 - The newest window year with published SIRs is the holdout. All earlier years are training data.
-- Tuning uses cross-validation inside the training years, grouped by hospital: all windows of one CCN fall in one fold. The panel model uses time-ordered folds.
+- Tuning uses cross-validation inside the training years, grouped by hospital: all windows of one CCN fall in one fold. The panel model uses time-ordered folds, each with at least three fitting years.
 - All learned preprocessing (imputation, scaling, encoding and selection) is fitted inside the training folds only.
 - Holdout metrics are RMSE (primary), MAE and R². The likelihood models also report AIC and BIC.
 
@@ -52,7 +52,9 @@ Every training run follows this plan. The plan changes during development, so ea
 3. **Mixed effects (RQ2):** a random intercept per ownership group, taken from the ownership history as of the window start. The model reports the intraclass correlation (ICC) and a likelihood-ratio test against the fixed-only model (H2).
 4. **Tree model with SHAP:** gradient boosting (XGBoost) is the primary tree model, with SHAP values on the holdout. Random Forest runs as a check and is never promoted.
 5. **Spatial (RQ5):** Moran's I on the holdout-year residuals of the best non-spatial model. If it is significant at 0.05 (H5), a spatial lag or spatial error model follows, chosen by Lagrange multiplier tests.
-6. **Fixed-effects panel (RQ6):** hospital fixed effects across window years with time-varying predictors. A Hausman test compares the model against random effects (H6). A holdout hospital without an estimated effect gets the mean effect. The run counts these hospitals.
+6. **Fixed-effects panel (RQ6):** hospital fixed effects across window years with time-varying predictors. A holdout hospital without an estimated effect gets the mean effect. The run counts these hospitals.
+   - The model fits complete cases on its own predictor set and adds no missing-value flags. This is its exception to the missing-value rule above. The run counts the rows left out. A holdout row with a missing predictor is still scored, with the fitting median.
+   - Every fit needs at least three fitting years. The time-ordered folds therefore validate the fourth training year onward.
 
 For Moran's I, two hospitals are neighbours when their counties are the same or adjacent in the county adjacency table. The weights are row-standardized. Hospitals with no neighbour are counted and left out of the test.
 
@@ -69,7 +71,8 @@ For Moran's I, two hospitals are neighbours when their counties are the same or 
 - **RQ2 (H2):** model 3.
 - **RQ3 (H3):** mediation of the process measures on SIR through PSI-90, by the product of coefficients with a bootstrap confidence interval for the indirect effect (5,000 resamples). The result is associational, not causal.
 - **RQ4 (H4):** a nested comparison of CMS-only against CMS plus HCRIS, CMI and county context on the same rows: likelihood-ratio and F tests in-sample and the holdout RMSE difference with a bootstrap interval.
-- **RQ5 (H5) and RQ6 (H6):** models 5 and 6.
+- **RQ5 (H5):** model 5.
+- **RQ6 (H6):** a Mundlak test on model 6. The outcome is regressed on the time-varying predictors, their hospital means and the window-year effects. H6 is the joint Wald test that the coefficients of the hospital means are zero, with hospital-clustered standard errors (CR1) and a chi-square reference. A rejection means the hospital effects correlate with the predictors. The record holds the statistic, the degrees of freedom, the p-value and the number of hospital clusters. The test needs at least 50 clusters and refuses a smaller design with its reason.
 - **Validation:** hospitals are ranked by predicted SIR and compared with the HAC Reduction Program worst-performer flag of the matching program year. The newest window year with published SIRs is Y. The matching program year is the one whose two-year HAI performance period covers windows Y-1 and Y, as the reviewed year map `config/training/hac_year_mapping.json` records with its known weak spots. A hospital with a row in only some years of the period is dropped from the comparison and counted.
   1. A validation-only fit takes the selected model specification (the same predictors and tuning grid) and trains on the windows through Y-2, so no window of the flag's period is in its training data.
   2. It predicts windows Y-1 and Y. Each hospital's score is the average of its predictions over those windows.

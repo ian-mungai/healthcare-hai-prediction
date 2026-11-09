@@ -226,6 +226,57 @@ class Tail:
         return math.exp(-max(0.0, float(statistic)))
 
 
+def upper_incomplete_gamma(shape: float, x: float) -> float:
+    """Regularized upper incomplete gamma function Q(shape, x), by series below shape + 1 and by continued fraction above."""
+    if x <= 0:
+        return 1.0
+    prefactor = math.exp(-x + shape * math.log(x) - math.lgamma(shape))
+    if x < shape + 1:
+        term = total = 1 / shape
+        denominator = shape
+        while abs(term) > abs(total) * 1e-16:
+            denominator += 1
+            term *= x / denominator
+            total += term
+        return 1 - total * prefactor
+    tiny = 1e-300
+    b = x + 1 - shape
+    c = 1 / tiny
+    d = 1 / b
+    fraction = d
+    for step in range(1, 10000):
+        a = -step * (step - shape)
+        b += 2
+        d = a * d + b
+        d = tiny if abs(d) < tiny else d
+        c = b + a / c
+        c = tiny if abs(c) < tiny else c
+        d = 1 / d
+        fraction *= d * c
+        if abs(d * c - 1) < 1e-15:
+            break
+    return prefactor * fraction
+
+
+class ExactChiSquare:
+    """Exact chi-square upper tail computed with the standard library, recording every request."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[float, float]] = []
+
+    def sf(self, statistic: float, degrees: float) -> float:
+        self.calls.append((float(statistic), float(degrees)))
+        return upper_incomplete_gamma(degrees / 2, float(statistic) / 2)
+
+
+@contextmanager
+def exact_chi_square() -> Any:
+    """Replace only the scipy tail with the exact standard-library chi-square, for statistics whose size and power are checked."""
+    tail = ExactChiSquare()
+    with patch.dict(sys.modules, {"scipy.stats": SimpleNamespace(chi2=tail)}):
+        yield tail
+
+
 def _pivoted_qr(matrix: Any, mode: str = "r", pivoting: bool = False) -> Any:
     """QR with column pivoting (Businger and Golub) in NumPy, for the small synthetic designs; it returns ``(R, pivots)`` as SciPy does."""
     if mode != "r" or not pivoting:

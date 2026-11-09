@@ -33,7 +33,7 @@ from scripts.training.models.common import (
 from scripts.training.models.elastic import ElasticRegressor
 from scripts.training.models.linear import OLSRegressor
 from scripts.training.models.mixed import MixedRegressor
-from scripts.training.models.panel import PanelRegressor, repeated_hospital_positions
+from scripts.training.models.panel import MINIMUM_FITTING_YEARS, PanelRegressor, complete_case_positions, repeated_hospital_positions
 from scripts.training.models.preprocessing import FoldPreprocessor, missing
 from scripts.training.models.spatial import SpatialRegressor, build_weights, moran_test
 from scripts.training.models.trees import TreeRegressor, shap_values
@@ -53,9 +53,9 @@ def folds_for(data: Dataset, config: Mapping[str, Any], seed: int) -> list[tuple
 
 
 def time_folds(data: Dataset) -> list[tuple[Any, Any]]:
-    """Reserve each later training year after at least two years for panel fitting."""
+    """Reserve each later training year after at least three fitting years for panel fitting."""
     years = np.asarray([row["window_year"] for row in data.rows])
-    return [(np.flatnonzero(years < year), np.flatnonzero(years == year)) for year in sorted(set(years))[2:]]
+    return [(np.flatnonzero(years < year), np.flatnonzero(years == year)) for year in sorted(set(years))[MINIMUM_FITTING_YEARS:]]
 
 
 def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool) -> Any:
@@ -91,18 +91,27 @@ def _grid(grid: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
     return [dict(zip(names, values, strict=True)) for values in itertools.product(*(grid[name] for name in names))]
 
 
-def _fit_pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool, training: Dataset) -> tuple[Any, list[str]]:
+def _panel_rows(request: ModelRequest, data: Dataset) -> tuple[Dataset, int, list[str]]:
+    """The fixed-effects model fits complete cases on its own predictor set, then only hospitals with repeated windows among them."""
+    complete, incomplete = complete_case_positions(data.rows, tuple(feature.name for feature in request.features_for("m6_fixed_effects")))
+    data = data.subset(complete)
+    positions, singletons = repeated_hospital_positions(data.rows)
+    data = data.subset(positions)
+    if not data.rows:
+        raise NotEstimable("panel has no complete repeated training hospitals")
+    return data, incomplete, singletons
+
+
+def _fit_pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool, training: Dataset) -> tuple[Any, list[str], int]:
     dropped: list[str] = []
+    incomplete = 0
     if slot == "m6_fixed_effects":
-        positions, dropped = repeated_hospital_positions(training.rows)
-        training = training.subset(positions)
-        if not training.rows:
-            raise NotEstimable("panel has no repeated training hospitals")
+        training, incomplete, dropped = _panel_rows(request, training)
     request.deadline.check()
     pipeline = _pipeline(request, slot, parameters, forest)
     pipeline.fit(training.rows, training.y)
     request.deadline.check()
-    return pipeline, dropped
+    return pipeline, dropped, incomplete
 
 
 def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -113,16 +122,13 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     fold_seed = seed_for(request.config["master_seed"], request.data.hai_type, "folds")
     folds = time_folds(training) if slot == "m6_fixed_effects" else folds_for(training, request.config, fold_seed)
     if not folds:
-        return options[0], [{"status": "not_estimable", "reason": "no time-ordered validation fold after two fitting years"}]
+        return options[0], [{"status": "not_estimable", "reason": "no time-ordered validation fold after three fitting years"}]
     cached: list[tuple[Prepared, Array, Prepared, Array, dict[str, Any]]] = []
     for left, right in folds:
         request.deadline.check()
         fitting, validation = training.subset(left), training.subset(right)
         if slot == "m6_fixed_effects":
-            positions, _ = repeated_hospital_positions(fitting.rows)
-            fitting = fitting.subset(positions)
-            if not fitting.rows:
-                raise NotEstimable("panel has no repeated training hospitals")
+            fitting, _, _ = _panel_rows(request, fitting)
         prepare = _pipeline(request, slot, options[0], forest).named_steps["prepare"]
         fitting_design = prepare.fit_transform(fitting.rows)
         validation_design = prepare.transform(validation.rows)
@@ -185,7 +191,7 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         if not training.rows or not holdout.rows:
             raise NotEstimable("mixed model has no ownership-eligible training or holdout windows")
     parameters, audit = _tune(request, slot, forest, training)
-    pipeline, dropped = _fit_pipeline(request, slot, parameters, forest, training)
+    pipeline, dropped, incomplete = _fit_pipeline(request, slot, parameters, forest, training)
     prediction = np.asarray(pipeline.predict(holdout.rows), dtype=np.float64).reshape(-1)
     scored = metrics(holdout.y, prediction)
     request.deadline.check()
@@ -208,6 +214,7 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         grid = request.config["slots"][slot]["grid"]
         details["grid_edge"] = any(parameters[name] in (grid[name][0], grid[name][-1]) for name in grid)
     if slot == "m6_fixed_effects":
+        details["dropped_incomplete_row_count"] = incomplete
         details["dropped_singleton_hospital_count"] = len(dropped)
         details["unseen_holdout_hospitals"] = len({row["ccn"] for row in holdout.rows if row["ccn"] not in model.effects_})
     return SlotResult(
@@ -455,7 +462,7 @@ def fit_models(request: ModelRequest) -> ModelSuite:
         research["process_vs_intercept_cmi"] = {"status": "not_estimable", "reason": result["m2_elastic_net"].reason}
     research["ownership"] = {"status": result["m3_mixed"].status, "reason": result["m3_mixed"].reason, **result["m3_mixed"].details}
     research["hospital_effects"] = result["m6_fixed_effects"].details.get(
-        "hausman", {"status": result["m6_fixed_effects"].status, "reason": result["m6_fixed_effects"].reason}
+        "mundlak", {"status": result["m6_fixed_effects"].status, "reason": result["m6_fixed_effects"].reason}
     )
     research["nested"] = _optional_analysis(lambda: research_tests.nested_comparison(request))
     shap: dict[str, Any] = {"status": "not_run", "reason": "gradient boosting was not fitted"}

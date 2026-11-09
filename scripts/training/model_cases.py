@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from scripts.training.model_test_support import SpatialOLS, libraries
+from scripts.training.model_test_support import SpatialOLS, exact_chi_square, libraries, upper_incomplete_gamma
 
 
 def require(condition: Any, reason: str) -> None:
@@ -111,7 +111,7 @@ def panel_standin(y: Any, x: Any, entities: Any, years: Any, names: Any) -> Any:
     beta[0] -= 0.4
     effects = {entity: float(np.mean(np.asarray(y)[np.asarray(entities) == entity] - x[np.asarray(entities) == entity] @ beta)) for entity in unique}
     covariance = np.eye(len(names)) * 0.2
-    return PanelFits(dict(zip(names, beta, strict=True)), covariance, dict(zip(names, beta + 0.01, strict=True)), covariance / 2, effects)
+    return PanelFits(dict(zip(names, beta, strict=True)), covariance, effects)
 
 
 def scenarios() -> list[tuple[str, Callable[[], None]]]:
@@ -345,8 +345,9 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
 
     def dependent_columns_dropped_and_recorded() -> None:
         changed = dependent_request()
-        expected = {"copy", "total", "kind__category_1"}
         for slot in ("m3_mixed", "m5_spatial", "m6_fixed_effects"):
+            panel_slot = slot == "m6_fixed_effects"
+            expected = {"copy", "total", "sparse"} if panel_slot else {"copy", "total", "kind__category_1"}
             with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
                 result = suite.fit_slot(changed, slot)
             require(result.status == "fitted", f"{slot} with dependent columns is {result.status}: {result.reason}")
@@ -354,15 +355,25 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             require(dropped == expected, f"{slot} dropped {sorted(dropped)}, not the duplicate, the sum and the mirrored category level")
             require(result.details["dependent_column_count"] == len(expected), f"{slot} dependent column count is wrong")
             kinds = {entry["name"]: entry["kind"] for entry in result.details["dependent_columns"]}
-            require(kinds == {"copy": "value", "total": "value", "kind__category_1": "category_level"}, f"{slot} dependent column kinds are wrong")
+            require(
+                kinds
+                == (
+                    {"copy": "value", "total": "value", "sparse": "value"}
+                    if panel_slot
+                    else {"copy": "value", "total": "value", "kind__category_1": "category_level"}
+                ),
+                f"{slot} dependent column kinds are wrong",
+            )
             names = result.pipeline.named_steps["prepare"].transform(changed.data.split()[1].rows).names
-            require(not expected & set(names) and {"process", "extra", "cmi", "sparse__missing"} <= set(names), f"{slot} holdout design kept a dropped column")
+            kept = {"process", "extra", "cmi"} if panel_slot else {"process", "extra", "cmi", "sparse__missing"}
+            require(not expected & set(names) and kept <= set(names), f"{slot} holdout design kept a dropped column")
+            require(not panel_slot or not any(name.endswith("__missing") for name in names), "the panel design kept a missing-value flag")
             folds = [record for attempt in result.details["tuning"] for record in attempt.get("folds", [])]
             require(all("dependent_columns" in record for record in folds), f"{slot} tuning folds do not record their dependent columns")
         with libraries():
             nested = research_tests.nested_comparison(changed)
         require(nested["status"] == "fitted", "nested comparison with dependent columns did not fit")
-        require({entry["name"] for entry in nested["dependent_columns"]} == expected, "nested comparison dropped other columns")
+        require({entry["name"] for entry in nested["dependent_columns"]} == {"copy", "total", "kind__category_1"}, "nested comparison dropped other columns")
         require(nested["reduced_references_fitted"] == sorted(changed.feature_lists["rq4_reduced"]), "nested comparison dropped a reduced-list column")
 
     def dependent_step_uses_fitting_rows_only() -> None:
@@ -477,13 +488,182 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         require(first == second and first["p_value_name"] == "p_sim", "Moran permutations were not seeded or the gate p-value changed")
         require(first["statistic"] > 0.8 and first["p_value"] < 0.05, "spatial pattern was missed")
 
-    def hausman_contract() -> None:
-        with libraries() as replacements:
-            fitted = research_tests.hausman(np.asarray([1.0, 2.0]), np.eye(2), np.asarray([0.0, 0.0]), np.eye(2) / 2, ("a", "b"))
-            singular = research_tests.hausman(np.asarray([1.0]), np.eye(1), np.asarray([0.0]), np.eye(1), ("a",))
-        require(math.isclose(fitted["statistic"], 10.0), "Hausman coefficient or covariance order is wrong")
-        require(singular["status"] == "not_estimable", "singular Hausman covariance used a pseudoinverse")
-        require(replacements["scipy.stats"].chi2.calls == [(fitted["statistic"], 2)], "Hausman tail received wrong degrees of freedom")
+    def mundlak_panel(seed: int, hospitals: int = 300, correlation: float = 0.0, effect_scale: float = 1.0) -> tuple[Any, Any, Any, Any, Any]:
+        """A balanced panel over four window years whose hospital effect is correlated with the first slope by the given amount."""
+        rng = np.random.default_rng(seed)
+        years = (2018, 2019, 2021, 2022)
+        effect = rng.normal(scale=effect_scale, size=hospitals)
+        first = correlation * effect[:, None] + rng.normal(size=(hospitals, len(years)))
+        second = rng.normal(size=(hospitals, len(years)))
+        level = np.asarray([0.0, 0.2, 0.5, 0.4])
+        y = 1.0 + 0.5 * first + 0.3 * second + effect[:, None] + level + rng.normal(scale=0.5, size=(hospitals, len(years)))
+        entities = np.repeat([f"H{index:04d}" for index in range(hospitals)], len(years))
+        return y.reshape(-1), np.column_stack((first.reshape(-1), second.reshape(-1))), ("first", "second"), entities, np.tile(years, hospitals)
+
+    def mundlak_design(slopes: Any, entities: Any, years: Any) -> Any:
+        """The Mundlak regressors built with explicit loops: constant, slopes, hospital means of the slopes, later window-year dummies."""
+        means = np.zeros_like(slopes)
+        for entity in sorted(set(entities)):
+            mask = entities == entity
+            means[mask] = slopes[mask].mean(axis=0)
+        later = sorted(set(years))[1:]
+        dummies = np.column_stack([(years == year).astype(float) for year in later])
+        return np.column_stack((np.ones(len(slopes)), slopes, means, dummies))
+
+    def hand_wald(y: Any, design: Any, entities: Any, tested: Sequence[int]) -> tuple[float, float]:
+        """Cluster-robust and unadjusted Wald statistics of the tested coefficients, one hospital at a time."""
+        rows, columns = design.shape
+        inverse = np.linalg.inv(design.T @ design)
+        beta = inverse @ design.T @ y
+        residual = y - design @ beta
+        meat = np.zeros((columns, columns))
+        labels = sorted(set(entities))
+        for entity in labels:
+            mask = entities == entity
+            score = design[mask].T @ residual[mask]
+            meat += np.outer(score, score)
+        count = len(labels)
+        clustered = count / (count - 1) * (rows - 1) / (rows - columns) * inverse @ meat @ inverse
+        unadjusted = float(residual @ residual) / (rows - columns) * inverse
+        gamma, index = beta[list(tested)], np.ix_(list(tested), list(tested))
+        return float(gamma @ np.linalg.solve(clustered[index], gamma)), float(gamma @ np.linalg.solve(unadjusted[index], gamma))
+
+    def exact_chi_square_tail() -> None:
+        for critical, degrees in ((3.841459, 1), (5.991465, 2), (12.591587, 6), (18.307038, 10), (124.342, 100)):
+            require(abs(upper_incomplete_gamma(degrees / 2, critical / 2) - 0.05) < 2e-6, f"chi-square tail is wrong at {degrees} degrees of freedom")
+        require(math.isclose(upper_incomplete_gamma(1.0, 2.0), math.exp(-2.0), rel_tol=1e-12), "chi-square tail is wrong for two degrees of freedom")
+
+    def mundlak_rejects_correlated_effect() -> None:
+        with exact_chi_square() as tail:
+            result = research_tests.mundlak(*mundlak_panel(11, correlation=0.8))
+        require(result["status"] == "fitted", f"correlated panel was not estimable: {result}")
+        require(result["p_value"] < 1e-6, "Mundlak test missed a hospital effect correlated with a regressor")
+        require(result["degrees_of_freedom"] == 2 and result["clusters"] == 300 and result["rows"] == 1200, "Mundlak record has the wrong size fields")
+        require(
+            result["tested_columns"] == ["first", "second"]
+            and result["covariance"] == "cluster_robust_cr1"
+            and result["reference_distribution"] == "chi_square",
+            "Mundlak record has the wrong tested columns",
+        )
+        require(tail.calls == [(result["statistic"], 2.0)], "Mundlak tail received the wrong statistic or degrees of freedom")
+
+    def mundlak_keeps_null_without_correlation() -> None:
+        with exact_chi_square():
+            single = research_tests.mundlak(*mundlak_panel(12, correlation=0.0))
+            p_values = [research_tests.mundlak(*mundlak_panel(seed, correlation=0.0))["p_value"] for seed in range(100, 160)]
+        require(single["status"] == "fitted" and single["p_value"] > 0.05, f"Mundlak test rejected an uncorrelated hospital effect at seed 12: {single}")
+        rejections = sum(value < 0.05 for value in p_values)
+        require(rejections <= 9, f"Mundlak test rejected {rejections} of 60 uncorrelated panels at the 0.05 level (limit 9 for a size near 0.05)")
+
+    def mundlak_clustered_errors_differ_from_unadjusted() -> None:
+        y, slopes, names, entities, years = mundlak_panel(21, correlation=0.0, effect_scale=1.0)
+        design = mundlak_design(slopes, entities, years)
+        _, clustered, unadjusted = research_tests.cluster_covariances(y, design, entities)
+        ratio = np.sqrt(np.diag(clustered) / np.diag(unadjusted))[3:5]
+        require(bool(np.all((ratio > 1.5) & (ratio < 2.3))), f"clustered errors do not exceed unadjusted errors under within-hospital correlation: {ratio}")
+        flat_y, flat_slopes, _, flat_entities, flat_years = mundlak_panel(21, correlation=0.0, effect_scale=0.0)
+        _, flat_clustered, flat_unadjusted = research_tests.cluster_covariances(flat_y, mundlak_design(flat_slopes, flat_entities, flat_years), flat_entities)
+        flat_ratio = np.sqrt(np.diag(flat_clustered) / np.diag(flat_unadjusted))[3:5]
+        require(
+            bool(np.all((flat_ratio > 0.85) & (flat_ratio < 1.15))),
+            f"clustered errors differ from unadjusted ones without within-hospital correlation: {flat_ratio}",
+        )
+        with exact_chi_square():
+            records = [research_tests.mundlak(*mundlak_panel(21, correlation=correlation)) for correlation in (0.0, 0.8)]
+        for record, correlation in zip(records, (0.0, 0.8), strict=True):
+            panel_data = mundlak_panel(21, correlation=correlation)
+            expected, unadjusted_statistic = hand_wald(panel_data[0], mundlak_design(panel_data[1], panel_data[3], panel_data[4]), panel_data[3], (3, 4))
+            require(math.isclose(record["statistic"], expected, rel_tol=1e-9), "Mundlak statistic differs from the hand-computed cluster-robust Wald statistic")
+            require(record["statistic"] < 0.9 * unadjusted_statistic, "Mundlak statistic did not use clustered errors")
+            if correlation == 0.0:
+                require(
+                    record["statistic"] < 0.5 * unadjusted_statistic,
+                    "clustered Wald statistic is not far below the unadjusted one under hospital-level error correlation",
+                )
+
+    def mundlak_refuses_few_clusters() -> None:
+        with exact_chi_square():
+            few = research_tests.mundlak(*mundlak_panel(31, hospitals=49))
+            enough = research_tests.mundlak(*mundlak_panel(31, hospitals=50))
+        require(
+            few["status"] == "not_estimable" and "at least 50 hospital clusters" in few["reason"] and few["clusters"] == 49,
+            f"few clusters were not refused: {few}",
+        )
+        require(enough["status"] == "fitted" and enough["clusters"] == 50, "the cluster minimum is not exactly 50")
+
+    def mundlak_refuses_unidentified_design() -> None:
+        y, slopes, names, entities, years = mundlak_panel(32)
+        with exact_chi_square():
+            duplicated = research_tests.mundlak(y, np.column_stack((slopes, slopes[:, 0])), (*names, "copy"), entities, years)
+        require(duplicated["status"] == "not_estimable" and "rank" in duplicated["reason"], f"a duplicated slope was not refused: {duplicated}")
+
+    def time_folds_keep_three_fitting_years() -> None:
+        wide = request(years=(2018, 2019, 2021, 2022, 2023), hospitals=60)
+        training, _ = wide.data.split()
+        folds = suite.time_folds(training)
+        require(len(folds) == 1, f"five training years should give one fold, got {len(folds)}")
+        for left, right in folds:
+            require(len({training.rows[i]["window_year"] for i in left}) >= 3, "a time fold fits on fewer than three years")
+            require({training.rows[i]["window_year"] for i in right} == {2022}, "the first validated year is not the fourth training year")
+
+    def panel_refuses_fewer_than_three_fitting_years() -> None:
+        from scripts.training.models.common import NotEstimable
+
+        few = request(years=(2020, 2021, 2022), hospitals=60)
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            result = suite.fit_slot(few, "m6_fixed_effects")
+            enough = suite.fit_slot(request(years=(2019, 2020, 2021, 2022), hospitals=60), "m6_fixed_effects")
+        require(
+            result.status == "not_estimable" and "at least three fitting years" in result.reason,
+            f"two fitting years were not refused: {result.status} {result.reason}",
+        )
+        require(enough.status == "fitted", "three fitting years were refused")
+        training, _ = few.data.split()
+        design = FoldPreprocessor(training.features).fit_transform(training.rows)
+        try:
+            panel.PanelRegressor().fit(design, training.y)
+        except NotEstimable as error:
+            require("at least three fitting years" in str(error), f"wrong refusal reason: {error}")
+        else:
+            raise AssertionError("the panel regressor accepted two fitting years")
+
+    def panel_record_carries_mundlak() -> None:
+        sixty = request(years=(2019, 2020, 2021, 2022), hospitals=60)
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            output = suite.fit_models(sixty)
+        record = output.research["hospital_effects"]
+        require(record["status"] == "fitted" and record["test"] == "mundlak", f"RQ6 record is not a Mundlak record: {record}")
+        require({"statistic", "degrees_of_freedom", "p_value", "clusters"} <= set(record), "RQ6 record lacks a Mundlak field")
+        require(record["clusters"] == 60 and record["covariance"] == "cluster_robust_cr1", "RQ6 record has the wrong cluster count or covariance")
+        require(
+            "mundlak" in output.slots["m6_fixed_effects"].details and "hausman" not in output.slots["m6_fixed_effects"].details, "m6 details keep the Hausman"
+        )
+        require("hausman" not in json.dumps(output.to_result(), sort_keys=True).lower(), "the result payload still names the Hausman test")
+        require("hospital_effects.p_value" in output.to_result()["p_values"], "the RQ6 p-value is missing from the p-value bundle")
+
+    def panel_fits_complete_cases() -> None:
+        data = request(years=(2019, 2020, 2021, 2022), hospitals=60)
+        rows = [dict(row) for row in data.data.rows]
+        training_rows = [index for index, row in enumerate(rows) if row["window_year"] < 2022]
+        for position in training_rows[0:30:3]:
+            rows[position]["process"] = None
+        first_hospital = [index for index in training_rows if rows[index]["ccn"] == rows[training_rows[40]]["ccn"]]
+        for position in first_hospital[:2]:
+            rows[position]["process"] = None
+        holdout_position = next(index for index, row in enumerate(rows) if row["window_year"] == 2022)
+        rows[holdout_position]["cmi"] = None
+        incomplete = sum(row["process"] is None or row["cmi"] is None for row in rows)
+        changed = replace(data, data=replace(data.data, rows=tuple(rows)))
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            result = suite.fit_slot(changed, "m6_fixed_effects")
+        require(result.status == "fitted", f"complete-case panel failed: {result.status} {result.reason}")
+        require(result.details["dropped_incomplete_row_count"] == incomplete - 1, "incomplete training rows were not counted")
+        require(result.details["dropped_singleton_hospital_count"] == 1, "the hospital left with one complete window was not dropped")
+        require(all(value == 0.0 for value in result.details["training_missing_fraction"].values()), "the fitting rows still hold missing values")
+        _, holdout = changed.data.split()
+        names = result.pipeline.named_steps["prepare"].transform(holdout.rows).names
+        require(not any(name.endswith("__missing") for name in names), "m6 kept a missing-value flag")
+        require(len(result.predictions) == len(holdout.rows) and np.isfinite(result.predictions).all(), "a holdout row with a missing predictor was not scored")
 
     def panel_unbalanced_and_unseen() -> None:
         rows = tuple(row for row in req.data.rows if row["ccn"] != "990000" or row["window_year"] in (2020, 2023))
@@ -585,9 +765,10 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         lists = {**req.feature_lists, "m1_ols": tuple(feature.reference for feature in data.features)}
         changed = replace(req, data=data, feature_lists=lists)
         with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            results = {}
             for slot in SLOTS:
-                result = suite.fit_slot(changed, slot)
-                require(result.status == "fitted", f"shared missing indicators made {slot} non-estimable: {result.reason}")
+                results[slot] = suite.fit_slot(changed, slot)
+                require(results[slot].status == "fitted", f"shared missing indicators made {slot} non-estimable: {results[slot].reason}")
             nested = research_tests.nested_comparison(changed)
         require(nested["status"] == "fitted", "shared missing indicators prevented the nested test")
         training, holdout = data.split()
@@ -595,7 +776,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         design = transform.transform(holdout.rows)
         require(design.names.count("process__missing") == 1 and "extra__missing" not in design.names, "duplicate indicator was retained")
         require(transform.indicator_aliases_ == {"extra__missing": "process__missing"}, "indicator aliases were not recorded")
-        require(result.details["indicator_aliases"] == transform.indicator_aliases_, "result lost the indicator mapping")
+        require(results["m5_spatial"].details["indicator_aliases"] == transform.indicator_aliases_, "result lost the indicator mapping")
+        require(results["m6_fixed_effects"].details["indicator_aliases"] == {}, "the panel model kept missing-value indicators")
         masked = np.asarray([row["extra"] is None for row in training.rows], dtype=float)
         learned = transform.transform(training.rows)
         require(np.array_equal(masked, learned.matrix[:, learned.names.index("process__missing")]), "indicator deduplication lost fitting-row information")
@@ -933,9 +1115,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         random = np.random.default_rng(224).normal(size=len(rows))
         with libraries():
             null = spatial.moran_test(random, graph.keys, graph, 19, 999, Deadline.after(10))
-            no_effect = research_tests.hausman(np.asarray([0.2, 0.3]), np.eye(2), np.asarray([0.2, 0.3]), np.eye(2) / 2, ("a", "b"))
         require(null["p_value"] > 0.05, "random spatial residuals falsely passed the gate")
-        require(no_effect["statistic"] == 0.0 and no_effect["p_value"] == 1.0, "no hospital effect did not retain the null")
 
     def optional_analysis_failures() -> None:
         from scripts.training.models.common import DeadlineExceeded, NotEstimable
@@ -1528,7 +1708,16 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("nested_no_gain", nested_no_gain),
         ("spatial_order_and_islands", spatial_order_and_islands),
         ("seeded_moran_pattern", moran_signal),
-        ("hausman_covariance", hausman_contract),
+        ("exact_chi_square_tail", exact_chi_square_tail),
+        ("mundlak_rejects_correlated_effect", mundlak_rejects_correlated_effect),
+        ("mundlak_keeps_null_without_correlation", mundlak_keeps_null_without_correlation),
+        ("mundlak_clustered_errors_differ_from_unadjusted", mundlak_clustered_errors_differ_from_unadjusted),
+        ("mundlak_refuses_few_clusters", mundlak_refuses_few_clusters),
+        ("mundlak_refuses_unidentified_design", mundlak_refuses_unidentified_design),
+        ("time_folds_keep_three_fitting_years", time_folds_keep_three_fitting_years),
+        ("panel_refuses_fewer_than_three_fitting_years", panel_refuses_fewer_than_three_fitting_years),
+        ("panel_record_carries_mundlak", panel_record_carries_mundlak),
+        ("panel_fits_complete_cases", panel_fits_complete_cases),
         ("unbalanced_panel_and_unseen_effect", panel_unbalanced_and_unseen),
         ("shap_additivity_refusal", shap_failure),
         ("separated_mediation", mediation_separation),

@@ -264,22 +264,81 @@ def rq4_compare(reduced: Mapping[str, Any], full: Mapping[str, Any], settings: M
     }
 
 
-def hausman(fixed: Array, fixed_covariance: Array, random: Array, random_covariance: Array, names: tuple[str, ...]) -> dict[str, Any]:
-    """Compare ordered slope estimates without inverting singular or indefinite covariance differences."""
-    fixed, random = np.asarray(fixed, dtype=np.float64), np.asarray(random, dtype=np.float64)
-    covariance = np.asarray(fixed_covariance) - np.asarray(random_covariance)
-    if fixed.shape != random.shape or fixed.shape != (len(names),) or covariance.shape != (len(names), len(names)) or not names:
-        raise ModelError("Hausman estimates differ in coefficient identity or covariance shape")
-    if not np.isfinite(covariance).all() or not np.isfinite(fixed).all() or not np.isfinite(random).all():
-        return {"status": "not_estimable", "reason": "Hausman estimates are not finite"}
-    if not np.allclose(covariance, covariance.T, rtol=1e-8, atol=1e-10) or np.min(np.linalg.eigvalsh(covariance)) <= 1e-12:
-        return {"status": "not_estimable", "reason": "Hausman covariance difference is singular or indefinite", "coefficients": list(names)}
-    delta = fixed - random
-    statistic = float(delta @ np.linalg.solve(covariance, delta))
+MUNDLAK_MINIMUM_CLUSTERS = 50
+YEAR_EFFECT_PREFIX = "window_year__"
+
+
+def cluster_covariances(y: Array, x: Array, groups: Array | Sequence[str]) -> tuple[Array, Array, Array]:
+    """OLS coefficients with the hospital-clustered (CR1) covariance and, beside it, the unadjusted covariance of the same fit.
+
+    The clustered covariance is (X'X)^-1 (sum over hospitals of X_g'u_g u_g'X_g) (X'X)^-1 times G/(G-1) * (N-1)/(N-K).
+    It lets the windows of one hospital be correlated.
+    """
+    y, x = np.asarray(y, dtype=np.float64), np.asarray(x, dtype=np.float64)
+    rows, columns = x.shape
+    labels, positions = np.unique(np.asarray(groups), return_inverse=True)
+    if y.shape != (rows,) or len(positions) != rows or len(labels) < 2 or rows <= columns:
+        raise ModelError("clustered covariance needs matching rows, two hospitals and residual degrees of freedom")
+    inverse = np.linalg.inv(x.T @ x)
+    beta = inverse @ x.T @ y
+    residual = y - x @ beta
+    scores = np.zeros((len(labels), columns))
+    np.add.at(scores, positions, x * residual[:, None])
+    correction = len(labels) / (len(labels) - 1) * (rows - 1) / (rows - columns)
+    clustered = correction * inverse @ (scores.T @ scores) @ inverse
+    unadjusted = float(residual @ residual) / (rows - columns) * inverse
+    return beta, clustered, unadjusted
+
+
+def mundlak(y: Array, slopes: Array, names: Sequence[str], entities: Sequence[str], years: Sequence[int]) -> dict[str, Any]:
+    """Mundlak test: do the hospital means of the time-varying slopes explain the outcome beyond the slopes themselves?
+
+    The outcome is regressed on a constant, the time-varying predictors, their hospital means and a dummy for every window year after the earliest.
+    The test is the joint Wald test that the coefficients of the hospital means are zero, with hospital-clustered errors.
+    Its reference is a chi-square with one degree of freedom per mean. A hospital effect correlated with a regressor makes it reject.
+    Year-effect columns of the design are replaced by the dummies built here.
+    """
+    y, entity_labels, year_values = np.asarray(y, dtype=np.float64), np.asarray(entities), np.asarray(years)
+    keep = [position for position, name in enumerate(names) if not name.startswith(YEAR_EFFECT_PREFIX)]
+    slopes = np.asarray(slopes, dtype=np.float64)[:, keep]
+    tested = [names[position] for position in keep]
+    clusters = len(set(entity_labels.tolist()))
+    if not tested or slopes.shape[0] != len(y) or len(entity_labels) != len(y) or len(year_values) != len(y):
+        raise ModelError("Mundlak test needs time-varying slopes with matching rows, hospitals and years")
+    if clusters < MUNDLAK_MINIMUM_CLUSTERS:
+        return {
+            "status": "not_estimable",
+            "reason": f"Mundlak test needs at least {MUNDLAK_MINIMUM_CLUSTERS} hospital clusters, found {clusters}",
+            "clusters": clusters,
+        }
+    means = np.zeros_like(slopes)
+    for label in sorted(set(entity_labels.tolist())):
+        mask = entity_labels == label
+        means[mask] = slopes[mask].mean(axis=0)
+    later_years = sorted(set(year_values.tolist()))[1:]
+    dummies = np.column_stack([(year_values == year).astype(np.float64) for year in later_years]) if later_years else np.empty((len(y), 0))
+    design = np.column_stack((np.ones(len(y)), slopes, means, dummies))
+    block = list(range(1 + len(tested), 1 + 2 * len(tested)))
+    if not np.isfinite(design).all() or not np.isfinite(y).all():
+        return {"status": "not_estimable", "reason": "Mundlak design contains a nonfinite value", "clusters": clusters}
+    if design.shape[0] <= design.shape[1] or np.linalg.matrix_rank(design) != design.shape[1]:
+        return {"status": "not_estimable", "reason": "Mundlak design is rank deficient or has no residual degrees of freedom", "clusters": clusters}
+    beta, covariance, _ = cluster_covariances(y, design, entity_labels)
+    gamma, variance = beta[block], covariance[np.ix_(block, block)]
+    eigenvalues = np.linalg.eigvalsh((variance + variance.T) / 2)
+    if not np.isfinite(eigenvalues).all() or eigenvalues[0] <= 1e-10 * max(eigenvalues[-1], 1e-300):
+        return {"status": "not_estimable", "reason": "Mundlak clustered covariance of the hospital means is singular or indefinite", "clusters": clusters}
+    statistic = float(gamma @ np.linalg.solve(variance, gamma))
     return {
         "status": "fitted",
+        "test": "mundlak",
         "statistic": statistic,
-        "p_value": float(importlib.import_module("scipy.stats").chi2.sf(statistic, len(names))),
-        "degrees_of_freedom": len(names),
-        "coefficients": list(names),
+        "degrees_of_freedom": len(tested),
+        "p_value": float(importlib.import_module("scipy.stats").chi2.sf(statistic, len(tested))),
+        "clusters": clusters,
+        "rows": len(y),
+        "tested_columns": tested,
+        "year_effect_years": later_years,
+        "covariance": "cluster_robust_cr1",
+        "reference_distribution": "chi_square",
     }

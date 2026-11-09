@@ -12,32 +12,31 @@ from typing import Any
 import numpy as np
 
 from scripts.training.models.common import Array, ModelError, NotEstimable, Prepared, Regressor, dependent_positions, full_rank, with_intercept
-from scripts.training.models.preprocessing import column_kind
+from scripts.training.models.preprocessing import column_kind, missing
+
+MINIMUM_FITTING_YEARS = 3
 
 
 @dataclass(frozen=True)
 class PanelFits:
-    """Comparable fixed and random estimates on exactly the same panel design and rows."""
+    """Fixed-effects estimates, their covariance and the estimated hospital effects on one panel design."""
 
     fixed: Mapping[str, float]
     fixed_covariance: Array
-    random: Mapping[str, float]
-    random_covariance: Array
     effects: Mapping[str, float]
     log_likelihood: float | None = None
 
 
 def native_fits(y: Array, matrix: Array, entities: tuple[str, ...], years: tuple[int, ...], names: tuple[str, ...]) -> PanelFits:
-    """Fit the two pinned linearmodels estimators on one explicit entity-time MultiIndex."""
+    """Fit the pinned linearmodels fixed-effects estimator on one explicit entity-time MultiIndex."""
     pandas = importlib.import_module("pandas")
     api = importlib.import_module("linearmodels.panel")
     index = pandas.MultiIndex.from_arrays([entities, years], names=["ccn", "window_year"])
     x = pandas.DataFrame(matrix, index=index, columns=list(names))
     outcome = pandas.Series(y, index=index, name="sir")
     fixed = api.PanelOLS(outcome, x, entity_effects=True, drop_absorbed=True, check_rank=True).fit(cov_type="unadjusted", debiased=True)
-    random = api.RandomEffects(outcome, x, check_rank=True).fit(cov_type="unadjusted", debiased=True)
-    if fixed.nobs != len(y) or random.nobs != len(y) or tuple(fixed.params.index) != names or tuple(random.params.index) != names:
-        raise ModelError("panel comparison changed its sample or coefficient identity")
+    if fixed.nobs != len(y) or tuple(fixed.params.index) != names:
+        raise ModelError("panel fit changed its sample or coefficient identity")
     coefficients = np.asarray([fixed.params.to_dict()[name] for name in names], dtype=np.float64)
     residuals = y - matrix @ coefficients
     entity_values = np.asarray(entities)
@@ -45,8 +44,6 @@ def native_fits(y: Array, matrix: Array, entities: tuple[str, ...], years: tuple
     return PanelFits(
         fixed.params.to_dict(),
         fixed.cov.loc[list(names), list(names)].to_numpy(),
-        random.params.to_dict(),
-        random.cov.loc[list(names), list(names)].to_numpy(),
         effects,
         float(fixed.loglik),
     )
@@ -58,19 +55,27 @@ def repeated_hospital_positions(rows: tuple[Mapping[str, Any], ...]) -> tuple[li
     return [index for index, row in enumerate(rows) if counts[row["ccn"]] > 1], sorted(key for key, count in counts.items() if count == 1)
 
 
+def complete_case_positions(rows: tuple[Mapping[str, Any], ...], names: tuple[str, ...]) -> tuple[list[int], int]:
+    """Keep the rows with a value for every predictor of the panel model and count the rows left out."""
+    kept = [index for index, row in enumerate(rows) if not any(missing(row[name]) for name in names)]
+    return kept, len(rows) - len(kept)
+
+
 class PanelRegressor(Regressor):
-    """Fit time-varying hospital effects and retain a comparable random-effects estimate."""
+    """Fit time-varying hospital effects and test them with the Mundlak test."""
 
     def __init__(self) -> None:
         pass
 
     def fit(self, design: Prepared, y: Array) -> PanelRegressor:
-        """Identify absorbed columns and estimate the panel with explicit covariance settings."""
-        from scripts.training.research_tests import hausman
+        """Identify absorbed columns, estimate the fixed-effects panel and run the Mundlak test on its time-varying slopes."""
+        from scripts.training.research_tests import mundlak
 
         entities = tuple(row["ccn"] for row in design.rows)
         years = tuple(row["window_year"] for row in design.rows)
         unique = sorted(set(entities))
+        if len(set(years)) < MINIMUM_FITTING_YEARS:
+            raise NotEstimable(f"panel requires at least three fitting years, found {len(set(years))}")
         if len(unique) < 2 or any(count < 2 for count in Counter(entities).values()):
             raise NotEstimable("panel requires repeated windows for at least two training hospitals")
         centered = design.matrix.copy()
@@ -95,20 +100,14 @@ class PanelRegressor(Regressor):
             raise NotEstimable("panel residual degrees of freedom are exhausted")
         names = ("intercept", *(design.names[index] for index in self.kept_indices_))
         result = native_fits(y, matrix, entities, years, names)
-        if set(result.fixed) != set(names) or set(result.random) != set(names) or set(result.effects) != set(unique):
+        if set(result.fixed) != set(names) or set(result.effects) != set(unique):
             raise ModelError("panel result changed its coefficient or hospital identity")
         self.coefficients_ = np.asarray([result.fixed[name] for name in names], dtype=np.float64)
         self.effects_ = dict(result.effects)
         self.mean_effect_ = float(np.mean(list(self.effects_.values())))
         if not np.isfinite(self.coefficients_).all() or not math.isfinite(self.mean_effect_):
             raise NotEstimable("panel estimates are not finite")
-        comparison = hausman(
-            np.asarray([result.fixed[name] for name in names[1:]]),
-            result.fixed_covariance[1:, 1:],
-            np.asarray([result.random[name] for name in names[1:]]),
-            result.random_covariance[1:, 1:],
-            names[1:],
-        )
+        comparison = mundlak(y, design.matrix[:, self.kept_indices_], names[1:], entities, years)
         self.details_ = {
             "coefficients": {name: float(result.fixed[name]) for name in names},
             "absorbed_columns": absorbed,
@@ -116,7 +115,7 @@ class PanelRegressor(Regressor):
             "within_dependent_column_count": len(self.within_dependent_),
             "training_hospitals": len(unique),
             "training_hospitals_by_window_count": {str(windows): count for windows, count in sorted(Counter(Counter(entities).values()).items())},
-            "hausman": comparison,
+            "mundlak": comparison,
             "covariance": "unadjusted",
             "debiased": True,
             "unseen_effect": "mean_estimated_hospital_effect",
