@@ -17,13 +17,12 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import systemd_model
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import LaunchPool, TimeoutExpired, run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROFILE = "example_project_dev"
@@ -213,6 +212,79 @@ while [ ! -e "$3" ] && [ "$held" -lt 400 ]; do
   held=$((held + 1))
 done
 exit "$status"
+"""
+# The stand-in for the mount command in the interrupt cases: it names its process in the case's state folder and then stalls.
+BOOT_STALL_WITH_PID = 'echo $$ >"$BOOT_STATE/stalled.pid"; exec /bin/sleep 45'
+# The most seconds an interrupted boot run may take to come back to its caller: the stalled step would otherwise run for BOOT_INTERRUPT_STALL_CAP seconds.
+BOOT_INTERRUPT_LIMIT = 4.0
+BOOT_INTERRUPT_STALL_CAP = 8
+# Runs boot_host in its own process and interrupts it with SIGINT once the stalled step runs. Arguments: repository root, case folder, mode ("interrupt", or
+# "survivor": a session stop that is never confirmed), plant ("" or the name of a planted defect), the real bash and the GNU timeout. It writes result.json.
+BOOT_INTERRUPT_RUNNER = """
+import json, os, signal, sys, threading, time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from unittest import mock
+repo, folder, mode, plant, bash, gnu_timeout = sys.argv[1:7]
+repo, folder = Path(repo), Path(folder)
+sys.path.insert(0, str(repo))
+signal.signal(signal.SIGINT, signal.default_int_handler)
+from scripts import process
+from scripts.infrastructure import run_e2e
+# The launch that started this runner marks its environment; a suite started from a shell has none, so the boot run leads its own session.
+os.environ.pop(process.SESSION_VARIABLE, None)
+main = threading.get_ident()
+temporary = folder / "temporary"
+root = temporary / "boot_interrupted"
+result = {}
+def interrupt_when_stalled():
+    deadline = time.monotonic() + 15
+    while not (root / "state" / "stalled.pid").exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    time.sleep(0.2)
+    result["interrupt_sent_at"] = time.time()
+    signal.pthread_kill(main, signal.SIGINT)
+def survivor_session_left(members):
+    return bool(members) or threading.current_thread() is not threading.main_thread()
+def gone(pid):
+    try:
+        state = run_e2e.process_state(pid)
+    except run_e2e.ProcessInspectionError:
+        return False
+    return state is None or state.startswith("Z")
+patches = []
+if mode == "survivor":
+    patches += [mock.patch("scripts.process.session_left", survivor_session_left), mock.patch("scripts.process.CONFIRM_SECONDS", 0.5)]
+    patches.append(mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 3.0))
+if plant == "plain_executor":
+    patches.append(mock.patch.object(run_e2e, "LaunchPool", ThreadPoolExecutor, create=True))
+if plant == "no_cancellation":
+    patches.append(mock.patch.object(process.Cancellation, "cancelled", lambda self: False))
+if plant == "worker_error_swallowed":
+    patches.append(mock.patch.object(process.LaunchPool, "unconfirmed_problems", lambda self: []))
+(folder / "evidence").mkdir()
+(temporary / "home").mkdir(parents=True)
+(temporary / "tools").mkdir()
+evidence = run_e2e.Evidence(folder / "evidence", temporary)
+template = (run_e2e.REPO_ROOT / run_e2e.BOOT_TEMPLATE).read_text(encoding="utf-8")
+for patch in patches:
+    patch.start()
+threading.Thread(target=interrupt_when_stalled, daemon=True).start()
+stall = {"mount": run_e2e.BOOT_STALL_WITH_PID}
+cap = {"BOOT_TIMEOUT_CAP": str(run_e2e.BOOT_INTERRUPT_STALL_CAP)}
+try:
+    run_e2e.boot_host(evidence, bash, "boot_interrupted", template, stall, cap, gnu_timeout)
+    result["raised"] = "nothing"
+except BaseException as error:
+    result["raised"] = type(error).__name__
+    result["message"] = str(error)[:300]
+result["returned_at"] = time.time()
+stalled = root / "state" / "stalled.pid"
+result["stalled_pid"] = int(stalled.read_text()) if stalled.exists() else None
+result["copy_pid"] = run_e2e.console_copy_pid("\\n".join(run_e2e.read_lines(root / run_e2e.BOOT_PATHS["log_file"])))
+result["stalled_gone_at_return"] = result["stalled_pid"] is not None and gone(result["stalled_pid"])
+result["copy_gone_at_return"] = result["copy_pid"] is not None and gone(result["copy_pid"])
+(folder / "result.json").write_text(json.dumps(result))
 """
 STALL = "exec /bin/sleep 45"
 STALL_IGNORING_TERM = "trap '' TERM; exec /bin/sleep 45"
@@ -1939,7 +2011,7 @@ def boot_host(
     started = time.monotonic()
     observation: dict[str, Any] | None = None
     script_seconds = 0.0
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    with LaunchPool(max_workers=1) as pool:
         run = pool.submit(evidence.run, name, command, root, {**environment, **case_environment})
         try:
             while not run.done() and not exited.exists() and time.monotonic() - started < BOOT_RUN_LIMIT:
@@ -2181,6 +2253,79 @@ def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_tim
         problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT, step["console_copy"])
         step["console_problems"] = problems
         evidence.check(step, "planted_console_defect_is_reported", any(expected in problem for problem in problems))
+    run_boot_interrupt_cases(evidence, bash, gnu_timeout)
+
+
+def boot_interrupt_result(evidence: Evidence, bash: str, gnu_timeout: str, mode: str, plant: str = "") -> dict[str, Any]:
+    """Run BOOT_INTERRUPT_RUNNER, which interrupts a stalled boot run, and return what it recorded (empty when it never came back to its caller)."""
+    folder = evidence.temporary / f"boot_interrupt_{mode}_{plant or 'unplanted'}"
+    folder.mkdir()
+    runner = folder / "runner.py"
+    runner.write_text(BOOT_INTERRUPT_RUNNER, encoding="utf-8")
+    arguments = ["-B", str(runner), str(REPO_ROOT), str(folder), mode, plant, bash, gnu_timeout]
+    # A runner that never comes back (the defect) is stopped, with its session and everything in it, when this deadline passes.
+    with contextlib.suppress(TimeoutExpired):
+        run_command(sys.executable, arguments, cwd=REPO_ROOT, env=evidence.environment, timeout=BOOT_INTERRUPT_STALL_CAP + 12)
+    path = folder / "result.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def pid_gone(pid: int | None) -> bool:
+    """Return True when the process is confirmed gone or is a zombie; a missing process number is not a proof."""
+    if pid is None:
+        return False
+    try:
+        state = process_state(pid)
+    except ProcessInspectionError:
+        return False
+    return state is None or state.startswith("Z")
+
+
+def boot_interrupt_checks(result: dict[str, Any], mode: str) -> dict[str, bool]:
+    """Return what an interrupt of the stalled boot run must show, by name; every value is True when the run behaved as required."""
+    sent, returned = result.get("interrupt_sent_at"), result.get("returned_at")
+    if mode == "survivor":
+        return {
+            "unconfirmed_stop_reaches_the_caller": result.get("raised") == "LaunchesNotStopped",
+            "message_names_the_cause": "not confirmed" in result.get("message", ""),
+        }
+    return {
+        "interrupt_reaches_the_caller": result.get("raised") == "KeyboardInterrupt",
+        "interrupt_returns_before_the_stalled_step_ends_on_its_own": sent is not None and returned is not None and returned - sent < BOOT_INTERRUPT_LIMIT,
+        "stalled_script_step_gone_when_the_interrupt_returns": result.get("stalled_gone_at_return") is True,
+        "console_copy_gone_when_the_interrupt_returns": result.get("copy_gone_at_return") is True,
+        "stalled_script_step_gone_afterwards": pid_gone(result.get("stalled_pid")),
+        "console_copy_gone_afterwards": pid_gone(result.get("copy_pid")),
+    }
+
+
+def run_boot_interrupt_cases(evidence: Evidence, bash: str, gnu_timeout: str) -> None:
+    """An interrupt during the boot run must end the boot script and its console copy at once and an unconfirmed stop must reach the caller.
+
+    Each case interrupts a run stalled in its mount step. Each planted run (a plain thread pool again, no cancellation, the worker error dropped)
+    must fail the check that names its defect.
+    """
+    late = "interrupt_returns_before_the_stalled_step_ends_on_its_own"
+    lost = "unconfirmed_stop_reaches_the_caller"
+    cases = (
+        ("boot_interrupt_stops_the_script_and_the_copy", "interrupt", "", ""),
+        ("boot_interrupt_reports_an_unconfirmed_stop", "survivor", "", ""),
+        ("boot_interrupt_with_plain_thread_pool_is_caught", "interrupt", "plain_executor", late),
+        ("boot_interrupt_without_cancellation_is_caught", "interrupt", "no_cancellation", late),
+        ("boot_interrupt_unconfirmed_stop_with_plain_thread_pool_is_caught", "survivor", "plain_executor", lost),
+        ("boot_interrupt_with_the_worker_error_dropped_is_caught", "survivor", "worker_error_swallowed", lost),
+    )
+    for name, mode, plant, expected in cases:
+        result = boot_interrupt_result(evidence, bash, gnu_timeout, mode, plant)
+        checks = boot_interrupt_checks(result, mode)
+        step: dict[str, Any] = {"name": name, "assertions": [], "interrupt_run": {key: evidence.redact(str(value)) for key, value in result.items()}}
+        evidence.report["steps"].append(step)
+        if plant:
+            step["failed_checks"] = [check for check, passed in checks.items() if not passed]
+            evidence.check(step, "planted_defect_is_caught", expected in step["failed_checks"])
+            continue
+        for check, passed in checks.items():
+            evidence.check(step, check, passed)
 
 
 def replace_once(text: str, old: str, new: str) -> str:
