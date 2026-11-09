@@ -174,7 +174,7 @@ hhs as (
 ),
 
 onc_periods as (
-    -- One performance period per facility; the latest that ends before the start is chosen below [590] [591].
+    -- One performance period per facility; the latest that ends before the start is chosen below, the later start when two end on the same day [590] [591].
     select
         ccn,
         start_date,
@@ -205,7 +205,7 @@ onc_latest as (
         onc_periods.products,
         onc_periods.cehrt_ids,
         spine.spine_key,
-        row_number() over (partition by spine.spine_key order by onc_periods.end_date desc) as recency
+        row_number() over (partition by spine.spine_key order by onc_periods.end_date desc, onc_periods.start_date desc) as recency
     from spine
     inner join onc_periods
         on

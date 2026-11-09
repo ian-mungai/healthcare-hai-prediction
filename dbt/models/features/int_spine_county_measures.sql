@@ -111,7 +111,7 @@ places as (
         measureid || ':' || datavaluetypeid as field,
         row_number() over (
             partition by county_fips, measureid, datavaluetypeid, data_year
-            order by edition desc
+            order by edition desc, places_row_key asc
         ) as release_rank
     from {{ ref('fct_places_county_value') }}
     where is_all_states
@@ -230,7 +230,7 @@ candidates as (
         max(control_periods.value_number) as value_number,
         row_number() over (
             partition by spine.spine_key, control_periods.measure_control, control_periods.field
-            order by control_periods.period_end desc
+            order by control_periods.period_end desc, control_periods.measure_source asc
         ) as recency
     from spine_geos as spine
     inner join control_periods

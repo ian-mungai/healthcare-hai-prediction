@@ -116,6 +116,11 @@ DERIVED_SVI = (
 DERIVED_SVI_NO_VALUE = (("12001", "2020"),)
 # Rural-urban continuum codes: county, vintage, code.
 DERIVED_RUCC = (("01001", "2013", "3"), ("48001", "2013", "9"), ("12001", "2013", "0"))
+# Row-choice ties (scripts/features/rank_tie_cases.py): hospital 990020 has the window 2023 and a county of its own, so no other case reads these rows. Each
+# tie is two or more eligible source periods with the same end and different values; the winner each model must pick is worked out there from the rule.
+TIE_CCN = "990020"
+TIE_COUNTY = "13001"
+TIE_YEAR = 2023
 Rows = dict[str, list[dict[str, Any]]]
 INSERT_SQL = 'insert into main."{table}" ({names}) values ({marks})'
 COPY_SQL = "copy (select * from main.\"{table}\") to '{path}' (format parquet)"
@@ -314,6 +319,54 @@ def derived_rows(rows: Rows) -> None:
         )
 
 
+def onc_product(ccn: str, start: date, end: date, developer: str, number: str) -> dict[str, Any]:
+    """One certified EHR product of one performance period (ONC)."""
+    return {
+        "ccn": ccn,
+        "facility_id": "F" + number,
+        "meets_criteria_for_promoting_interoperability_of_ehrs": True,
+        "start_date": start,
+        "end_date": end,
+        "program_year": end.year,
+        "cehrt_id": "CEHRT" + number,
+        "chpl_id": "CHP" + number,
+        "product_database_id": "P" + number,
+        "developer_name": developer,
+        "linkage_key": "onc-" + number,
+        "member_sha256": "onc-" + number,
+    }
+
+
+def tie_rows(rows: Rows) -> None:
+    """The gold rows of the row-choice ties of hospital 990020: two ONC performance periods with the same end, two influenza-vaccination windows (C154) with
+    the same end and two PLACES values of one edition. The row that the as-of rule names is inserted after the other, so a model that keeps the first row of
+    a tie finds a different one from the rule."""
+    rows["fct_pos_snapshot"].append(snapshot(TIE_CCN, date(TIE_YEAR - 1, 12, 31), state_code="GA", zip_code="30001", county_fips=TIE_COUNTY))
+    rows["fct_onc_ehr_product"] += [
+        onc_product(TIE_CCN, date(TIE_YEAR - 1, 1, 1), date(TIE_YEAR - 1, 6, 30), "Vendor X", "20"),
+        onc_product(TIE_CCN, date(TIE_YEAR - 1, 4, 1), date(TIE_YEAR - 1, 6, 30), "Vendor Y", "21"),
+    ]
+    rows["fct_timely_effective_care_window"] += [
+        care_window(TIE_CCN, "IMM_3", (date(TIE_YEAR - 2, 10, 1), date(TIE_YEAR - 1, 3, 31)), "70", date(TIE_YEAR - 1, 7, 31)),
+        care_window(TIE_CCN, "IMM_3", (date(TIE_YEAR - 1, 1, 1), date(TIE_YEAR - 1, 3, 31)), "75", date(TIE_YEAR - 1, 7, 31)),
+    ]
+    for key, value in (("b", 10.0), ("a", 12.0)):
+        rows["fct_places_county_value"].append(
+            {
+                "edition": "2022",
+                "measureid": "DIABETES",
+                "datavaluetypeid": "AgeAdjPrv",
+                "data_value_published": str(value),
+                "data_year": TIE_YEAR - 1,
+                "county_fips": TIE_COUNTY,
+                "data_value": value,
+                "is_all_states": True,
+                "places_row_key": f"{TIE_COUNTY}-{TIE_YEAR - 1}-{key}",
+                "member_sha256": "places",
+            }
+        )
+
+
 def gold_rows(version: int = 1) -> Rows:
     """The gold rows of one fixture version (1 or 2)."""
     rows: Rows = {name: [] for name in TABLES}
@@ -326,6 +379,7 @@ def gold_rows(version: int = 1) -> Rows:
         # A hospital with a window before the reviewed first_window_year (2017: history only), one on it (2018) and one after it (2019).
         "990007": [2017, 2018, 2019],
         **{ccn: list(years) for ccn, years in DERIVED_WINDOWS.items()},
+        TIE_CCN: [TIE_YEAR],
     }
     if version == 2:
         hospitals["990006"] = [2023, 2024]
@@ -503,6 +557,7 @@ def gold_rows(version: int = 1) -> Rows:
                 }
             )
     derived_rows(rows)
+    tie_rows(rows)
     for measure in ("PSI_90", "PSI_13"):
         for year in range(2020, 2025):
             rows["fct_complications_deaths_window"].append(

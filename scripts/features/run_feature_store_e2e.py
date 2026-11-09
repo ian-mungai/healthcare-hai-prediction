@@ -1651,10 +1651,13 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
     from scripts.features.cost_report_domain_cases import built_domains
     from scripts.features.delta_cases import built_support
     from scripts.features.derived_column_cases import built_derived
+    from scripts.features.rank_tie_cases import built_ties, permuted_ties
 
     built_support(report, staging, ROOT, first)
     built_domains(report, first)
     built_derived(report, first)
+    built_ties(report, first)
+    permuted_ties(report)
     connection = open_db(staging)
     try:
         tables = {row[0] for row in rows(connection, "select table_name from information_schema.tables where table_schema = 'main'")}

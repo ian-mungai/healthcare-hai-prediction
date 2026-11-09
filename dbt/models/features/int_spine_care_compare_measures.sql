@@ -87,11 +87,23 @@ periods as (
 ),
 
 candidates as (
-    -- Only periods that end before the HAI window starts [564]; the latest one wins [565].
+    -- Only periods that end before the HAI window starts [564]; the latest one wins [565]. Windows with the same end rank by the later start, the later
+    -- release, the lower measure ID and the published texts and numbers, so a rebuild picks the same row.
     select
         periods.*,
         spine.spine_key,
-        row_number() over (partition by spine.spine_key, periods.measure_control order by periods.period_end desc) as recency
+        row_number() over (
+            partition by spine.spine_key, periods.measure_control
+            order by
+                periods.period_end desc,
+                periods.period_start desc nulls last,
+                periods.release_date desc nulls last,
+                periods.measure_id asc,
+                periods.value_text asc,
+                periods.value_number asc,
+                periods.footnote_text asc,
+                periods.sample_text asc
+        ) as recency
     from spine
     inner join periods
         on

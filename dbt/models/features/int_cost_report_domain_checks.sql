@@ -12,7 +12,7 @@ checked_controls as (
         max(case when role in ('value', 'numerator') then domain_min end) as domain_min,
         max(case when role in ('value', 'numerator') then domain_max end) as domain_max,
         max(case when role = 'denominator' then denominator_floor end) as denominator_floor,
-        string_agg(distinct domain_reason, '; ') as domain_reason
+        string_agg(distinct domain_reason, '; ' order by domain_reason) as domain_reason
     from {{ ref('cost_report_measures_recipe') }}
     group by measure_control
     having
