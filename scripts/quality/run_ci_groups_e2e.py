@@ -4163,7 +4163,7 @@ MANUAL_FINGERPRINTS = {
     "check-jsonschema": "3b0e5a36602c",
     "typos": "61801f4f88b0",
     "osv-scanner": "6cccadc5d95b",
-    "test-checks": "587d4d8d14b5",
+    "test-checks": "87e6b8fa40a3",
     "dependency-lock": "161d1011d863",
     "test-lock": "54d78b27f865",
     "test-documentation-review": "db426284e54a",

@@ -17,6 +17,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from scripts.process import clear_git_environment, run_command
 from scripts.quality import scratch_marker
@@ -200,6 +201,366 @@ class Case:
     committed: dict[str, str] = field(default_factory=dict)
     delete: list[str] = field(default_factory=list)
     message: str | None = None
+    reason: str = ""  # A blocked case must print this text, so it fails for its intended cause.
+    symlinks: dict[str, str] = field(default_factory=dict)  # Link path to link target, staged with the files.
+    untracked: dict[str, str] = field(default_factory=dict)  # Written after staging, so Git does not track them.
+
+
+def guide_page(*body: str) -> str:
+    """A guide whose body starts on line 3."""
+    return "# Guide\n\n" + "\n".join(body) + "\n"
+
+
+def link_case(name: str, expect_pass: bool, files: dict[str, str | bytes], reason: str = "", **extra: Any) -> Case:
+    """A markdown-links case; a blocked one must print ``reason``."""
+    return Case(name, "markdown-links", expect_pass, files, reason=reason, **extra)
+
+
+def unresolved(line: int, target: str, source: str = "docs/guide.md") -> str:
+    return f"{source}:{line}: link target '{target}' is not a tracked file"
+
+
+def no_heading(line: int, fragment: str, target: str, source: str = "docs/guide.md") -> str:
+    return f"{source}:{line}: link anchor '#{fragment}' matches no heading in {target}"
+
+
+SETUP = "docs/setup.md"
+PICTURE = {"assets/pic.png": b"\x89PNG"}
+UNICODE_MARK = "Café"  # e plus a combining acute accent: the mark stays in GitHub's anchor
+UNICODE_LINK = "setup.md#cafe%CC%81-menu"
+LINK_CASES = [
+    # Destination syntax: parentheses, escapes, angle brackets, line breaks, titles, percent encoding and queries.
+    link_case(
+        "destinations with parentheses, escapes, angle brackets, titles and queries pass",
+        True,
+        {
+            "docs/guide.md": guide_page(
+                "See [a](guide(one).md), [b](guide\\(one\\).md), [c](<my notes (v2).md>), [d](my%20notes.md),",
+                "[e](setup.md \"Title (with) parens\"), [f](setup.md 'Other'), [g](<setup.md> (Third)), [h](setup.md?plain=1#install-steps)",
+                'and [i](\n  setup.md\n  "Title").',
+            ),
+            "docs/guide(one).md": "# One\n",
+            "docs/my notes (v2).md": "# Notes\n",
+            "docs/my notes.md": "# Notes\n",
+            SETUP: LINK_TARGET_PAGE,
+        },
+    ),
+    link_case(
+        "truncated destination does not hide a missing file",
+        False,
+        {"docs/guide.md": guide_page("See [a](guide(one).md)."), "docs/guide(one": "x\n"},
+        unresolved(3, "guide(one).md"),
+    ),
+    link_case("destination on the next line blocked", False, {"docs/guide.md": "# Guide\n\nSee [a](\nabsent.md).\n"}, unresolved(3, "absent.md")),
+    link_case("missing target with a title blocked", False, {"docs/guide.md": guide_page('See [a](absent.md "Title").')}, unresolved(3, "absent.md")),
+    link_case("missing percent-encoded target blocked", False, {"docs/guide.md": guide_page("See [a](my%20missing.md).")}, unresolved(3, "my missing.md")),
+    link_case(
+        "query string before a missing fragment blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](setup.md?plain=1#nope)."), SETUP: LINK_TARGET_PAGE},
+        no_heading(3, "nope", SETUP),
+    ),
+    # Code is never read as links or headings.
+    link_case(
+        "links in indented code, double-backtick spans, comments and list fences pass",
+        True,
+        {
+            "docs/guide.md": '# Guide\n\n    [a](absent.md)\n\nA ``span with ` and [b](absent.md)`` and `<a href="absent.md">`.\n\n'
+            '<!-- [c](absent.md) -->\n\n<!--\n<a href="absent.md">d</a>\n-->\n\n- ```text\n  [e](absent.md)\n  ```\n\n'
+            "- a\n  - b\n\n    ```text\n    [f](absent.md)\n    ```\n\n~~~text\n[g](absent.md)\n~~~\n",
+        },
+    ),
+    link_case(
+        "heading in a list fence is no anchor",
+        False,
+        {"docs/guide.md": guide_page("See [a](setup.md#ghost)."), SETUP: "# Setup\n\n- ```markdown\n  # Ghost\n  ```\n"},
+        no_heading(3, "ghost", SETUP),
+    ),
+    link_case(
+        "front matter is neither links nor headings",
+        True,
+        {"docs/guide.md": "---\ntitle: Guide\ndescription: See [a](absent.md)\n# note: x\nlast_updated: 2026-10-02\n---\n\n# Guide\n"},
+    ),
+    link_case(
+        "comment line in front matter is no anchor",
+        False,
+        {"docs/guide.md": "---\ntitle: Guide\n# notes line\n---\n\n# Guide\n\nSee [a](#notes-line).\n"},
+        no_heading(8, "notes-line", "docs/guide.md"),
+    ),
+    # GitHub's heading anchors.
+    link_case(
+        "setext headings are anchors",
+        True,
+        {"docs/guide.md": guide_page("See [a](setup.md#install-steps) and [b](setup.md#run-it)."), SETUP: "Install steps\n=============\n\nRun it\n------\n"},
+    ),
+    link_case(
+        "combining marks and Unicode letters stay in an anchor",
+        True,
+        {
+            "docs/guide.md": guide_page(f"See [a]({UNICODE_LINK}), [b](setup.md#z%C3%BCrich-%E6%97%A5%E6%9C%AC), [c](setup.md#zürich-日本)."),
+            SETUP: f"# Setup\n\n## {UNICODE_MARK} menu\n\n## Zürich 日本\n",
+        },
+    ),
+    link_case(
+        "underscores, entities, emphasis, links, punctuation, hyphens and emoji follow GitHub's slug",
+        True,
+        {
+            "docs/guide.md": guide_page(
+                "See [a](other.md#_name_-option), [b](other.md#a--b), [c](other.md#bold-and-soft-guide), [d](other.md#whats-new-v20-api-keys),",
+                "[e](other.md#x---y--z), [f](other.md#-launch), [g](other.md#snake_case_name), [h](other.md#12-overview), [i](other.md#quoted-heading)",
+                "and [j](other.md#Bold-And-Soft-Guide).",
+            ),
+            "docs/other.md": "# Other\n\n## `_name_` option\n\n## A &amp; B\n\n## **Bold** and *soft* [guide](guide.md) ##\n\n"
+            "## What's New? (v2.0), API: Keys!\n\n## x - y  z\n\n## \U0001f680 Launch\n\n## snake_case_name\n\n## 1.2 Overview\n\n> ## Quoted heading\n",
+        },
+    ),
+    link_case(
+        "repeated headings skip generated names",
+        True,
+        {"docs/guide.md": guide_page("See [a](setup.md#repeat-2) and [b](setup.md#repeat-1)."), SETUP: "# Repeat\n\n## Repeat-1\n\n## Repeat\n"},
+    ),
+    link_case(
+        "repeated heading beyond the last number blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](setup.md#repeat-3)."), SETUP: "# Repeat\n\n## Repeat-1\n\n## Repeat\n"},
+        no_heading(3, "repeat-3", SETUP),
+    ),
+    # HTML: attributes in any spelling, anchors on any element, case kept for ids.
+    link_case("spaced uppercase HTML attribute blocked", False, {"docs/guide.md": '# Guide\n\n<A HREF = "absent.md">a</A>\n'}, unresolved(3, "absent.md")),
+    link_case("single-quoted HTML attribute blocked", False, {"docs/guide.md": "# Guide\n\n<a href='absent.md'>a</a>\n"}, unresolved(3, "absent.md")),
+    link_case("unquoted HTML attribute blocked", False, {"docs/guide.md": "# Guide\n\n<a href=absent.md>a</a>\n"}, unresolved(3, "absent.md")),
+    link_case("HTML image source blocked", False, {"docs/guide.md": '# Guide\n\n<img src="assets/absent.png" alt="x">\n'}, unresolved(3, "assets/absent.png")),
+    link_case("inline HTML link in a paragraph blocked", False, {"docs/guide.md": 'Text\n\nmore <a href="absent.md">a</a> text\n'}, unresolved(3, "absent.md")),
+    link_case(
+        "HTML link on a later line of a block reports that line",
+        False,
+        {"docs/guide.md": '# Guide\n\n<div>\n<a href="setup.md">ok</a>\n<a href="absent.md">bad</a>\n</div>\n', SETUP: LINK_TARGET_PAGE},
+        unresolved(5, "absent.md"),
+    ),
+    link_case(
+        "Markdown inside an HTML block after a blank line is checked",
+        False,
+        {"docs/guide.md": "# Guide\n\n<div>\n\n[a](absent.md)\n\n</div>\n"},
+        unresolved(5, "absent.md"),
+    ),
+    link_case(
+        "valid HTML links, entities and external addresses pass",
+        True,
+        {
+            "docs/guide.md": '# Guide\n\n<a href="setup.md#install-steps">a</a> <img src="../assets/pic.png"> <a href="my&#32;notes.md">b</a>\n\n'
+            '<a href="https://example.invalid/absent.md">c</a>\n',
+            SETUP: LINK_TARGET_PAGE,
+            "docs/my notes.md": "# Notes\n",
+            **PICTURE,
+        },
+    ),
+    link_case(
+        "id on any element and name on an anchor are anchors",
+        True,
+        {
+            "docs/guide.md": guide_page("See [a](setup.md#custom), [b](setup.md#plain) and [c](setup.md#old-spot)."),
+            SETUP: '# Setup\n\n<div id="custom">x</div>\n\n<span id=plain>y</span>\n\n<a name="old-spot"></a>\n',
+        },
+    ),
+    link_case(
+        "HTML id keeps its case: lower-case link blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](setup.md#custom)."), SETUP: '# Setup\n\n<a id="CUSTOM"></a>\n'},
+        no_heading(3, "custom", SETUP),
+    ),
+    link_case(
+        "HTML id keeps its case: exact link passes",
+        True,
+        {"docs/guide.md": guide_page("See [a](setup.md#CUSTOM)."), SETUP: '# Setup\n\n<a id="CUSTOM"></a>\n'},
+    ),
+    link_case(
+        "name on a non-anchor element is no anchor",
+        False,
+        {"docs/guide.md": guide_page("See [a](setup.md#old-spot)."), SETUP: '# Setup\n\n<div name="old-spot">x</div>\n'},
+        no_heading(3, "old-spot", SETUP),
+    ),
+    # Symlinks resolve inside the tracked tree.
+    link_case(
+        "symlink to a tracked file passes with that file's headings",
+        True,
+        {"docs/guide.md": guide_page("See [a](alias.md#install-steps)."), SETUP: LINK_TARGET_PAGE},
+        symlinks={"docs/alias.md": "setup.md"},
+    ),
+    link_case(
+        "symlink to a tracked file with a missing heading blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](alias.md#nope)."), SETUP: LINK_TARGET_PAGE},
+        no_heading(3, "nope", SETUP),
+        symlinks={"docs/alias.md": "setup.md"},
+    ),
+    link_case(
+        "symlink to an ignored file blocked",
+        False,
+        {".gitignore": "docs/hidden.md\n", "docs/hidden.md": "# Hidden\n", "docs/guide.md": guide_page("See [a](alias.md#hidden).")},
+        "docs/guide.md:3: link target 'alias.md' is a symlink that does not resolve to a tracked file",
+        symlinks={"docs/alias.md": "hidden.md"},
+    ),
+    link_case(
+        "symlink above the repository root blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](alias.md).")},
+        "docs/guide.md:3: link target 'alias.md' is a symlink that does not resolve to a tracked file",
+        symlinks={"docs/alias.md": "../../outside.md"},
+    ),
+    link_case(
+        "symlink loop blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](one.md).")},
+        "docs/guide.md:3: link target 'one.md' is a symlink that does not resolve to a tracked file",
+        symlinks={"docs/one.md": "two.md", "docs/two.md": "one.md"},
+    ),
+    link_case(
+        "symlinked folder passes",
+        True,
+        {
+            "docs/guide.md": guide_page("See [a](linked/page.md#top-page), [b](linked/) and [c](linked/#top-page)."),
+            "folder/page.md": "# Top page\n",
+            "folder/README.md": "# Top page\n",
+        },
+        symlinks={"docs/linked": "../folder"},
+    ),
+    link_case(
+        "symlinked Markdown file is not read as its own source",
+        True,
+        {"docs/real/page.md": "# Page\n\nSee [a](other.md).\n", "docs/real/other.md": "# Other\n"},
+        symlinks={"docs/alias.md": "real/page.md"},
+    ),
+    # Markdown file extensions in any case.
+    link_case(
+        "uppercase Markdown extension is read as a source", False, {"README.MD": "# Project\n\nSee [a](absent.md).\n"}, unresolved(3, "absent.md", "README.MD")
+    ),
+    link_case(
+        "markdown extension is read as a source",
+        False,
+        {"docs/notes.markdown": "# Notes\n\nSee [a](absent.md).\n"},
+        unresolved(3, "absent.md", "docs/notes.markdown"),
+    ),
+    link_case(
+        "anchor into an uppercase Markdown extension blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](Target.MD#nope)."), "docs/Target.MD": LINK_TARGET_PAGE},
+        no_heading(3, "nope", "docs/Target.MD"),
+    ),
+    link_case(
+        "anchor into an uppercase Markdown extension passes",
+        True,
+        {"docs/guide.md": guide_page("See [a](Target.MD#install-steps)."), "docs/Target.MD": LINK_TARGET_PAGE},
+    ),
+    # A folder link with a fragment points into the folder's README.
+    link_case(
+        "folder fragment with a missing heading blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](../folder/#missing)."), "folder/README.md": "# Valid\n"},
+        no_heading(3, "missing", "folder/README.md"),
+    ),
+    link_case(
+        "folder fragments pass for README and readme files and the root",
+        True,
+        {
+            "docs/guide.md": guide_page("See [a](../folder/#valid), [b](../small/#little) and [c](../#project)."),
+            "folder/README.md": "# Valid\n",
+            "small/readme.md": "# Little\n",
+            "README.md": "# Project\n",
+        },
+    ),
+    link_case(
+        "folder fragment without a README blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](../folder/#valid)."), "folder/app.py": "VALUE = 1\n"},
+        "docs/guide.md:3: link anchor '#valid' points into folder 'folder', which has no tracked README",
+    ),
+    # Reference-style links and definitions.
+    link_case(
+        "reference links, definitions, labels and images pass",
+        True,
+        {
+            "docs/guide.md": guide_page(
+                "See [full][s], [collapsed][], [shortcut], ![img][pic] and [^1].",
+                "",
+                "[s]: setup.md#install-steps",
+                '[collapsed]: <setup.md> "Title"',
+                "[shortcut]: ./setup.md",
+                "[Pic]: ../assets/pic.png",
+                "[^1]: Note.",
+            ),
+            SETUP: LINK_TARGET_PAGE,
+            **PICTURE,
+        },
+    ),
+    link_case("unused broken definition blocked", False, {"docs/guide.md": guide_page("[ref]: absent.md")}, unresolved(3, "absent.md")),
+    link_case(
+        "definition with a missing heading blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a][s].", "", "[s]: setup.md#nope"), SETUP: LINK_TARGET_PAGE},
+        no_heading(5, "nope", SETUP),
+    ),
+    link_case(
+        "reference-style image with a missing file blocked",
+        False,
+        {"docs/guide.md": guide_page("![diagram][pic]", "", "[pic]: assets/absent.png")},
+        unresolved(5, "assets/absent.png"),
+    ),
+    link_case(
+        "undefined labels and definitions in code pass",
+        True,
+        {"docs/guide.md": guide_page("See [a][nope] and [also nope].", "", "```markdown", "[ref]: absent.md", "```")},
+    ),
+    # Out of scope: autolinks and external addresses.
+    link_case(
+        "autolinks, bare addresses and external images pass",
+        True,
+        {
+            "docs/guide.md": guide_page(
+                "<https://example.invalid/absent.md> <mailto:someone@example.invalid> https://example.invalid/absent.md#x",
+                "![badge](https://example.invalid/badge.svg)",
+            )
+        },
+    ),
+    # Targets: untracked files and folders.
+    link_case(
+        "untracked file blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](notes.md).")},
+        unresolved(3, "notes.md"),
+        untracked={"docs/notes.md": "# Notes\n"},
+    ),
+    link_case(
+        "folder holding only untracked files blocked",
+        False,
+        {"docs/guide.md": guide_page("See [a](../drafts/).")},
+        unresolved(3, "../drafts/"),
+        untracked={"drafts/a.md": "# Draft\n"},
+    ),
+    # Where links sit: tables, lists, quotes, headings, nested brackets and images in links.
+    link_case(
+        "link on a later line of a paragraph reports that line",
+        False,
+        {"docs/guide.md": "# Guide\n\nFirst line.\nSecond with [x](setup.md)\nthird [y](absent.md).\n", SETUP: LINK_TARGET_PAGE},
+        unresolved(5, "absent.md"),
+    ),
+    link_case(
+        "link in a table cell blocked",
+        False,
+        {"docs/guide.md": "# Guide\n\n| a | b |\n|---|---|\n| [x](absent.md) | y |\n"},
+        unresolved(5, "absent.md"),
+    ),
+    link_case("link in a quoted list item blocked", False, {"docs/guide.md": "# Guide\n\n- item\n  > quoted [x](absent.md)\n"}, unresolved(4, "absent.md")),
+    link_case("link in a heading blocked", False, {"docs/guide.md": "# Guide\n\n## See [x](absent.md)\n"}, unresolved(3, "absent.md")),
+    link_case(
+        "nested brackets, image in a link and empty links pass",
+        True,
+        {
+            "docs/guide.md": guide_page("See [a [b] c](setup.md), [![alt](../assets/pic.png)](setup.md), [empty](), [top](#top) and [hash](#)."),
+            SETUP: LINK_TARGET_PAGE,
+            **PICTURE,
+        },
+    ),
+]
 
 
 POLICY_DOCUMENT = "scripts/quality/repo_checks.py"
@@ -732,6 +1093,7 @@ CASES = [
     Case("missing image blocked", "markdown-links", False, {"docs/guide.md": "# Guide\n\n![diagram](assets/absent.png)\n"}),
     Case("missing reference definition target blocked", "markdown-links", False, {"docs/guide.md": "# Guide\n\nSee [the target][ref].\n\n[ref]: absent.md\n"}),
     Case("missing HTML link target blocked", "markdown-links", False, {"docs/guide.md": '# Guide\n\n<a href="absent.md">the target</a>\n'}),
+    *LINK_CASES,
     Case("clean Markdown through markdownlint", "markdownlint", True, {"notes.md": "# Notes\n\n- One item\n\n```bash\nls\n```\n"}),
     Case("star bullet blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n* One item\n"}),
     Case("fence without a language blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n```\nls\n```\n"}),
@@ -979,9 +1341,13 @@ def run_case(case: Case) -> tuple[bool, str]:
     with tempfile.TemporaryDirectory(prefix="hai_check_test_") as scratch:
         repo = scratch_repo(Path(scratch), case)
         write(repo, case.files)
+        for relative, target in case.symlinks.items():
+            (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+            (repo / relative).symlink_to(target)
         for relative in case.delete:
             git(repo, "rm", "-q", relative)
         git(repo, "add", "-A")
+        write(repo, case.untracked)
         verbose = case.name in PASS_MARKERS
         args = [
             "run",
@@ -1011,7 +1377,7 @@ def run_case(case: Case) -> tuple[bool, str]:
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
         if case.hook in ("writing-check", "markdownlint", "front-matter", "markdown-links", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
-            correct = correct and BLOCK_REASONS.get(case.name, "") in output
+            correct = correct and (case.reason or BLOCK_REASONS.get(case.name, "")) in output
         if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
             reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"
             correct = correct and reason in output
@@ -1789,9 +2155,15 @@ def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--hook-probe", action="store_true", help="run only the clean sample, for the commit-hook E2E")
+    parser.add_argument("--hook", help="iteration run: only the cases of this hook, with no extra runners (not commit evidence)")
+    parser.add_argument("--case", action="append", default=[], help="with --hook: only the cases whose name contains this text (repeatable)")
     args = parser.parse_args()
     clear_git_environment()
-    cases = CASES[:1] if args.hook_probe else CASES
+    cases = (
+        CASES[:1]
+        if args.hook_probe
+        else [case for case in CASES if args.hook in (None, case.hook) and (not args.case or any(text in case.name for text in args.case))]
+    )
     if not PRE_COMMIT.exists() or not (ROOT / ".tools" / "bin" / "gitleaks").exists():
         sys.stderr.write("setup missing: create .venv from the host group of uv.lock and run scripts/quality/install_tools.py (README, Install)\n")
         return 1
@@ -1804,7 +2176,7 @@ def main() -> int:
             failures += 1
             sys.stdout.write("".join(f"       {line}\n" for line in output.strip().splitlines()[-12:]))
     extra = 0
-    if not args.hook_probe:
+    if not args.hook_probe and args.hook is None:
         for label, runner in (
             ("commit-range", run_range_case),
             ("workflow ranges", run_workflow_range_case),
