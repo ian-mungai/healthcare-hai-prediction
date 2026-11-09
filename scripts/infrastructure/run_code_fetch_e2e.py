@@ -51,6 +51,22 @@ def archive(folder: Path, marker: str) -> tuple[Path, str]:
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def unsafe_archive(folder: Path, kind: str) -> tuple[Path, str]:
+    """A code archive that tries to leave its release folder: ``traversal`` has an entry named ``../outside``, ``symlink`` a ``dags`` link out of it."""
+    path = folder / f"code_{kind}.tar.gz"
+    with tarfile.open(path, "w:gz") as tar:
+        if kind == "traversal":
+            data = b"escaped\n"
+            info = tarfile.TarInfo("../outside")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        else:
+            info = tarfile.TarInfo("dags")
+            info.type, info.linkname = tarfile.SYMTYPE, "../../outside"
+            tar.addfile(info)
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 class StandInS3:
     """Serves one archive per run ID from local files and records every download; ``fail`` makes every download raise."""
 
@@ -177,6 +193,34 @@ def failed_download_keeps_the_old_checkout() -> dict[str, bool]:
     }
 
 
+def unsafe_archive_keeps_the_old_checkout() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for kind in ("traversal", "symlink"):
+        script, host, archives, work = fixture()
+        path_a, sha_a = archives[RUN_A]
+        call(script, host, environment(RUN_A, sha_a), StandInS3({RUN_A: path_a}))
+        path_bad, sha_bad = unsafe_archive(work, kind)
+        code, text = call(script, host, environment(RUN_B, sha_bad), StandInS3({RUN_B: path_bad}))
+        checks[f"a {kind} archive with the right digest is refused at unpacking"] = code != 0 and "cannot unpack" in text
+        checks[f"after a {kind} archive repo still shows the old code"] = (
+            os.readlink(host / "repo") == f"repo_releases/{sha_a}/code" and marker(host) == "MARKER = 'a'\n"
+        )
+        checks[f"a {kind} archive writes nothing outside its release folder"] = not any(item.name == "outside" for item in work.rglob("outside"))
+    return checks
+
+
+def missing_archive_keeps_the_old_checkout() -> dict[str, bool]:
+    script, host, archives, _ = fixture()
+    (path_a, sha_a), (_, sha_b) = archives[RUN_A], archives[RUN_B]
+    call(script, host, environment(RUN_A, sha_a), StandInS3({RUN_A: path_a}))
+    code, text = call(script, host, environment(RUN_B, sha_b), StandInS3({RUN_A: path_a}))
+    return {
+        "a run with no staged archive is refused": code != 0 and "cannot download" in text,
+        "repo still shows the old code": os.readlink(host / "repo") == f"repo_releases/{sha_a}/code" and marker(host) == "MARKER = 'a'\n",
+        "no release folder is made for the missing run": not (host / "repo_releases" / sha_b).exists(),
+    }
+
+
 def no_code_keeps_an_existing_checkout() -> dict[str, bool]:
     script, host, archives, _ = fixture()
     path, sha = archives[RUN_A]
@@ -242,6 +286,8 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "new_code_swaps_the_link": new_code_swaps_the_link,
     "hash_mismatch_keeps_the_old_checkout": hash_mismatch_keeps_the_old_checkout,
     "failed_download_keeps_the_old_checkout": failed_download_keeps_the_old_checkout,
+    "unsafe_archive_keeps_the_old_checkout": unsafe_archive_keeps_the_old_checkout,
+    "missing_archive_keeps_the_old_checkout": missing_archive_keeps_the_old_checkout,
     "no_code_keeps_an_existing_checkout": no_code_keeps_an_existing_checkout,
     "no_code_and_no_checkout_is_refused": no_code_and_no_checkout_is_refused,
     "half_given_code_is_refused": half_given_code_is_refused,

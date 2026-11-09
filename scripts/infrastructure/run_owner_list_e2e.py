@@ -229,6 +229,13 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
         "the reviewed services file of the code list names the code one-shot role and the bucket": code_example.get("root") == "services"
         and sorted(code_example.get("variables", {})) == ["code_bucket_name", "code_fetch_task_role_arn"],
     }
+    code_body = owner_commands.section(text, CODE)
+    policy_apply, services_plan = code_body.find("manage_policies apply --admin-profile <ADMIN_PROFILE>"), code_body.find("terraform.sh --services")
+    checks["the code list applies the project user's policy with the policy manager under the administrator profile before the services apply"] = (
+        0 <= policy_apply < services_plan
+        and "CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies" in code_body
+        and "host_code_fetch_task" in code_body
+    )
     for heading in (SILVER, GOLD, FEATURES, CODE):
         problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
         count = len(problems)

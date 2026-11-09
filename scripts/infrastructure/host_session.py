@@ -52,6 +52,7 @@ CODE_FETCH = "code_fetch"
 CODE_FETCH_SECONDS = 1200
 CODE_RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
+CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256")
 OPENMETADATA_BOOTSTRAP_SECONDS = 1500
 OPENMETADATA_STOP_SECONDS = 300
 FAILED_ROLLOUT = "FAILED"
@@ -111,6 +112,18 @@ def category(reason: object, categories: tuple[tuple[str, str], ...]) -> str:
     """The fixed category of a provider reason; the reason text itself can hold identifiers and never reaches the output."""
     text = str(reason).lower()
     return next((name for needle, name in categories if needle in text), OTHER_REASON)
+
+
+def code_environment(overrides: dict[str, Any] | None, container: str) -> dict[str, str]:
+    """The code environment variables (CODE_RUN_ID, CODE_SHA256) that the container overrides of a RunTask call or a described task set for ``container``."""
+    containers = (overrides or {}).get("containerOverrides", [])
+    return {
+        item["name"]: item["value"]
+        for entry in containers
+        if entry.get("name") == container
+        for item in entry.get("environment", [])
+        if item.get("name") in CODE_ENVIRONMENT
+    }
 
 
 def run_task_code(reason: object) -> str:
@@ -359,9 +372,18 @@ class Session:
         raise HostSessionError(f"{key} RunTask unconfirmed after {RUN_TASK_ATTEMPTS} attempts; the task may be running")
 
     def one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None = None) -> None:
-        """Run a one-shot task once (a running task of the same family is awaited, never doubled) and require exit code 0."""
+        """Run a one-shot task once and require exit code 0; ``seconds`` bounds everything, including a wait for an earlier task to stop.
+
+        A running task of the family with the same code overrides is awaited, never doubled. A running task with other code overrides is awaited until it
+        stops, then the requested task launches, so two tasks of the family never run at once and the requested code is the code that is installed.
+        """
         family = self.names.one_shot[key]
+        end = self.clock.now() + seconds
         running = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--family", family, "--desired-status", "RUNNING"]).get("taskArns", [])
+        if running and not self.same_code(key, running, overrides):
+            self.step(key, "a task of this family is already running for another run or digest; waiting for it to stop, then launching the requested one")
+            self.wait(f"{key} running task stop", lambda: self.all_stopped(key, running), seconds, TASK_POLL_SECONDS)
+            running, seconds = [], max(int(end - self.clock.now()), TASK_POLL_SECONDS)
         if running:
             task = running[0]
             self.step(key, "a task of this family is already running; waiting for it")
@@ -385,6 +407,26 @@ class Session:
         if not exits or any(code != 0 for code in exits.values()):
             raise HostSessionError(f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}")
         self.step(key, f"exit codes {exits}")
+
+    def described(self, key: str, arns: list[str]) -> list[dict[str, Any]]:
+        """The described tasks of ``arns``; a failure entry or a missing task raises, as the wait of ``one_shot`` does."""
+        found: list[dict[str, Any]] = []
+        for index in range(0, len(arns), DESCRIBE_TASKS_LIMIT):
+            chunk = arns[index : index + DESCRIBE_TASKS_LIMIT]
+            described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", *chunk])
+            if described.get("failures") or len(described.get("tasks", [])) != len(chunk):
+                raise HostSessionError(f"{key} describe-tasks failures")
+            found.extend(described["tasks"])
+        return found
+
+    def same_code(self, key: str, arns: list[str], overrides: dict[str, Any] | None) -> bool:
+        """True when every task in ``arns`` runs with the code environment (CODE_RUN_ID, CODE_SHA256) that ``overrides`` ask for."""
+        wanted = code_environment(overrides, key)
+        return all(code_environment(task.get("overrides"), key) == wanted for task in self.described(key, arns))
+
+    def all_stopped(self, key: str, arns: list[str]) -> bool:
+        """True when every task in ``arns`` is STOPPED."""
+        return all(task.get("lastStatus") == "STOPPED" for task in self.described(key, arns))
 
     def deploy_services(self) -> None:
         """Force a new deployment of every project service, postgres first, then wait until all are stable."""

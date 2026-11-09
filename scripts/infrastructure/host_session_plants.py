@@ -55,6 +55,13 @@ SIGNAL_PLANTS: dict[str, Callable[[str], str]] = {
 PLANTS: dict[str, tuple[str, str]] = {
     "drops tag propagation": ('"TASK_DEFINITION"', '"NONE"'),
     "starts a second one-shot task": ("        if running:\n", "        if False:\n"),
+    "reuses a running task of another run or digest": ("        if running and not self.same_code(key, running, overrides):\n", "        if False:\n"),
+    "launches before the running task of other code stopped": (
+        'self.wait(f"{key} running task stop", lambda: self.all_stopped(key, running), seconds, TASK_POLL_SECONDS)',
+        "pass",
+    ),
+    "compares only the run ID": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256")', 'CODE_ENVIRONMENT = ("CODE_RUN_ID",)'),
+    "compares only the digest": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256")', 'CODE_ENVIRONMENT = ("CODE_SHA256",)'),
     "leaves the host on after a failure": (
         "        try:\n            with deferred_signals(self.step):\n                self.host_off()\n        except HostSessionError",
         "        try:\n            pass\n        except HostSessionError",

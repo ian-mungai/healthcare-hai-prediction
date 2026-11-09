@@ -676,6 +676,71 @@ def code_start_repeated_for_the_same_code() -> dict[str, bool]:
     }
 
 
+OTHER_RUN = "20261108T130000Z-bbbbbbbb"
+OTHER_SHA = "c" * 64
+
+
+def launch_code_fetch(host: StandInHost, session: Session, run: str, sha: str) -> str:
+    """Start a code one-shot for ``run`` the way an earlier start did, outside ``place_code``, and answer its task ARN."""
+    environment = [{"name": "CODE_RUN_ID", "value": run}, {"name": "CODE_SHA256", "value": sha}]
+    launched = session.run_task("code_fetch", CODE_FETCH_FAMILY, {"containerOverrides": [{"name": "code_fetch", "environment": environment}]})
+    return str(launched["tasks"][0]["taskArn"])
+
+
+def code_fetch_running_for_other_code_is_awaited_before_the_requested_code_runs() -> dict[str, bool]:
+    host, session, lines = build(code_fetch=True)
+    session.host_on()
+    running = launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
+    stops_at = host.tasks[running]["stops_at"]
+    session.place_code((OTHER_RUN, OTHER_SHA))
+    runs = runs_of(host, CODE_FETCH_FAMILY)
+    launches = [entry["at"] for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [CODE_FETCH_FAMILY]]
+    return {
+        "the requested code gets its own launch": len(runs) == 2 and code_environment(runs[1]) == {"CODE_RUN_ID": OTHER_RUN, "CODE_SHA256": OTHER_SHA},
+        "the host shows the requested code, not the running one": host.checkout == OTHER_SHA,
+        "the requested task starts only after the running one stopped": len(launches) == 2 and launches[1] >= stops_at,
+        "the wait names why": any("another run or digest" in line for line in lines),
+        "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def code_fetch_running_that_differs_in_one_value_is_not_reused() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for name, requested in (("run ID", (OTHER_RUN, CODE_SHA)), ("code digest", (CODE_RUN, OTHER_SHA))):
+        host, session, _ = build(code_fetch=True)
+        session.host_on()
+        launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
+        session.place_code(requested)
+        checks[f"a running task that differs only in the {name} is followed by the requested task"] = (
+            len(runs_of(host, CODE_FETCH_FAMILY)) == 2 and host.checkout == requested[1]
+        )
+    return checks
+
+
+def code_fetch_running_for_the_same_code_is_awaited_not_doubled() -> dict[str, bool]:
+    host, session, lines = build(code_fetch=True)
+    session.host_on()
+    launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
+    session.place_code((CODE_RUN, CODE_SHA))
+    return {
+        "no second task starts": len(runs_of(host, CODE_FETCH_FAMILY)) == 1,
+        "the host shows the code": host.checkout == CODE_SHA,
+        "the wait is reported": any("already running; waiting for it" in line for line in lines),
+    }
+
+
+def code_fetch_running_for_other_code_that_never_stops_fails_visibly() -> dict[str, bool]:
+    host, session, _ = build(code_fetch=True, checkout=OLD_SHA)
+    session.host_on()
+    host.add_task(CODE_FETCH_FAMILY)
+    message = failure(lambda: session.place_code((OTHER_RUN, OTHER_SHA)))
+    return {
+        "the placement fails inside the one-shot's bounded wait": message is not None and "code_fetch" in message and "1200 s" in message,
+        "no second task of the family starts": runs_of(host, CODE_FETCH_FAMILY) == [],
+        "the host keeps its checkout": host.checkout == OLD_SHA,
+    }
+
+
 def code_given_without_the_one_shot_is_refused() -> dict[str, bool]:
     host, session, _ = build()
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
@@ -758,6 +823,10 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_start_without_code_on_an_empty_host_is_refused": code_start_without_code_on_an_empty_host_is_refused,
     "code_fetch_failure_keeps_the_old_checkout": code_fetch_failure_keeps_the_old_checkout,
     "code_start_repeated_for_the_same_code": code_start_repeated_for_the_same_code,
+    "code_fetch_running_for_other_code_is_awaited_before_the_requested_code_runs": code_fetch_running_for_other_code_is_awaited_before_the_requested_code_runs,
+    "code_fetch_running_that_differs_in_one_value_is_not_reused": code_fetch_running_that_differs_in_one_value_is_not_reused,
+    "code_fetch_running_for_the_same_code_is_awaited_not_doubled": code_fetch_running_for_the_same_code_is_awaited_not_doubled,
+    "code_fetch_running_for_other_code_that_never_stops_fails_visibly": code_fetch_running_for_other_code_that_never_stops_fails_visibly,
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
 }

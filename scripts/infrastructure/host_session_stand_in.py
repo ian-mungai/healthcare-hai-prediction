@@ -333,6 +333,7 @@ class StandInHost:
                 continue
             container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
             definition = {} if "no_definition" in self.faults else {"taskDefinitionArn": f"{ACCOUNT_MARK}task-definition/{task['family']}:7"}
+            overrides = json.loads(task["options"]["--overrides"][0]) if "--overrides" in task["options"] else {"containerOverrides": [{"name": task["key"]}]}
             found.append(
                 {
                     "taskArn": arn,
@@ -342,6 +343,7 @@ class StandInHost:
                     "desiredStatus": task.get("desired", "RUNNING"),
                     "stoppedReason": reason,
                     "containers": [container],
+                    "overrides": overrides,
                 }
             )
         return {"tasks": found, "failures": failures}
