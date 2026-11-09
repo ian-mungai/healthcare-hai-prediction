@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.features import fixture_catalog
+from scripts.features import feature_sets, fixture_catalog
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
@@ -49,7 +49,7 @@ STEPS = ("apply", "materialize", "probe")
 BUILT_STEPS = ("apply", "materialize")
 JOB_SECONDS = 1800
 DEFAULT_RUN_FOLDER = "/workspace/out"
-SUMMARY_KEYS = ("step", "mode", "publication", "objects", "object_list_sha256", "load_id", "entities")
+SUMMARY_KEYS = ("step", "mode", "publication", "objects", "object_list_sha256", "load_id", "entities", "feature_set", "online")
 LEASE_MODULE = "scripts.features.online_protocol"
 LEASE_ENTRY = "writer_lease"
 Lease = Callable[[], contextlib.AbstractContextManager[None]]
@@ -220,6 +220,22 @@ def write_record(path: Path, document: dict[str, Any]) -> None:
         raise
 
 
+def view_list_problems(schema: dict[str, Any], backend: FeastBackend) -> list[str]:
+    """Differences between the views the repository registers and the schema: the online domain views, the offline label views and the model views."""
+    problems = []
+    registered = backend.registered_views()
+    predictors, labels = reads.reference_lists(schema)
+    model_views = {entry["view"] for entry in schema.get("model_sets", {}).values()}
+    in_domain = [(view, columns, is_online) for view, (is_online, columns) in registered.items() if view not in model_views]
+    online = sorted(f"{view}:{column}" for view, columns, is_online in in_domain if is_online for column in columns)
+    offline = sorted(f"{view}:{column}" for view, columns, is_online in in_domain if not is_online for column in columns)
+    if online != predictors:
+        problems.append("the online feature views of the repository differ from the registered predictors of the schema")
+    if offline != labels:
+        problems.append("the offline-only views of the repository differ from the label columns of the schema")
+    return problems + reads.model_view_problems(schema, registered)
+
+
 def preflight(catalog: reads.IcebergCatalog, publication: reads.Publication, schema: dict[str, Any], backend: FeastBackend) -> None:
     """Everything that can be refused before the lease is taken and Feast writes (design 3.4 items 2 and 3); raises with the problems listed."""
     problems = reads.view_problems(schema)
@@ -227,20 +243,7 @@ def preflight(catalog: reads.IcebergCatalog, publication: reads.Publication, sch
     problems += [f"{name}: the publication does not name this table" for name in sorted(set(schema["tables"]) - named)]
     columns = {name: reads.iceberg_columns(reads.load_table(catalog, publication.namespace, name)) for name in sorted(set(schema["tables"]) & named)}
     problems += reads.column_problems(schema, {**columns, **{name: {} for name in set(schema["tables"]) - named}})
-    registered = backend.registered_views()
-    predictors, labels = reads.reference_lists(schema)
-    model_views = {entry["view"] for entry in schema.get("model_sets", {}).values()}
-    online = sorted(
-        f"{view}:{column}" for view, (is_online, view_columns) in registered.items() if is_online and view not in model_views for column in view_columns
-    )
-    offline = sorted(
-        f"{view}:{column}" for view, (is_online, view_columns) in registered.items() if not is_online and view not in model_views for column in view_columns
-    )
-    if online != predictors:
-        problems.append("the online feature views of the repository differ from the registered predictors of the schema")
-    if offline != labels:
-        problems.append("the offline-only views of the repository differ from the label columns of the schema")
-    problems += reads.model_view_problems(schema, registered)
+    problems += view_list_problems(schema, backend)
     if problems:
         raise ReadError(f"the repository is refused before apply ({len(problems)} problems): {reads.listed(problems)}")
 
@@ -373,6 +376,7 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("step", choices=STEPS)
     parser.add_argument("--run", required=True)
     parser.add_argument("--mode", required=True, choices=reads.MODES)
+    parser.add_argument("--feature-set", default=os.environ.get(feature_sets.VARIABLE, ""), help="the set whose run is applied (empty: the single path)")
     return parser.parse_args(list(argv))
 
 
@@ -386,12 +390,24 @@ def main(argv: Sequence[str] | None = None, environ: MutableMapping[str, str] | 
     try:
         from scripts.features import feast_aws
 
+        if args.feature_set and args.feature_set not in feature_sets.SETS:
+            raise ReadError(f"{feature_sets.VARIABLE} {args.feature_set!r} is not one of {', '.join(feature_sets.SETS)}")
+        feature_set = args.feature_set
         if feast_aws.selected_profile(live) == "aws":
-            record = feast_aws.run_job(args.step, args.run, args.mode, live)
+            record = feast_aws.run_job(args.step, args.run, args.mode, live, feature_set=feature_set)
             sys.stdout.write(json.dumps({key: record[key] for key in record if key in SUMMARY_KEYS}, sort_keys=True) + "\n")
             return 0
         settings = job_settings(live, args.step, args.run, args.mode)
-        if args.step == "materialize":
+        if feature_set:
+            from scripts.features import feast_sets
+
+            if args.step == "materialize":
+                record = feast_sets.run_set_materialize(settings, live, feature_set)
+            elif feature_set == feature_sets.BASE:
+                record = run(settings, live)
+            else:
+                record = feast_sets.run_set_apply(settings, live, feature_set)
+        elif args.step == "materialize":
             from scripts.features import feast_materialize
 
             record = feast_materialize.run_materialize(settings, live)

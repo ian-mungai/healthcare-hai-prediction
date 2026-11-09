@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -383,7 +384,7 @@ class RecordingBackend:
         registered: dict[str, tuple[bool, list[str]]] = {}
         for table in self.schema["tables"].values():
             for column in table["columns"]:
-                if column["role"] in ("predictor", "label"):
+                if column["role"] in ("predictor", "label", "weight"):
                     registered.setdefault(column["view"], (column["role"] == "predictor", []))[1].append(column["name"])
         for entry in self.schema.get("model_sets", {}).values():
             registered[entry["view"]] = (entry["online"], [column["name"] for column in entry["columns"] if column["role"] == "predictor"])
@@ -619,6 +620,252 @@ def case_e31_model_views(c: Checker) -> None:
         lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log, views=stray)),
         "model_m9",
     )
+
+
+def set_catalog(
+    feature_set: str = "m1", *, label_drift: bool = False, model_drift: bool = False, base_names_label: bool = True
+) -> tuple[StubCatalog, dict[str, Any], str, str]:
+    """A catalog of the committed schema's model table and label table with two publications: a base run that names the label table and the spine, and the
+    run of the model set that names its own table. Returns the catalog, the schema, the base run and the set run."""
+    schema, _ = reads.read_schema()
+    entry = schema["model_sets"][feature_set]
+    catalog = StubCatalog()
+    types = {column["name"]: reads.ICEBERG_TYPES[column["type"]] for column in entry["columns"]}
+    labels = {column["name"]: reads.ICEBERG_TYPES[column["type"]] for column in schema["tables"]["label_matrix_hai_outcomes"]["columns"]}
+    if model_drift:
+        types["surprise"] = "string"
+    if label_drift:
+        labels["surprise"] = "string"
+    catalog.tables[entry["table"]] = StubTable(entry["table"], 4001, types)
+    catalog.tables["label_matrix_hai_outcomes"] = StubTable("label_matrix_hai_outcomes", 2001, labels)
+    catalog.tables[reads.SPINE_TABLE] = StubTable(reads.SPINE_TABLE, 2000, {"spine_key": "string"})
+    base_set = {reads.SPINE_TABLE: 2000, **({"label_matrix_hai_outcomes": 2001} if base_names_label else {})}
+    base_run, set_run = "20261109T010000Z-0000b001", "20261109T020000Z-0000a001"
+    rows = [runs_row(base_run, T0, base_set), runs_row(set_run, T0 + timedelta(hours=1), {entry["table"]: 4001})]
+    catalog.tables[reads.RUNS_TABLE] = StubTable(reads.RUNS_TABLE, 3000, {}, rows)
+    return catalog, schema, base_run, set_run
+
+
+def set_folder(folder: Path, base_run: str | None, feature_set: str = "m1") -> None:
+    """The run folder of a model set after its record step: ``features_snapshot.json`` names the set and the base run."""
+    record: dict[str, Any] = {"schema": 1, "feature_set": feature_set, "base_run": base_run}
+    (folder / "features_snapshot.json").write_text(json.dumps(record))
+
+
+def case_e32_set_apply(c: Checker) -> None:
+    """A model set run is applied against its own publication and the label table of its base run, and nothing else of the schema."""
+    feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+    with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
+        folder = Path(raw)
+        catalog, schema, base_run, set_run = set_catalog()
+        set_folder(folder, base_run)
+        log: list[str] = []
+
+        def apply(catalog: StubCatalog = catalog, schema: dict[str, Any] = schema) -> dict[str, Any]:
+            settings = replace(fixture_settings(folder), run=set_run)
+            return feast_sets.set_apply(
+                catalog,
+                settings,
+                "m1",
+                schema=schema,
+                schema_sha256="c" * 64,
+                backend=RecordingBackend(schema, log),
+                lease=recording_lease(log),
+                deadline=lambda phase: None,
+            )
+
+        record = apply()
+        c.check("the record names the set, its run, the base run and the base publication", (record["feature_set"], record["base_run"]) == ("m1", base_run))
+        c.check(
+            "the publication is the set's own run and the base publication is the base run",
+            record["publication"]["run_id"] == set_run and record["base_publication"]["run_id"] == base_run,
+        )
+        c.check("the set's schema hash is in the record", len(record["set_schema_sha256"]) == 64)
+        c.check("Feast applied once under the lease", log == ["lease_acquired", "apply", "read_back", "lease_released"])
+        drifted, schema2, _, set_run2 = set_catalog(model_drift=True)
+        set_folder(folder, base_run)
+        c.refused("a model table with another column is refused", lambda: apply(drifted, schema2), "feature_matrix_m1")
+        label, schema3, _, _ = set_catalog(label_drift=True)
+        c.refused("a label table with another column is refused", lambda: apply(label, schema3), "label_matrix_hai_outcomes")
+        silent, schema4, _, _ = set_catalog(base_names_label=False)
+        c.refused("a base run that does not name the label table is refused", lambda: apply(silent, schema4), "label_matrix_hai_outcomes")
+        set_folder(folder, None)
+        c.refused("a record without a base run is refused", lambda: apply(), "base run")
+        (folder / "features_snapshot.json").write_text("{not json")
+        c.refused("an unreadable record is refused", lambda: apply(), "features_snapshot.json")
+        c.check("a refused apply left the registry untouched", log == ["lease_acquired", "apply", "read_back", "lease_released"])
+        del set_run2
+
+
+def case_e32_set_hold(c: Checker) -> None:
+    """The Feast phase of a set loads online, holds the load or stays offline by the schema hash of the Production model of that set."""
+    feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+    feature_sets: Any = importlib.import_module("scripts.features.feature_sets")
+    schema, sha = reads.read_schema()
+    base_run, set_run = "20261109T010000Z-0000b001", "20261109T020000Z-0000a001"
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+
+    def materialize(feature_set: str, production: list[str | None], folder: Path) -> tuple[dict[str, Any], list[str]]:
+        calls: list[str] = []
+
+        def loader(request: Any) -> str:
+            calls.append(f"{request.feature_set}:{request.run}")
+            return "load-1"
+
+        settings = replace(fixture_settings(folder), run=set_run)
+        record = feast_sets.set_materialize(
+            settings,
+            feature_set,
+            schema=schema,
+            schema_sha256=sha,
+            base_run=base_run,
+            production=lambda: production,
+            loader=loader,
+            holds=feast_sets.FolderHoldStore(folder / "store"),
+        )
+        return record, calls
+
+    with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
+        folder = Path(raw)
+        for label, feature_set, production, online, loaded in (
+            ("base", "base", [], "none", False),
+            ("an offline set", "m3", ["0" * 64], "offline", False),
+            ("no Production model", "m1", [], "load", True),
+            ("a Production model with the same hash", "m1", [mine], "load", True),
+            ("a Production model with another hash", "m1", ["0" * 64], "hold", False),
+            ("a Production model without the hash tag", "m1", [None], "hold", False),
+        ):
+            sub = folder / label.replace(" ", "_")
+            sub.mkdir()
+            record, calls = materialize(feature_set, production, sub)
+            c.check(f"{label}: the record says {online}", record["online"] == online and record["feature_set"] == feature_set)
+            c.check(f"{label}: the online load {'ran once' if loaded else 'did not run'}", calls == ([f"{feature_set}:{set_run}"] if loaded else []))
+            held = (sub / "store" / set_run / feast_sets.HOLD_NAME).is_file()
+            c.check(f"{label}: the hold record is {'written' if online == 'hold' else 'absent'}", held == (online == "hold"))
+        hold = json.loads((folder / "a_Production_model_with_another_hash" / "store" / set_run / feast_sets.HOLD_NAME).read_text())
+        c.check(
+            "the hold record names the set, the run, the base run and both hashes",
+            (hold["feature_set"], hold["run_id"], hold["base_run"], hold["set_schema_sha256"]) == ("m1", set_run, base_run, mine)
+            and hold["production_set_schema_sha256"] == ["0" * 64],
+        )
+        c.check(
+            "the hold record holds names, counts and hashes only",
+            set(hold) == {"schema", "feature_set", "run_id", "base_run", "set_schema_sha256", "production_set_schema_sha256"},
+        )
+        flat = folder / "flat"
+        flat.mkdir()
+        set_folder(flat, base_run)
+        settings = replace(fixture_settings(flat), run=set_run)
+        record = feast_sets.run_set_materialize(settings, {}, "m1", schema=(schema, sha), production=lambda: ["0" * 64])
+        c.check(
+            "the step writes the hold into the run folder, where the layer driver uploads it, and its record beside it",
+            record["online"] == "hold" and (flat / feast_sets.HOLD_NAME).is_file() and (flat / "feast_materialize.json").is_file(),
+        )
+        c.check(
+            "a base run needs no snapshot record and writes no hold",
+            feast_sets.run_set_materialize(replace(settings, run=base_run), {}, "base", schema=(schema, sha))["online"] == "none",
+        )
+        c.check(
+            "a repeat of the held materialize writes the same record",
+            materialize("m1", ["0" * 64], folder / "a_Production_model_with_another_hash")[0]["online"] == "hold",
+        )
+        c.refused(
+            "the default loader refuses until the per-set online store exists",
+            lambda: feast_sets.set_materialize(
+                replace(fixture_settings(folder), run=set_run),
+                "m1",
+                schema=schema,
+                schema_sha256=sha,
+                base_run=base_run,
+                production=lambda: [],
+                loader=feast_sets.refusing_loader,
+                holds=feast_sets.FolderHoldStore(folder / "refused"),
+            ),
+            "per-set online store",
+        )
+        del feature_sets
+
+
+def case_e32_release(c: Checker) -> None:
+    """The release entry point loads a held run online once, records the release and changes nothing on a repeat."""
+    feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    base_run, held_run, newer_run = "20261109T010000Z-0000b001", "20261109T020000Z-0000a001", "20261109T050000Z-0000a002"
+    with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
+        holds = feast_sets.FolderHoldStore(Path(raw))
+        calls: list[str] = []
+
+        def loader(request: Any) -> str:
+            calls.append(f"{request.feature_set}:{request.run}:{request.base_run}")
+            return "load-2"
+
+        def release(feature_set: str = "m1", run: str = held_run, newest: str = held_run) -> dict[str, Any]:
+            return feast_sets.release(feature_set, run, schema=schema, schema_sha256=sha, holds=holds, loader=loader, newest_run=lambda name: newest)
+
+        c.refused("a run without a hold record is refused", release, "no online hold")
+        holds.write_new(
+            feast_sets.HOLD_NAME,
+            held_run,
+            {"schema": 1, "feature_set": "m1", "run_id": held_run, "base_run": base_run, "set_schema_sha256": mine, "production_set_schema_sha256": ["0" * 64]},
+        )
+        c.refused("a hold of another set is refused", lambda: release("m2"), "m1")
+        c.refused("a run that is not the newest of its set is refused and both are named", lambda: release(newest=newer_run), newer_run)
+        c.check("nothing was loaded by the refusals", calls == [])
+        record = release()
+        c.check("the release loads the held run online once, with its base run", calls == [f"m1:{held_run}:{base_run}"])
+        c.check(
+            "the release record names the set, the run and the load", (record["feature_set"], record["run_id"], record["load_id"]) == ("m1", held_run, "load-2")
+        )
+        stored = holds.read(feast_sets.RELEASE_NAME, held_run)
+        c.check("the release is recorded beside the hold", stored is not None and stored["load_id"] == "load-2")
+        again = release()
+        c.check("a repeat release loads nothing and returns the same record", calls == [f"m1:{held_run}:{base_run}"] and again == record)
+        c.check("a repeat release rewrites nothing", holds.read(feast_sets.RELEASE_NAME, held_run) == stored)
+        c.check("the hold record is kept as evidence", holds.read(feast_sets.HOLD_NAME, held_run) is not None)
+
+
+def case_e32_release_command(c: Checker) -> None:
+    """``python -m scripts.features.feast_materialize --release <SET> <RUN_ID>``: its arguments, its exit codes and a release through the entry function."""
+    feast_materialize: Any = importlib.import_module("scripts.features.feast_materialize")
+    feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m4", schema=schema)
+    run, base_run = "20261109T020000Z-0000a004", "20261109T010000Z-0000b001"
+    with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
+        holds = feast_sets.FolderHoldStore(Path(raw))
+        holds.write_new(
+            feast_sets.HOLD_NAME,
+            run,
+            {"schema": 1, "feature_set": "m4", "run_id": run, "base_run": base_run, "set_schema_sha256": mine, "production_set_schema_sha256": ["0" * 64]},
+        )
+        calls: list[str] = []
+
+        def loader(request: Any) -> str:
+            calls.append(request.run)
+            return "load-4"
+
+        record = feast_materialize.release_set(
+            ["--release", "m4", run, "--mode", "publish_fixture"], {}, schema=(schema, sha), holds=holds, loader=loader, newest_run=lambda name: run
+        )
+        c.check("the command releases the held run of m4 through the loader", calls == [run] and record["load_id"] == "load-4")
+        c.refused(
+            "a set that is not a model set is refused",
+            lambda: feast_materialize.release_set(["--release", "base", run], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run),
+            "not a model set",
+        )
+        c.refused(
+            "a set that is not online is refused",
+            lambda: feast_materialize.release_set(["--release", "m3", run], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run),
+            "not an online model set",
+        )
+        try:
+            feast_materialize.release_set(["--release", "m4"], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run)
+            exited = 0
+        except SystemExit as error:
+            exited = int(error.code or 0)
+        c.check("a command without the run argument exits 2", exited == 2)
+        c.check("the main function returns 1 and names the cause for an unknown set", feast_materialize.main(["--release", "m9", run], {}) == 1)
 
 
 def case_e11_variables(c: Checker) -> None:
@@ -1861,6 +2108,10 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E11_views": (case_e11_views, "LC11"),
     "E11_variables": (case_e11_variables, "LC19"),
     "E31_model_views": (case_e31_model_views, "FS5"),
+    "E32_set_apply": (case_e32_set_apply, "FS3 FS5"),
+    "E32_set_hold": (case_e32_set_hold, "FS6"),
+    "E32_release": (case_e32_release, "FS6"),
+    "E32_release_command": (case_e32_release_command, "FS6"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
     "E13_lease": (case_e13_lease, "LC12"),

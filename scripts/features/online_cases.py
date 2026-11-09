@@ -1219,6 +1219,68 @@ def single_path_unchanged(server: Any) -> bool:
     return len(server.database_keys(1)) == len(KEYS) and server.marker().get("state") == "ready"
 
 
+def case_e35(c: Checker, make: Callable[[], Any]) -> None:
+    """The online load of a set reads the run's table, loads the set's own database under the set's marker, and a release goes through the same load."""
+    feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+    feast_materialize: Any = importlib.import_module("scripts.features.feast_materialize")
+    schema, sha = reads.read_schema()
+    set_hash = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    run, base = "20261109T020000Z-0000a001", "20261109T010000Z-0000b001"
+    table = schema["model_sets"]["m1"]["table"]
+    server = make()
+    catalog = feast_cases.StubCatalog()
+    rows = [{"spine_key": key, "event_timestamp": T0 + timedelta(days=index)} for index, key in enumerate(KEYS)]
+    catalog.tables[table] = feast_cases.StubTable(table, 4001, {"spine_key": "string", "event_timestamp": "timestamptz"}, rows)
+    catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 1, {}, [feast_cases.runs_row(run, T0, {table: 4001})])
+    layout = online.set_layout("m1")
+
+    def loader() -> Any:
+        return feast_sets.online_loader(
+            feast_cases.fixture_settings(Path("/nonexistent")),
+            {},
+            schema=(schema, sha),
+            session=lambda: contextlib.nullcontext(catalog),
+            control=server.client(online.CONTROL_DB),
+            features=server.client(layout.feature_db),
+            hooks_for=lambda cat, publication, entry: SetHooks(server, "load-1", layout),
+        )
+
+    request = feast_sets.LoadRequest("m1", run, base, set_hash)
+    load_id = loader()(request)
+    marker = server.read_hash(online.CONTROL_DB, layout.marker_key)
+    c.check(
+        "the load fills database 3 with the run's entities and marks it ready under the set's marker",
+        len(server.database_keys(3)) == len(KEYS) and marker.get("state") == "ready" and marker.get("load_id") == load_id,
+    )
+    c.check(
+        "the marker names the run, the entity count and the set's schema hash",
+        (marker.get("feature_run_id"), marker.get("entity_count"), marker.get("feature_schema_sha256")) == (run, str(len(KEYS)), set_hash),
+    )
+    c.check("no other database and no other marker changed", not server.database_keys(1) and not server.database_keys(4) and not server.marker())
+    thin = feast_cases.StubCatalog()
+    thin.tables[table] = feast_cases.StubTable(table, 4001, {}, [rows[0], rows[0]])
+    thin.tables[reads.RUNS_TABLE] = catalog.tables[reads.RUNS_TABLE]
+    c.refused(
+        "a table with a repeated key is refused before the flush",
+        lambda: feast_sets.set_load_plan(thin, reads.read_publication(thin, "features_e2e", run), schema["model_sets"]["m1"], set_hash, "t"),
+        "clean entity table",
+    )
+    holds = feast_sets.FolderHoldStore(Path(tempfile.mkdtemp(prefix="hold_cases_")))
+    holds.write_new(
+        feast_sets.HOLD_NAME,
+        run,
+        {"schema": 1, "feature_set": "m1", "run_id": run, "base_run": base, "set_schema_sha256": set_hash, "production_set_schema_sha256": ["0" * 64]},
+    )
+    server.restart()
+    record = feast_materialize.release_set(
+        ["--release", "m1", run, "--mode", "publish_fixture"], {}, schema=(schema, sha), holds=holds, loader=loader(), newest_run=lambda name: run
+    )
+    c.check(
+        "a release loads the held run through the same load",
+        server.read_hash(online.CONTROL_DB, layout.marker_key).get("load_id") == record["load_id"] and len(server.database_keys(3)) == len(KEYS),
+    )
+
+
 FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] = {
     "E20": (case_e20, "LO1 D1 RS5 B9"),
     "E21": (case_e21, "LO8 LO17 D1 D9 CR5"),
@@ -1229,6 +1291,7 @@ FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] 
     "E26": (case_e26, "LO6 LO12 D10 D19"),
     "E33": (case_e33, "LO1 LO16 RS5"),
     "E34": (case_e34, "FS6"),
+    "E35": (case_e35, "FS6"),
     "E24_serving": (case_serving_read, "LO13 LO16"),
     "E24_materialize": (case_materialize, "LO11 D7"),
 }

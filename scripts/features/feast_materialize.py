@@ -9,15 +9,20 @@ Feast and PyIceberg are imported when needed. Messages hold names, counts and ha
 
 from __future__ import annotations
 
+import argparse
 import contextlib
+import functools
 import importlib
 import importlib.metadata
+import json
+import os
+import sys
 from collections.abc import Callable, MutableMapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.features import feast_job, historical
+from scripts.features import feast_job, feast_sets, feature_sets, historical
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
@@ -165,3 +170,62 @@ def run_materialize(
     }
     feast_job.write_record(settings.folder / "feast_materialize.json", record)
     return record
+
+
+def release_set(
+    argv: Sequence[str],
+    environ: MutableMapping[str, str] | None = None,
+    *,
+    schema: tuple[dict[str, Any], str] | None = None,
+    holds: feast_sets.HoldStore | None = None,
+    loader: feast_sets.OnlineLoader | None = None,
+    newest_run: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Release the held online load of a run: ``--release <SET> <RUN_ID> [--mode real|publish_fixture]``. A repeat returns the first release record."""
+    parser = argparse.ArgumentParser(description="Load a held model set run online and record the release.", prog="feast_materialize")
+    parser.add_argument("--release", nargs=2, metavar=("SET", "RUN_ID"), required=True)
+    parser.add_argument("--mode", choices=reads.MODES, default="real")
+    args = parser.parse_args(list(argv))
+    feature_set, run = args.release
+    live = os.environ if environ is None else environ
+    if feature_set not in feature_sets.MODEL_SETS:
+        raise ReadError(f"set {feature_set!r} is not a model set (m1 to m6)")
+    document, sha = schema if schema is not None else reads.read_schema()
+    if holds is not None and newest_run is not None:
+        return feast_sets.release(
+            feature_set, run, schema=document, schema_sha256=sha, holds=holds, loader=loader or feast_sets.refusing_loader, newest_run=newest_run
+        )
+    from scripts.features import feast_aws
+
+    aws = feast_aws.selected_profile(live) == "aws"
+    settings = (feast_aws.job_settings if aws else feast_job.job_settings)(live, "materialize", run, args.mode)
+    session = (
+        functools.partial(feast_aws.catalog_session, settings, live, open_store=functools.partial(feast_aws.open_ssm, settings.region))
+        if aws
+        else functools.partial(feast_job.catalog_session, settings, live)
+    )
+    with session() as catalog:
+        return feast_sets.release(
+            feature_set,
+            run,
+            schema=document,
+            schema_sha256=sha,
+            holds=holds if holds is not None else feast_sets.hold_store(settings, live),
+            loader=loader if loader is not None else feast_sets.online_loader(settings, live, schema=(document, sha), session=session),
+            newest_run=newest_run if newest_run is not None else (lambda name: feast_sets.newest_set_run(catalog, reads.NAMESPACES[args.mode], name, document)),
+        )
+
+
+def main(argv: Sequence[str] | None = None, environ: MutableMapping[str, str] | None = None) -> int:
+    """The release entry point: exit 0 when the run is released (or was), 1 when the release is refused or fails (the message names the cause)."""
+    try:
+        record = release_set(sys.argv[1:] if argv is None else argv, environ)
+    except ReadError as error:
+        sys.stderr.write(f"feast_materialize release failed: {error}\n")
+        return 1
+    sys.stdout.write(json.dumps({key: record[key] for key in ("feature_set", "run_id", "base_run", "load_id") if key in record}, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

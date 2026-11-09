@@ -31,7 +31,7 @@ import re
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Iterator, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -329,13 +329,27 @@ def run_job(
     control: online.RedisClient | None = None,
     features: online.RedisClient | None = None,
     hooks_for: Callable[[reads.IcebergCatalog, reads.Publication, dict[str, Any]], online.LoadHooks] | None = None,
+    feature_set: str = "",
+    production: Callable[[], Sequence[str | None]] | None = None,
+    holds: Any = None,
 ) -> dict[str, Any]:
-    """Run one AWS step (apply or materialize) through the existing job code with this profile's catalog session and settings file."""
+    """Run one AWS step (apply or materialize) through the existing job code with this profile's catalog session and settings file.
+
+    A feature set runs the set flows of ``feast_sets``: base applies like the single path, a model set applies against its own publication and the base
+    run it read, and the materialize step of any set decides online, offline or hold."""
     job = job_settings(environ, step, run, mode)
     open_store = (lambda: store) if store is not None else functools.partial(open_ssm, job.region)
     session = functools.partial(
         catalog_session, job, environ, open_store=open_store, exchange=exchange, loader=loader, redis_factory=redis_factory, limits=limits
     )
+    if feature_set:
+        from scripts.features import feast_sets
+
+        if step == "materialize":
+            return feast_sets.run_set_materialize(job, environ, feature_set, schema=schema, production=production, holds=holds)
+        if feature_set != "base":
+            repository = backend if backend is not None else feast_job.FeastRepository(settings_file=AWS_SETTINGS_FILE)
+            return feast_sets.run_set_apply(job, environ, feature_set, backend=repository, lease=lease, schema=schema, session=session)
     if step == "materialize":
         return feast_materialize.run_materialize(
             job, environ, control=control, features=features, hooks_for=hooks_for, schema=schema, session=session, settings_file=AWS_SETTINGS_FILE
