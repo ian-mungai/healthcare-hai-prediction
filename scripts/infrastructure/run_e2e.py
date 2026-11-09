@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,21 @@ BOOT_STUBS = {
 CONSOLE_FLUSH_LIMIT = 10
 # How long after the boot script exited its console copy may still be listed: the kernel ends a process after the KILL that was sent to it.
 CONSOLE_EXIT_GRACE = 10.0
+# The seconds Evidence.run lets a child process take; the boot script and the look at its console copy must fit in them.
+BOOT_RUN_LIMIT = 30
+# Runs the boot script and then keeps its launch session open until the runner has looked at the console copy: the launcher ends every member of a
+# session when its program returns, so a copy that the script left running would be gone before the runner could see it.
+BOOT_SESSION_HOLD = """#!/bin/bash
+"$BASH" "$1"
+status=$?
+: >"$2"
+held=0
+while [ ! -e "$3" ] && [ "$held" -lt 400 ]; do
+  sleep 0.05
+  held=$((held + 1))
+done
+exit "$status"
+"""
 STALL = "exec /bin/sleep 45"
 STALL_IGNORING_TERM = "trap '' TERM; exec /bin/sleep 45"
 # Stateful stand-ins, in Python, for the commands whose effect later steps read back. They keep their state in
@@ -1890,8 +1906,13 @@ def boot_host(
     case_environment: dict[str, str],
     gnu_timeout: str,
     console: str = "file",
+    exit_grace: float = CONSOLE_EXIT_GRACE,
 ) -> tuple[Path, dict[str, str], dict[str, Any], Any]:
-    """Run the boot script once in its own temporary host root and return the root, the stand-in environment, the step and the result."""
+    """Run the boot script once in its own temporary host root and return the root, the stand-in environment, the step and the result.
+
+    The step records ``console_copy``: what the runner saw of the script's console copy within ``exit_grace`` seconds after the script exited, while
+    the launch session was still open. The step's duration is the script's own.
+    """
     root = evidence.temporary / name
     script = prepare_host_root(root, template, stub_overrides, console)
     environment = {
@@ -1912,7 +1933,27 @@ def boot_host(
         "BOOT_NFTABLES_CONFIG": str(root / BOOT_PATHS["nftables_config"]),
         "BOOT_STATE_INITIAL": "nftables.service",
     }
-    step, result = evidence.run(name, [bash, str(script)], root, {**environment, **case_environment})
+    hold, exited, released = root / "hold_session.sh", root / "script_exited", root / "session_released"
+    hold.write_text(BOOT_SESSION_HOLD, encoding="utf-8")
+    command = [bash, str(hold), str(script), str(exited), str(released)]
+    started = time.monotonic()
+    observation: dict[str, Any] | None = None
+    script_seconds = 0.0
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        run = pool.submit(evidence.run, name, command, root, {**environment, **case_environment})
+        try:
+            while not run.done() and not exited.exists() and time.monotonic() - started < BOOT_RUN_LIMIT:
+                time.sleep(0.05)
+            if exited.exists():
+                script_seconds = time.monotonic() - started
+                observation = observe_console_copy(root, exit_grace)
+        finally:
+            released.touch()
+        step, result = run.result()
+    if observation is None:
+        raise CheckFailed(f"{name}: the boot script did not exit within {BOOT_RUN_LIMIT} seconds")
+    step["console_copy"] = observation
+    step["duration_seconds"] = round(script_seconds, 6)
     return root, environment, step, result
 
 
@@ -1971,9 +2012,33 @@ def copy_process_running(pid: int, grace_seconds: float) -> bool:
         time.sleep(0.05)
 
 
-def console_copy_problems(
-    root: Path, returncode: int | None, duration: float, message: str | None, flush_limit: float, exit_grace: float = CONSOLE_EXIT_GRACE
-) -> list[str]:
+def console_copy_pid(log: str) -> int | None:
+    """Return the process number that the boot script's first log line names for its console copy, or None when the log names none."""
+    found = re.search(r"\(process (\d+)\)", log)
+    return None if found is None else int(found.group(1))
+
+
+def observe_console_copy(root: Path, exit_grace: float) -> dict[str, Any]:
+    """Look at the console copy of a boot script that has just exited; call it while the script's launch session is still open.
+
+    Returns the copy's process number, whether it still ran after ``exit_grace`` seconds (None when that could not be told) and the inspection error.
+    A copy that is not confirmed gone is ended here.
+    """
+    pid = console_copy_pid("\n".join(read_lines(root / BOOT_PATHS["log_file"])))
+    observation: dict[str, Any] = {"pid": pid, "running": None, "error": None}
+    if pid is None:
+        return observation
+    try:
+        observation["running"] = copy_process_running(pid, exit_grace)
+    except ProcessInspectionError as error:
+        observation["error"] = str(error)
+    if observation["running"] is not False:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    return observation
+
+
+def console_copy_problems(root: Path, returncode: int | None, duration: float, message: str | None, flush_limit: float, copy: dict[str, Any]) -> list[str]:
     """Compare what the boot script wrote to the log with what reached the console; return one sentence per difference.
 
     A boot with a console that cannot be read passes ``flush_limit`` only; every other boot passes the whole comparison.
@@ -1981,22 +2046,12 @@ def console_copy_problems(
     problems = []
     log = read_lines(root / BOOT_PATHS["log_file"])
     text = "\n".join(log)
-    copy_process = re.search(r"\(process (\d+)\)", text)
-    if copy_process is None:
+    if console_copy_pid(text) is None:
         problems.append("the log does not name the console copy process")
-    else:
-        copy_pid = int(copy_process.group(1))
-        try:
-            running: bool | None = copy_process_running(copy_pid, exit_grace)
-        except ProcessInspectionError as error:
-            problems.append(f"the console copy process could not be inspected after the script exited: {error}")
-            running = None
-        else:
-            if running:
-                problems.append("the console copy process was still running after the script exited")
-        if running is not False:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(copy_pid, signal.SIGKILL)
+    elif copy["error"] is not None:
+        problems.append(f"the console copy process could not be inspected after the script exited: {copy['error']}")
+    elif copy["running"]:
+        problems.append("the console copy process was still running after the script exited")
     if duration >= flush_limit:
         problems.append(f"the script took {duration:.1f} seconds, not under {flush_limit} seconds")
     if BOOT_METADATA_SENTINEL in text or "AssociationId" in text or '"State"' in text:
@@ -2049,7 +2104,7 @@ def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_tim
         ("boot_console_copy_ends_after_the_script", "fifo", kill_the_copy_late),
     ):
         root, _, step, result = boot_host(evidence, bash, name, template if change is None else change(template), {}, {}, gnu_timeout, console)
-        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], None, CONSOLE_FLUSH_LIMIT)
+        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], None, CONSOLE_FLUSH_LIMIT, step["console_copy"])
         step["console_problems"] = problems
         evidence.check(step, "boot_succeeded", result.returncode == 0)
         evidence.check(step, "console_problems_none", not problems)
@@ -2119,11 +2174,11 @@ def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_tim
         ),
     }
     for name, (expected, change, console, stub_overrides, case_environment) in planted.items():
-        root, _, step, result = boot_host(evidence, bash, name, change(template), stub_overrides, case_environment, gnu_timeout, console)
-        stalled = "Mounting the data volume did not finish within 120 seconds." if "mount" in stub_overrides else None
         # A copy that is planted to run forever needs one second, not the whole grace, to be told from one that is still ending.
         grace = 1.0 if name == "boot_with_console_copy_left_running" else CONSOLE_EXIT_GRACE
-        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT, grace)
+        root, _, step, result = boot_host(evidence, bash, name, change(template), stub_overrides, case_environment, gnu_timeout, console, grace)
+        stalled = "Mounting the data volume did not finish within 120 seconds." if "mount" in stub_overrides else None
+        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT, step["console_copy"])
         step["console_problems"] = problems
         evidence.check(step, "planted_console_defect_is_reported", any(expected in problem for problem in problems))
 
@@ -2225,7 +2280,7 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         step["boot_log"] = evidence.redact(log)
         step["requested_deadlines"] = [evidence.redact(line) for line in deadlines]
         step["metadata_requests"] = metadata
-        console_problems = console_copy_problems(root, result.returncode, 0.0, message, CONSOLE_FLUSH_LIMIT)
+        console_problems = console_copy_problems(root, result.returncode, 0.0, message, CONSOLE_FLUSH_LIMIT, step["console_copy"])
         step["console_problems"] = console_problems
         evidence.check(step, "console_copy_matches_log", not console_problems)
         evidence.check(step, "every_deadline_kills_after_a_grace_period", all(line.startswith("--kill-after=") for line in deadlines))
