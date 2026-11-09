@@ -1,5 +1,5 @@
-"""Check the training target-list check on copies of the committed files; never writes them (failure modes T1 to T9 in
-plans/full_scope_20261022/p4a/targets_failure_modes.md).
+"""Check the training target-list check on copies of the committed files; never writes them. Each case plants one defect in a copy and requires
+the check to name it.
 
 Run ``.venv/bin/python -m scripts.training.run_targets_e2e`` from the repository root. Reports stay in data/e2e/training_targets/.
 """

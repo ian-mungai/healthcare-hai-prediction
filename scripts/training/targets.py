@@ -1,5 +1,6 @@
-"""Check the training target lists against the gold control bridge (failure modes T1 to T9 in
-plans/full_scope_20261022/p4a/targets_failure_modes.md).
+"""Check the training target lists against the gold control bridge. ``scripts.training.run_targets_e2e`` plants each defect the check names on
+a copy: a control missing from the bridge, swapped keys, a wrong fact or value column, a control mapped twice, a type listed twice or missing, a
+control in both lists, a missing or malformed list and a file that is not JSON.
 
 Run from the repository root:
 
@@ -10,7 +11,7 @@ Run from the repository root:
 earlier-outcome candidates (owner decision, Oct 22 2026). Each listed control must map, in the bridge, to exactly one row
 of fact `fct_hai_hospital_window`, measure key `<hai_type>_SIR` and value column `score`; each of the six types has
 exactly one control in each list and no control is in both. Each list holds exactly the owner's approved controls for its
-role, because the bridge row is the same for both periods (T10). The check reads files only and writes nothing.
+role, because the bridge row is the same for both periods. The check reads files only and writes nothing.
 """
 
 from __future__ import annotations

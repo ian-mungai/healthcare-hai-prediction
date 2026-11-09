@@ -1,6 +1,6 @@
 """End-to-end cases of the feature store package, lane A: the schema and generated files, the publish contract, the gold pin, the build, the
-validation and the export. Each case names the failure modes it proves (``plans/full_scope_20261022/p3c/failure_modes_lane_a.md`` and
-``failure_modes_design.md``).
+validation and the export. Each case plants one defect or condition and requires the check that owns it to fail or pass, and the report lists
+the failure-mode IDs the case proves.
 
 Run from the repository root:
 
