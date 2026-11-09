@@ -9,6 +9,7 @@ variables {
   environment         = "dev"
   data_bucket_name    = "example-project-data-dev"
   log_group_name      = "example_project_jobs_dev"
+  host_job_memory_mib = 23552
   images = {
     analytics = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     quality   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_quality_dev@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -125,12 +126,12 @@ run "flag_on_plans_the_nine_host_definitions" {
 
   assert {
     condition = alltrue([for family, size in {
-      silver   = [3072, 16384], gold = [3072, 16384], features = [3072, 16384], bronze = [3072, 16384], train = [3072, 16384],
-      metadata = [1024, 2048], drift = [2048, 8192], promote = [1024, 4096], serve = [1024, 4096]
+      silver   = [3072, 23552], gold = [3072, 23552], features = [3072, 23552], bronze = [3072, 23552], train = [3072, 23552],
+      metadata = [3072, 23552], drift = [3072, 23552], promote = [3072, 23552], serve = [3072, 23552]
       } : (
       aws_ecs_task_definition.host[family].cpu == tostring(size[0]) && aws_ecs_task_definition.host[family].memory == tostring(size[1])
     )])
-    error_message = "A job reserves at most 3072 CPU units and 16 GiB at task level; the smaller families keep their Fargate size and the metadata job is sized for its one ingestion container."
+    error_message = "Every host job gets the 3072 CPU units and the memory the services stack leaves for one job (host_job_memory_mib), whatever its Fargate size."
   }
 
   assert {
@@ -339,11 +340,12 @@ run "one_family_can_move_first" {
   }
 }
 
-run "resources_follow_the_fargate_shape_up_to_the_host_cap" {
+run "every_host_job_gets_the_computed_cap_whatever_its_fargate_shape" {
   command = plan
 
   variables {
-    host_jobs_enabled = true
+    host_jobs_enabled   = true
+    host_job_memory_mib = 20480
     layer_resources = {
       silver   = { cpu = 4096, memory = 30720, ephemeral_storage_gib = 100 }
       gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
@@ -353,13 +355,44 @@ run "resources_follow_the_fargate_shape_up_to_the_host_cap" {
   }
 
   assert {
-    condition = (
-      aws_ecs_task_definition.host["silver"].cpu == "3072" && aws_ecs_task_definition.host["silver"].memory == "16384" &&
-      aws_ecs_task_definition.host["features"].cpu == "3072" && aws_ecs_task_definition.host["features"].memory == "16384" &&
-      aws_ecs_task_definition.host["drift"].cpu == "1024" && aws_ecs_task_definition.host["drift"].memory == "4096"
-    )
-    error_message = "A bigger Fargate shape, the 16 vCPU and 64 GiB features task included, is capped at 3072 CPU units and 16 GiB; a smaller one is kept. The task derives its threads from that CPU limit."
+    condition = alltrue([for family in ["silver", "gold", "features", "drift", "metadata"] : (
+      aws_ecs_task_definition.host[family].cpu == "3072" && aws_ecs_task_definition.host[family].memory == "20480"
+    )])
+    error_message = "A host job's size comes from the host room, not from its Fargate twin: one job runs at a time and its engines derive their limits from the task."
   }
+}
+
+run "host_jobs_need_the_room_the_services_leave" {
+  command = plan
+
+  variables {
+    host_jobs_enabled   = true
+    host_job_memory_mib = null
+  }
+
+  expect_failures = [var.host_job_memory_mib]
+}
+
+run "the_job_room_must_fit_the_host" {
+  command = plan
+
+  variables {
+    host_jobs_enabled   = true
+    host_job_memory_mib = 32768
+  }
+
+  expect_failures = [var.host_job_memory_mib]
+}
+
+run "the_job_room_may_not_be_too_small_for_a_layer_job" {
+  command = plan
+
+  variables {
+    host_jobs_enabled   = true
+    host_job_memory_mib = 2048
+  }
+
+  expect_failures = [var.host_job_memory_mib]
 }
 
 run "run_task_and_dispatch_contract" {
@@ -405,7 +438,7 @@ run "run_task_and_dispatch_contract" {
   assert {
     condition = (
       output.host_dispatch_contract.capacity_provider == "example_project_host_dev" && output.host_dispatch_contract.network_mode == "bridge" &&
-      output.host_dispatch_contract.jobs_at_a_time == 1 && output.host_dispatch_contract.cpu_units_cap == 3072 && output.host_dispatch_contract.memory_mib_cap == 16384 &&
+      output.host_dispatch_contract.jobs_at_a_time == 1 && output.host_dispatch_contract.cpu_units_cap == 3072 && output.host_dispatch_contract.memory_mib_cap == 23552 &&
       output.host_dispatch_contract.propagate_tags == "TASK_DEFINITION" && toset(output.host_dispatch_contract.families) == toset(keys(aws_ecs_task_definition.host)) &&
       toset(keys(output.host_dispatch_contract.writers)) == toset(["silver", "gold", "features", "bronze"]) &&
       jsonencode(output.host_dispatch_contract.writers["gold"].parameter_names) == jsonencode(["/example_project/aws_polaris_gold_client_id", "/example_project/aws_polaris_gold_client_secret"]) &&
@@ -584,10 +617,9 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
 
   assert {
     condition = (
-      tonumber(aws_ecs_task_definition.host["metadata"].memory) <= 4096 && tonumber(aws_ecs_task_definition.host["metadata"].cpu) <= 1024 &&
-      aws_ecs_task_definition.host["metadata"].memory == "2048" && aws_ecs_task_definition.host["metadata"].cpu == "1024"
+      aws_ecs_task_definition.host["metadata"].memory == tostring(var.host_job_memory_mib) && aws_ecs_task_definition.host["metadata"].cpu == "3072"
     )
-    error_message = "The task is sized for one ingestion container: 1024 CPU units and 2 GiB, not the catalog's 24 GiB or the 16 GiB job cap."
+    error_message = "The metadata job gets the same room as every host job: 3072 CPU units and the memory the services leave (host_job_memory_mib); one job runs at a time."
   }
 }
 
@@ -605,45 +637,6 @@ run "the_metadata_job_needs_only_the_ingestion_image_and_the_catalog_roles" {
     condition     = toset(keys(aws_ecs_task_definition.host)) == toset(["metadata"]) && length(aws_ecs_task_definition.openmetadata) == 0
     error_message = "The host metadata job does not depend on the Fargate catalog task or on the server, search and database images."
   }
-}
-
-run "the_metadata_job_sizes_come_from_one_variable_within_a_small_cap" {
-  command = plan
-
-  variables {
-    host_jobs_enabled       = true
-    host_jobs               = ["metadata"]
-    host_metadata_resources = { cpu = 512, memory = 1024 }
-  }
-
-  assert {
-    condition     = aws_ecs_task_definition.host["metadata"].cpu == "512" && aws_ecs_task_definition.host["metadata"].memory == "1024"
-    error_message = "The ingestion task size is one input."
-  }
-}
-
-run "the_metadata_job_may_not_grow_back_to_a_catalog_sized_task" {
-  command = plan
-
-  variables {
-    host_jobs_enabled       = true
-    host_jobs               = ["metadata"]
-    host_metadata_resources = { cpu = 1024, memory = 16384 }
-  }
-
-  expect_failures = [var.host_metadata_resources]
-}
-
-run "the_metadata_job_may_not_ask_for_catalog_sized_cpu" {
-  command = plan
-
-  variables {
-    host_jobs_enabled       = true
-    host_jobs               = ["metadata"]
-    host_metadata_resources = { cpu = 3072, memory = 2048 }
-  }
-
-  expect_failures = [var.host_metadata_resources]
 }
 
 run "the_metadata_job_needs_a_catalog_address" {

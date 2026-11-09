@@ -121,6 +121,44 @@ run "service_cpu_reservations_fit_beside_a_full_job" {
   }
 }
 
+run "the_job_memory_room_is_the_host_less_the_system_reserve_and_the_service_reservations" {
+  command = plan
+
+  assert {
+    condition     = output.host_job_memory_mib == var.host_memory_mib - var.host_system_reserve_mib - output.reserved_memory_mib && var.host_system_reserve_mib == 2048
+    error_message = "One job gets the host memory less 2 GiB for the operating system and the ECS agent and less every always-on service reservation."
+  }
+
+  assert {
+    condition     = output.host_job_memory_mib >= 4096 && output.host_job_memory_mib < var.host_memory_mib
+    error_message = "The job room is a usable job size and smaller than the host."
+  }
+}
+
+run "a_larger_system_reserve_shrinks_the_job_room" {
+  command = plan
+
+  variables {
+    host_system_reserve_mib = 4096
+  }
+
+  assert {
+    condition     = output.host_job_memory_mib == var.host_memory_mib - 4096 - output.reserved_memory_mib
+    error_message = "The job room follows the system reserve, so no job size is typed by hand."
+  }
+}
+
+run "services_that_leave_no_room_for_a_job_are_refused" {
+  command = plan
+
+  variables {
+    host_job_memory_floor_mib = 30720
+  }
+
+  # Only the job-room guard can refuse this: the reserve stays at its default, so the hard-limit guard on the service definitions passes.
+  expect_failures = [output.host_job_memory_mib]
+}
+
 run "a_job_that_leaves_less_room_than_the_services_reserve_is_refused" {
   command = plan
 

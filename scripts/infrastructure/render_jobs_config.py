@@ -23,12 +23,32 @@ from scripts.infrastructure.render_project_config import (
 from scripts.process import TimeoutExpired, run_command
 
 JOBS_DIRECTORY = REPO_ROOT / "infra/jobs"
+SERVICES_DIRECTORY = REPO_ROOT / "infra/services"
+JOB_ROOM_FLOOR_MIB = 4096
 PREPARATION_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/jobs_preparation.schema.json"
 
 
 def jobs_values(storage: dict[str, str]) -> dict[str, str]:
     """Return the six environment-derived base inputs for the jobs root."""
     return {key: storage[key] for key in ("aws_profile", "aws_region", "data_bucket_name", "environment", "expected_account_id", "project_name")}
+
+
+def host_job_room(directory: Path = SERVICES_DIRECTORY) -> int:
+    """Return the memory MiB one host job gets, read from the services stack output host_job_memory_mib, or refuse."""
+    try:
+        result = run_command("terraform", [f"-chdir={directory}", "output", "-json", "host_job_memory_mib"], timeout=120)
+    except (OSError, TimeoutExpired):
+        raise ConfigurationError("The services job room could not be read within 120 seconds. No Terraform action was run.") from None
+    try:
+        room = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        room = None
+    if type(room) is not int or room < JOB_ROOM_FLOOR_MIB:
+        raise ConfigurationError(
+            "Host jobs need the job room from the services stack output host_job_memory_mib (a whole number of at least 4096 MiB). "
+            "Apply the services stack, then render again. No Terraform action was run."
+        )
+    return room
 
 
 def verify_jobs_plan(plan: dict[str, Any], expected: dict[str, Any]) -> None:
@@ -82,6 +102,8 @@ def main() -> int:
             values.pop("data_bucket_name")
             directory /= "identity_probe"
         values.update(prepared)
+        if root == "jobs" and values.get("host_jobs_enabled") is True:
+            values["host_job_memory_mib"] = host_job_room()
         if arguments.check_plan:
             try:
                 result = run_command("terraform", [f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())], timeout=120)

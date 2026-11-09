@@ -52,6 +52,16 @@ output "reserved_memory_mib" {
   value       = local.reserved_memory_mib
 }
 
+output "host_job_memory_mib" {
+  description = "Memory MiB one job gets on the host: the host memory less the system reserve and the always-on service reservations. render_jobs_config passes it to the jobs stack as host_job_memory_mib."
+  value       = local.host_job_memory_mib
+
+  precondition {
+    condition     = local.host_job_memory_mib >= var.host_job_memory_floor_mib
+    error_message = "The always-on service reservations and the system reserve leave less than host_job_memory_floor_mib for one job on the host."
+  }
+}
+
 output "container_definitions" {
   description = "The container definitions JSON of every task definition, keyed by task name, for review and for the secret-flow test."
   value       = { for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : key => definition.container_definitions }

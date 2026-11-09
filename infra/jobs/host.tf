@@ -39,21 +39,15 @@ variable "host_scratch_root" {
   }
 }
 
-variable "host_metadata_resources" {
-  description = "CPU units and memory MiB of the metadata host task. It holds an init step and one ingestion container that sends Polaris and dbt metadata to the persistent catalog, so it is small: the catalog itself runs as a service."
-  type = object({
-    cpu    = number
-    memory = number
-  })
-  default  = { cpu = 1024, memory = 2048 }
-  nullable = false
+variable "host_job_memory_mib" {
+  description = "Memory MiB of every host job: the services stack output host_job_memory_mib (host memory less the operating system reserve and the always-on services' reservations), rendered by scripts/infrastructure/render_jobs_config.py. One job runs at a time, so each job gets the whole room and its engines derive their limits from it."
+  type        = number
+  default     = null
+  nullable    = true
 
   validation {
-    condition = (
-      var.host_metadata_resources.cpu >= 256 && var.host_metadata_resources.cpu <= 2048 && var.host_metadata_resources.memory >= 512 && var.host_metadata_resources.memory <= 4096 &&
-      var.host_metadata_resources.cpu == floor(var.host_metadata_resources.cpu) && var.host_metadata_resources.memory == floor(var.host_metadata_resources.memory)
-    )
-    error_message = "Use 256 to 2048 CPU units and 512 to 4096 MiB. A larger task is not an ingestion client."
+    condition     = var.host_job_memory_mib == null ? !var.host_jobs_enabled : (var.host_job_memory_mib >= 4096 && var.host_job_memory_mib < 32768 && var.host_job_memory_mib == floor(var.host_job_memory_mib))
+    error_message = "Host jobs need host_job_memory_mib from the services stack output: a whole number of MiB from 4096 up to below the 32768 MiB host."
   }
 }
 
@@ -94,10 +88,10 @@ locals {
   host_families = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"
-  # The host has 4096 CPU units and about 31 GiB. A job reserves at most 3072 units and 16 GiB at task level, and the services keep the rest.
+  # The host has 4096 CPU units. One job runs at a time and gets 3072 units and the memory the always-on services leave (host_job_memory_mib, from the services stack).
   # A job derives its threads, memory and spill cap from these task-level limits when it starts, so the host rewrites no engine value.
   host_cpu_cap    = 3072
-  host_memory_cap = 16384
+  host_memory_cap = var.host_job_memory_mib
   # The two volumes of every Fargate job keep their names and become host folders; a volume that is not named here keeps its own name as the folder.
   host_volume_directories = { workspace = "work" }
   host_source_ready = {
@@ -111,17 +105,17 @@ locals {
     serve    = var.serve_enabled
     metadata = contains(keys(var.openmetadata_images), "ingestion") && contains(keys(var.openmetadata_roles), "execution") && contains(keys(var.openmetadata_roles), "openmetadata_task") && var.log_group_name != null
   }
-  # Roles, network class (the class of config/orchestration/ecs_broker_jobs.json, which a Terraform test compares) and the Fargate shape each host definition starts from.
+  # Roles and network class of each host definition (the class of config/orchestration/ecs_broker_jobs.json, which a Terraform test compares).
   host_specs = {
-    silver   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse", shape = var.layer_resources["silver"] }
-    gold     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse", shape = var.layer_resources["gold"] }
-    features = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.features, task = lookup(var.job_role_arns, local.layer_roles.features, ""), network = "lakehouse", shape = var.layer_resources["features"] }
-    bronze   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.bronze_role, task = lookup(var.job_role_arns, local.bronze_role, ""), network = "lakehouse", shape = var.bronze_resources }
-    train    = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training", shape = var.train_resources }
-    drift    = { execution = lookup(var.drift_roles, "execution", ""), task_key = "drift_task", task = lookup(var.drift_roles, "drift_task", ""), network = "training", shape = var.drift_resources }
-    promote  = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training", shape = var.promote_resources }
-    serve    = { execution = lookup(var.train_roles, "execution", ""), task_key = "serve_task", task = lookup(var.serve_roles, "serve_task", ""), network = "training", shape = var.serve_resources }
-    metadata = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse", shape = var.host_metadata_resources }
+    silver   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse" }
+    gold     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse" }
+    features = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.features, task = lookup(var.job_role_arns, local.layer_roles.features, ""), network = "lakehouse" }
+    bronze   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.bronze_role, task = lookup(var.job_role_arns, local.bronze_role, ""), network = "lakehouse" }
+    train    = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training" }
+    drift    = { execution = lookup(var.drift_roles, "execution", ""), task_key = "drift_task", task = lookup(var.drift_roles, "drift_task", ""), network = "training" }
+    promote  = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training" }
+    serve    = { execution = lookup(var.train_roles, "execution", ""), task_key = "serve_task", task = lookup(var.serve_roles, "serve_task", ""), network = "training" }
+    metadata = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse" }
   }
   host_selected = {
     for family, spec in local.host_specs : family => spec
@@ -236,8 +230,8 @@ locals {
   }
   host_resources = {
     for family, spec in local.host_selected : family => {
-      cpu    = min(spec.shape.cpu, local.host_cpu_cap)
-      memory = min(spec.shape.memory, local.host_memory_cap)
+      cpu    = local.host_cpu_cap
+      memory = local.host_memory_cap
     }
   }
   host_run_variables = {

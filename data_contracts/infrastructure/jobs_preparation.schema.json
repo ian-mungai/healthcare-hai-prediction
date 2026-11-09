@@ -682,26 +682,6 @@
           "type": "string",
           "pattern": "^(?!.*\\.\\.)(?!.*//)/data/job_scratch(/[A-Za-z0-9_]([A-Za-z0-9_./-]*[A-Za-z0-9_])?)?$"
         },
-        "host_metadata_resources": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "cpu",
-            "memory"
-          ],
-          "properties": {
-            "cpu": {
-              "type": "integer",
-              "minimum": 256,
-              "maximum": 2048
-            },
-            "memory": {
-              "type": "integer",
-              "minimum": 512,
-              "maximum": 4096
-            }
-          }
-        },
         "host_openmetadata_api": {
           "type": [
             "string",

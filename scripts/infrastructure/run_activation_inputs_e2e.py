@@ -295,23 +295,6 @@ ROWS: list[Row] = [
     ),
     Row(
         "jobs",
-        "host_metadata_resources",
-        {"cpu": 256, "memory": 4096},
-        {"cpu": "256", "memory": 4096},
-        {"cpu": 1024, "memory": 2048},
-        (
-            {"cpu": 255, "memory": 2048},
-            {"cpu": 2049, "memory": 2048},
-            {"cpu": 1024, "memory": 511},
-            {"cpu": 1024, "memory": 4097},
-            {"cpu": 1024.5, "memory": 2048},
-            {"cpu": 1024, "memory": 2048.5},
-            {"cpu": 1024},
-            {"memory": 2048},
-        ),
-    ),
-    Row(
-        "jobs",
         "host_openmetadata_api",
         "http://172.31.0.7:8585/api",
         5,
@@ -363,12 +346,15 @@ EXEMPT = {
     "allow_destructive_teardown": "teardown guard of the platform stack, never an activation",
     "bronze_writer_prepared": "required key of the committed IAM preparation file",
     "job_writer_e2e_prepared": "required key of the committed IAM preparation file",
+    "host_job_memory_mib": "rendered by render_jobs_config from the services stack output host_job_memory_mib",
 }
 TOOL = (
     f"#!{sys.executable}\nimport json, os, sys\n"
     "args = sys.argv[1:]\n"
     "with open(os.environ['STANDIN_CALLS'], 'a') as log:\n    log.write(json.dumps(args) + '\\n')\n"
-    "if 'output' in args:\n    sys.stdout.write(open(os.environ['STANDIN_OUTPUTS']).read())\n"
+    "if 'output' in args:\n    outputs = json.load(open(os.environ['STANDIN_OUTPUTS']))\n"
+    "    named = args[-1] if args[-1] not in ('output', '-json') else None\n"
+    "    sys.stdout.write(json.dumps(outputs[named]['value'] if named else outputs))\n"
     "elif 'show' in args:\n    sys.stdout.write(open(os.environ['STANDIN_PLAN']).read())\n"
 )
 
@@ -441,7 +427,8 @@ class Workspace:
         self.plan = self.root / "standin_plan.json"
         self.calls = self.root / "terraform_calls.jsonl"
         self.outputs = self.root / "standin_outputs.json"
-        self.outputs.write_text(json.dumps({name: {"value": value} for name, value in SERVICES_FOUNDATION.items()}))
+        # The platform outputs the services renderer reads, and the services output host_job_memory_mib the jobs renderer reads for host jobs.
+        self.outputs.write_text(json.dumps({name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_job_memory_mib": 23552}.items()}))
         for stack in ("services",):
             (self.root / STACKS[stack] / "images.auto.tfvars.json").parent.mkdir(parents=True, exist_ok=True)
             (self.root / STACKS[stack] / "images.auto.tfvars.json").write_text(json.dumps({"image_digests": {}}))

@@ -406,6 +406,30 @@ variable "host_memory_mib" {
   }
 }
 
+variable "host_system_reserve_mib" {
+  description = "Memory in MiB of the host that no task gets: the operating system, Docker and the ECS agent. The job room (output host_job_memory_mib) is the host memory less this reserve and the always-on service reservations."
+  type        = number
+  default     = 2048
+  nullable    = false
+
+  validation {
+    condition     = var.host_system_reserve_mib >= 1024 && var.host_system_reserve_mib == floor(var.host_system_reserve_mib)
+    error_message = "Keep at least 1024 MiB, a whole number, for the operating system, Docker and the ECS agent."
+  }
+}
+
+variable "host_job_memory_floor_mib" {
+  description = "Smallest job room in MiB the services may leave on the host; a plan that leaves less is refused at the host_job_memory_mib output."
+  type        = number
+  default     = 4096
+  nullable    = false
+
+  validation {
+    condition     = var.host_job_memory_floor_mib >= 1024 && var.host_job_memory_floor_mib == floor(var.host_job_memory_floor_mib)
+    error_message = "Use a whole number of at least 1024 MiB."
+  }
+}
+
 variable "other_services_reserve_mib" {
   description = "Memory in MiB that stays free of control-plane reservations: the operating system, the ECS agent and the later services (MLflow, prediction API, Streamlit). The monitoring containers count in the control-plane reservations when monitoring_enabled is true."
   type        = number

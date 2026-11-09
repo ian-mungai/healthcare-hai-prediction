@@ -262,6 +262,67 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         (binary / "plan.json").write_text(json.dumps(altered))
         result = run_command(sys.executable, args, cwd=workspace, env=env, timeout=15)
         checks[name] = result.returncode == (0 if accepted else 2) and (accepted or "saved jobs plan" in result.stderr)
+    checks.update(_host_room_cases(workspace, environment_file, prep, output, document, values))
+    return checks
+
+
+def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output: Path, document: dict[str, Any], values: dict[str, Any]) -> dict[str, bool]:
+    """Host jobs get the job room that the services stack outputs; the renderer refuses a missing or unusable figure and writes nothing."""
+    binary = workspace / "host_room_bin"
+    binary.mkdir()
+    tool = binary / "terraform"
+    calls = binary / "calls.jsonl"
+
+    def answer(text: str, code: int) -> None:
+        tool.write_text(
+            f"#!{sys.executable}\nimport json, sys\n"
+            f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            f"sys.stdout.write({text!r})\nsys.exit({code})\n"
+        )
+        tool.chmod(0o700)
+
+    env = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
+
+    def invoke(variables: dict[str, Any]) -> Any:
+        prep.write_text(json.dumps(document | {"variables": variables}, sort_keys=True) + "\n")
+        return run_command(
+            sys.executable,
+            [
+                "-m",
+                "scripts.infrastructure.render_jobs_config",
+                "--env-file",
+                str(environment_file),
+                "--preparation-inputs",
+                str(prep),
+                "--preparation-sha256",
+                hashlib.sha256(prep.read_bytes()).hexdigest(),
+            ],
+            cwd=workspace,
+            env=env,
+            timeout=15,
+        )
+
+    host_variables = document["variables"] | {"host_jobs_enabled": True}
+    checks: dict[str, bool] = {}
+    answer("23552", 0)
+    result = invoke(host_variables)
+    asked = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+    checks["host_jobs_get_the_services_job_room"] = (
+        result.returncode == 0
+        and json.loads(output.read_text()) == values | host_variables | {"host_job_memory_mib": 23552}
+        and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_job_memory_mib"]]
+    )
+    rendered = output.read_bytes()
+    for name, text, code in (("a_failed_services_output", "", 1), ("a_job_room_that_is_not_a_number", '"big"', 0), ("a_job_room_below_one_job", "2048", 0)):
+        answer(text, code)
+        result = invoke(host_variables)
+        checks["host_room_refuses_" + name] = result.returncode == 2 and "job room" in result.stderr and output.read_bytes() == rendered
+    calls.unlink(missing_ok=True)
+    answer("23552", 0)
+    result = invoke(document["variables"])
+    checks["jobs_without_host_jobs_read_no_services_output"] = (
+        result.returncode == 0 and not calls.exists() and "host_job_memory_mib" not in json.loads(output.read_text())
+    )
     return checks
 
 

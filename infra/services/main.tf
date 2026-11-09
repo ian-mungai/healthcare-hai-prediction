@@ -207,6 +207,7 @@ locals {
   reserved_memory_mib = sum([for service in local.services : sum([for container in service.containers : container.memoryReservation])])
   hard_memory_mib     = sum([for container in local.all_containers : container.memory])
   memory_budget_mib   = var.host_memory_mib - var.other_services_reserve_mib
+  host_job_memory_mib = var.host_memory_mib - var.host_system_reserve_mib - local.reserved_memory_mib
   secret_arns_used    = sort(distinct(flatten([for container in local.all_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   serving_secret_arns = sort(distinct(flatten([for container in local.serving_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   other_secret_arns   = sort(distinct(flatten([for container in local.other_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
@@ -254,8 +255,8 @@ resource "aws_ecs_task_definition" "service" {
     }
 
     precondition {
-      condition     = local.hard_memory_mib <= var.host_memory_mib - 2048
-      error_message = "If every container, including the one-shot tasks, reached its hard memory limit, the host would keep less than 2 GiB for the operating system and the ECS agent."
+      condition     = local.hard_memory_mib <= var.host_memory_mib - var.host_system_reserve_mib
+      error_message = "If every container, including the one-shot tasks, reached its hard memory limit, the host would keep less than its system reserve for the operating system and the ECS agent."
     }
 
     precondition {
