@@ -1279,8 +1279,8 @@ def guard_cases(report: Report, build: LocalBuild, first: Path, base: Path) -> N
             "E03",
             "H3",
             "an extract whose manifest or pin differs from the accepted digest is refused",
-            refuses(lambda: features_build.import_gold(scratch, "0" * 64, pin_sha, RUN, connection), "differs")
-            and refuses(lambda: features_build.import_gold(scratch, manifest_sha, "0" * 64, RUN, connection), "differs"),
+            refuses(lambda: features_build.import_gold(scratch, "0" * 64, pin_sha, RUN, connection, 60), "differs")
+            and refuses(lambda: features_build.import_gold(scratch, manifest_sha, "0" * 64, RUN, connection, 60), "differs"),
         )
         victim = next((scratch / "gold_input").glob("*/part-00000.parquet"))
         victim.chmod(0o644)
@@ -1289,18 +1289,14 @@ def guard_cases(report: Report, build: LocalBuild, first: Path, base: Path) -> N
             "E03",
             "H3",
             "an exported file changed after the manifest is refused",
-            refuses(lambda: features_build.import_gold(scratch, manifest_sha, pin_sha, RUN, connection), "changed before import"),
+            refuses(lambda: features_build.import_gold(scratch, manifest_sha, pin_sha, RUN, connection, 60), "changed before import"),
         )
-        features_build.COPY_SECONDS, saved = -1, features_build.COPY_SECONDS
-        try:
-            report.case(
-                "E03",
-                "H15",
-                "the import copy loop stops at its deadline",
-                refuses(lambda: features_build.import_gold(scratch, manifest_sha, pin_sha, RUN, connection), "exceeded"),
-            )
-        finally:
-            features_build.COPY_SECONDS = saved
+        report.case(
+            "E03",
+            "H15",
+            "the import copy loop stops at its deadline",
+            refuses(lambda: features_build.import_gold(scratch, manifest_sha, pin_sha, RUN, connection, -1), "exceeded"),
+        )
     finally:
         connection.close()
     try:

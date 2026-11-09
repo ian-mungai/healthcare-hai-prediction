@@ -2,9 +2,9 @@
 
     .venv/bin/python -m scripts.lakehouse.run_task_capacity_cases
 
-The cases cover four things. The reader (cgroup v1 and v2 files, an unlimited cgroup, a tiny one, no readable source, the CPU quota and the cpuset). The
+The cases cover five things. The reader (cgroup v1 and v2 files, an unlimited cgroup, a tiny one, no readable source, the CPU quota and the cpuset). The
 derived DuckDB memory, Spark heap, threads and spill cap, with the exact figures of the 16 GiB and 64 GiB tasks. The clipping of an explicit override.
-And the entry points that call the reader before an engine starts."""
+The entry points that call the reader before an engine starts. And the deadline of the features build, derived from what is left of the task deadline."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestration.pipeline_protocol import PipelineError
+from scripts.features import features_build
 from scripts.lakehouse import ecs_engine, layer_run, task_capacity
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -302,6 +303,65 @@ def case_the_layers_choose_the_profile_by_phase(root: Path) -> None:
         {layer_run.capacity_profile(layer, phase) for layer in layer_run.PHASES for phase in layer_run.PHASES[layer] if (layer, phase) != ("features", "build")}
         == {"default"}
     )
+
+
+def started_job(folder: Path, seconds_ago: int) -> layer_run.Job:
+    (folder / "task_started").write_text(f"{layer_run.time.time() - seconds_ago:.0f}\n")
+    return layer_run.Job("features", "20261109T000000Z-0a1b2c3d", "real", folder / "code")
+
+
+def case_the_layer_passes_the_phase_deadline_to_the_build(root: Path) -> None:
+    job = started_job(root, 600)
+    left = layer_run.task_seconds_left(job)
+    with mock.patch.object(layer_run, "STEP_SECONDS", 10**6):
+        span = float(layer_run.phase_deadline_environment(job)["HAI_PHASE_DEADLINE_EPOCH"]) - layer_run.time.time()
+    expect(abs(span - left) < 5 and left < 21600 - 590, (span, left))
+    with mock.patch.object(layer_run, "STEP_SECONDS", 3600):
+        capped = float(layer_run.phase_deadline_environment(job)["HAI_PHASE_DEADLINE_EPOCH"]) - layer_run.time.time()
+    expect(3590 < capped < 3602, "a phase never outlives the limit of one step of the driver")
+    expect_error(lambda: layer_run.phase_deadline_environment(started_job(root, 30000)), "deadline")
+
+
+def case_features_build_limits_come_from_the_remaining_deadline(root: Path) -> None:
+    now = [1000.0]
+    budget = features_build.BuildBudget(1000.0 + 21000, lambda: now[0])
+    expect(budget.limit("copy") == 15750 * 600 // 8400 == 1125, budget.limit("copy"))
+    now[0] += 500
+    expect(budget.limit("seed") == 15250 * 900 // 7800, budget.limit("seed"))
+    now[0] += 3000
+    expect(budget.limit("build") == 15750 - 3500, "the build gets all that is left of the share")
+    expect(budget.limit("build") > 3300, "today's run needed more than the fixed 3300 seconds it had")
+
+
+def case_features_build_keeps_a_reserve_for_the_later_phases(root: Path) -> None:
+    now = [0.0]
+    budget = features_build.BuildBudget(20000.0, lambda: now[0])
+    now[0] = 14999.0
+    expect(budget.limit("build") == 1, "the share of the phases after the build is never given to the build")
+    now[0] = 15000.0
+    expect_error(lambda: budget.limit("build"), "no time")
+
+
+def case_features_build_refuses_a_deadline_that_is_too_short(root: Path) -> None:
+    expect_error(lambda: features_build.BuildBudget(600.0, lambda: 0.0), "left")
+    expect_error(lambda: features_build.BuildBudget(-5.0, lambda: 0.0), "left")
+    features_build.BuildBudget(4000.0, lambda: 0.0)
+
+
+def case_features_build_reads_the_deadline_from_the_environment(root: Path) -> None:
+    now = 5000.0
+    found = features_build.BuildBudget.from_environment({"HAI_PHASE_DEADLINE_EPOCH": str(now + 8000)}, lambda: now)
+    expect(found.limit("copy") == int(8000 * 75 // 100 * 600 // 8400), found.limit("copy"))
+    default = features_build.BuildBudget.from_environment({}, lambda: now)
+    expect(default.deadline == now + 4 * 3600, "without a task deadline the budget is one step of the driver")
+    expect_error(lambda: features_build.BuildBudget.from_environment({"HAI_PHASE_DEADLINE_EPOCH": "soon"}, lambda: now), "HAI_PHASE_DEADLINE_EPOCH")
+
+
+def case_features_build_names_the_derivation_when_a_step_runs_long(root: Path) -> None:
+    budget = features_build.BuildBudget(21000.0, lambda: 0.0)
+    expect("21000" in budget.describe("copy") and "1125" in budget.describe("copy"), budget.describe("copy"))
+    source = (ROOT / "scripts/features/features_build.py").read_text()
+    expect(not any(name in source for name in ("COPY_SECONDS", "SEED_SECONDS", "BUILD_SECONDS", "WORKER_SECONDS")), "a fixed limit is left")
 
 
 CASES = [value for name, value in sorted(globals().items()) if name.startswith("case_")]

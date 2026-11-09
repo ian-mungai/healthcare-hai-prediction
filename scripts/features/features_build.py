@@ -29,7 +29,7 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -47,10 +47,13 @@ GOLD_PLAN = "data_contracts/lakehouse/gold_contract.json"
 IMPORT_SQL = 'create or replace table main."{table}" as select * from read_parquet(?)'
 ATTACH_SQL = "attach '{path}' as {catalog} (read_only)"
 MATERIALIZE_SQL = 'create table main."{table}" as select * from {catalog}.main."{table}"'
-COPY_SECONDS = 600
-SEED_SECONDS = 900
-BUILD_SECONDS = 3300
-WORKER_SECONDS = 1800
+# The steps of the build in order, each with the weight of its share of the time left. The weights are the proportions of the fixed limits that the steps had
+# (600, 900, 1800, 1800 and 3300 seconds), so a step that needs more than its share finds the time the earlier steps did not use.
+STEPS = (("copy", 600), ("seed", 900), ("restrict", 1800), ("stage_two", 1800), ("build", 3300))
+RESERVE_PERCENT = 25  # the share of the time to the phase deadline that stays for the phases after the build: validate, export, publish, upload and feast
+PHASE_FLOOR_SECONDS = 1800  # a build with less than this to use is refused at once, by name, instead of failing at its last step
+DEFAULT_PHASE_SECONDS = 4 * 3600  # the time to the deadline when no driver sets one: the longest the layer driver lets a phase run
+DEADLINE_VARIABLE = "HAI_PHASE_DEADLINE_EPOCH"  # set by scripts.lakehouse.layer_run: the time (epoch seconds) by which this phase must end
 DBT_CODE = "import sys; from dbt.cli.main import dbtRunner; sys.exit(0 if dbtRunner().invoke(sys.argv[1:]).success else 1)"
 INPUTS_TABLE = "feature_build_inputs"
 OWN_SNAPSHOT_SQL = (
@@ -65,14 +68,63 @@ INPUTS_SQL = (
 RECEIPT_SQL = "create table main.feature_build_receipt (node varchar, resource_type varchar, status varchar)"
 
 
+class BuildBudget:
+    """The time each step of the build may take, derived from the deadline of the phase instead of fixed.
+
+    The build may use ``100 - RESERVE_PERCENT`` percent of the time left when it starts. Each step, when it starts, gets the share of what is still left of that
+    time that its weight is of the weights of the steps not yet run, so the last step (the dbt build) gets all that remains."""
+
+    def __init__(self, deadline: float, clock: Callable[[], float] = time.time) -> None:
+        self.deadline = deadline
+        self.clock = clock
+        self.left = deadline - clock()
+        usable = self.left * (100 - RESERVE_PERCENT) / 100
+        if usable < PHASE_FLOOR_SECONDS:
+            raise PipelineError(
+                f"{max(self.left, 0):.0f} seconds are left to the phase deadline, so the build may use {max(usable, 0):.0f}: "
+                f"less than the {PHASE_FLOOR_SECONDS} it needs at least"
+            )
+        self.usable = usable
+        self.usable_end = clock() + usable
+
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str], clock: Callable[[], float] = time.time) -> BuildBudget:
+        text = environ.get(DEADLINE_VARIABLE)
+        if text is None:
+            return cls(clock() + DEFAULT_PHASE_SECONDS, clock)
+        try:
+            deadline = float(text)
+        except ValueError:
+            raise PipelineError(f"{DEADLINE_VARIABLE} is {text!r}, not a time in epoch seconds") from None
+        return cls(deadline, clock)
+
+    def limit(self, step: str) -> int:
+        """The seconds the step may run, from the time left now. Refuses a step that starts after the build's share has ended."""
+        remaining = self.usable_end - self.clock()
+        if remaining < 1:
+            raise PipelineError(f"no time is left for {step}: the build's share of the phase deadline ended")
+        names = [name for name, _ in STEPS]
+        later = sum(weight for name, weight in STEPS[names.index(step) :])
+        return max(1, int(remaining) * dict(STEPS)[step] // later)
+
+    def describe(self, step: str) -> str:
+        share = f"{self.usable:.0f} seconds that the build may use, {100 - RESERVE_PERCENT}% of the {self.left:.0f} left to the phase deadline"
+        return f"{step} may run {self.limit(step)} seconds: its share of the {share}"
+
+    def seconds(self, step: str) -> int:
+        """The limit of a step, stated in the log before the step starts."""
+        sys.stderr.write(f"features build: {self.describe(step)}\n")
+        return self.limit(step)
+
+
 def published_tables(root: Path) -> list[str]:
     """The tables the features contract publishes, in name order."""
     document = json.loads((root / CONTRACT).read_text())
     return sorted(document["publish"]["tables"])
 
 
-def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connection: Any) -> list[str]:
-    """Materialize the exported gold snapshot bytes into the run's database; returns the table names."""
+def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connection: Any, seconds: int) -> list[str]:
+    """Materialize the exported gold snapshot bytes into the run's database within ``seconds``; returns the table names."""
     manifest, digest = read_record(folder / INPUT_NAME, "manifest.json")
     if digest != expected or manifest.get("pins_sha256") != pin_sha or manifest.get("run_id") != run_id:
         raise PipelineError("the gold extract manifest differs from its accepted input")
@@ -83,7 +135,7 @@ def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connecti
     with tempfile.TemporaryDirectory(prefix="gold_import_", dir=folder) as temporary:
         private = Path(temporary)
         copied: dict[str, list[str]] = {safe_name(name): [] for name in tables}
-        deadline = time.monotonic() + COPY_SECONDS
+        deadline = time.monotonic() + seconds
         for name, sha in sorted(files.items()):
             parts = Path(name).parts
             if len(parts) != 2 or parts[0] not in copied or not parts[1].endswith(".parquet") or ".." in parts:
@@ -98,7 +150,7 @@ def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connecti
                 with destination.open("xb") as writer, os.fdopen(descriptor, "rb", closefd=False) as reader:
                     while block := reader.read(1 << 20):
                         if time.monotonic() >= deadline:
-                            raise PipelineError(f"gold snapshot import exceeded {COPY_SECONDS} seconds")
+                            raise PipelineError(f"gold snapshot import exceeded {seconds} seconds")
                         digest_bytes.update(block)
                         writer.write(block)
             finally:
@@ -138,9 +190,9 @@ def run_dbt(arguments: list[str], root: Path, label: str, seconds: int) -> None:
     run_child(["-c", DBT_CODE, *arguments], root, f"dbt {label}", seconds)
 
 
-def run_worker(root: Path, action: str, *arguments: str) -> None:
-    """One DuckDB step of ``feature_columns`` in a child process."""
-    run_child(["-m", "scripts.lakehouse.feature_columns", "--worker", action, *arguments], root, f"worker {action}", WORKER_SECONDS)
+def run_worker(root: Path, action: str, seconds: int, *arguments: str) -> None:
+    """One DuckDB step of ``feature_columns`` in a child process, within ``seconds``."""
+    run_child(["-m", "scripts.lakehouse.feature_columns", "--worker", action, *arguments], root, f"worker {action}", seconds)
 
 
 def check_results(work: Path, root: Path) -> tuple[str, list[tuple[str, str, str]]]:
@@ -205,6 +257,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     check_gold_pin(gold_pin, args.run, args.mode, set(load_plan(root / GOLD_PLAN).tables))
     if pin_sha != args.input_sha256:
         raise PipelineError("the gold pin differs from the accepted input digest")
+    budget = BuildBudget.from_environment(os.environ)
     work = folder / "features_work"
     if work.is_symlink():
         raise PipelineError("the build work folder is a symlink")
@@ -217,7 +270,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             connection.execute("SET memory_limit = ?", [os.environ["DUCKDB_MEMORY_LIMIT"]])
         if os.environ.get("JOB_THREADS"):
             connection.execute("SET threads = ?", [int(os.environ["JOB_THREADS"])])
-        imported = import_gold(folder, args.extract_sha256, args.input_sha256, args.run, connection)
+        imported = import_gold(folder, args.extract_sha256, args.input_sha256, args.run, connection, budget.seconds("copy"))
     finally:
         connection.close()
     if not set(imported) <= contract_tables:
@@ -225,18 +278,18 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     project = work / "dbt"
     columns.copy_project(root, project, contract=True)
     seed_profile = write_profile(work / "seed_profiles", full, locked=False)
-    run_dbt(["seed", "--select", "resource_type:seed", *columns.dbt_arguments(project, seed_profile, work / "seed")], root, "seed", SEED_SECONDS)
+    run_dbt(["seed", "--select", "resource_type:seed", *columns.dbt_arguments(project, seed_profile, work / "seed")], root, "seed", budget.seconds("seed"))
     seeds = sorted({path.stem for folder_name in (columns.FEATURE_SEEDS, columns.LIVE_SEEDS) for path in (root / folder_name).glob("*.csv")})
-    run_worker(root, "restrict", str(full), str(shell), str(root / GOLD_PLAN), *seeds)
+    run_worker(root, "restrict", budget.seconds("restrict"), str(full), str(shell), str(root / GOLD_PLAN), *seeds)
     filters = sorted(path.stem for path in (root / columns.FILTER_FOLDER).glob("*.sql") if columns.FILTER_NAME.fullmatch(path.stem))
-    run_worker(root, "stage_two", str(shell), str(stage), *filters)
+    run_worker(root, "stage_two", budget.seconds("stage_two"), str(shell), str(stage), *filters)
     profile = write_profile(work / "profiles", stage, locked=True)
     filter_paths = [f"path:{columns.FILTER_PATH}/{name}.sql" for name in filters]
     run_dbt(
         ["build", "--select", "tag:features", "--exclude", "resource_type:seed", *filter_paths, *columns.dbt_arguments(project, profile, work / "build")],
         root,
         "build tag:features",
-        BUILD_SECONDS,
+        budget.seconds("build"),
     )
     invocation, rows = check_results(work / "build", root)
     schema_sha = feature_schema.schema_sha256(root)

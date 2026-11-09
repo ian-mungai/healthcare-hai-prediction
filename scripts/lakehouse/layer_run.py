@@ -75,6 +75,7 @@ BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path g
 UPLOAD_PREFIX = "lakehouse/layer_runs"
 JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job, as the broker enforces it
 STARTED_FILE = "task_started"  # in the work folder: the init container writes the start time of the whole task
+PHASE_DEADLINE = "HAI_PHASE_DEADLINE_EPOCH"  # read by scripts.features.features_build: the time by which the phase must end
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")  # what the publisher emits: the decimal string of a sum cast to DECIMAL(38, 0)
 BRONZE_TABLES = Path(__file__).resolve().parents[2] / "config/lakehouse/bronze_tables.json"
 INPUT_LAYER = {"silver": "bronze", "gold": "silver", "features": "gold"}  # the layer whose data each layer reads
@@ -213,6 +214,14 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
 def capacity_profile(layer: str, phase: str) -> str:
     """The thread profile of a phase for ``task_capacity``: the features build holds more memory for each thread than any other phase."""
     return "features_build" if (layer, phase) == ("features", "build") else "default"
+
+
+def phase_deadline_environment(job: Job) -> dict[str, str]:
+    """The absolute time (epoch seconds) by which the phase module must end: what is left of the task deadline, and no more than one step of this driver."""
+    left = min(task_seconds_left(job), STEP_SECONDS)
+    if left <= 0:
+        raise StepError("the task deadline has passed")
+    return {PHASE_DEADLINE: f"{time.time() + left:.0f}"}
 
 
 def task_seconds_left(job: Job) -> float:
@@ -489,7 +498,7 @@ def build(job: Job) -> None:
     arguments: list[str | Path] = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", project]
     arguments += ["--source-sha256", source, "--input-sha256", input_sha, *(["--extract-sha256", extract] if extract else [])]
     if job.layer == "features":
-        run_module(job, "scripts.features.features_build", arguments, environment)
+        run_module(job, "scripts.features.features_build", arguments, environment | phase_deadline_environment(job))
     else:
         run_module(job, "scripts.lakehouse.pipeline_build", ["--layer", job.layer, *arguments], environment)
 
