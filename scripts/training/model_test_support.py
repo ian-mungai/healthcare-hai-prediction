@@ -226,54 +226,64 @@ class Tail:
         return math.exp(-max(0.0, float(statistic)))
 
 
-def upper_incomplete_gamma(shape: float, x: float) -> float:
-    """Regularized upper incomplete gamma function Q(shape, x), by series below shape + 1 and by continued fraction above."""
+def regularized_incomplete_beta(x: float, a: float, b: float) -> float:
+    """Regularized incomplete beta function I_x(a, b), by the continued fraction on the faster-converging side."""
     if x <= 0:
+        return 0.0
+    if x >= 1:
         return 1.0
-    prefactor = math.exp(-x + shape * math.log(x) - math.lgamma(shape))
-    if x < shape + 1:
-        term = total = 1 / shape
-        denominator = shape
-        while abs(term) > abs(total) * 1e-16:
-            denominator += 1
-            term *= x / denominator
-            total += term
-        return 1 - total * prefactor
+    if x > (a + 1) / (a + b + 2):
+        return 1.0 - regularized_incomplete_beta(1.0 - x, b, a)
+    prefactor = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x)) / a
     tiny = 1e-300
-    b = x + 1 - shape
-    c = 1 / tiny
-    d = 1 / b
+    c, d = 1.0, 1.0 - (a + b) * x / (a + 1)
+    d = 1 / (tiny if abs(d) < tiny else d)
     fraction = d
     for step in range(1, 10000):
-        a = -step * (step - shape)
-        b += 2
-        d = a * d + b
-        d = tiny if abs(d) < tiny else d
-        c = b + a / c
-        c = tiny if abs(c) < tiny else c
-        d = 1 / d
-        fraction *= d * c
+        for numerator in (
+            step * (b - step) * x / ((a + 2 * step - 1) * (a + 2 * step)),
+            -(a + step) * (a + b + step) * x / ((a + 2 * step) * (a + 2 * step + 1)),
+        ):
+            d = 1 + numerator * d
+            d = 1 / (tiny if abs(d) < tiny else d)
+            c = 1 + numerator / c
+            c = tiny if abs(c) < tiny else c
+            fraction *= d * c
         if abs(d * c - 1) < 1e-15:
             break
     return prefactor * fraction
 
 
-class ExactChiSquare:
-    """Exact chi-square upper tail computed with the standard library, recording every request."""
+def upper_f_tail(statistic: float, numerator: float, denominator: float) -> float:
+    """Exact upper tail of the F distribution with the given degrees of freedom, from the incomplete beta function."""
+    if statistic <= 0:
+        return 1.0
+    return regularized_incomplete_beta(denominator / (denominator + numerator * statistic), denominator / 2, numerator / 2)
+
+
+class ExactF:
+    """Exact F upper tail computed with the standard library, recording every request."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[float, float]] = []
+        self.calls: list[tuple[float, float, float]] = []
 
-    def sf(self, statistic: float, degrees: float) -> float:
-        self.calls.append((float(statistic), float(degrees)))
-        return upper_incomplete_gamma(degrees / 2, float(statistic) / 2)
+    def sf(self, statistic: float, numerator: float, denominator: float) -> float:
+        self.calls.append((float(statistic), float(numerator), float(denominator)))
+        return upper_f_tail(float(statistic), float(numerator), float(denominator))
+
+
+class ForbiddenTail:
+    """A tail that fails the case when read, for a statistic that must not use this reference distribution."""
+
+    def sf(self, statistic: float, *degrees: float) -> float:
+        raise AssertionError(f"a chi-square tail was read with statistic {statistic} and degrees {degrees}")
 
 
 @contextmanager
-def exact_chi_square() -> Any:
-    """Replace only the scipy tail with the exact standard-library chi-square, for statistics whose size and power are checked."""
-    tail = ExactChiSquare()
-    with patch.dict(sys.modules, {"scipy.stats": SimpleNamespace(chi2=tail)}):
+def exact_f() -> Any:
+    """Replace only the scipy tail with the exact standard-library F tail, for statistics whose size and power are checked."""
+    tail = ExactF()
+    with patch.dict(sys.modules, {"scipy.stats": SimpleNamespace(f=tail, chi2=ForbiddenTail())}):
         yield tail
 
 

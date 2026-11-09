@@ -294,8 +294,9 @@ def mundlak(y: Array, slopes: Array, names: Sequence[str], entities: Sequence[st
     """Mundlak test: do the hospital means of the time-varying slopes explain the outcome beyond the slopes themselves?
 
     The outcome is regressed on a constant, the time-varying predictors, their hospital means and a dummy for every window year after the earliest.
-    The test is the joint Wald test that the coefficients of the hospital means are zero, with hospital-clustered errors.
-    Its reference is a chi-square with one degree of freedom per mean. A hospital effect correlated with a regressor makes it reject.
+    The test is the joint Wald test W that the coefficients of the hospital means are zero, with hospital-clustered errors.
+    Its reference is F = W / q on q and G - 1 degrees of freedom, with q the number of tested slopes and G the number of hospitals.
+    A hospital effect correlated with a regressor makes it reject.
     Year-effect columns of the design are replaced by the dummies built here.
     """
     y, entity_labels, year_values = np.asarray(y, dtype=np.float64), np.asarray(entities), np.asarray(years)
@@ -329,16 +330,19 @@ def mundlak(y: Array, slopes: Array, names: Sequence[str], entities: Sequence[st
     if not np.isfinite(eigenvalues).all() or eigenvalues[0] <= 1e-10 * max(eigenvalues[-1], 1e-300):
         return {"status": "not_estimable", "reason": "Mundlak clustered covariance of the hospital means is singular or indefinite", "clusters": clusters}
     statistic = float(gamma @ np.linalg.solve(variance, gamma))
+    f_statistic = statistic / len(tested)
     return {
         "status": "fitted",
         "test": "mundlak",
         "statistic": statistic,
-        "degrees_of_freedom": len(tested),
-        "p_value": float(importlib.import_module("scipy.stats").chi2.sf(statistic, len(tested))),
+        "f_statistic": f_statistic,
+        "numerator_degrees_of_freedom": len(tested),
+        "denominator_degrees_of_freedom": clusters - 1,
+        "p_value": float(importlib.import_module("scipy.stats").f.sf(f_statistic, len(tested), clusters - 1)),
         "clusters": clusters,
         "rows": len(y),
         "tested_columns": tested,
         "year_effect_years": later_years,
         "covariance": "cluster_robust_cr1",
-        "reference_distribution": "chi_square",
+        "reference_distribution": "f",
     }

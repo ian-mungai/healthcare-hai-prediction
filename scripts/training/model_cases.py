@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from scripts.training.model_test_support import SpatialOLS, exact_chi_square, libraries, upper_incomplete_gamma
+from scripts.training.model_test_support import SpatialOLS, exact_f, libraries, upper_f_tail
 
 
 def require(condition: Any, reason: str) -> None:
@@ -528,27 +528,50 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         gamma, index = beta[list(tested)], np.ix_(list(tested), list(tested))
         return float(gamma @ np.linalg.solve(clustered[index], gamma)), float(gamma @ np.linalg.solve(unadjusted[index], gamma))
 
-    def exact_chi_square_tail() -> None:
-        for critical, degrees in ((3.841459, 1), (5.991465, 2), (12.591587, 6), (18.307038, 10), (124.342, 100)):
-            require(abs(upper_incomplete_gamma(degrees / 2, critical / 2) - 0.05) < 2e-6, f"chi-square tail is wrong at {degrees} degrees of freedom")
-        require(math.isclose(upper_incomplete_gamma(1.0, 2.0), math.exp(-2.0), rel_tol=1e-12), "chi-square tail is wrong for two degrees of freedom")
+    def exact_f_tail() -> None:
+        for critical, numerator, denominator in ((4.9646, 1, 10), (4.1028, 2, 10), (2.7109, 5, 20), (2.9223, 3, 30), (2.5252, 4, 60), (3.0718, 2, 120)):
+            require(
+                abs(upper_f_tail(critical, numerator, denominator) - 0.05) < 2e-5,
+                f"F tail is wrong at ({numerator}, {denominator}) degrees of freedom",
+            )
+        for denominator in (3, 49, 299):
+            for value in (0.1, 1.0, 7.3):
+                require(
+                    math.isclose(upper_f_tail(value, 2, denominator), (1 + 2 * value / denominator) ** (-denominator / 2), rel_tol=1e-10),
+                    f"F tail is wrong for two numerator degrees of freedom at {denominator}",
+                )
+        for numerator in (4, 6):
+            require(
+                math.isclose(upper_f_tail(1.7, numerator, 2), 1 - (numerator * 1.7 / (2 + numerator * 1.7)) ** (numerator / 2), rel_tol=1e-12),
+                f"F tail is wrong for two denominator degrees of freedom at {numerator}",
+            )
+        require(upper_f_tail(0.0, 3, 5) == 1.0, "F tail is not one at zero")
 
     def mundlak_rejects_correlated_effect() -> None:
-        with exact_chi_square() as tail:
+        with exact_f() as tail:
             result = research_tests.mundlak(*mundlak_panel(11, correlation=0.8))
         require(result["status"] == "fitted", f"correlated panel was not estimable: {result}")
         require(result["p_value"] < 1e-6, "Mundlak test missed a hospital effect correlated with a regressor")
-        require(result["degrees_of_freedom"] == 2 and result["clusters"] == 300 and result["rows"] == 1200, "Mundlak record has the wrong size fields")
+        require(result["clusters"] == 300 and result["rows"] == 1200, "Mundlak record has the wrong size fields")
+        require(
+            result["numerator_degrees_of_freedom"] == 2 and result["denominator_degrees_of_freedom"] == 299,
+            f"Mundlak record has the wrong F degrees of freedom: {result}",
+        )
         require(
             result["tested_columns"] == ["first", "second"]
             and result["covariance"] == "cluster_robust_cr1"
-            and result["reference_distribution"] == "chi_square",
-            "Mundlak record has the wrong tested columns",
+            and result["reference_distribution"] == "f"
+            and "degrees_of_freedom" not in result,
+            "Mundlak record has the wrong tested columns or reference distribution",
         )
-        require(tail.calls == [(result["statistic"], 2.0)], "Mundlak tail received the wrong statistic or degrees of freedom")
+        require(
+            math.isclose(result["f_statistic"], result["statistic"] / 2, rel_tol=1e-12),
+            "Mundlak F statistic is not the Wald statistic divided by the tested slopes",
+        )
+        require(tail.calls == [(result["f_statistic"], 2.0, 299.0)], f"Mundlak tail received the wrong statistic or degrees of freedom: {tail.calls}")
 
     def mundlak_keeps_null_without_correlation() -> None:
-        with exact_chi_square():
+        with exact_f():
             single = research_tests.mundlak(*mundlak_panel(12, correlation=0.0))
             p_values = [research_tests.mundlak(*mundlak_panel(seed, correlation=0.0))["p_value"] for seed in range(100, 160)]
         require(single["status"] == "fitted" and single["p_value"] > 0.05, f"Mundlak test rejected an uncorrelated hospital effect at seed 12: {single}")
@@ -568,7 +591,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             bool(np.all((flat_ratio > 0.85) & (flat_ratio < 1.15))),
             f"clustered errors differ from unadjusted ones without within-hospital correlation: {flat_ratio}",
         )
-        with exact_chi_square():
+        with exact_f():
             records = [research_tests.mundlak(*mundlak_panel(21, correlation=correlation)) for correlation in (0.0, 0.8)]
         for record, correlation in zip(records, (0.0, 0.8), strict=True):
             panel_data = mundlak_panel(21, correlation=correlation)
@@ -581,8 +604,37 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                     "clustered Wald statistic is not far below the unadjusted one under hospital-level error correlation",
                 )
 
+    def mundlak_reads_p_value_from_f_with_cluster_degrees() -> None:
+        for hospitals, correlation in ((300, 0.0), (300, 0.8), (50, 0.0), (50, 0.8), (80, 0.3)):
+            data = mundlak_panel(41, hospitals=hospitals, correlation=correlation)
+            wald, _ = hand_wald(data[0], mundlak_design(data[1], data[3], data[4]), data[3], (3, 4))
+            with exact_f():
+                record = research_tests.mundlak(*data)
+            denominator = hospitals - 1
+            expected_f = wald / 2
+            expected_p = (1 + 2 * expected_f / denominator) ** (-denominator / 2)
+            where = f"{hospitals} hospitals, correlation {correlation}"
+            require(record["status"] == "fitted" and record["clusters"] == hospitals, f"Mundlak record is not fitted for {where}: {record}")
+            require(math.isclose(record["f_statistic"], expected_f, rel_tol=1e-9), f"Mundlak F is not the hand-computed Wald statistic over two for {where}")
+            require(record["denominator_degrees_of_freedom"] == denominator, f"Mundlak F denominator is not the clusters minus one for {where}")
+            require(math.isclose(record["p_value"], expected_p, rel_tol=1e-8), f"Mundlak p-value differs from the exact F(2, {denominator}) tail for {where}")
+
+    def mundlak_numerator_follows_the_tested_slopes() -> None:
+        y, slopes, names, entities, years = mundlak_panel(42, hospitals=80, correlation=0.4)
+        third = np.random.default_rng(43).normal(size=len(y))
+        three = np.column_stack((slopes, third))
+        wald, _ = hand_wald(y, mundlak_design(three, entities, years), entities, (4, 5, 6))
+        with exact_f() as tail:
+            record = research_tests.mundlak(y, three, (*names, "third"), entities, years)
+        require(record["status"] == "fitted" and record["tested_columns"] == ["first", "second", "third"], f"three-slope Mundlak test failed: {record}")
+        require(record["numerator_degrees_of_freedom"] == 3 and record["denominator_degrees_of_freedom"] == 79, f"wrong F degrees of freedom: {record}")
+        require(math.isclose(record["statistic"], wald, rel_tol=1e-9), "three-slope Wald statistic differs from the hand computation")
+        require(math.isclose(record["f_statistic"], wald / 3, rel_tol=1e-9), "three-slope F is not the Wald statistic divided by three")
+        require(tail.calls == [(record["f_statistic"], 3.0, 79.0)], f"three-slope tail received the wrong arguments: {tail.calls}")
+        require(math.isclose(record["p_value"], upper_f_tail(wald / 3, 3, 79), rel_tol=1e-9), "three-slope p-value differs from the exact F(3, 79) tail")
+
     def mundlak_refuses_few_clusters() -> None:
-        with exact_chi_square():
+        with exact_f():
             few = research_tests.mundlak(*mundlak_panel(31, hospitals=49))
             enough = research_tests.mundlak(*mundlak_panel(31, hospitals=50))
         require(
@@ -593,7 +645,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
 
     def mundlak_refuses_unidentified_design() -> None:
         y, slopes, names, entities, years = mundlak_panel(32)
-        with exact_chi_square():
+        with exact_f():
             duplicated = research_tests.mundlak(y, np.column_stack((slopes, slopes[:, 0])), (*names, "copy"), entities, years)
         require(duplicated["status"] == "not_estimable" and "rank" in duplicated["reason"], f"a duplicated slope was not refused: {duplicated}")
 
@@ -629,11 +681,21 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
 
     def panel_record_carries_mundlak() -> None:
         sixty = request(years=(2019, 2020, 2021, 2022), hospitals=60)
-        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+        with libraries() as replacements, patch.object(panel, "native_fits", side_effect=panel_standin):
             output = suite.fit_models(sixty)
         record = output.research["hospital_effects"]
         require(record["status"] == "fitted" and record["test"] == "mundlak", f"RQ6 record is not a Mundlak record: {record}")
-        require({"statistic", "degrees_of_freedom", "p_value", "clusters"} <= set(record), "RQ6 record lacks a Mundlak field")
+        require(
+            {"statistic", "f_statistic", "numerator_degrees_of_freedom", "denominator_degrees_of_freedom", "p_value", "clusters"} <= set(record),
+            "RQ6 record lacks a Mundlak field",
+        )
+        tested = len(record["tested_columns"])
+        require(record["reference_distribution"] == "f" and record["numerator_degrees_of_freedom"] == tested, f"RQ6 record has the wrong reference: {record}")
+        require(record["denominator_degrees_of_freedom"] == 59, f"RQ6 record has the wrong F denominator: {record}")
+        require(
+            (record["f_statistic"], float(tested), 59.0) in replacements["scipy.stats"].f.calls,
+            f"RQ6 p-value was not read from the F tail: {replacements['scipy.stats'].f.calls}",
+        )
         require(record["clusters"] == 60 and record["covariance"] == "cluster_robust_cr1", "RQ6 record has the wrong cluster count or covariance")
         require(
             "mundlak" in output.slots["m6_fixed_effects"].details and "hausman" not in output.slots["m6_fixed_effects"].details, "m6 details keep the Hausman"
@@ -1708,10 +1770,12 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("nested_no_gain", nested_no_gain),
         ("spatial_order_and_islands", spatial_order_and_islands),
         ("seeded_moran_pattern", moran_signal),
-        ("exact_chi_square_tail", exact_chi_square_tail),
+        ("exact_f_tail", exact_f_tail),
         ("mundlak_rejects_correlated_effect", mundlak_rejects_correlated_effect),
         ("mundlak_keeps_null_without_correlation", mundlak_keeps_null_without_correlation),
         ("mundlak_clustered_errors_differ_from_unadjusted", mundlak_clustered_errors_differ_from_unadjusted),
+        ("mundlak_reads_p_value_from_f_with_cluster_degrees", mundlak_reads_p_value_from_f_with_cluster_degrees),
+        ("mundlak_numerator_follows_the_tested_slopes", mundlak_numerator_follows_the_tested_slopes),
         ("mundlak_refuses_few_clusters", mundlak_refuses_few_clusters),
         ("mundlak_refuses_unidentified_design", mundlak_refuses_unidentified_design),
         ("time_folds_keep_three_fitting_years", time_folds_keep_three_fitting_years),
