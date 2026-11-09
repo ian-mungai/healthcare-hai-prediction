@@ -508,7 +508,24 @@
           }
         },
         "layer_resources": {
-          "$ref": "#/$defs/job_resources"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "silver",
+            "gold",
+            "features"
+          ],
+          "properties": {
+            "silver": {
+              "$ref": "#/$defs/job_resources"
+            },
+            "gold": {
+              "$ref": "#/$defs/job_resources"
+            },
+            "features": {
+              "$ref": "#/$defs/job_resources"
+            }
+          }
         },
         "drift_enabled": {
           "type": "boolean"
@@ -660,11 +677,6 @@
               "train"
             ]
           }
-        },
-        "host_job_threads": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3
         },
         "host_scratch_root": {
           "type": "string",

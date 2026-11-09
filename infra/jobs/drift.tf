@@ -127,11 +127,6 @@ locals {
           { name = "HOME", value = "/tmp" },
           { name = "PYTHONHASHSEED", value = "0" },
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
-          { name = "JOB_THREADS", value = "2" },
-          { name = "OMP_NUM_THREADS", value = "2" },
-          { name = "OPENBLAS_NUM_THREADS", value = "2" },
-          { name = "MKL_NUM_THREADS", value = "2" },
-          { name = "DUCKDB_MEMORY_LIMIT", value = "5GB" },
         ],
         [for name in lookup(local.drift_run_variables, step.name, []) : { name = name, value = "" }],
         step.name == "baseline" ? [{ name = "MLFLOW_TRACKING_USERNAME", value = "admin" }] : []

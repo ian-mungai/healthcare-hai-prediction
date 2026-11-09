@@ -85,21 +85,6 @@ variable "memory" {
   type        = number
 }
 
-variable "job_threads" {
-  description = "Spark thread count from the reviewed capacity contract."
-  type        = number
-}
-
-variable "spark_memory" {
-  description = "Spark heap from the reviewed capacity contract, expressed as whole GiB."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[1-9][0-9]*g$", var.spark_memory))
-    error_message = "Use a positive whole-GiB heap such as 1g."
-  }
-}
-
 variable "polaris_uri" {
   description = "Private AWS catalog endpoint from the verified target contract."
   type        = string

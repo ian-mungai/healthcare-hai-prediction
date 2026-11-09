@@ -29,23 +29,30 @@ variable "layer_jobs" {
 }
 
 variable "layer_resources" {
-  description = "Fargate CPU units, memory MiB and ephemeral storage GiB of every layer task."
-  type = object({
+  description = "Fargate CPU units, memory MiB and ephemeral storage GiB of each layer task. Every size is a reviewed allocation. Silver and gold keep 4 vCPU and 16 GiB; features has the 16 vCPU and 64 GiB that the Nov 9 2026 AWS run proved (ARM64 Fargate, a valid combination). The engines inside a task derive their own limits from this size when a phase starts, so nothing else here fixes memory, threads or a spill cap."
+  type = map(object({
     cpu                   = number
     memory                = number
     ephemeral_storage_gib = number
-  })
-  default = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
+  }))
+  default = {
+    silver   = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
+    gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
+    features = { cpu = 16384, memory = 65536, ephemeral_storage_gib = 100 }
+  }
+  nullable = false
 
   validation {
-    condition = try(
-      var.layer_resources.memory >= local.memory_shapes[tostring(var.layer_resources.cpu)].min &&
-      var.layer_resources.memory <= local.memory_shapes[tostring(var.layer_resources.cpu)].max &&
-      var.layer_resources.memory % local.memory_shapes[tostring(var.layer_resources.cpu)].step == 0 &&
-      var.layer_resources.ephemeral_storage_gib >= 20 && var.layer_resources.ephemeral_storage_gib <= 200 &&
-      var.layer_resources.ephemeral_storage_gib == floor(var.layer_resources.ephemeral_storage_gib), false
-    )
-    error_message = "Supply a valid whole-vCPU Fargate shape and 20 to 200 whole GiB of scratch."
+    condition = toset(keys(var.layer_resources)) == toset(["silver", "gold", "features"]) && alltrue([
+      for size in values(var.layer_resources) : try(
+        size.memory >= local.memory_shapes[tostring(size.cpu)].min &&
+        size.memory <= local.memory_shapes[tostring(size.cpu)].max &&
+        size.memory % local.memory_shapes[tostring(size.cpu)].step == 0 &&
+        size.ephemeral_storage_gib >= 20 && size.ephemeral_storage_gib <= 200 &&
+        size.ephemeral_storage_gib == floor(size.ephemeral_storage_gib), false
+      )
+    ])
+    error_message = "Give silver, gold and features each a valid whole-vCPU Fargate shape and 20 to 200 whole GiB of scratch."
   }
 }
 
@@ -96,8 +103,6 @@ locals {
   EOT
   )
   layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", maintain = "spark", feast = "feature_store" }
-  # DuckDB spills to the workspace volume. The cap is 60 GiB of the 100 GiB scratch default, which leaves room for the run folder, the sealed copy and Spark's own spill.
-  layer_duckdb_spill_bytes = 60 * 1073741824
   # The silver build reads the catalog through dbt, whose profile names the pair DBT_ENV_SECRET_POLARIS_CLIENT_ID and _SECRET so that dbt scrubs them from its logs.
   layer_build_secrets = [for item in local.reader_parameters : { name = "DBT_ENV_SECRET_${item.name}", valueFrom = item.valueFrom }]
   # Gold maintenance commits snapshot removal to the catalog, so it holds the gold writer pair; it is a gold phase only.
@@ -147,13 +152,10 @@ locals {
             { name = "HOME", value = "/tmp" },
             { name = "PYTHONHASHSEED", value = "0" },
             { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
-            { name = "SPARK_JOB_MEMORY", value = "10g" },
-            { name = "DUCKDB_MEMORY_LIMIT", value = "12GB" },
-            # The features build ran out of DuckDB memory at four threads on Fargate; the host rewrite changes only a value of "4", so it keeps the 2.
-            { name = "JOB_THREADS", value = layer == "features" && step.name == "build" ? "2" : "4" },
+            # The spill folders are paths. The Spark heap, the DuckDB memory, the threads and the DuckDB spill cap are derived from the capacity of the task when a
+            # phase starts (scripts/lakehouse/task_capacity.py), so no value here fixes them.
             { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
             { name = "HAI_DUCKDB_TEMP_DIRECTORY", value = "/workspace/duckdb_spill" },
-            { name = "HAI_DUCKDB_MAX_TEMP_BYTES", value = tostring(local.layer_duckdb_spill_bytes) },
           ],
           [for name in lookup(local.layer_run_variables[layer], step.name, []) : { name = name, value = "" }],
           step.name == "feast" ? [
@@ -184,10 +186,11 @@ locals {
 # A phase that exits with an error does not stop the task: the phases after it wait for its success and never start, and the one essential container (the last
 # phase) never runs, so the task stays PENDING until somebody stops it. The guard is a second essential container with no dependency. It reads the task metadata
 # endpoint and exits with an error as soon as a phase has failed, which stops the whole task (scripts/orchestration/task_guard.py). It also ends the task 900 seconds
-# after the job deadline of 21600 seconds, so a hand-started task has a limit too. The deadline counts from the init container and covers the fetch phase and every
-# other phase, so the order is: the driver stops a phase at 21600 seconds, the guard stops the task at 22500 seconds and the owner's last resort in the guide is 23400.
+# after the job deadline of the broker table (config/orchestration/ecs_broker_jobs.json), so a hand-started task has a limit too. The deadline counts from the init
+# container and covers the fetch phase and every other phase, so the order is: the driver stops a phase at the deadline, the guard stops the task 900 seconds later
+# and the owner's last resort in the guide is 900 seconds after that. The driver also derives the time of the features build from the deadline that is left.
 locals {
-  layer_guard_seconds = 22500
+  layer_guard_seconds = { for layer in local.layer_jobs : layer => jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].deadline_seconds + 900 }
   layer_guards = {
     for layer in local.layer_jobs : layer => {
       name                   = "guard"
@@ -203,7 +206,7 @@ locals {
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn              = []
       environment = [
-        { name = "GUARD_SECONDS", value = tostring(local.layer_guard_seconds) },
+        { name = "GUARD_SECONDS", value = tostring(local.layer_guard_seconds[layer]) },
         { name = "GUARD_INTERVAL_SECONDS", value = "10" },
         { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
       ]
@@ -229,8 +232,8 @@ resource "aws_ecs_task_definition" "layer" {
   family                   = "${var.project_name}_${var.environment}_job_${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = tostring(var.layer_resources.cpu)
-  memory                   = tostring(var.layer_resources.memory)
+  cpu                      = tostring(var.layer_resources[each.key].cpu)
+  memory                   = tostring(var.layer_resources[each.key].memory)
   execution_role_arn       = lookup(var.job_role_arns, "execution", "")
   task_role_arn            = lookup(var.job_role_arns, local.layer_roles[each.key], "")
   container_definitions    = jsonencode(concat(local.layer_containers[each.key], [local.layer_guards[each.key]]))
@@ -254,7 +257,7 @@ resource "aws_ecs_task_definition" "layer" {
   }
 
   dynamic "ephemeral_storage" {
-    for_each = var.layer_resources.ephemeral_storage_gib > 20 ? [var.layer_resources.ephemeral_storage_gib] : []
+    for_each = var.layer_resources[each.key].ephemeral_storage_gib > 20 ? [var.layer_resources[each.key].ephemeral_storage_gib] : []
     content {
       size_in_gib = ephemeral_storage.value
     }

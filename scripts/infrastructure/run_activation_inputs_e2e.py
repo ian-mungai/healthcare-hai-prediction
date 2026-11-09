@@ -238,7 +238,7 @@ ROWS: list[Row] = [
         {"write_silver_task": ["/example_project/aws_polaris_silver_client_id"]},
     ),
     Row("jobs", "log_group_name", "example_project_jobs_dev", 5),
-    Row("jobs", "layer_resources", RESOURCES, {"cpu": 1}),
+    Row("jobs", "layer_resources", {"silver": RESOURCES, "gold": RESOURCES, "features": RESOURCES}, {"cpu": 1}),
     Row("jobs", "drift_images", {name: IMAGE % name for name in ("training", "feature_store", "drift")}, {"drift": "latest"}),
     Row("jobs", "drift_roles", {"execution": ROLE % "job_execution", "drift_task": ROLE % "job_drift_task"}, {"drift_task": "x"}),
     Row("jobs", "drift_resources", RESOURCES, {"cpu": 1}),
@@ -267,7 +267,6 @@ ROWS: list[Row] = [
         HOST_FAMILIES,
         (["unreviewed_family"], ["silver", "Metadata"], ["fargate"]),
     ),
-    Row("jobs", "host_job_threads", 2, "2", 3, (0, 4, -1, 2.5)),
     Row(
         "jobs",
         "host_scratch_root",

@@ -194,32 +194,10 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       [for container in fargate : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters"], key)) || (key == "command" && container.essential && container.name != "guard")) }] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.name]] ==
       [for container in fargate : [for item in container.environment : item.name]] &&
-      [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]] ==
-      [for container in fargate : [for item in container.environment : item.value if !contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]]
+      [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value]] ==
+      [for container in fargate : [for item in container.environment : item.value]]
     )])
-    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable except the thread counts. The init step differs by its wipe and capabilities and the last phase by its cleanup, which the scratch cases pin."
-  }
-
-  assert {
-    condition = alltrue([for family, fargate in {
-      silver   = jsondecode(output.layer_container_definitions["silver"]), gold = jsondecode(output.layer_container_definitions["gold"]),
-      features = jsondecode(output.layer_container_definitions["features"]), bronze = jsondecode(output.bronze_container_definitions),
-      train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
-      promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
-      } : (
-      [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value if contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]] ==
-      [for container in fargate : [for item in container.environment : item.value == "4" ? "3" : item.value if contains(["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"], item.name)]]
-    )])
-    error_message = "A job that ran four threads on Fargate runs three on the host; a job with fewer keeps its count."
-  }
-
-  assert {
-    condition = (
-      one([for item in jsondecode(output.host_container_definitions["silver"])[2].environment : item.value if item.name == "JOB_THREADS"]) == "3" &&
-      one([for item in jsondecode(output.host_container_definitions["train"])[4].environment : item.value if item.name == "OMP_NUM_THREADS"]) == "3" &&
-      one([for item in jsondecode(output.host_container_definitions["drift"])[2].environment : item.value if item.name == "JOB_THREADS"]) == "2"
-    )
-    error_message = "Silver and training use three threads and drift keeps two."
+    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable. The init step differs by its wipe and capabilities and the last phase by its cleanup, which the scratch cases pin."
   }
 
   assert {
@@ -366,47 +344,21 @@ run "resources_follow_the_fargate_shape_up_to_the_host_cap" {
 
   variables {
     host_jobs_enabled = true
-    layer_resources   = { cpu = 4096, memory = 30720, ephemeral_storage_gib = 100 }
-    drift_resources   = { cpu = 1024, memory = 4096, ephemeral_storage_gib = 30 }
+    layer_resources = {
+      silver   = { cpu = 4096, memory = 30720, ephemeral_storage_gib = 100 }
+      gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
+      features = { cpu = 16384, memory = 65536, ephemeral_storage_gib = 100 }
+    }
+    drift_resources = { cpu = 1024, memory = 4096, ephemeral_storage_gib = 30 }
   }
 
   assert {
     condition = (
       aws_ecs_task_definition.host["silver"].cpu == "3072" && aws_ecs_task_definition.host["silver"].memory == "16384" &&
+      aws_ecs_task_definition.host["features"].cpu == "3072" && aws_ecs_task_definition.host["features"].memory == "16384" &&
       aws_ecs_task_definition.host["drift"].cpu == "1024" && aws_ecs_task_definition.host["drift"].memory == "4096"
     )
-    error_message = "A bigger Fargate shape is capped at 3072 CPU units and 16 GiB; a smaller one is kept."
-  }
-}
-
-run "thread_count_can_be_lowered" {
-  command = plan
-
-  variables {
-    host_jobs_enabled = true
-    host_job_threads  = 2
-  }
-
-  assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["silver"])[2].environment : item.value if item.name == "JOB_THREADS"]) == "2"
-    error_message = "The thread count of the four-thread jobs is one input."
-  }
-}
-
-run "the_features_build_keeps_two_threads_on_the_host" {
-  command = plan
-
-  variables {
-    host_jobs_enabled = true
-  }
-
-  assert {
-    condition = (
-      one([for container in jsondecode(output.host_container_definitions["features"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "2" &&
-      one([for container in jsondecode(output.host_container_definitions["silver"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "3" &&
-      one([for container in jsondecode(output.host_container_definitions["gold"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "3"
-    )
-    error_message = "On the host the features build keeps the two threads it needs for its DuckDB memory, and the silver and gold builds take the host cap of three."
+    error_message = "A bigger Fargate shape, the 16 vCPU and 64 GiB features task included, is capped at 3072 CPU units and 16 GiB; a smaller one is kept. The task derives its threads from that CPU limit."
   }
 }
 
@@ -519,17 +471,6 @@ run "the_catalog_task_needs_the_host_architecture" {
   }
 
   expect_failures = [var.host_jobs]
-}
-
-run "a_job_may_not_ask_for_four_threads" {
-  command = plan
-
-  variables {
-    host_jobs_enabled = true
-    host_job_threads  = 4
-  }
-
-  expect_failures = [var.host_job_threads]
 }
 
 run "the_scratch_root_must_be_an_absolute_clean_path" {
@@ -1058,5 +999,22 @@ run "the_catalog_address_accepts_private_192" {
   assert {
     condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
     error_message = "A private address on port 8585 with the /api path reaches the container."
+  }
+}
+
+run "no_host_container_fixes_an_engine_limit" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for family in ["silver", "gold", "features", "bronze", "train", "drift"] : alltrue([
+      for container in jsondecode(output.host_container_definitions[family]) : length([
+        for item in container.environment : item.name if contains(["SPARK_JOB_MEMORY", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
+      ]) == 0
+    ])])
+    error_message = "A host job derives its limits from the CPU units and memory of its task, so no host container fixes an engine limit and no thread count is rewritten."
   }
 }

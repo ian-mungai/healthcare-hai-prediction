@@ -68,7 +68,7 @@ run "each_layer_is_one_fargate_task_with_its_own_writer_role" {
       alltrue([for task in values(aws_ecs_task_definition.layer) : (
         task.execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
         toset(task.requires_compatibilities) == toset(["FARGATE"]) && task.network_mode == "awsvpc" && task.runtime_platform[0].cpu_architecture == "ARM64" &&
-        task.cpu == "4096" && task.memory == "16384" && task.ephemeral_storage[0].size_in_gib == 100 && task.skip_destroy && !task.enable_fault_injection
+        task.ephemeral_storage[0].size_in_gib == 100 && task.skip_destroy && !task.enable_fault_injection
       )])
     )
     error_message = "Each layer is one ARM64 Fargate definition with the execution role and only its own layer's writer role."
@@ -285,7 +285,7 @@ run "secrets_reach_only_the_phases_that_need_them" {
   }
 }
 
-run "every_layer_container_names_its_duckdb_spill_folder_and_cap" {
+run "every_layer_container_names_its_duckdb_spill_folder_and_no_fixed_cap" {
   command = plan
 
   variables {
@@ -296,19 +296,14 @@ run "every_layer_container_names_its_duckdb_spill_folder_and_cap" {
     condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
       for container in jsondecode(output.layer_phase_containers[layer]) : (
         [for item in container.environment : item.value if item.name == "HAI_DUCKDB_TEMP_DIRECTORY"] == ["/workspace/duckdb_spill"] &&
-        [for item in container.environment : item.value if item.name == "HAI_DUCKDB_MAX_TEMP_BYTES"] == ["64424509440"]
+        [for item in container.environment : item.value if item.name == "HAI_SPARK_LOCAL_DIRECTORY"] == ["/workspace/spill"]
       )
     ])])
-    error_message = "The task refuses a DuckDB build without an absolute spill folder and a positive byte cap, so every layer container names both, and the cap stays below the scratch volume."
-  }
-
-  assert {
-    condition     = tonumber(one([for item in jsondecode(output.layer_phase_containers["silver"])[2].environment : item.value if item.name == "HAI_DUCKDB_MAX_TEMP_BYTES"])) < 100 * 1073741824
-    error_message = "The spill cap must be smaller than the 100 GiB of scratch storage the default layer shape holds."
+    error_message = "Every layer container still names the spill folders of DuckDB and Spark, which are paths on the workspace volume."
   }
 }
 
-run "the_features_build_runs_two_threads_and_the_other_layers_keep_four" {
+run "no_layer_container_fixes_an_engine_limit" {
   command = plan
 
   variables {
@@ -317,16 +312,37 @@ run "the_features_build_runs_two_threads_and_the_other_layers_keep_four" {
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
-      for container in jsondecode(output.layer_phase_containers[layer]) : (
-        [for item in container.environment : item.value if item.name == "JOB_THREADS"] == [layer == "features" && container.name == "build" ? "2" : "4"]
-      )
+      for container in jsondecode(output.layer_container_definitions[layer]) : length([
+        for item in container.environment : item.name if contains(["SPARK_JOB_MEMORY", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
+      ]) == 0
     ])])
-    error_message = "The features build ran out of DuckDB memory at four threads on Fargate, so only that container runs two threads. Every other container of every layer, and the silver and gold builds, keep four."
+    error_message = "The task derives the Spark heap, the DuckDB memory, the threads and the spill cap from its own capacity when a phase starts, so no container of a layer task fixes one."
+  }
+}
+
+run "each_layer_task_has_its_own_reviewed_size" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled = true
   }
 
   assert {
-    condition     = one([for container in jsondecode(output.layer_phase_containers["features"]) : one([for item in container.environment : item.value if item.name == "JOB_THREADS"]) if container.name == "build"]) == "2"
-    error_message = "The features build container sets JOB_THREADS to 2."
+    condition = (
+      aws_ecs_task_definition.layer["silver"].cpu == "4096" && aws_ecs_task_definition.layer["silver"].memory == "16384" &&
+      aws_ecs_task_definition.layer["gold"].cpu == "4096" && aws_ecs_task_definition.layer["gold"].memory == "16384" &&
+      aws_ecs_task_definition.layer["silver"].ephemeral_storage[0].size_in_gib == 100 && aws_ecs_task_definition.layer["gold"].ephemeral_storage[0].size_in_gib == 100
+    )
+    error_message = "Silver and gold keep 4 vCPU, 16 GiB and 100 GiB of scratch."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_task_definition.layer["features"].cpu == "16384" && aws_ecs_task_definition.layer["features"].memory == "65536" &&
+      aws_ecs_task_definition.layer["features"].ephemeral_storage[0].size_in_gib == 100 &&
+      aws_ecs_task_definition.layer["features"].runtime_platform[0].cpu_architecture == "ARM64"
+    )
+    error_message = "The features task has the size the Nov 9 2026 run proved: 16 vCPU and 64 GiB on ARM64 Fargate, a valid combination."
   }
 }
 
@@ -390,12 +406,16 @@ run "resources_can_be_resized_within_a_fargate_shape" {
 
   variables {
     layer_jobs_enabled = true
-    layer_resources    = { cpu = 8192, memory = 32768, ephemeral_storage_gib = 150 }
+    layer_resources = {
+      silver   = { cpu = 8192, memory = 32768, ephemeral_storage_gib = 150 }
+      gold     = { cpu = 8192, memory = 32768, ephemeral_storage_gib = 150 }
+      features = { cpu = 8192, memory = 32768, ephemeral_storage_gib = 150 }
+    }
   }
 
   assert {
     condition     = alltrue([for task in values(aws_ecs_task_definition.layer) : task.cpu == "8192" && task.memory == "32768" && task.ephemeral_storage[0].size_in_gib == 150])
-    error_message = "A valid larger shape is accepted."
+    error_message = "A valid larger shape is accepted for each layer."
   }
 }
 
@@ -404,7 +424,11 @@ run "invalid_shape_is_refused" {
 
   variables {
     layer_jobs_enabled = true
-    layer_resources    = { cpu = 4096, memory = 4096, ephemeral_storage_gib = 100 }
+    layer_resources = {
+      silver   = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
+      gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
+      features = { cpu = 16384, memory = 40000, ephemeral_storage_gib = 100 }
+    }
   }
 
   expect_failures = [var.layer_resources]

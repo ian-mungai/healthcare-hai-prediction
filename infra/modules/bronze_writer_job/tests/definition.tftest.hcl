@@ -11,8 +11,6 @@ variables {
   cpu                  = 1024
   cpu_architecture     = "X86_64"
   memory               = 3072
-  job_threads          = 1
-  spark_memory         = "1g"
   polaris_uri          = "https://catalog.example.com/api/catalog"
   log_group_name       = "/example/jobs"
   bootstrap_entrypoint = ["python", "-B", "/app/bootstrap.py"]
@@ -113,5 +111,20 @@ run "family_matches_the_project_ecs_policy" {
       startswith(aws_ecs_task_definition.bronze_writer[0].family, "example_project_dev_")
     )
     error_message = "The family must start with <project>_<environment>_, the only task definitions the project user's ECS policy may register and run."
+  }
+}
+
+run "definition_fixes_no_engine_limit" {
+  command = plan
+
+  variables {
+    register_definition = true
+  }
+
+  assert {
+    condition = length([
+      for item in jsondecode(aws_ecs_task_definition.bronze_writer[0].container_definitions)[0].environment : item.name if contains(["SPARK_JOB_MEMORY", "JOB_THREADS", "DUCKDB_MEMORY_LIMIT", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
+    ]) == 0
+    error_message = "The bronze writer derives its Spark heap and threads from the capacity of its task when it starts."
   }
 }

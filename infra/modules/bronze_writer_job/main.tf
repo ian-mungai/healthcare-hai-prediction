@@ -13,9 +13,7 @@ locals {
     stopTimeout            = 120
     environment = [
       { name = "AWS_REGION", value = var.aws_region },
-      { name = "POLARIS_URI", value = var.polaris_uri },
-      { name = "SPARK_JOB_MEMORY", value = var.spark_memory },
-      { name = "JOB_THREADS", value = tostring(var.job_threads) }
+      { name = "POLARIS_URI", value = var.polaris_uri }
     ]
     secrets = [
       {
@@ -94,11 +92,9 @@ resource "aws_ecs_task_definition" "bronze_writer" {
       condition = (
         var.memory >= local.bronze_memory_shapes[tostring(var.cpu)].min &&
         var.memory <= local.bronze_memory_shapes[tostring(var.cpu)].max &&
-        var.memory % local.bronze_memory_shapes[tostring(var.cpu)].step == 0 &&
-        var.job_threads >= 1 && var.job_threads == floor(var.job_threads) && var.job_threads <= var.cpu / 1024 &&
-        tonumber(trimsuffix(var.spark_memory, "g")) * 1024 < var.memory
+        var.memory % local.bronze_memory_shapes[tostring(var.cpu)].step == 0
       )
-      error_message = "Use a valid Fargate memory shape, bounded Spark threads and a heap smaller than task memory."
+      error_message = "Use a valid Fargate memory shape. The writer derives its Spark heap and threads from that size when it starts."
     }
   }
 }

@@ -80,8 +80,6 @@ locals {
           { name = "HOME", value = "/tmp" },
           { name = "PYTHONHASHSEED", value = "0" },
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
-          { name = "SPARK_JOB_MEMORY", value = "10g" },
-          { name = "JOB_THREADS", value = "4" },
           { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
         ],
         [for name in lookup(local.bronze_run_variables, step.name, []) : { name = name, value = "" }]

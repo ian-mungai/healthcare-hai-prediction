@@ -27,18 +27,6 @@ variable "host_jobs" {
   }
 }
 
-variable "host_job_threads" {
-  description = "Threads of a job that runs four threads on Fargate (JOB_THREADS and the OpenMP, OpenBLAS and MKL counts). The host keeps CPU units for its services, so a job gets at most 3072 units and three threads."
-  type        = number
-  default     = 3
-  nullable    = false
-
-  validation {
-    condition     = var.host_job_threads >= 1 && var.host_job_threads <= 3 && var.host_job_threads == floor(var.host_job_threads)
-    error_message = "Use 1, 2 or 3 threads. A fourth would take the CPU the host services reserve."
-  }
-}
-
 variable "host_scratch_root" {
   description = "Folder on the host's scratch volume: /data/job_scratch, where boot mounts that volume, or a folder inside it. Each family gets <root>/<family>/<volume> for its task volumes. The job wipes it at start and after success."
   type        = string
@@ -107,10 +95,9 @@ locals {
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"
   # The host has 4096 CPU units and about 31 GiB. A job reserves at most 3072 units and 16 GiB at task level, and the services keep the rest.
-  host_cpu_cap          = 3072
-  host_memory_cap       = 16384
-  host_thread_variables = ["JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"]
-  host_thread_default   = "4"
+  # A job derives its threads, memory and spill cap from these task-level limits when it starts, so the host rewrites no engine value.
+  host_cpu_cap    = 3072
+  host_memory_cap = 16384
   # The two volumes of every Fargate job keep their names and become host folders; a volume that is not named here keeps its own name as the folder.
   host_volume_directories = { workspace = "work" }
   host_source_ready = {
@@ -126,9 +113,9 @@ locals {
   }
   # Roles, network class (the class of config/orchestration/ecs_broker_jobs.json, which a Terraform test compares) and the Fargate shape each host definition starts from.
   host_specs = {
-    silver   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse", shape = var.layer_resources }
-    gold     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse", shape = var.layer_resources }
-    features = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.features, task = lookup(var.job_role_arns, local.layer_roles.features, ""), network = "lakehouse", shape = var.layer_resources }
+    silver   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse", shape = var.layer_resources["silver"] }
+    gold     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse", shape = var.layer_resources["gold"] }
+    features = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.features, task = lookup(var.job_role_arns, local.layer_roles.features, ""), network = "lakehouse", shape = var.layer_resources["features"] }
     bronze   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.bronze_role, task = lookup(var.job_role_arns, local.bronze_role, ""), network = "lakehouse", shape = var.bronze_resources }
     train    = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training", shape = var.train_resources }
     drift    = { execution = lookup(var.drift_roles, "execution", ""), task_key = "drift_task", task = lookup(var.drift_roles, "drift_task", ""), network = "training", shape = var.drift_resources }
@@ -231,12 +218,6 @@ locals {
     for family in keys(local.host_selected) : family => [
       for container in lookup(local.host_source_containers, family, []) : merge(
         container,
-        {
-          environment = [
-            for item in container.environment :
-            contains(local.host_thread_variables, item.name) && item.value == local.host_thread_default ? { name = item.name, value = tostring(var.host_job_threads) } : item
-          ]
-        },
         { for key, value in {
           command         = [format("%s%s", local.host_init_wipe, container.command[0])]
           linuxParameters = merge(container.linuxParameters, { capabilities = { add = [], drop = local.host_init_drop } })

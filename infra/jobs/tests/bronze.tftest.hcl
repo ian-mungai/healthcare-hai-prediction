@@ -306,3 +306,20 @@ run "another_layers_pair_is_refused" {
 
   expect_failures = [var.writer_parameter_names]
 }
+
+run "no_bronze_container_fixes_an_engine_limit" {
+  command = plan
+
+  variables {
+    bronze_job_enabled = true
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(output.bronze_container_definitions) : length([
+        for item in container.environment : item.name if contains(["SPARK_JOB_MEMORY", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
+      ]) == 0
+    ])
+    error_message = "The bronze task derives its Spark heap and threads from its own capacity when it starts, so no container fixes a heap, a thread count or a spill cap."
+  }
+}

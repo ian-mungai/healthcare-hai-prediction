@@ -341,3 +341,20 @@ run "drift_containers_follow_the_broker_table" {
     error_message = "The container names, their empty variables and the log container equal the broker job table, so every override the broker sends names a container of the task and fills what it needs."
   }
 }
+
+run "no_drift_container_fixes_an_engine_limit" {
+  command = plan
+
+  variables {
+    drift_enabled = true
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(output.drift_container_definitions) : length([
+        for item in container.environment : item.name if contains(["SPARK_JOB_MEMORY", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
+      ]) == 0
+    ])
+    error_message = "The drift task derives its threads and DuckDB memory from its own capacity when it starts, so no container fixes a thread count, a memory limit or a spill cap."
+  }
+}
