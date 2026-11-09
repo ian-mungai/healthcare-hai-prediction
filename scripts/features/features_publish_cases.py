@@ -72,12 +72,12 @@ class Features(Harness):
         )
 
     def committed(self, name: str, label: str) -> Context:
-        """Publish export ``name`` on a fresh warehouse and save the warehouse as ``label``."""
+        """Publish export ``name`` on a fresh warehouse, save the warehouse as ``label`` and return the context on the session that is open after the save."""
         self.fresh()
         ctx = self.features_context(name, work=f"{label}_work")
         run_steps(ctx)
         self.save(label)
-        return ctx
+        return replace(ctx, spark=self.spark)
 
 
 def count(spark: Any, template: str, **parts: Any) -> int:
@@ -129,16 +129,17 @@ def happy_and_types(h: Features) -> Check:
 
 
 def retry_and_new_publication(h: Features) -> Check:
-    """E06a and E06b: a retry of one run changes nothing; a new run ID with the same data adds a row, equal fingerprints and a different provenance row only."""
-    h.committed("a", "a")
+    """E06a and E06b: a retry of a committed run changes nothing; a new run ID with the same data adds a row, equal fingerprints and a new provenance row."""
+    ctx = h.committed("a", "a")
     spark = h.restore("a")
+    ctx = replace(ctx, spark=spark)
     checks = h.begin()
-    ctx = h.features_context("a", work="retry")
     before = {name: count(spark, "SELECT count(*) FROM {table}.snapshots", table=ctx.fq(name)) for name in [*ctx.plan.tables, ctx.plan.runs_table]}
-    run_steps(ctx)
+    refused = refusal_of(lambda: step(ctx, "candidates"))
     again = step(ctx, "commit")
     after = {name: count(spark, "SELECT count(*) FROM {table}.snapshots", table=ctx.fq(name)) for name in [*ctx.plan.tables, ctx.plan.runs_table]}
-    checks["a retry after the commit reports the run as committed"] = again.get("already_committed") is True
+    checks["a candidates retry after the commit is refused, not rewritten"] = "already committed" in refused
+    checks["a commit retry reports the run as committed"] = again.get("already_committed") is True
     checks["a retry after the commit creates no snapshot in any table"] = before == after
     checks["publish_runs holds the run once"] = [row["run_id"] for row in publish.published_runs(ctx)] == [ctx.run_id]
     first = publish.published_head(ctx)
