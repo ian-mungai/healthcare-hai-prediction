@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
-from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, version_listing
+from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, task_capacity, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
 
@@ -203,11 +203,16 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
     if done.returncode and duckdb_bounds.cap_reached(done.stdout + done.stderr):
         raise StepError(
             f"{module} stopped at the temporary storage cap of DuckDB: it needed more than HAI_DUCKDB_MAX_TEMP_BYTES = {child['HAI_DUCKDB_MAX_TEMP_BYTES']} "
-            f"bytes in HAI_DUCKDB_TEMP_DIRECTORY = {child['HAI_DUCKDB_TEMP_DIRECTORY']}. Raise the cap in the task definition only after a measured need, "
-            "or reduce what the phase holds on disk."
+            f"bytes in HAI_DUCKDB_TEMP_DIRECTORY = {child['HAI_DUCKDB_TEMP_DIRECTORY']}, the share of the scratch space that was free when the phase started. "
+            "Raise the scratch size of the layer task only after a measured need, or reduce what the phase holds on disk."
         )
     if done.returncode:
         raise StepError(f"{module} exited {done.returncode}")
+
+
+def capacity_profile(layer: str, phase: str) -> str:
+    """The thread profile of a phase for ``task_capacity``: the features build holds more memory for each thread than any other phase."""
+    return "features_build" if (layer, phase) == ("features", "build") else "default"
 
 
 def task_seconds_left(job: Job) -> float:
@@ -935,11 +940,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
         if not args.code_run_id or not RUN_ID.fullmatch(args.code_run_id):
             raise StepError("CODE_RUN_ID is not set to a run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)")
+        task_capacity.apply(capacity_profile(args.layer, args.phase))
         with task_deadline(job):
             if args.phase != "pin":
                 check_code_run(job)
             dispatch(job, args.phase, args)
-    except (StepError, PipelineError, PublishError, provenance.ProvenanceError, OSError, ValueError, KeyError, tarfile.TarError) as error:
+    except (
+        StepError,
+        PipelineError,
+        PublishError,
+        provenance.ProvenanceError,
+        task_capacity.CapacityError,
+        OSError,
+        ValueError,
+        KeyError,
+        tarfile.TarError,
+    ) as error:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")
         return 1
     return 0

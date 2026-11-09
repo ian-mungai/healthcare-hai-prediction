@@ -8,7 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from scripts.lakehouse import bronze, bronze_writer, checksums, dictionary, smoke
+from scripts.lakehouse import bronze, bronze_writer, checksums, dictionary, smoke, task_capacity
 
 WORKERS = {
     "scripts.lakehouse.bronze": bronze.main,
@@ -42,8 +42,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.describe:
             sys.stdout.write(json.dumps(asdict(plan), sort_keys=True) + "\n")
             return 0
+        task_capacity.apply()
         return execute(plan)
-    except (bronze_writer.BindingError, OSError, json.JSONDecodeError) as error:
+    except (bronze_writer.BindingError, task_capacity.CapacityError, OSError, json.JSONDecodeError) as error:
         sys.stderr.write(f"AWS bronze command refused: {error}\n")
         return 1
 

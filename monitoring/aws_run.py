@@ -35,6 +35,7 @@ from typing import Any
 from monitoring import baseline, current_window, drift_check, drift_config
 from monitoring.drift_check import HAI_TYPES, CheckError, deadline
 from orchestration.training_contract import RUN_ID
+from scripts.lakehouse import task_capacity
 from scripts.training import dvc_baseline
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -225,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         if not re.fullmatch(RUN_ID, arguments.run):
             raise CheckError("run_invalid", f"{arguments.run!r} is not a run ID")
         seconds = int(config["deadline_seconds"]) if arguments.phase == "check" else PHASE_SECONDS[arguments.phase]
+        task_capacity.apply()
         with deadline(seconds), contextlib.ExitStack() as stack:
             if arguments.phase == "baseline":
                 result = baseline_phase(open_store(), arguments.work, arguments.run)
@@ -237,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not BUCKET.fullmatch(arguments.bucket):
                     raise CheckError("bucket_invalid", "set --bucket or DATA_BUCKET_NAME to the data bucket name")
                 result = publish_phase(open_s3(), arguments.bucket, arguments.work, arguments.run)
-    except (CheckError, drift_config.ConfigError) as error:
+    except (CheckError, drift_config.ConfigError, task_capacity.CapacityError) as error:
         sys.stderr.write(f"drift task {arguments.phase} failed: {error}\n")
         return error.code if isinstance(error, CheckError) else 2
     sys.stdout.write(json.dumps({"phase": arguments.phase, "run_id": arguments.run, "result": result}, sort_keys=True) + "\n")

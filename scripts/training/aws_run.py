@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import code_digest, mlflow_service, training_contract
+from scripts.lakehouse import task_capacity
 from scripts.training import job, promote_lease, promote_receipt
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
@@ -336,6 +337,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": "the run ID has another form"}) + "\n")
         return EXIT_FAILED
     handler = {"prepare": prepare, "extract": extract, "train": train, "promote": promote}[values.phase]
+    try:
+        task_capacity.apply()
+    except task_capacity.CapacityError as refusal:
+        sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": str(refusal)}, sort_keys=True) + "\n")
+        return EXIT_FAILED
     try:
         steps = handler(values.work, values.run, values.mode)
     except RunRefused as refusal:

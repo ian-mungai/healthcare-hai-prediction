@@ -42,5 +42,8 @@ lakehouse_features_store() {
   # The spill directory and the byte cap on every DuckDB connection of a layer phase: a real spill through the helper and through the generated profiles, and
   # a scan that no phase opens a connection without the helper.
   timed "lakehouse_features: DuckDB bounds cases" "$repo_root/.tools/sqlfluff/bin/python" -m scripts.lakehouse.run_duckdb_bounds_cases
+  # The engine limits that an AWS task derives from its capacity: fake cgroup files for the reader, the derived figures, the clipping of an override, the entry
+  # points and the features build deadline.
+  timed "lakehouse_features: task capacity cases" "$python_bin" -m scripts.lakehouse.run_task_capacity_cases
   timed "lakehouse_features: features pipeline light E2E" "$python_bin" -m scripts.orchestration.run_features_pipeline_light
 }
