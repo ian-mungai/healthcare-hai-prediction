@@ -423,7 +423,8 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     name = "docs_only_runs_gates" if part == "core" else f"docs_only_runs_gates_{part}_part"
     stage_readme(work)
     tooling = install_tooling_filter(work)
-    # The launcher is selected by every path (inventory_reads pattern "."), so a part that holds it starts the stand-in suite, never the real one.
+    # README.md is an exact input of the launcher group (the launcher E2E reads it), so a part that holds the group starts the stand-in suite, never the
+    # real one.
     launcher_part = "launcher" in PART_GROUPS[part]
     marker = (install_launcher_group_stub(work) if "repository_code_checks" in PART_GROUPS[part] else install_launcher_stub(work)) if launcher_part else None
     try:
@@ -965,12 +966,21 @@ LAUNCHER_IMPORTED = (
     "tests/orchestration/fixtures/combined_dag.py",
     "scripts/quality/future_probe.py",
 )
-# Paths no import or read of the suite reaches. Followed modules that list files carry an ``inventory_reads`` entry with the pattern ``.``, so the group is
-# selected by every path (owner decision 1): the cases expect it until a module's entry is narrowed by a reviewed change, one module at a time.
-LAUNCHER_ALWAYS_SELECTED = (
+# Paths outside every pattern of the launcher group: no import, read or reviewed inventory_reads pattern of the suite reaches them, so a change to one skips
+# the stand-in or real launcher suite.
+LAUNCHER_OUTSIDE = (
     "infra/main.tf",
     "config/quality/mypy_runtimes.json",
     ".github/pull_request_template.md",
+)
+# Paths no file of the committed list names but one reviewed inventory_reads pattern matches (a new file in a folder the suite lists) still select it.
+LAUNCHER_INSIDE_PATTERNS = (
+    "dbt/models/features/matrix/new_probe.sql",
+    "config/training/feature_lists/new_probe.json",
+    "data_contracts/great_expectations/features/new_probe.json",
+    "dbt/seeds/gold/new_probe_bridge.csv",
+    "scripts/acquisition/new_probe.py",
+    ".gitignore",
 )
 # The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
 LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
@@ -1149,21 +1159,30 @@ def overlay_problems(tracked: set[str], committed: dict[str, Any], line: str) ->
 
 
 def launcher_always_cases(work: Path) -> list[dict[str, Any]]:
-    """The always-select pattern (``.``) selects the launcher for every changed path and takes no part in classifying paths: it is not in a group list, so a
-    path no list names still selects every group (LS27), an empty change list selects no launcher (LS28) and the configuration note states the
-    exception (LS30)."""
+    """The always-select pattern (``.``) is kept for a module whose reads are not reviewed, and no entry carries it now. Declared, it selects the launcher for
+    every changed path and takes no part in classifying paths: it is not in a group list, so a path no list names still selects every group (LS27); an empty
+    change list selects no launcher (LS28) and the configuration note states the exception (LS30)."""
     config = ci_groups.load()
     listed = [pattern for patterns in config["groups"].values() for pattern in patterns] + config["passive"]
     always = config.get("launcher_always", [])
+    sample = LAUNCHER_OUTSIDE[-1]
+    declared = ci_groups.plan("paths", "launcher", paths=[sample], config={**config, "launcher_always": [ci_groups.ALWAYS_PATTERN]})
+    actual = ci_groups.plan("paths", "launcher", paths=[sample], config=config)
     code, plan, error = select(work, "--scope", "paths", "--part", "all")
     note = json.loads((ROOT / ci_groups.CONFIG).read_text(encoding="utf-8"))["note"]
     stale = ("no longer selects it", "never another group")
     return [
         {
             "case": "launcher_always_pattern_is_not_a_classifier",
-            "passed": bool(always) and not any(re.search(pattern, "newtop/tool.bin") for pattern in listed),
-            "launcher_always": always,
+            "passed": ci_groups.ALWAYS_PATTERN not in listed and not any(re.search(pattern, "newtop/tool.bin") for pattern in listed),
             "matching": [pattern for pattern in listed if re.search(pattern, "newtop/tool.bin")][:4],
+        },
+        {
+            "case": "launcher_always_pattern_selects_every_path_only_when_declared",
+            "passed": "launcher" in declared["run"] and "launcher" not in actual["run"] and not always,
+            "declared_run": declared["run"],
+            "actual_run": actual["run"],
+            "launcher_always": always,
         },
         {
             "case": "empty_change_list_selects_no_launcher",
@@ -1180,17 +1199,20 @@ def launcher_always_cases(work: Path) -> list[dict[str, Any]]:
 
 
 def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
-    """The launcher group is selected by what its suite imports or reads, and by every path while a followed module that lists files carries the ``.`` pattern
-    of its ``inventory_reads`` entry (owner decision 1: every such module always selects the suite until a reviewed entry narrows it). A change to a module
-    the suite imports selects it, so does a path the suite never reaches, the committed list equals the computed one, and every computed file is selected by
-    the group's patterns."""
+    """The launcher group is selected by what its suite imports or reads and by the reviewed ``inventory_reads`` pattern of each followed module that lists
+    files. A change to a module the suite imports selects it, so does a new file in a folder a reviewed pattern names, a path outside every pattern does not,
+    every entry is reviewed with a file and line, the committed list equals the computed one, and every computed file is selected by the group's patterns."""
     cases: list[dict[str, Any]] = [
         selection_case(work, f"launcher_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
         for path in LAUNCHER_IMPORTED
     ]
     cases += [
-        selection_case(work, f"launcher_always_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
-        for path in LAUNCHER_ALWAYS_SELECTED
+        selection_case(work, f"launcher_selected_by_pattern_{Path(path).name}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_INSIDE_PATTERNS
+    ]
+    cases += [
+        selection_case(work, f"launcher_not_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], [])
+        for path in LAUNCHER_OUTSIDE
     ]
     try:
         from scripts.quality import launcher_inputs
@@ -1202,6 +1224,12 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
     gaps = launcher_inputs.selection_gaps(config, committed["files"], tracked)
     exact = overlay_problems(tracked, committed, LAUNCHER_EXACT_READ[1])
     inventories = {name: overlay_problems(tracked, committed, line) for name, line in LAUNCHER_INVENTORY_READS.items()}
+    citation = re.compile(r"\b[\w/]+\.py:\d+")
+    unreviewed = [
+        item["module"]
+        for item in committed["inventory_reads"]
+        if item["pattern"] == ci_groups.ALWAYS_PATTERN or not item["why"].startswith("reviewed:") or not citation.search(item["why"])
+    ]
     with tempfile.TemporaryDirectory(prefix="launcher_sample.") as folder:
         sample = sample_cases(Path(folder))
     return [
@@ -1224,6 +1252,11 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
             }
             for name, found in inventories.items()
         ),
+        {
+            "case": "launcher_inventory_reads_are_all_reviewed",
+            "passed": not unreviewed,
+            "unreviewed": unreviewed[:6],
+        },
         {
             "case": "launcher_list_is_selected_by_the_group",
             "passed": not gaps and len(committed["files"]) > 0,
@@ -3406,7 +3439,7 @@ def staged_edit_case(
 
 def body_file_cases(work: Path) -> list[dict[str, Any]]:
     """An edit to a body file selects its own group (and the layers downstream of a lakehouse layer) and the repository group, which runs the guard, and no
-    other group in the core and layer parts (the launcher part selects every path, see ``launcher_selection_cases``). The dispatcher, the workflow and the
+    other group in the core and layer parts (a body file lies below scripts/, so the launcher part runs too). The dispatcher, the workflow and the
     setup action select every group."""
     cases = [
         {
@@ -3899,8 +3932,8 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
         "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["ci_tooling_checks", "repository_code_checks", "sql_style"],
-        # Every path selects the launcher while a followed module carries the inventory_reads pattern ".", so the dry run starts it too.
-        "launcher_selected_by_every_path": "TIMED launcher E2E" in log
+        # sql_style.sh lies below scripts/, which the reviewed inventory_reads patterns of code_digest.py and code_closure.py name, so the dry run starts it.
+        "launcher_selected_by_a_scripts_path": "TIMED launcher E2E" in log
         and local["groups"] == {"launcher", "ci_tooling_checks", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }

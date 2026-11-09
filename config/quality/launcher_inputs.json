@@ -83,63 +83,63 @@
   "inventory_reads": [
     {
       "module": "orchestration/code_digest.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^(scripts|orchestration|feature_store|config/training|data_contracts/(features|lakehouse|training))/|^docs/[a-z_]+[.]md$|^dbt/seeds/gold/[^/]+_bridge\\.csv$|^dbt/seeds/features/frozen_hai_outcome_controls\\.csv$",
+      "why": "reviewed: file_entries walks the fixed TRAINING_ROOTS (orchestration/code_digest.py:19) with iterdir (:72) and glob (:80) and git ls-files (:132); only the default roots are ever used (no other module calls file_entries), so the pattern is that tuple (the docs entry is written as any lowercase markdown file in the docs folder, which tracks only the analysis plan)"
     },
     {
       "module": "orchestration/launcher.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/|(?i:(^|/)secrets(/|$))",
+      "why": "reviewed: copy_tree lists the dbt project with rglob at orchestration/launcher.py:9979 (source = checkout / \"dbt\", :9957); held_secrets scans every mount source at any depth with os.scandir (:1609, called at :1878) and refuses a folder named secrets in any letter case (the repository tracks no link, so the scan decides only on folder names); its other listing sites (:1858 data/worktrees, :9991 :10002 :10052 copy folders, :10086 runs_root snapshots) list run-time folders"
     },
     {
       "module": "orchestration/lineage.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: collect_provider lists the provider spool folder with os.listdir (orchestration/lineage.py:732), the folder CompletionWorker passes (:804) and supervisor.py:235 names self.state / \"lineage_provider\", a run-time state folder"
     },
     {
       "module": "orchestration/training_render.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: build lists the copied code of one run with iterdir at orchestration/training_render.py:52 on (folder / \"code\"), where folder is inp.run_folder (:31), the launcher's run folder; no repository folder is listed"
     },
     {
       "module": "scripts/acquisition/batch.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: receipt_for_job globs captures/*/*/receipt.json (scripts/acquisition/batch.py:51) and reserve_bls_requests globs the quota folder (:89), both below the state root that run_batch receives (:99) from the --state-root argument (:250); the state root is a run-time store, not a repository folder"
     },
     {
       "module": "scripts/acquisition/bls_api_contract.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^scripts/acquisition/[^/]+\\.py$",
+      "why": "reviewed: code_hashes globs *.py in REPO_ROOT / \"scripts/acquisition\" (scripts/acquisition/bls_api_contract.py:29); a new or removed module in that folder changes the hashes"
     },
     {
       "module": "scripts/acquisition/bls_api_transport.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: reserve globs the requests folder of the state root (scripts/acquisition/bls_api_transport.py:63, reserve(root, ...) :49 with the state root of fetch :108); the state root is a run-time store. The repository-wide quota ledger glob it reaches through quota_lock is listed under scripts/acquisition/redownload_controls.py"
     },
     {
       "module": "scripts/acquisition/code_closure.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^scripts/|\\.(so|pyd|pyc)$",
+      "why": "reviewed: code_index walks the CODE_DIRECTORIES (\"scripts\", scripts/acquisition/code_closure.py:14) with os.walk (:224), the package search lists folders with iterdir (:81) and compiled_file lists a package folder with os.listdir (:31) for stem.*.so, .pyd and .pyc files; the pattern is the scripts folder and compiled-file names anywhere"
     },
     {
       "module": "scripts/acquisition/history_routes.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: acquired_receipt globs captures/*/*/receipt.json (scripts/acquisition/history_routes.py:195) below root = directory / \"jobs\" / job_id (:226), a job folder of the run-time capture store"
     },
     {
       "module": "scripts/acquisition/redownload_controls.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: quota_lock globs **/requests/*.json under REPO_ROOT or the state root (scripts/acquisition/redownload_controls.py:166); the files it can meet are the BLS quota ledgers the collectors write under data/ at run time (no tracked path has that form), and the other sites list .budgets (:47), .attempts (:70) and allocation (:86) folders of the state root"
     },
     {
       "module": "scripts/acquisition/reuse_capture.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: reuse_capture lists the audit folder of an existing capture with rglob (scripts/acquisition/reuse_capture.py:42, parent_path.parent / \"audit\"); the capture store is a run-time folder"
     },
     {
       "module": "scripts/acquisition/s3_store.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: upload_snapshot lists the audit folder of one capture with rglob (scripts/acquisition/s3_store.py:460, root / \"audit\"); the capture folder is run-time data"
     },
     {
       "module": "scripts/acquisition/store_nber_hc.py",
@@ -148,218 +148,218 @@
     },
     {
       "module": "scripts/features/feature_schema.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/models/features/matrix/[^/]+\\.sql$",
+      "why": "reviewed: model_files globs *.sql in the matrix folder (scripts/features/feature_schema.py:786, MATRIX_FOLDER :38 = dbt/models/features/matrix)"
     },
     {
       "module": "scripts/features/feature_validation.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^data_contracts/great_expectations/.*\\.json$",
+      "why": "reviewed: suites globs *.json in each folder of --suites (scripts/features/feature_validation.py:237); the launcher mounts only folders inside data_contracts/great_expectations as suite sources (orchestration/launcher.py:2208, :2216)"
     },
     {
       "module": "scripts/features/features_build.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/models/features/bridge/[^/]+\\.sql$|^dbt/seeds(/features)?/[^/]+\\.csv$",
+      "why": "reviewed: scripts/features/features_build.py globs *.sql in the filter folder (:156, :231; columns.FILTER_FOLDER = dbt/models/features/bridge, scripts/lakehouse/feature_columns.py:62) and *.csv in the feature and live seed folders (:229; dbt/seeds/features and dbt/seeds, feature_columns.py:57-58)"
     },
     {
       "module": "scripts/features/features_input.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: extract lists the parquet members it just wrote (scripts/features/features_input.py:113) and the partial extract folder with rglob (:128); both are run-time output folders"
     },
     {
       "module": "scripts/features/features_publish_cases.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the cases list a run-time export folder (scripts/features/features_publish_cases.py:226) and the private copies below self.root / work (:59); the harness root is a temporary folder"
     },
     {
       "module": "scripts/features/fixture_catalog.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: versions globs v*.metadata.json in the metadata folder of a table (scripts/features/fixture_catalog.py:63; warehouse / namespace / table / \"metadata\", :58), a Hadoop-catalog warehouse the run creates"
     },
     {
       "module": "scripts/features/training_extract.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^config/training/feature_lists/[^/]+\\.json$",
+      "why": "reviewed: the selected-predictor check globs *.json in (config / \"feature_lists\") with config = root / \"config/training\" (scripts/features/training_extract.py:229)"
     },
     {
       "module": "scripts/infrastructure/sts_stand_in.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: history_bytes lists home / \".aws\" / \"cli\" / \"history\" with rglob (scripts/infrastructure/sts_stand_in.py:249), the AWS command history of a temporary home folder"
     },
     {
       "module": "scripts/lakehouse/catalog_journal.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the journal globs its intents folder (scripts/lakehouse/catalog_journal.py:192; root / \"dispatch\" / epoch, :153) and its completions folder (:196; root / \"lakehouse\" / \"catalog_journal\" / epoch, :154), run-time ledgers below the journal root"
     },
     {
       "module": "scripts/lakehouse/dbt_package_archive.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: install lists the destination package folder (scripts/lakehouse/dbt_package_archive.py:339, :350) and its staging folder (:359) with iterdir; the destination is data/analytics/dbt/dbt_packages (--destination, :371), which Git ignores (.gitignore:42 data/)"
     },
     {
       "module": "scripts/lakehouse/feature_allowlist.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/.*\\.ya?ml$",
+      "why": "reviewed: yaml_problems globs *.yml and *.yaml below root / \"dbt\" (scripts/lakehouse/feature_allowlist.py:444, folder :443)"
     },
     {
       "module": "scripts/lakehouse/feature_columns.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/models/features/(.*\\.sql|(.*/)?_[^/]*\\.yml)$|^dbt/seeds(/features)?/[^/]+\\.csv$",
+      "why": "reviewed: scripts/lakehouse/feature_columns.py:91 lists *.sql and :108 lists _*.yml (YAML_PATTERN :53) with rglob below dbt/models/features (MODELS :51); :287 globs *.csv in dbt/seeds/features and dbt/seeds (FEATURE_SEEDS :57, LIVE_SEEDS :58); :330 globs *.sql in the bridge filter folder (FILTER_FOLDER :62, inside MODELS); the \"ls\" at :360 is a dbt command word, not a listing"
     },
     {
       "module": "scripts/lakehouse/feature_sources.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/(models/(gold|silver|features)|macros/features|tests/features)/.*\\.sql$|^dbt/seeds/.*\\.csv$|^dbt/models/features/bridge/",
+      "why": "reviewed: scripts/lakehouse/feature_sources.py:202 lists *.sql in dbt/models/features, dbt/macros/features and dbt/tests/features (FOLDERS :61); :174 lists every file of the filter folder dbt/models/features/bridge; names() (:109) lists the .sql of dbt/models/gold (:209) and dbt/models/silver (:210) and the .csv of dbt/seeds/gold (:125) and dbt/seeds (:211)"
     },
     {
       "module": "scripts/lakehouse/geography_file_periods.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the receipt readers glob below DATASETS = REPO_ROOT / \"data/datasets\" (scripts/lakehouse/geography_file_periods.py:131, :142, :157, :168, :177; DATASETS :35), called only with that default (:268); Git ignores data/ (.gitignore:42), so no tracked path is below it"
     },
     {
       "module": "scripts/lakehouse/gold_checks.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/(models|macros|tests)/.*\\.sql$|^dbt/models/.*\\.yml$|^data_contracts/great_expectations/gold/[^/]+\\.json$",
+      "why": "reviewed: model_problems lists *.sql in dbt/models/silver, dbt/models/gold, dbt/macros and dbt/tests and *.yml in dbt/models with rglob (scripts/lakehouse/gold_checks.py:732-737; DBT :36), and suites_problems globs *.json in the gold suites folder (:1015; SUITES :35 = data_contracts/great_expectations/gold, the folder run_gold_e2e.py:324 and run_silver_e2e.py:217 pass)"
     },
     {
       "module": "scripts/lakehouse/gold_publish.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: remove_tree lists the folder it deletes (scripts/lakehouse/gold_publish.py:253); its callers pass run output folders (scripts/features/features_input.py:106 partial extract, orchestration/launcher.py:10046 copy folder)"
     },
     {
       "module": "scripts/lakehouse/ownership_release_periods.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: receipt_periods globs the RECEIPTS patterns (scripts/lakehouse/ownership_release_periods.py:28) below DATASETS = REPO_ROOT / \"data/datasets\" (:27, glob :63), called only with that default (:108); Git ignores data/ (.gitignore:42)"
     },
     {
       "module": "scripts/lakehouse/package_fixture.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the fixture writer globs earlier case folders in OUT = ROOT / \"data\" / \"package_fixture\" (scripts/lakehouse/package_fixture.py:237, OUT :47); Git ignores data/ (.gitignore:42); the \"ls\" at :480 is a dbt command word"
     },
     {
       "module": "scripts/lakehouse/pipeline_build.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the spill check lists the DuckDB temp_directory with rglob (scripts/lakehouse/pipeline_build.py:64; spill = Path(settings[\"temp_directory\"]), :60), a run-time scratch folder"
     },
     {
       "module": "scripts/lakehouse/pos_file_periods.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: job_periods globs job plans below JOBS = REPO_ROOT / \"data/datasets/acquisition_batches\" (scripts/lakehouse/pos_file_periods.py:27, glob :40, captures :49), called only with that default (:82); Git ignores data/ (.gitignore:42)"
     },
     {
       "module": "scripts/lakehouse/provenance.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: tree_entries lists a held snapshot folder with os.scandir (scripts/lakehouse/provenance.py:223) and drop_interrupted_copies lists the held sealed folder (:559); both are run-time folders of one run, and the repository files that reach a snapshot are copied by a read the scan already names; the \"ls\" at :64 is a dbt command word"
     },
     {
       "module": "scripts/lakehouse/run_bronze_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the repair case globs report_*.json in report_root = root / \"repair_report\" (scripts/lakehouse/run_bronze_e2e.py:1983, root :1960), a temporary case folder"
     },
     {
       "module": "scripts/lakehouse/run_duckdb_spill_cases.py",
       "pattern": "^dbt/profiles\\.yml$",
-      "why": "reviewed: it lists only its own temporary spill folder, and the one repository file it reads is dbt/profiles.yml"
+      "why": "reviewed: it lists only its own temporary spill folder (rglob at scripts/lakehouse/run_duckdb_spill_cases.py:68), and the one repository file it reads is dbt/profiles.yml"
     },
     {
       "module": "scripts/lakehouse/run_gold_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: copy_overlay and overlay_sha256 list the overlay folders with rglob (scripts/lakehouse/run_gold_e2e.py:444, :457); the folders are the --overlay and --self-test arguments (:802, :804, :645), owner-chosen case folders that are not tracked (plans/ is untracked), never a repository folder the launcher suite names"
     },
     {
       "module": "scripts/lakehouse/run_gold_publish_cases.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the cases list a scratch parquet folder (scripts/lakehouse/run_gold_publish_cases.py:119), the warehouse of the harness (:609) and private copies below self.root / work (:209); the harness root is a temporary folder"
     },
     {
       "module": "scripts/lakehouse/run_launcher_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "(^|/)\\.gitignore$",
+      "why": "reviewed: source_snapshot lists every file Git tracks or does not ignore with git ls-files --cached --others --exclude-standard (scripts/lakehouse/run_launcher_e2e.py:10997) and files_holding walks ROOT with os.walk (:8212, called at :8373); both compare the repository with itself within one run (source_changes, :11051; files written since the run began), so a file's content changes the result only if the suite rewrites it, and a rewrite by name is already an exact entry; the set of untracked files that the snapshot counts depends on the .gitignore files. Its other sites list run-time folders (env.registry, env.temp, env.work, silver.RESULTS under data/)"
     },
     {
       "module": "scripts/lakehouse/run_launcher_real_fixture.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the real-fixture case lists the scratch package folder with iterdir (scripts/lakehouse/run_launcher_real_fixture.py:182; scratch = ROOT / \"data\" / \"e2e\" / \"launcher_real\" / \"scratch_packages\", :174); Git ignores data/ (.gitignore:42)"
     },
     {
       "module": "scripts/lakehouse/run_lock_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: token_scan globs the token store (scripts/lakehouse/run_lock_e2e.py:312, sc.env.settings[\"token_root\"]) and the registry (:314, sc.env.registry) of the case environment, both temporary folders"
     },
     {
       "module": "scripts/lakehouse/run_pins_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: rival_keeps_its_pin lists the parent folder of a pins file with iterdir (scripts/lakehouse/run_pins_e2e.py:51); the path is below root / \"runs\" (:67, :76), a temporary case folder"
     },
     {
       "module": "scripts/lakehouse/run_silver_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^data_contracts/great_expectations/(suites|gold)/[^/]+\\.json$",
+      "why": "reviewed: folder_expectations (:165), static_problems (:187) and the suite-name list (:621) glob *.json in SILVER_SUITES = CONTRACTS / \"suites\" (scripts/lakehouse/run_silver_e2e.py:48) and GOLD_SUITES (:49); the report listing (:659) globs REPORTS = data/e2e/silver_quality (:53), which Git ignores (.gitignore:42)"
     },
     {
       "module": "scripts/lakehouse/run_staging_e2e.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/",
+      "why": "reviewed: dbt_tree_sha256 hashes every file below REPO_ROOT / \"dbt\" except target, dbt_packages and logs with rglob (scripts/lakehouse/run_staging_e2e.py:4831, DBT_GENERATED :4824)"
     },
     {
       "module": "scripts/lakehouse/silver.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^data_contracts/great_expectations/.*\\.json$",
+      "why": "reviewed: repeated_dbt_tests globs *.json in each suites folder (scripts/lakehouse/silver.py:67); its callers pass the --suites folders (:134) and SILVER_SUITES and GOLD_SUITES (run_silver_e2e.py:747), all inside data_contracts/great_expectations (orchestration/launcher.py:2208)"
     },
     {
       "module": "scripts/lakehouse/silver_input.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: extract lists the parquet members it just wrote (scripts/lakehouse/silver_input.py:41) and the partial extract folder with rglob (:56); both are run-time output folders"
     },
     {
       "module": "scripts/lakehouse/silver_quality.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^data_contracts/great_expectations/.*\\.json$",
+      "why": "reviewed: load_suites globs *.json in each suites folder (scripts/lakehouse/silver_quality.py:167) that validate receives from --suites (:226); the launcher mounts only folders inside data_contracts/great_expectations (orchestration/launcher.py:2208)"
     },
     {
       "module": "scripts/orchestration/in_image_checks.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: dags lists DAG_FOLDER = /opt/hai/dags, a path inside the Airflow image (scripts/orchestration/in_image_checks.py:39, glob :48), and the spool check lists a temporary folder (:226); neither is a folder of the checkout"
     },
     {
       "module": "scripts/orchestration/ledger.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: runs globs *.jsonl in the ledger folder (scripts/orchestration/ledger.py:164, self.folder :85), the broker's run-time ledger folder (scripts/orchestration/broker.py:345 paths.ledger)"
     },
     {
       "module": "scripts/orchestration/run_control.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: checked_seed lists a seed folder with rglob (scripts/orchestration/run_control.py:202) after it refuses any folder that is not inside broker.repo_root / \"data\" or the broker state (:200); Git ignores data/ (.gitignore:42)"
     },
     {
       "module": "scripts/process.py",
       "pattern": null,
-      "why": "reviewed: list_table_processes lists the kernel process table under PROC_ROOT (/proc) to find live processes; it lists no repository folder and reads no repository file through that listing"
+      "why": "reviewed: list_table_processes lists the kernel process table under PROC_ROOT (/proc) with os.listdir (scripts/process.py:387) to find live processes; it lists no repository folder and reads no repository file through that listing"
     },
     {
       "module": "scripts/quality/docker_calls.py",
-      "pattern": "\\.py$",
-      "why": "docker_calls.check lists every tracked and untracked Python file with git ls-files and parses each one to discover wrappers; the suite's docker_calls_check case runs it, so any Python file, also a future one, can change the result"
+      "pattern": "\\.(py|sh)$",
+      "why": "reviewed: docker_calls.tracked_files lists every tracked and untracked Python and shell file with git ls-files (scripts/quality/docker_calls.py:1160) and check parses each one to discover wrappers (shell files at :1153); the suite's docker_calls_check case runs it, so any Python or shell file, also a future one, can change the result"
     },
     {
       "module": "scripts/training/bundle.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: the bundle writer lists the model folder it just saved with rglob (scripts/training/bundle.py:160; model = Path(scratch) / \"model\", :157), a temporary folder"
     },
     {
       "module": "scripts/training/guards.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": "^dbt/seeds/gold/[^/]+_bridge\\.csv$",
+      "why": "reviewed: _bridge_controls globs *_bridge.csv in (root / \"dbt/seeds/gold\") (scripts/training/guards.py:82)"
     },
     {
       "module": "scripts/training/job_actions.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: run_step lists the output folder of one training step with rglob (scripts/training/job_actions.py:74, :76), a run-time run folder"
     },
     {
       "module": "scripts/training/step_records.py",
-      "pattern": ".",
-      "why": "not reviewed: the module lists files (glob, walk, scandir, listdir, iterdir, git ls-files, find or ls) and the scan cannot prove which folder or which file contents the result depends on, so any change selects the launcher suite (owner decision 1, project decision 15); narrow it later with a hand-written pattern or null, one reviewed module at a time"
+      "pattern": null,
+      "why": "reviewed: verify_done lists the output folder of one training step with rglob (scripts/training/step_records.py:51), a run-time run folder"
     }
   ],
   "dynamic_sites": {},

@@ -8,11 +8,11 @@ GitHub CI and local commits use the same lists. Scopes:
   scripts/quality/pre_push.py). A range that cannot be used (missing end, zero or unknown commit) selects every group.
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
-The ``launcher`` group lists, besides the few patterns of the configuration, the path pattern of each ``inventory_reads`` entry (files a suite module
-lists by inventory, such as every Python file the Docker-call guard parses; the pattern ``.`` of a module whose reads are not reviewed selects the group for
-every path, as ``launcher_always``, apart from the group lists, so it never classifies a path), one exact path for each file and one prefix for each folder of
-config/quality/launcher_inputs.json: the files that the launcher E2E suite imports or reads and the folders it reads whole (generated and checked by
-scripts/quality/launcher_inputs.py).
+The ``launcher`` group lists, besides the few patterns of the configuration, the reviewed path pattern of each ``inventory_reads`` entry (files a suite
+module lists by inventory, such as the dbt models a feature check reads; an entry with the pattern ``null`` lists only run-time folders and adds none), one
+exact path for each file and one prefix for each folder of config/quality/launcher_inputs.json: the files that the launcher E2E suite imports or reads and
+the folders it reads whole (generated and checked by scripts/quality/launcher_inputs.py). An entry whose reads are not reviewed carries the pattern ``.``,
+which selects the group for every path, as ``launcher_always``, apart from the group lists, so it never classifies a path; no entry carries it now.
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
 names.
 The lakehouse layers (``layers`` in the configuration, upstream first) select one another: a changed path belongs to the most downstream layer whose
@@ -61,8 +61,8 @@ LAYER_PARTS = {
     "reuse_gate": "reuse_gate_checks",
 }
 BASE_PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
-# The inventory_reads pattern of a module whose reads are not reviewed. It selects the launcher group for every changed path, but never classifies a path:
-# it stays out of the group lists, so a path that no list names still selects every group.
+# The inventory_reads pattern of a module whose reads are not reviewed (no entry carries it now). It selects the launcher group for every changed path,
+# but never classifies a path: it stays out of the group lists, so a path that no list names still selects every group.
 ALWAYS_PATTERN = "."
 
 

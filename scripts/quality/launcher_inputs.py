@@ -10,8 +10,9 @@ occurrences it covers, and fails the check when those occurrences change (a new 
 text: a file that another text of the module also names stays listed. A followed module that lists files by inventory (a ``git ls-files`` call, a glob,
 walk, ``scandir``, ``iterdir`` or ``listdir`` call over any folder, or a ``find`` or ``ls`` program) may read files that no string names, such as every tracked
 Python file that ``docker_calls.check`` parses: it needs an ``inventory_reads`` entry whose path ``pattern`` ci_groups.py adds to the group, and its site count
-is held in ``inventory_sites``. The pattern ``.`` selects the suite for every path: every module whose reads are not reviewed carries it (owner decision 1),
-and a reviewed entry narrows one module at a time. Parent packages come with each
+is held in ``inventory_sites``. The pattern ``.`` selects the suite for every path: a module whose reads are not reviewed carries it (owner decision 1),
+and a reviewed entry narrows one module at a time (no entry carries it now). A reviewed pattern is a Python regular expression over repository paths, ``null``
+for a module that lists only run-time folders, and its ``why`` names the listing call and its root with the file and line. Parent packages come with each
 module. Calls that import or open a module by a computed name (``importlib.import_module(name)``) cannot be followed:
 they are counted per file in ``dynamic_sites`` of the committed list, so a new one changes the computed list.
 
