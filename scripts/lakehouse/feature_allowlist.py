@@ -14,11 +14,13 @@ build runs (``feature_columns.SHELL_MODELS``).
 
 1. **Jinja.** The code of each node in scope and of each project macro it reaches (transitively, from ``depends_on.macros`` in the manifest) is parsed with
    dbt's Jinja and walked. Only the constructs in ``NODE_TYPES`` are allowed: no ``do`` statement, ``set`` block, call block, dict, import, include or
-   arithmetic. Calls are allowed only to ``ref``, ``config`` (keyword arguments from ``CONFIG_CALL_KEYS`` only), ``return`` and the macros the code depends
-   on. The only filter is ``join`` and the only attributes are ``loop.first`` and ``loop.last``. Every name the code reads without declaring it must be one
-   of those functions, so ``execute``, ``adapter``, ``target``, ``var``, ``env_var`` and ``modules`` fail, and nothing environment-dependent can feed a
-   ``ref``: it resolves the same at parse and run time. A dbt or package macro may be reached only if its id is in ``PACKAGE_MACROS``. A project macro
-   that has the name of a dbt context function fails: it would replace that function for every node.
+   arithmetic. Calls are allowed only to ``ref``, ``config`` (keyword arguments from ``CONFIG_CALL_KEYS`` only), ``return``, ``var`` (one literal name from
+   ``REVIEWED_VARS``, no default) and the macros the code depends on. The only filter is ``join`` and the only attributes are ``loop.first`` and
+   ``loop.last``. Every name the code reads without declaring it must be one of those functions, so ``execute``, ``adapter``, ``target``, ``env_var`` and
+   ``modules`` fail, and nothing environment-dependent can feed a ``ref``: it resolves the same at parse and run time. A reviewed variable is a constant of
+   ``dbt/dbt_project.yml`` (``feature_sources.check_configuration`` checks its value) and appears in the compiled query, never in a ``ref``. A dbt or
+   package macro may be reached only if its id is in ``PACKAGE_MACROS``. A project macro that has the name of a dbt context function fails: it would
+   replace that function for every node.
 2. **Config.** The resolved config of each node in scope (node, folder and project levels merged by dbt) may hold only the keys of ``INERT`` (with a value
    from its list) and ``FREE`` (with a value its rule accepts). A ``sql_header``, ``persist_docs``, ``grants`` or any other key fails. The SQL text that a
    column ``data_type`` or a seed ``column_types`` entry carries into a create-table statement must be a plain type text, and a constraint fails. A pre-hook
@@ -76,7 +78,10 @@ NODE_TYPES = frozenset(
     }
 )
 # The functions any node or macro may call besides the macros it depends on, and the name dbt gives the arguments of a generic test.
-CALLS = frozenset({"ref", "config", "return"})
+CALLS = frozenset({"ref", "config", "return", "var"})
+# The only project variables a node or macro may read, each as var('<name>') with no default; the value is a constant of dbt_project.yml. first_window_year is
+# the first calendar year of HAI windows that int_hospital_spine keeps (owner decision of 8 Nov 2026); feature_sources.check_configuration checks its value.
+REVIEWED_VARS = frozenset({"first_window_year"})
 GENERIC_TEST_ARGUMENTS = "_dbt_generic_test_kwargs"
 FILTERS = frozenset({"join"})
 LOOP_ATTRIBUTES = frozenset({"first", "last"})
@@ -184,6 +189,19 @@ def dotted(node: Any) -> str:
     return type(node).__name__
 
 
+def reviewed_var_call(call: Any) -> bool:
+    """True for ``var('<name>')`` with exactly one literal argument that names a reviewed variable: no default, no keyword, no computed name."""
+    nodes: Any = importlib.import_module("jinja2.nodes")
+    return (
+        len(call.args) == 1
+        and isinstance(call.args[0], nodes.Const)
+        and call.args[0].value in REVIEWED_VARS
+        and not call.kwargs
+        and not call.dyn_args
+        and not call.dyn_kwargs
+    )
+
+
 def call_problems(call: Any, names: frozenset[str]) -> list[tuple[int, str]]:
     """Problems with one call: a plain name from ``names``, and for ``config`` only key=value pairs from ``CONFIG_CALL_KEYS``."""
     nodes: Any = importlib.import_module("jinja2.nodes")
@@ -192,6 +210,8 @@ def call_problems(call: Any, names: frozenset[str]) -> list[tuple[int, str]]:
         return [(call.lineno, f"calls {dotted(callee)}(), which is no plain function name")]
     if callee.name not in names:
         return [(call.lineno, f"calls {callee.name}(), which is neither an allowed function nor a macro it depends on")]
+    if callee.name == "var" and not reviewed_var_call(call):
+        return [(call.lineno, f"calls var(), which is allowed only as var('<name>') with one literal name from {sorted(REVIEWED_VARS)} and no default")]
     if callee.name == "config" and (call.args or call.dyn_args or call.dyn_kwargs):
         return [(call.lineno, "calls config() with an argument that is not a key=value pair")]
     return [

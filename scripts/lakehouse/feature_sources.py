@@ -307,6 +307,12 @@ def check_configuration(root: Path) -> list[str]:
         f"to change feature_sources.PROJECT_KEYS."
         for key in sorted(set(project) - PROJECT_KEYS)
     )
+    year = (project.get("vars") or {}).get("first_window_year")
+    if not isinstance(year, int) or isinstance(year, bool) or not 2000 <= year <= 2100:
+        problems.append(
+            f"dbt/dbt_project.yml:1: vars.first_window_year is {year!r}, not a whole year; int_hospital_spine reads it as its first HAI window year. "
+            f"Rule: {RULE}. Set it to a year such as 2018."
+        )
     seeds = ((project.get("seeds") or {}).get("hai") or {}).get("features") or {}
     if TAG not in tag_list(seeds, "+tags"):
         problems.append(f"dbt/dbt_project.yml:1: seeds.hai.features has no +tags with '{TAG}', so the gold builds load the formula recipes. Rule: {RULE}.")

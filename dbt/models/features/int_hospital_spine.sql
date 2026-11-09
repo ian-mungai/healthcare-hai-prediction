@@ -10,7 +10,8 @@
 with
 
 windows as (
-    -- Calendar-year windows only; rolling and 18-month windows are not spine years [306] [307].
+    -- Calendar-year windows only; rolling and 18-month windows are not spine years [306] [307]. Windows before the reviewed first_window_year
+    -- (dbt_project.yml) are not spine years either: they stay in fct_hai_hospital_window and feed only the history features.
     select
         entity_id as ccn,
         window_start,
@@ -21,6 +22,7 @@ windows as (
         month(window_start) = 1
         and day(window_start) = 1
         and window_end = make_date(year(window_start), 12, 31)
+        and year(window_start) >= {{ var('first_window_year') }}
     group by
         entity_id,
         window_start

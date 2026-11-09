@@ -54,6 +54,7 @@
   "assert_spine_as_of_window_start": ["int_hospital_spine"],
   "assert_spine_classification_as_of_start": ["fct_pos_snapshot", "int_hospital_spine"],
   "assert_spine_county_as_of_start": ["bridge_zip_county", "fct_pos_snapshot", "int_hospital_spine"],
+  "assert_spine_from_first_window_year": ["int_hospital_spine"],
   "assert_spine_planning_region_as_of_start": ["bridge_zip_county", "int_hospital_spine"],
   "assert_spine_state_as_of_start": ["fct_enrollment_release", "fct_pos_snapshot", "int_hospital_spine"],
   "assert_spine_zip_as_of_start": ["fct_enrollment_release", "fct_pos_snapshot", "int_hospital_spine"],

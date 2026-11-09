@@ -1071,6 +1071,7 @@
     "dbt/tests/features/assert_spine_as_of_window_start.sql",
     "dbt/tests/features/assert_spine_classification_as_of_start.sql",
     "dbt/tests/features/assert_spine_county_as_of_start.sql",
+    "dbt/tests/features/assert_spine_from_first_window_year.sql",
     "dbt/tests/features/assert_spine_planning_region_as_of_start.sql",
     "dbt/tests/features/assert_spine_state_as_of_start.sql",
     "dbt/tests/features/assert_spine_zip_as_of_start.sql",

@@ -10,7 +10,7 @@ Every training run follows this plan. The plan changes during development, so ea
 
 ## Unit, populations and timing
 
-- The unit of analysis is the hospital-window: one CMS Certification Number (CCN) and one calendar-year healthcare-associated infection (HAI) window, keyed by `spine_key`.
+- The unit of analysis is the hospital-window: one CMS Certification Number (CCN) and one calendar-year healthcare-associated infection (HAI) window, keyed by `spine_key`. The spine keeps the calendar-year windows from the reviewed `first_window_year` (2018, `dbt/dbt_project.yml`) on. Earlier windows stay in the gold HAI fact and feed only the history features.
 - The primary population is `is_primary_population`. Sensitivity analyses repeat every test on `is_sensitivity_population` and are marked exploratory.
 - Every predictor takes the latest source period that ends before the window starts. The rule uses the measured period, not the publication date.
 - The design is same-period: the model predicts the window's standardized infection ratio (SIR) from the information available at the window start. Forecasting later windows is a separate extension that adds the earlier-outcome candidates C275 to C280.

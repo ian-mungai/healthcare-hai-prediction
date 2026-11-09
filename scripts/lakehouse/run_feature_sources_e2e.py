@@ -56,6 +56,7 @@ HOSPITAL_TEST = "dbt/tests/features/assert_hospital_control_identity.sql"
 ENABLED_TEST = "dbt/tests/features/assert_spine_as_of_window_start.sql"
 MACRO = "dbt/macros/features/cmi_years.sql"
 PROJECT = "dbt/dbt_project.yml"
+INPUTS = "dbt/models/features/_feature_inputs.json"
 SELECTORS = "dbt/selectors.yml"
 Damage = Callable[[Path], None]
 
@@ -303,6 +304,16 @@ def cases() -> list[tuple[str, Damage, str | None]]:
             "query_comment_macro_added",
             append(PROJECT, 'query-comment:\n  comment: "{{ hai_comment() }}"\n'),
             "the key query-comment is outside the keys of the feature build",
+        ),
+        (
+            "first_window_year_removed",
+            replace(PROJECT, "  first_window_year: 2018\n", ""),
+            "vars.first_window_year is None, not a whole year",
+        ),
+        (
+            "first_window_year_not_a_year",
+            replace(PROJECT, "  first_window_year: 2018\n", "  first_window_year: '2018'\n"),
+            "vars.first_window_year is '2018', not a whole year",
         ),
         ("default_selector_removed", remove(SELECTORS), "no default selector leaves tag 'features' out"),
         ("default_selector_loses_exclusion", replace(SELECTORS, "value: features", "value: other"), "no default selector leaves tag 'features' out"),
@@ -755,6 +766,29 @@ def allowlist_cases() -> list[tuple[str, Damage, str | None]]:
             "execute_branch_resolved",
             contracted_probe("int_probe_execute", "{% if execute %}select 'x' as measure_control{% else %}select 'y' as measure_control{% endif %}"),
             "model.hai.int_probe_execute uses the name execute",
+        ),
+        (
+            "reviewed_var_in_a_model_is_admitted_resolved",
+            both(
+                contracted_probe("int_probe_window_year", "select cast({{ var('first_window_year') }} as varchar) as measure_control"),
+                replace(INPUTS, '"models": {\n', '"models": {\n  "int_probe_window_year": [],\n'),
+            ),
+            None,
+        ),
+        (
+            "var_with_an_unreviewed_name_resolved",
+            contracted_probe("int_probe_other_var", "select cast({{ var('rating_table') }} as varchar) as measure_control"),
+            "model.hai.int_probe_other_var calls var()",
+        ),
+        (
+            "reviewed_var_with_a_default_resolved",
+            contracted_probe("int_probe_var_default", "select cast({{ var('first_window_year', 2000) }} as varchar) as measure_control"),
+            "model.hai.int_probe_var_default calls var()",
+        ),
+        (
+            "var_name_built_at_run_time_resolved",
+            contracted_probe("int_probe_var_name", "select cast({{ var('first_' ~ 'window_year') }} as varchar) as measure_control"),
+            "model.hai.int_probe_var_name calls var()",
         ),
         (
             "ref_argument_from_var_resolved",

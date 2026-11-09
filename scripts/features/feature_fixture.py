@@ -39,6 +39,9 @@ PLANTED = {
     "period_on_window_start": "990001:2022",
     "oldest": "990001:2022",
     "newest": "990001:2024",
+    "before_first_window_year": "990007:2017",
+    "on_first_window_year": "990007:2018",
+    "after_first_window_year": "990007:2019",
 }
 Rows = dict[str, list[dict[str, Any]]]
 INSERT_SQL = 'insert into main."{table}" ({names}) values ({marks})'
@@ -100,6 +103,8 @@ def gold_rows(version: int = 1) -> Rows:
         "990003": [2023],
         "990004": [2022, 2023],
         "990005": [2022],
+        # A hospital with a window before the reviewed first_window_year (2017: history only), one on it (2018) and one after it (2019).
+        "990007": [2017, 2018, 2019],
     }
     if version == 2:
         hospitals["990006"] = [2023, 2024]

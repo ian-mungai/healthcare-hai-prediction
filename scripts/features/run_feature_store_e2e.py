@@ -1515,6 +1515,24 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
             "windows with an own snapshot keep state, county and classification",
             by_key["990001:2022"][1:4] == ("AL", "01001", "01") and by_key["990005:2022"][1] == "FL",
         )
+        first_year = int(importlib.import_module("yaml").safe_load((ROOT / "dbt/dbt_project.yml").read_text())["vars"]["first_window_year"])
+        history = rows(
+            connection,
+            "select count(*) from read_parquet(?) where entity_id = '990007' and window_start < make_date(?, 1, 1)",
+            [str(first / "gold_input/fct_hai_hospital_window/*.parquet"), first_year],
+        )[0][0]
+        report.case(
+            "E14",
+            "FY1",
+            "the spine starts at first_window_year: an earlier window is absent while the gold input keeps it for history; that year and later ones stay",
+            all(int(key.split(":")[1]) >= first_year for key in by_key)
+            and history > 0
+            and "990007:2017" not in by_key
+            and {"990007:2018", "990007:2019"} <= set(by_key),
+            first_window_year=first_year,
+            earlier_gold_rows=history,
+            spine_years=sorted({int(key.split(":")[1]) for key in by_key}),
+        )
         county = dict(rows(connection, "select spine_key, c203__diabetes_ageadjprv__number from feature_matrix_county_measures"))
         context = {
             row[0]: row[1:]
