@@ -200,11 +200,33 @@ PRIVACY_PATTERNS = {
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
 WRITING_RULE = (
-    f"{POLICY}: writing check. It checks the Oxford comma, date format, time-bound words, dashes, semicolons, slashes and internal references. "
-    "In declared article files it also checks em dashes"
+    f"{POLICY}: writing check. It checks the Oxford comma, date format, time-bound words, dashes, semicolons, slashes, internal references, "
+    "history notes, the phrase no longer and hard-wrapped lines. In declared article files it also checks em dashes"
 )
 WRITING_ALLOWLIST = ".writing_allowlist"
-# Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
+MONTH_ANY = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+# Provenance and past-state forms only. A requirement such as "must be confirmed by the user" or "replaces the old file" is a current rule.
+HISTORY_FORMS = (
+    r"(?i)\(\s*(?:explicit )?user decisions?\b"
+    r"|\buser decisions?,? (?:on |of |in |from )?(?:MONTH[a-z]* \d|v\d|\[?#\d)"
+    r"|\b(?:was|were|been) \w+ by (?:explicit )?user decision\b"
+    r"|\b(?:was|were|been) confirmed by the user\b|(?:^|[.!?]\s+)confirmed by the user\b"
+    r"|\(v\d+\.\d+\.\d+[;,)]|\b(?:until|since|as of) v\d+\.\d+\.\d+\b"
+    r"|\b(?:added|removed|introduced|changed|deprecated|fixed) in v\d+\.\d+\.\d+\b"
+    r"|\bas of (?:MONTH[a-z]*\.? (?:\d{1,2},? )?\d{4}|\d{4}-\d{2}-\d{2})\b"
+    r"|\b(?:was|were) (?:replaced|superseded)\b|\b(?:it|this|which|that) (?:replaced|superseded) (?:the|an?)\b"
+    r"|\b(?:replaced|superseded) (?:the |an |a )?(?:earlier|old|older|previous|former)\b"
+    r"|\b(?:in|from) (?:earlier|previous|former|older) (?:versions?|releases?)\b(?=.*\b(?:was|were|used to|did|had)\b)"
+    r"|\bsince MONTH[a-z]* \d{1,2},? \d{4}\b"
+    r"|\[#\d+\]"
+    r"|\bwhen this (?:section|file|document|standard|rule|page|guide|text) was (?:written|added|created|drafted)\b"
+    r"|\bon the mistaken (?:reading|assumption|belief|premise|view)\b|\b(?:was|were) (?:capped|limited) at\b"
+    r"|(?<!\bis )(?<!\bare )(?<!\bwas )(?<!\bwere )(?<!\bbe )(?<!\bbeen )\bused to "
+    r"(?:be|have|accept|allow|require|need|include|use|call|create|support|read|write|run|return|default|work|reject)\b"
+    r"|\bpreviously (?:was|were|used|did|had|ran|allowed|required|accepted|defaulted)\b|\b(?:was|were) previously\b|(?:^|[.!?]\s+)previously,"
+    r"|(?<!\bis )(?<!\bare )(?<!\bbe )\bchanged from\b"
+)
+# Checked in prose only: code spans, URLs and link targets are masked, and front matter, fenced blocks and indented code blocks are skipped.
 WRITING_PATTERNS = {
     "comma-and": (
         "comma before a final 'and', 'or' or 'nor'",
@@ -223,9 +245,28 @@ WRITING_PATTERNS = {
     "dash": ("em or en dash in prose", re.compile("[\u2013\u2014]"), "end the sentence or use a comma"),
     "semicolon": ("semicolon in prose", re.compile(r";(?!\w)"), "split the text into two sentences"),
     "slash": ("slash between words in prose", re.compile(r"(?<![\w./~-])[a-z]+/[a-z]+(?![\w/.-])"), 'write "a, b or both" instead of "a/b" or "and/or"'),
+    "history": (
+        "history note in a current document",
+        re.compile(HISTORY_FORMS.replace("MONTH", MONTH_ANY)),
+        "state the current rule only. Git history, the CHANGELOG and issues hold when and why it changed",
+    ),
+    "no-longer": (
+        "possible history note: 'no longer' describes a change",
+        re.compile(r"(?i)\bno longer\b"),
+        "if the sentence records a past state, state the current rule only. A current rule such as 'remove the files it no longer reads' stays",
+    ),
 }
+# A line that follows a prose line and starts no structure of its own continues that line.
+WRAP = ("hard-wrapped prose line", "join the line to the one before it. This repository writes each paragraph and list item on one line")
+WRAP_START = re.compile(r"\s*(?:[-*+] |\d+[.)] |#|\||>|<|\[[^\]]*\]:|$)")
+LIST_ITEM = re.compile(r"\s*(?:[-*+] |\d+[.)] )")
+SENTENCE_END = re.compile(r"[.!?:][\"')\]*_]*$")
+SETEXT_UNDERLINE = re.compile(r"\s*(?:=+|-+)\s*$")
+HISTORY_EXEMPT = {"CHANGELOG.md"}
 ARTICLE_ONLY = {"em-dash"}
-WARN_FIRST = {"dash", "semicolon", "slash", "internal-reference"}
+WARN_FIRST = {"dash", "semicolon", "slash", "internal-reference", "history", "no-longer", "wrap"}
+# A person reviews these kinds: a current rule can use the phrase, so no option blocks them.
+REVIEWED_BY_HAND = {"no-longer"}
 
 
 MONTH_NAME = (
@@ -1274,9 +1315,13 @@ def mask_prose(line: str) -> str:
 
 
 def prose_lines(text: str) -> list[tuple[int, str]]:
-    """Masked prose lines of a Markdown file, outside front matter and fenced code blocks."""
+    """Masked prose lines of a Markdown file, outside front matter, fenced code blocks and indented code blocks.
+
+    An indented block is code when a blank line precedes it and no list item is open. Inside a list item, an indented paragraph is prose.
+    """
     lines: list[tuple[int, str]] = []
-    fenced = front = False
+    fenced = front = code = listed = False
+    previous_blank = True
     for number, line in enumerate(text.splitlines(), 1):
         if number == 1 and line.strip() == "---":
             front = True
@@ -1287,7 +1332,21 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
         if line.lstrip().startswith(("```", "~~~")):
             fenced = not fenced
             continue
-        if not fenced:
+        if fenced:
+            continue
+        if not line.strip():
+            lines.append((number, ""))
+            previous_blank = True
+            continue
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip())
+        if LIST_ITEM.match(line):
+            listed = True
+        elif indent == 0 and previous_blank:
+            listed = False
+        code = indent >= 4 and (code or (previous_blank and not listed))
+        previous_blank = False
+        if not code:
             lines.append((number, mask_prose(line)))
     return lines
 
@@ -1375,21 +1434,44 @@ def internal_reference_findings(allowed: list[tuple[str, str]]) -> list[Finding]
     return findings
 
 
+def line_matches(kind: str, path: str, article: bool, line: str, pattern: re.Pattern[str]) -> bool:
+    """Whether a prose line holds the kind: article-only and changelog exemptions apply, and entities do not join words in the warn-first kinds."""
+    if (kind in ARTICLE_ONLY and not article) or (kind == "history" and path in HISTORY_EXEMPT):
+        return False
+    text = re.sub(r"&#?\w+;", " ", line) if kind in WARN_FIRST else line
+    if kind == "dash" and article:
+        text = text.replace("\u2014", "")
+    return bool(pattern.search(text))
+
+
+def paragraph_prose(line: str) -> bool:
+    """Whether the line is plain paragraph text: no heading, list marker, quote, HTML, table row, setext underline or link definition."""
+    return not WRAP_START.match(line) and "|" not in line and not SETEXT_UNDERLINE.match(line)
+
+
+def wrapped(previous: str, line: str) -> bool:
+    """Whether the line continues the paragraph or list item line before it: that line stops mid-sentence and has no hard break."""
+    if previous.endswith(("  ", "\\")) or SENTENCE_END.search(previous.rstrip()):
+        return False
+    return paragraph_prose(line) and (paragraph_prose(previous) or (bool(LIST_ITEM.match(previous)) and "|" not in previous))
+
+
 def writing_check(articles: list[str], block: list[str]) -> tuple[list[Finding], list[Finding]]:
-    allowed, findings = read_allowlist(WRITING_ALLOWLIST, [*WRITING_PATTERNS, "internal-reference"], WRITING_RULE, "why this text is kept as is")
+    allowed, findings = read_allowlist(WRITING_ALLOWLIST, [*WRITING_PATTERNS, "internal-reference", "wrap"], WRITING_RULE, "why this text is kept as is")
     warnings: list[Finding] = []
     for path in sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())):
         article = any(fnmatch.fnmatch(path, glob) for glob in articles)
         if not (path.endswith(".md") or article) or path.startswith(DATA_FOLDERS) or not os.path.isfile(path):
             continue
-        for number, line in prose_lines(Path(path).read_text(errors="replace")):
-            for kind, (description, pattern, fix) in WRITING_PATTERNS.items():
-                if kind in ARTICLE_ONLY and not article:
-                    continue
-                text = re.sub(r"&#?\w+;", " ", line) if kind in WARN_FIRST else line
-                if kind == "dash" and article:
-                    text = text.replace("\u2014", "")
-                if pattern.search(text) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+        lines = prose_lines(Path(path).read_text(errors="replace"))
+        for index, (number, line) in enumerate(lines):
+            hits = [
+                (kind, description, fix) for kind, (description, pattern, fix) in WRITING_PATTERNS.items() if line_matches(kind, path, article, line, pattern)
+            ]
+            if index and lines[index - 1][0] == number - 1 and wrapped(lines[index - 1][1], line):
+                hits.append(("wrap", *WRAP))
+            for kind, description, fix in hits:
+                if not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
                     target = warnings if kind in WARN_FIRST and kind not in block else findings
                     target.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
     target = findings if "internal-reference" in block else warnings
@@ -1503,7 +1585,9 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore (the default scope). Ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
-    parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST), help="writing-check: make a warn-first kind block")
+    parser.add_argument(
+        "--block", action="append", default=[], choices=sorted(WARN_FIRST - REVIEWED_BY_HAND), help="writing-check: make a warn-first kind block"
+    )
     parser.add_argument("--today", metavar="YYYY-MM-DD", help="judge allowlist expiry against this UTC date instead of today's")
     args = parser.parse_args()
     if args.today:

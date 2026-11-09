@@ -280,7 +280,7 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
         step["timeout_seconds"] = seconds if step is not first else int(config["pre_push"]["changed_file_seconds"]) * 2
         step["argv"] = command(root, step)
     if small:
-        reason += ". This is a small change: the hook partitions and the acquisition hook stay with hosted CI"
+        reason += ". This is a small change. The hook partitions and the acquisition hook stay with hosted CI"
     return {"scope": scope, "reason": reason, "start": start, "end": end, "output": str(output), "first": first, "steps": steps}
 
 

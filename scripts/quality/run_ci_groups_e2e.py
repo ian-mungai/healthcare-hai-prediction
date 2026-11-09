@@ -5153,6 +5153,7 @@ def small_case(
         and "changed_files" in stubs
         and (not hosted if want_small else "ci_hooks" in stubs)
         and (("small change" in out) == want_small)
+        and "small change:" not in out
     )
     return {"case": f"pre_push_small_change_{name}", "passed": passed, "exit": code, "calls": stubs, "output": (out + error)[-300:]}
 

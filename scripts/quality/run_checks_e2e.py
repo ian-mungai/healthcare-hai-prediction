@@ -81,11 +81,11 @@ EM_DASH = "\u2014"
 EN_DASH = "\u2013"
 CLEAN_WRITING = (
     f"---\nlast_updated: {ISO_DATE}\n---\n\n# Notes\n\n"
-    "Keep secrets out of logs or commits and run a privacy scan. Lists read red, green and blue.\n"
-    f"Dates read Sep 30 2026; code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n"
+    "Keep secrets out of logs or commits and run a privacy scan. Lists read red, green and blue.\n\n"
+    f"Dates read Sep 30 2026; code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n\n"
     f"An em dash {EM_DASH} allowed outside articles.\n\n```text\nrun {ISO_DATE}, and done\n```\n"
 )
-CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n", "")
+CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n\n", "")
 CLAUSE_COMMA = "Secrets never go into logs or commits" + ", and a privacy scan runs on every commit.\n"
 SERIAL_COMMA = "The check reads Markdown, articles" + ", and commit messages.\n"
 NOR_COMMA = "It is not fast" + ", nor is it cheap.\n"
@@ -1091,6 +1091,12 @@ CASES = [
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
     Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
+    Case(
+        "history, no longer and wrapped line warn through the hook",
+        "writing-check",
+        True,
+        {"notes.md": "This replaced the earlier rule.\n\nThe hook no longer runs on push.\n\nThis sentence is wrapped\nonto a second line.\n"},
+    ),
     Case("internal references warn through the hook", "writing-check", True, {"notes.md": "The work belongs to wave 3.\n"}),
     Case(
         "valid front matter passes",
@@ -1368,6 +1374,13 @@ BLOCK_REASONS = {
     "leading comma blocked by sqlfluff": "LT04",
 }
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
+WARNING_HEADERS = {
+    "history, no longer and wrapped line warn through the hook": (
+        "WARN notes.md:1: history note in a current document",
+        "WARN notes.md:3: possible history note: 'no longer' describes a change",
+        "WARN notes.md:6: hard-wrapped prose line",
+    )
+}
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
     "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
@@ -1442,7 +1455,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             git(repo, "rm", "-q", relative)
         git(repo, "add", "-A")
         write(repo, case.untracked)
-        verbose = case.name in PASS_MARKERS
+        verbose = case.name in PASS_MARKERS or case.name in WARNING_HEADERS
         args = [
             "run",
             case.hook,
@@ -1468,6 +1481,8 @@ def run_case(case: Case) -> tuple[bool, str]:
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
             marker = PASS_MARKERS.get(case.name, "")
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
+        if case.name in WARNING_HEADERS:
+            correct = correct and all(header in output for header in WARNING_HEADERS[case.name])
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
         if case.hook in ("writing-check", "markdownlint", "front-matter", "markdown-links", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
@@ -2036,17 +2051,96 @@ def run_allowlist_expiry_case() -> tuple[bool, str]:
 DASH_FINDING = "em or en dash in prose"
 SEMICOLON_FINDING = "semicolon in prose"
 SLASH_FINDING = "slash between words in prose"
+HISTORY_FINDING = "history note in a current document"
+NO_LONGER_FINDING = "possible history note: 'no longer' describes a change"
+WRAP_FINDING = "hard-wrapped prose line"
 DASH_LINE = f"Rules help {EM_DASH} when they are checked.\n"
 EN_DASH_LINE = f"Rules help {EN_DASH} when they are checked.\n"
 SEMICOLON_LINE = "Rules help; checks enforce them.\n"
 SLASH_LINE = "Read and/or write the file.\n"
-ALL_KINDS = DASH_LINE + SEMICOLON_LINE + SLASH_LINE
+ALL_KINDS = f"{DASH_LINE}\n{SEMICOLON_LINE}\n{SLASH_LINE}"
 PUNCTUATION_PROSE = (
     "Rules help when they are checked. Read `a/b;c`, see [the log](https://example.invalid/a;b-c) &amp; write it.\n"
     "Open scripts/quality/timing.sh or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
 )
 CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
 BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
+# Each history sample sits in its own paragraph, so a finding names its own line and no sample is also a wrapped line.
+HISTORY_SENTENCES = (
+    "The scan was added by user decision.",
+    "Until v8.35.0 every module needed a docstring.",
+    "The suppression was approved in [#16](https://example.invalid/issues/16).",
+    "This replaced the earlier rule.",
+    "Other methods are allowed since Oct 10 2026.",
+    "The loader reads the skill folder (v8.27.0).",
+    "Confirmed by the user in a review.",
+    "Diagrams use the archify skill (it replaced the architecture-diagram skill).",
+    "No public repository existed when this section was written, so do not link one.",
+    "The payload was capped at 28,672 bytes on the mistaken reading that the files share one budget.",
+    "The flag used to accept two values.",
+    "Previously, the loader read both folders.",
+    "The default changed from 4 to 8.",
+    "The table reflects the state as of Oct 2026.",
+    "The old loader was replaced by the broker.",
+    "The rule was confirmed by the user.",
+)
+# Statements of a current rule or requirement that share words with the history forms.
+CURRENT_RULE_PROSE = (
+    "\n\n".join(
+        (
+            "Each release must be confirmed by the user before deployment.",
+            "Exceptions are granted by user decision.",
+            "This command replaces the old config file with the new one.",
+            "Use the flag in v2.1.0 or later.",
+            "Packages from earlier versions must be rebuilt.",
+            "Step #3 selects the option.",
+            "Previously saved files are reused.",
+            "The value is used to run the scan.",
+            "The setting can be changed from the command line.",
+            "The loader supersedes nothing and keeps every file.",
+        )
+    )
+    + "\n"
+)
+
+HISTORY_PROSE = "\n\n".join(HISTORY_SENTENCES) + "\n"
+HISTORY_HEADERS = [f"WARN notes.md:{1 + 2 * index}: {HISTORY_FINDING}" for index in range(len(HISTORY_SENTENCES))]
+NO_LONGER_PROSE = (
+    "The Claude Code loader no longer includes the index.\n\n- The hook no longer runs on push.\n\nThe copy of the loader no longer reads this file.\n"
+)
+NO_LONGER_HEADERS = [f"WARN notes.md:{line}: {NO_LONGER_FINDING}" for line in (1, 3, 5)]
+WRAPPED_PROSE = "This sentence is wrapped\nonto a second line.\n\n1. A list item that\n   continues on the next line.\n"
+WRAP_HEADERS = [f"WARN notes.md:{line}: {WRAP_FINDING}" for line in (2, 5)]
+# A line is wrapped only when the line before it ends mid-sentence and both lines are plain paragraph prose.
+SENTENCE_PER_LINE_PROSE = (
+    "Read the file.\nCheck the result.\n\n"
+    "Is it done?\nYes!\nGood.\n\n"
+    'He said "done."\nNext.\n\n'
+    "Run these:\nthe next item\n\n"
+    "First line with a break  \nsecond line.\n\n"
+    "First line with a break\\\nsecond line.\n\n"
+    "a | b\n--- | ---\n1 | 2\n\n"
+    "Title\n=====\n\nSubtitle\n--------\n\n"
+    '[ref]: https://example.invalid/a\n    "Title of the link"\n'
+)
+MID_SENTENCE_PROSE = "Ends with a comma,\ncontinues here\nand again here.\n\n- A list item that\n  continues here.\n"
+MID_SENTENCE_HEADERS = [f"WARN notes.md:{line}: {WRAP_FINDING}" for line in (2, 3, 6)]
+# Indented code is not prose, but an indented paragraph inside a list item is.
+INDENTED_CODE_PROSE = (
+    "Intro paragraph.\n\n    The hook no longer runs.\n    This replaced the earlier rule; code/with slash \u2014 and dash.\n    Wrapped\n    line.\n\n"
+    "\tTab indented: the hook no longer runs.\n\nBack to prose.\n"
+)
+LIST_CONTINUATION_PROSE = "- Item.\n\n    The hook no longer runs.\n"
+
+# Structure that starts a line of its own is never a continuation: headings, lists, tables, quotes, HTML, link definitions, code and front matter.
+UNWRAPPED_PROSE = (
+    "---\ntitle: Notes\ndescription: front matter lines\n---\n\n# Title\n\nOne paragraph line.\n\n- item one\n- item two\n1. first\n2. second\n\n"
+    "| a | b |\n| - | - |\n\n> quoted\n> quoted again\n\n<!-- note -->\n[ref]: https://example.invalid/a\n\n```text\nfenced\nfenced two\n```\n\nLast line.\n"
+)
+CODE_AND_FENCE_PROSE = (
+    "Run `no longer` in code and keep `This replaced the earlier rule.` as an example.\n\n"
+    "```text\nThis replaced the earlier rule.\nThe hook no longer runs.\n```\n"
+)
 KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/")
 INTERNAL_REFERENCE_SAMPLES = [
     ("numbered owner decision", "Owner decision 12 permits the reader.", "owner-record"),
@@ -2089,14 +2183,14 @@ INTERNAL_REFERENCE_SAMPLES = [
     ("local plan link destination", "Read [the design](plans/design.md).", "plans-path"),
 ]
 INTERNAL_NEAR_MISSES = (
-    "Owner decisions describe scope. Approval is required. Amendments describe a rule. The wave breaks. Review rounds have names.\n"
-    "The approved code hashes of 9 collectors. Approval is required for 2 users. Approved: 5 of 10 rows.\n"
-    "Approved 5 rows were loaded. Approval 2 weeks later. User approval takes 2 steps. Encoded text +P7d/ and =P3c stays.\n"
-    "Owner decisions in October are logged. User approval for re-entry stays.\n"
-    "User approved utf-8 output. Owner approved sha-256 checksums. User approved top-10 results.\n"
-    "User approval retains 3 decimal places. Owner approval needs 2 marked rows. User approval uses 4 augmented rows and 2 decoders.\n"
-    "Approved Decimal 3 2026 values stay. Owner approval may 2 rows.\n"
-    "Observed on Oct 25 2026. Versions v9.10.0 and 1.2.3 stay. RQ4, P3.12, P7docs and WPA stay.\n"
+    "Owner decisions describe scope. Approval is required. Amendments describe a rule. The wave breaks. Review rounds have names.\n\n"
+    "The approved code hashes of 9 collectors. Approval is required for 2 users. Approved: 5 of 10 rows.\n\n"
+    "Approved 5 rows were loaded. Approval 2 weeks later. User approval takes 2 steps. Encoded text +P7d/ and =P3c stays.\n\n"
+    "Owner decisions in October are logged. User approval for re-entry stays.\n\n"
+    "User approved utf-8 output. Owner approved sha-256 checksums. User approved top-10 results.\n\n"
+    "User approval retains 3 decimal places. Owner approval needs 2 marked rows. User approval uses 4 augmented rows and 2 decoders.\n\n"
+    "Approved Decimal 3 2026 values stay. Owner approval may 2 rows.\n\n"
+    "Observed on Oct 25 2026. Versions v9.10.0 and 1.2.3 stay. RQ4, P3.12, P7docs and WPA stay.\n\n"
     "See https://example.invalid/plans/P7d/wave-3/issue/76#76 or [the source](https://example.invalid/plans/A273).\n"
 )
 WRITING_KIND_SAMPLES = [
@@ -2109,7 +2203,7 @@ WRITING_KIND_SAMPLES = [
         {"notes.md": ALL_KINDS},
         (),
         0,
-        [f"WARN notes.md:1: {DASH_FINDING}", f"WARN notes.md:2: {SEMICOLON_FINDING}", f"WARN notes.md:3: {SLASH_FINDING}"],
+        [f"WARN notes.md:1: {DASH_FINDING}", f"WARN notes.md:3: {SEMICOLON_FINDING}", f"WARN notes.md:5: {SLASH_FINDING}"],
     ),
     ("code, URL, path, entity, fence and front matter are not reported", {"notes.md": CLEAN_PUNCTUATION}, (), 0, []),
     (
@@ -2129,7 +2223,7 @@ WRITING_KIND_SAMPLES = [
         {"notes.md": ALL_KINDS},
         BLOCK_ALL,
         1,
-        [f"notes.md:1: {DASH_FINDING}", f"notes.md:2: {SEMICOLON_FINDING}", f"notes.md:3: {SLASH_FINDING}"],
+        [f"notes.md:1: {DASH_FINDING}", f"notes.md:3: {SEMICOLON_FINDING}", f"notes.md:5: {SLASH_FINDING}"],
     ),
     ("--block of one kind leaves the others warning", {"notes.md": DASH_LINE}, ("--block", "semicolon"), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
     ("--block of every kind passes clean prose", {"notes.md": CLEAN_PUNCTUATION}, BLOCK_ALL, 0, []),
@@ -2143,10 +2237,10 @@ WRITING_KIND_SAMPLES = [
     ),
     (
         "allowlist entry with a reason silences only its kind",
-        {"notes.md": SEMICOLON_LINE + DASH_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon -- permanent\n"},
+        {"notes.md": f"{SEMICOLON_LINE}\n{DASH_LINE}", WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon -- permanent\n"},
         (),
         0,
-        [f"WARN notes.md:2: {DASH_FINDING}"],
+        [f"WARN notes.md:3: {DASH_FINDING}"],
     ),
     (
         "allowlist entry silences a blocked kind",
@@ -2171,6 +2265,54 @@ WRITING_KIND_SAMPLES = [
     ),
     ("an en dash in a declared article warns", {"articles/a.md": EN_DASH_LINE}, ("--articles=articles/*.md",), 0, [f"WARN articles/a.md:1: {DASH_FINDING}"]),
     *[(f"{folder} is not scanned", {f"{folder}notes.md": ALL_KINDS}, BLOCK_ALL, 0, []) for folder in KIND_FOLDERS],
+    ("history notes warn", {"notes.md": HISTORY_PROSE}, (), 0, HISTORY_HEADERS),
+    ("--block history blocks", {"notes.md": "This replaced the earlier rule.\n"}, ("--block", "history"), 1, [f"notes.md:1: {HISTORY_FINDING}"]),
+    (
+        "--warn keeps blocked history a warning",
+        {"notes.md": "This replaced the earlier rule.\n"},
+        ("--block", "history", "--warn"),
+        0,
+        [f"WARN notes.md:1: {HISTORY_FINDING}"],
+    ),
+    ("history is exempt in the changelog", {"CHANGELOG.md": "This replaced the earlier rule.\n"}, (), 0, []),
+    (
+        "history allowlist entry silences its kind",
+        {"notes.md": "This replaced the earlier rule.\n", WRITING_ALLOWLIST: "history notes.md -- the text quotes a past rule\n"},
+        ("--block", "history"),
+        0,
+        [],
+    ),
+    ("no longer warns", {"notes.md": NO_LONGER_PROSE}, (), 0, NO_LONGER_HEADERS),
+    ("no longer warns in the changelog", {"CHANGELOG.md": "The hook no longer runs on push.\n"}, (), 0, [f"WARN CHANGELOG.md:1: {NO_LONGER_FINDING}"]),
+    (
+        "no longer allowlist entry silences its kind",
+        {"notes.md": "The hook no longer runs on push.\n", WRITING_ALLOWLIST: "no-longer notes.md -- a current rule keeps the phrase\n"},
+        (),
+        0,
+        [],
+    ),
+    ("hard-wrapped lines warn", {"notes.md": WRAPPED_PROSE}, (), 0, WRAP_HEADERS),
+    ("--block wrap blocks", {"notes.md": "Wrapped\nline.\n"}, ("--block", "wrap"), 1, [f"notes.md:2: {WRAP_FINDING}"]),
+    (
+        "wrap allowlist entry silences its kind",
+        {"notes.md": "Wrapped\nline.\n", WRITING_ALLOWLIST: "wrap notes.md -- quoted text\n"},
+        ("--block", "wrap"),
+        0,
+        [],
+    ),
+    ("structure that starts a line is not a wrapped line", {"notes.md": UNWRAPPED_PROSE}, ("--block", "wrap"), 0, []),
+    ("one sentence per line, breaks, tables and headings are not wrapped lines", {"notes.md": SENTENCE_PER_LINE_PROSE}, ("--block", "wrap"), 0, []),
+    ("a line that ends mid-sentence is a wrapped line", {"notes.md": MID_SENTENCE_PROSE}, (), 0, MID_SENTENCE_HEADERS),
+    (
+        "indented code holds no history note, no longer, wrapped line or punctuation kind",
+        {"notes.md": INDENTED_CODE_PROSE},
+        (*BLOCK_ALL, "--block", "history", "--block", "wrap"),
+        0,
+        [],
+    ),
+    ("a paragraph indented inside a list item is prose", {"notes.md": LIST_CONTINUATION_PROSE}, (), 0, [f"WARN notes.md:3: {NO_LONGER_FINDING}"]),
+    ("current rules and requirements are not history notes", {"notes.md": CURRENT_RULE_PROSE}, ("--block", "history"), 0, []),
+    ("code spans and fences hold no history note or no longer", {"notes.md": CODE_AND_FENCE_PROSE}, ("--block", "history"), 0, []),
     *[
         (name, {"notes.txt": sample + "\n"}, (), 0, [f"WARN notes.txt:1: internal reference ({pattern})"])
         for name, sample, pattern in INTERNAL_REFERENCE_SAMPLES
@@ -2348,6 +2490,7 @@ WRITING_KIND_SAMPLES = [
 WRITING_KIND_ERRORS = [
     ("--block with an unknown kind", ("--block", "colon"), "invalid choice: 'colon'"),
     ("--block of a kind that always blocks", ("--block", "comma-and"), "invalid choice: 'comma-and'"),
+    ("--block of a kind that a person reviews", ("--block", "no-longer"), "invalid choice: 'no-longer'"),
 ]
 
 
