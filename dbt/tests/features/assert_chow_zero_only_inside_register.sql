@@ -1,14 +1,15 @@
 -- Fails for each spine row whose C069 (change of ownership in the prior 12 months) or C069 any-event flag differs from the events of fct_ownership_change
 -- (design 2.6). The count is the distinct events of the CCN, as buyer or seller, with an effective date in [start - 1 year, start); it is 0, not missing,
--- when there is none, but only when the 12 months lie inside the register, which starts on the earliest effective date of the gold events. An earlier
--- window stays missing. An event 366 days before the start and an event on the start are not counted. The flag is 1 when the count is above 0, else 0, and
--- missing when the count is missing.
+-- when there is none, but only when the 12 months lie inside the register, which covers events from the reviewed coverage start (seed register_coverage, the
+-- date the CMS dataset page states), never from the earliest event of the data. An earlier window stays missing. An event 366 days before the start and an
+-- event on the start are not counted. The flag is 1 when the count is above 0, else 0, and missing when the count is missing.
 
 with
 
 register as (
-    select min(effective_date) as register_start
-    from {{ ref('fct_ownership_change') }}
+    select coverage_start as register_start
+    from {{ ref('register_coverage') }}
+    where register = 'cms_change_of_ownership'
 ),
 
 events as (

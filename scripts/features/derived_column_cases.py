@@ -67,19 +67,22 @@ CARE = {
     f"{CCN}:2024": (None, None),
     "990001:2022": (None, 4.0),
 }
-# County context density: ln(50000 / 100), ln(60000 / 100) and a zero area; county measures ordinal of the code 3 (990009) and of the code 0 (990005).
-DENSITY = {f"{CCN}:2022": math.log(500), f"{CCN}:2023": math.log(600), f"{CCN}:2024": None}
+# County context density of the latest SVI edition that has both the population and the area before the window start: the window 2022 pairs 2020 (2021 has a
+# population and no area), the window 2023 pairs 2022 and the window 2024 pairs 2023, whose area is zero; hospital 990005 (county 12001) has no pair. County
+# measures ordinal of the code 3 (990009) and of the code 0 (990005).
+DENSITY = {f"{CCN}:2022": math.log(500), f"{CCN}:2023": math.log(600), f"{CCN}:2024": None, "990005:2022": None}
 RUCC = {f"{CCN}:2022": 3.0, f"{CCN}:2023": 3.0, f"{CCN}:2024": 3.0, "990005:2022": None}
-# C069 and its flag: the register starts on 2021-06-01, so a window whose 12 months start earlier is missing; 990009 has two events in 2022 (one 366 days before
-# the start of 2024), one on the start of 2024 and one exactly 12 months before it, which counts.
+# C069 and its flag: the register covers events from 2016-01-01 (the reviewed date of register_coverage), whatever the earliest event of the data is, so every
+# window of the spine has a count; 990009 has two events in 2022 (one 366 days before the start of 2024), one on the start of 2024 and one exactly 12 months
+# before it, which counts.
 CHOW = {
-    f"{CCN}:2022": (None, None),
+    f"{CCN}:2022": (0.0, 0.0),
     f"{CCN}:2023": (2.0, 1.0),
     f"{CCN}:2024": (1.0, 1.0),
-    "990001:2022": (None, None),
+    "990001:2022": (0.0, 0.0),
     "990001:2023": (0.0, 0.0),
     "990001:2024": (0.0, 0.0),
-    "990007:2018": (None, None),
+    "990007:2018": (0.0, 0.0),
     "990002:2023": (0.0, 0.0),
 }
 WINDOW_SQL = (

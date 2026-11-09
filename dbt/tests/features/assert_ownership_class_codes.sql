@@ -5,8 +5,8 @@ with
 
 codes as (
     select
-        code,
-        expected_class
+        listed.code,
+        listed.expected_class
     from (
         values
         ('01', 'nonprofit'),
@@ -23,7 +23,7 @@ codes as (
         ('11', null),
         ('3', null),
         (null, null)
-    ) as table_of_codes (code, expected_class)
+    ) as listed (code, expected_class)
 )
 
 select

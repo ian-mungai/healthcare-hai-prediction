@@ -92,7 +92,8 @@ DERIVED_SNAPSHOTS = (
 )
 # Case-mix index by data fiscal year, with its cases: window 2023 gets 1.8 minus 1.5; window 2022 has no earlier year; window 2024 has no 2023 year.
 DERIVED_CMI = ((2021, 1.5, 1000.0), (2022, 1.8, 0.0))
-# Change of ownership events: (key, effective date, buyer, seller, type). The first starts the register at 2021-06-01 and belongs to no spine hospital.
+# Change of ownership events: (key, effective date, buyer, seller, type). The first is the earliest event of the data (2021-06-01); it proves nothing about
+# the register, whose coverage starts on the reviewed date of dbt/seeds/features/register_coverage.csv (2016-01-01).
 DERIVED_EVENTS = (
     ("EV0", date(2021, 6, 1), "990012", None, "ACQ"),
     ("EV1", date(2022, 6, 15), DERIVED_CCN, "990013", "ACQ"),
@@ -100,8 +101,19 @@ DERIVED_EVENTS = (
     ("EV3", date(2024, 1, 1), DERIVED_CCN, "990015", "ACQ"),
     ("EV4", date(2023, 1, 1), DERIVED_CCN, "990016", "ACQ"),
 )
-# SVI editions of county 01001 (population, area in square miles): the area of the last one is zero.
-DERIVED_SVI = (("2020", 50000.0, 100.0), ("2022", 60000.0, 100.0), ("2023", 70000.0, 0.0))
+# SVI editions (county, edition, population, area in square miles; None leaves the area row out). County 01001: the area of 2023 is zero, and 2021 has a
+# population but no area, so the window 2022 pairs the editions of 2020, not the population of 2021 with the area of 2020. County 12001 (hospital 990005) has
+# no pair: 2021 has a population and no area, and the area row of 2020 has no value (see DERIVED_SVI_NO_VALUE).
+DERIVED_SVI = (
+    ("01001", "2020", 50000.0, 100.0),
+    ("01001", "2021", 55000.0, None),
+    ("01001", "2022", 60000.0, 100.0),
+    ("01001", "2023", 70000.0, 0.0),
+    ("12001", "2020", 80000.0, None),
+    ("12001", "2021", 90000.0, None),
+)
+# SVI area rows that are published with no number (county, edition): the row exists and the value is missing.
+DERIVED_SVI_NO_VALUE = (("12001", "2020"),)
 # Rural-urban continuum codes: county, vintage, code.
 DERIVED_RUCC = (("01001", "2013", "3"), ("48001", "2013", "9"), ("12001", "2013", "0"))
 Rows = dict[str, list[dict[str, Any]]]
@@ -266,19 +278,22 @@ def derived_rows(rows: Rows) -> None:
                 "releases_listed": 1,
             }
         )
-    for edition, population, area in DERIVED_SVI:
+    for county, edition, population, area in DERIVED_SVI:
         for field, value in (("e_totpop", population), ("area_sqmi", area)):
+            no_value = field == "area_sqmi" and (county, edition) in DERIVED_SVI_NO_VALUE
+            if value is None and not no_value:
+                continue
             rows["fct_svi_county_value"].append(
                 {
                     "member_sha256": f"svi-{edition}",
                     "source_row_number": 1,
                     "edition": edition,
-                    "county_fips": "01001",
+                    "county_fips": county,
                     "field": field,
-                    "value_published": str(value),
-                    "value_number": value,
+                    "value_published": "-999" if no_value else str(value),
+                    "value_number": None if no_value else value,
                     "county_scope": "county",
-                    "svi_value_key": f"svi-{edition}-{field}",
+                    "svi_value_key": f"svi-{county}-{edition}-{field}",
                     "is_connecticut": False,
                 }
             )

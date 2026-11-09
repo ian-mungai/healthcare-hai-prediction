@@ -449,26 +449,27 @@ computed_fields as (
         and transform = 'computed'
 ),
 
-density_rows as (
-    -- Density is the natural log of the SVI population over the SVI area in square miles of the same spine key; null when either is missing or not above
-    -- 0. The row takes the period of the population row, so its age is that of the population.
+density_pairs as (
+    -- The SVI editions that have both a population and an area for the spine key: each a single value, not missing, from the same edition (period), never a
+    -- population of one edition over the area of another. The latest such edition that ends before the window start comes first.
     select
         population.spine_key,
         population.measure_source,
         population.measure_control,
-        computed_fields.field,
-        population.review_decision,
         population.period_end,
-        null::varchar as value_text,
-        case when population.value_number > 0 and area.value_number > 0 then ln(population.value_number / area.value_number) end as value_number,
-        null::varchar as value_note,
-        population.alignment_status
-    from base_rows as population
-    inner join base_rows as area
+        population.value_number as population,
+        area.value_number as area,
+        row_number() over (
+            partition by population.spine_key, population.measure_source, population.measure_control
+            order by population.period_end desc
+        ) as recency
+    from value_candidates as population
+    inner join value_candidates as area
         on
             population.spine_key = area.spine_key
             and population.measure_source = area.measure_source
             and population.measure_control = area.measure_control
+            and population.period_end = area.period_end
     inner join computed_fields
         on
             population.measure_source = computed_fields.measure_source
@@ -477,6 +478,50 @@ density_rows as (
         computed_fields.field = 'density_log'
         and population.field = 'e_totpop'
         and area.field = 'area_sqmi'
+        and not population.is_conflict
+        and not area.is_conflict
+        and population.value_number is not null
+        and area.value_number is not null
+),
+
+density_rows as (
+    -- Density is the natural log of the SVI population over the SVI area in square miles of the latest SVI edition that has both (density_pairs); null when
+    -- either is not above 0. The row takes the period of that edition. With no edition that has both, the value and the period are null, also when the
+    -- population has a period of its own.
+    select
+        spine.spine_key,
+        computed_fields.measure_source,
+        computed_fields.measure_control,
+        computed_fields.field,
+        value_controls.review_decision,
+        pair.period_end,
+        null::varchar as value_text,
+        case when pair.population > 0 and pair.area > 0 then ln(pair.population / pair.area) end as value_number,
+        null::varchar as value_note,
+        case
+            when pair.spine_key is not null then 'aligned'
+            when population.alignment_status = 'aligned' then 'no_period_before_start'
+            else population.alignment_status
+        end as alignment_status
+    from spine
+    inner join computed_fields on computed_fields.field = 'density_log'
+    inner join value_controls
+        on
+            computed_fields.measure_source = value_controls.measure_source
+            and computed_fields.measure_control = value_controls.measure_control
+            and value_controls.field = 'e_totpop'
+    left join density_pairs as pair
+        on
+            spine.spine_key = pair.spine_key
+            and computed_fields.measure_source = pair.measure_source
+            and computed_fields.measure_control = pair.measure_control
+            and pair.recency = 1
+    left join base_rows as population
+        on
+            spine.spine_key = population.spine_key
+            and computed_fields.measure_source = population.measure_source
+            and computed_fields.measure_control = population.measure_control
+            and population.field = 'e_totpop'
 ),
 
 all_rows as (

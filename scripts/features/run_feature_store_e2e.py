@@ -1043,6 +1043,44 @@ PACKAGE_THREE_COLUMNS = {
 DENSITY = {"family": "county_context", "source": "svi", "control": "C191", "field": "density_log", "reason": "planted"}
 
 
+REGISTER_SEED = "dbt/seeds/features/register_coverage.csv"
+REGISTER_MODEL = "dbt/models/features/int_spine_operations_measures.sql"
+REGISTER_COVERAGE = ("cms_change_of_ownership", "2016-01-01")
+
+
+def register_coverage_problems(model_text: str, seed_text: str) -> list[str]:
+    """What is wrong with the coverage start of the change-of-ownership register: it must be the one reviewed row of the seed, read by the model, and the
+    model must not take it from the earliest event of the data or write it as a date."""
+    problems = []
+    rows = [line.split(",") for line in seed_text.strip().splitlines()[1:]]
+    if [row[:2] for row in rows] != [list(REGISTER_COVERAGE)]:
+        problems.append("the seed does not hold the one reviewed coverage row")
+    elif not rows[0][2].startswith("https://data.cms.gov/") or not rows[0][3]:
+        problems.append("the coverage row has no citation")
+    if "ref('register_coverage')" not in model_text:
+        problems.append("the model does not read the reviewed coverage seed")
+    if "min(effective_date)" in model_text:
+        problems.append("the model takes the coverage start from the earliest event")
+    if f"date '{REGISTER_COVERAGE[1]}'" in model_text:
+        problems.append("the model writes the coverage start as a date")
+    return problems
+
+
+def register_coverage_cases(report: Report) -> None:
+    """R9: the coverage start of the change-of-ownership register has one reviewed place, the seed, and the true zero of C069 reads it (design 2.6)."""
+    model, seed = (ROOT / REGISTER_MODEL).read_text(), (ROOT / REGISTER_SEED).read_text()
+    report.case("R9", "G18", "the coverage start of the register is the reviewed seed row, read by the model", not register_coverage_problems(model, seed))
+    old_rule = model.replace("select coverage_start as register_start", "select min(effective_date) as register_start")
+    literal = model.replace("select coverage_start as register_start", "select date '2016-01-01' as register_start")
+    for name, planted_model, planted_seed in (
+        ("takes the coverage start from the earliest event", old_rule, seed),
+        ("writes the coverage start as a date in the model", literal, seed),
+        ("has a seed date other than the cited one", model, seed.replace("2016-01-01", "2017-01-01")),
+        ("has a seed row without a citation", model, seed.replace("https://data.cms.gov/", "https://example.invalid/")),
+    ):
+        report.case("R9", "G18", f"a register coverage that {name} is refused", bool(register_coverage_problems(planted_model, planted_seed)))
+
+
 def package_three_cases(report: Report, base: Path, schema: dict[str, Any]) -> None:
     """R9: the hospital-window and derived columns of package 3 (design 2.5, 2.6, 2.10, 2.11): their names, kinds and masks, the computed-field list, the
     generated seed that tells the long models which derived rows to write, and RNs per bed, which stays out until the owner decides item 13."""
@@ -1266,6 +1304,7 @@ def static(report: Report) -> None:
     generator_cases(report)
     with tempfile.TemporaryDirectory(prefix="package_three_cases_") as folder:
         package_three_cases(report, Path(folder), schema_module.load_schema())
+    register_coverage_cases(report)
     role_cases(report)
     contract_cases(report)
     pin_cases(report)

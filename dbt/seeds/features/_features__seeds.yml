@@ -357,6 +357,30 @@ seeds:
       - name: transform
         description: log, change, ordinal or computed.
 
+  - name: register_coverage
+    description: >
+      The reviewed coverage start of each change-of-ownership register: the first day from which the register lists every event, so a window whose look-back lies
+      inside the coverage and holds no event is a true zero. It is a stated date of the publisher, never the earliest event of the data: an early event shows that
+      it happened, not that every later quiet window is complete. assert_chow_register_coverage pins the row; change it only with a new citation.
+    config:
+      column_types:
+        register: varchar
+        coverage_start: date
+        source_url: varchar
+        source_wording: varchar
+        read_on: date
+    columns:
+      - name: register
+        description: The register the row covers (cms_change_of_ownership, the CMS Hospital Change of Ownership dataset behind fct_ownership_change).
+      - name: coverage_start
+        description: The first day of coverage, taken from the publisher's statement of the period the register covers.
+      - name: source_url
+        description: The page of the publisher that states the coverage.
+      - name: source_wording
+        description: The publisher's words that state the coverage, quoted.
+      - name: read_on
+        description: The date the page was read.
+
   - name: recipe_groups
     description: >
       Inventory of the recipe groups: each group with its rule and its count of inputs per role. bridge_references checks every recipe against it.

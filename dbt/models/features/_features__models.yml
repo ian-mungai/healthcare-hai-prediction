@@ -1442,8 +1442,8 @@ models:
       7-day sums, a mean of 7-day averages; a CCN-week with two HHS hospitals skipped and counted). ONC: the latest
       performance period ending before the start. Ownership: the latest owner release before the start through the
       enrollment CCN, private equity and REIT flags from ownership roles only (Y or not_reported). Change of
-      ownership: events in the year before the start (C069), 0 when there is none inside the register (a true zero from the register start, the earliest effective
-      date of the gold events) and missing before it, with its any-event flag, and months since the latest (C070).
+      ownership: events in the year before the start (C069), 0 when there is none inside the register (a true zero from the reviewed coverage start of the
+      register, 2016-01-01, seed register_coverage, never the earliest event of the data) and missing before it, with its any-event flag, and months since the latest (C070).
     meta:
       classification: Public
     columns:

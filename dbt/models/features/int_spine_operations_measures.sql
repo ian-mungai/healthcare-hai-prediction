@@ -356,10 +356,12 @@ chow_events as (
 ),
 
 register as (
-    -- The change-of-ownership register starts on the earliest effective date of the gold events (2016-01-01 in the data of 8 Nov 2026), read from the data and
-    -- never written as a literal. A 12-month window that starts before it is not covered, so its count stays missing.
-    select min(effective_date) as register_start
-    from {{ ref('fct_ownership_change') }}
+    -- The reviewed coverage start of the change-of-ownership register (seed register_coverage: the date the CMS dataset page states, 2016-01-01). The register
+    -- lists every event from that day, so a 12-month window that starts on or after it and holds no event is a true zero. The start never comes from the
+    -- earliest event of the data. A window that starts before it is not covered, so its count stays missing.
+    select coverage_start as register_start
+    from {{ ref('register_coverage') }}
+    where register = 'cms_change_of_ownership'
 ),
 
 chow_count as (
