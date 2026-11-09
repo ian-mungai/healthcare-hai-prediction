@@ -20,7 +20,7 @@ Modes:
   DuckDB from the SQLFluff tool environment, no producer build, launcher or Docker. ``build_local`` includes the same projection case.
 - ``publish_offline``: three fixture builds exported through the shared consumer and published to a local Iceberg catalog in the Spark image by the
   Spark case suite (``features_publish_cases``). It needs the launcher job ``features_publish_e2e`` (template ``spark_e2e``); without it the mode
-  reports the case as blocked and fails. Run it under ``.tools/sqlfluff/bin/python`` (it builds the three exports first).
+  reports the case as blocked and fails. Run it under ``.venv/bin/python`` (the launcher needs it); its build children run in the tool environment.
 
 Report: ``data/e2e/feature_store/<UTC stamp>/report.json`` with case ID, failure-mode IDs, verdict (``pass``, ``fail`` or ``pending`` for a case whose
 code lives in another lane), counts, hashes and timings; never a row value.
@@ -600,6 +600,18 @@ def pipeline_quality_case(report: Report) -> None:
     )
 
 
+def tool_interpreter_case(report: Report) -> None:
+    """The dbt build children run in the tool environment's interpreter whatever interpreter runs this runner, so publish_offline can run under .venv."""
+    child = run_tool(["-c", "import sys; print(sys.prefix)"], 60)
+    reported = Path(child.stdout.strip()) if child.returncode == 0 else None
+    report.case(
+        "E02",
+        "H5",
+        "a build child runs .tools/sqlfluff/bin/python, not the runner's own interpreter",
+        reported is not None and reported.resolve() == (ROOT / ".tools/sqlfluff").resolve(),
+    )
+
+
 def static(report: Report) -> None:
     """Every static case."""
     generator_cases(report)
@@ -609,11 +621,15 @@ def static(report: Report) -> None:
     settings_cases(report)
     pipeline_quality_case(report)
     build_process_cases(report)
+    tool_interpreter_case(report)
     report.pending("E01", "A1, A3, A21", "the pinned build receipt passes in the launcher (publish_offline)", "lead", "needs the launcher; see publish_offline")
 
 
 # ----------------------------------------------------------------------------------------------------
 # build_local (runs under .tools/sqlfluff/bin/python)
+
+# The interpreter of the build children: the SQLFluff tool environment holds dbt and DuckDB, which .venv does not.
+TOOL_PYTHON = ROOT / ".tools/sqlfluff/bin/python"
 
 
 def sha256(path: Path) -> str:
@@ -621,8 +637,11 @@ def sha256(path: Path) -> str:
 
 
 def run_tool(arguments: list[str], seconds: int, extra: dict[str, str] | None = None) -> Any:
-    """Run this Python interpreter (the tool environment's) with the arguments in the repository root, with a deadline."""
-    return run_command(sys.executable, arguments, cwd=ROOT, env={**columns.tool_environment(ROOT), **(extra or {})}, timeout=seconds)
+    """Run the tool environment's interpreter (dbt and DuckDB) with the arguments in the repository root, with a deadline.
+
+    It names the interpreter instead of using this runner's own, so publish_offline can run under .venv (the launcher needs it) while its
+    dbt build children still get dbt."""
+    return run_command(str(TOOL_PYTHON), arguments, cwd=ROOT, env={**columns.tool_environment(ROOT), **(extra or {})}, timeout=seconds)
 
 
 class LocalBuild:
