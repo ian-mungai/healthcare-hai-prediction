@@ -1372,11 +1372,11 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 599,
+      "line": 608,
       "code_sha256": "ee20a27238cf5e8b14a791933c550d1cdcae10ff3635aef6ab74e5f57407c008",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "396d17506d3c8124cb51a9d39ca20c9a6ca32a2a0e7cd54b98d88f51892b6f06",
+      "file_sha256": "59c7b458209eeedffab445a05ea75f6c0e03b97847fc00cc5d10d4b15e0ed3f8",
       "dependencies": {
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",

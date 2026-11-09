@@ -61,6 +61,10 @@ def build(
     return host, Session(cli, names(openmetadata, code_fetch), Clock(lambda: host.now, host.advance), marker, lines.append), lines
 
 
+# The code one-shot's own limit (host_session.CODE_FETCH_SECONDS).
+CODE_FETCH_LIMIT = 1200
+
+
 def failure(action: Callable[[], object]) -> str | None:
     """The message of the HostSessionError the action raised, or None."""
     try:
@@ -741,6 +745,29 @@ def code_fetch_running_for_other_code_that_never_stops_fails_visibly() -> dict[s
     }
 
 
+def code_fetch_wait_and_launch_share_one_deadline() -> dict[str, bool]:
+    """The wait for a running fetch of other code, the reads around it and the requested launch share the one-shot's single limit: an earlier fetch
+    that stops just before the limit, with slow ECS reads, leaves no time, so start refuses the launch instead of starting a task past the limit."""
+    host, session, _ = build(code_fetch=True)
+    session.host_on()
+    running = launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
+    begun = host.now
+    host.tasks[running]["stops_at"] = begun + CODE_FETCH_LIMIT - 10
+    host.latency = 100
+    message = failure(lambda: session.place_code((OTHER_RUN, OTHER_SHA)))
+    late = [
+        entry["at"] - begun
+        for entry in host.log
+        if entry["operation"] == "run-task" and entry["at"] > begun and entry["options"]["--task-definition"] == [CODE_FETCH_FAMILY]
+    ]
+    return {
+        "the placement fails inside the one-shot's limit": message is not None and "code_fetch" in message,
+        "no task of the family is launched after the limit": all(offset <= CODE_FETCH_LIMIT for offset in late),
+        "nothing is launched once the limit is spent": late == [],
+        "the whole placement ends within the limit plus one slow read": host.now - begun <= CODE_FETCH_LIMIT + host.latency,
+    }
+
+
 def code_given_without_the_one_shot_is_refused() -> dict[str, bool]:
     host, session, _ = build()
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
@@ -827,6 +854,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_fetch_running_that_differs_in_one_value_is_not_reused": code_fetch_running_that_differs_in_one_value_is_not_reused,
     "code_fetch_running_for_the_same_code_is_awaited_not_doubled": code_fetch_running_for_the_same_code_is_awaited_not_doubled,
     "code_fetch_running_for_other_code_that_never_stops_fails_visibly": code_fetch_running_for_other_code_that_never_stops_fails_visibly,
+    "code_fetch_wait_and_launch_share_one_deadline": code_fetch_wait_and_launch_share_one_deadline,
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
 }
