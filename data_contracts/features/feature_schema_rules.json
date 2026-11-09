@@ -54,5 +54,13 @@
     "own_snapshot_classification": "classification_source = 'pos_own': the provider subtype and control type come from the own snapshot",
     "county_family": "county_source = 'pos_own' and no planning region: a Connecticut window with any HUD planning region is masked even with a complete own snapshot",
     "ruca_zip": "the spine ZIP equals the first five characters of the own snapshot's ZIP"
+  },
+  "model_sets": {
+    "m1": {"list": "m1_ols", "online": true},
+    "m2": {"list": "m2_elastic_net", "online": true},
+    "m3": {"list": "m3_mixed", "online": false},
+    "m4": {"list": "m4_boosting", "online": true},
+    "m5": {"list": "m5_spatial", "online": false},
+    "m6": {"list": "m6_fixed_effects", "online": false}
   }
 }

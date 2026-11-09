@@ -599,6 +599,12 @@ def with_rules(**entries: Any) -> Callable[[Path], None]:
     return edit_json(schema_module.RULES, lambda document: document.update(entries))
 
 
+def narrow_sets(root: Path) -> None:
+    """Keep one model set with one column, so a planted change of the domain columns is judged without the model lists that name the removed columns."""
+    edit_json(schema_module.RULES, lambda document: document.update(model_sets={"m1": {"list": "m1_ols", "online": True}}))(root)
+    edit_json("config/training/feature_lists/m1_ols.json", lambda document: document.update(references=["feature_matrix_hospital_window:bed_count"]))(root)
+
+
 def attempt(root: Path) -> tuple[dict[str, Any] | None, str]:
     """The schema a root generates, or the text of whatever stopped it."""
     try:
@@ -935,7 +941,7 @@ def restricted_table_cases(report: Report, base: Path) -> None:
 def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> None:
     """R7: log, change and ordinal fields of a control are keys of the same family, named from the field; they carry the parent's control."""
     rules = {"log_fields": [HOSPITAL_LOG, CARE_LOG], "change_fields": [HOSPITAL_CHANGE], "ordinal_fields": [CARE_ORDINAL]}
-    root = planted_root(base, "derived", with_rules(**rules, computed_fields=[]))
+    root = planted_root(base, "derived", with_rules(**rules, computed_fields=[]), narrow_sets)
     built, error = attempt(root)
     hospital, care = columns_of(built, "feature_matrix_hospital"), columns_of(built, "feature_matrix_care_compare")
     wanted = {
@@ -960,7 +966,7 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
         error=error[:120],
         found=sorted(set(wanted) & (set(hospital) | set(care))),
     )
-    plain = planted_root(base, "derived_plain", with_rules(log_fields=[], change_fields=[], ordinal_fields=[], computed_fields=[]))
+    plain = planted_root(base, "derived_plain", with_rules(log_fields=[], change_fields=[], ordinal_fields=[], computed_fields=[]), narrow_sets)
     plain_schema, _ = attempt(plain)
     old = {name: set(columns_of(plain_schema, name)) for name in ("feature_matrix_hospital", "feature_matrix_care_compare")}
     report.case(
@@ -1305,12 +1311,144 @@ def tool_interpreter_case(report: Report) -> None:
     )
 
 
+MODEL_SETS = {
+    "m1": ("m1_ols", True),
+    "m2": ("m2_elastic_net", True),
+    "m3": ("m3_mixed", False),
+    "m4": ("m4_boosting", True),
+    "m5": ("m5_spatial", False),
+    "m6": ("m6_fixed_effects", False),
+}
+LIST_FOLDER = "config/training/feature_lists"
+LABEL_VIEW_NAMES = [f"label_hai_{number}" for number in range(1, 7)]
+
+
+def list_references(slot: str, root: Path = ROOT) -> list[str]:
+    """The references of one feature list file, in file order."""
+    references: list[str] = json.loads((root / LIST_FOLDER / f"{slot}.json").read_text())["references"]
+    return references
+
+
+def model_set_cases(report: Report) -> None:
+    """M01 to M10: the model sets of the schema (one table, one Feast view and one Feast service per feature list), each defect planted in a scratch copy."""
+    schema = schema_module.load_schema()
+    sets: dict[str, Any] = schema.get("model_sets", {})
+    definitions = (ROOT / schema_module.DEFINITIONS).read_text()
+    report.case("M01", "FS1", "the schema names the six model sets m1 to m6", sorted(sets) == sorted(MODEL_SETS), sets=sorted(sets))
+    exact, flags = [], []
+    for set_id, (slot, online) in MODEL_SETS.items():
+        entry = sets.get(set_id, {})
+        columns = entry.get("columns", [])
+        names = [column["name"] for column in columns if column["role"] == "predictor"]
+        exact.append(
+            names == [reference.split(":", 1)[1] for reference in list_references(slot)]
+            and [c["name"] for c in columns[:2]] == ["spine_key", "event_timestamp"]
+        )
+        flags.append(entry.get("table") == f"feature_matrix_{set_id}" and entry.get("online") is online and entry.get("view") == f"model_{set_id}")
+    report.case(
+        "M02", "FS1", "each set holds the key, the event time and exactly the columns of its list in list order", all(exact) and len(exact) == 6, exact=exact
+    )
+    report.case(
+        "M03",
+        "FS5",
+        "the tables are feature_matrix_<set>, the views model_<set>, and only m1, m2 and m4 are online",
+        all(flags) and len(flags) == 6,
+        flags=flags,
+    )
+    views = getattr(schema_module, "model_views_in_definitions", lambda text: {})(definitions)
+    report.case(
+        "M04",
+        "FS5",
+        "the definitions register one view model_<set> over feature_matrix_<set> per set with the set's online flag and columns",
+        all(
+            views.get(f"model_{set_id}") == (f"feature_matrix_{set_id}", online, [reference.split(":", 1)[1] for reference in list_references(slot)])
+            for set_id, (slot, online) in MODEL_SETS.items()
+        ),
+        views=sorted(views),
+    )
+    services = getattr(schema_module, "model_services_in_definitions", lambda text: {})(definitions)
+    report.case(
+        "M05",
+        "FS5",
+        "the definitions register one feature service model_<set> per set with its view and the six label views",
+        all(services.get(f"model_{set_id}") == [f"model_{set_id}_view", *LABEL_VIEW_NAMES] for set_id in MODEL_SETS),
+        services=sorted(services),
+    )
+    domain = getattr(schema_module, "servable_in_definitions", lambda text: [])(definitions)
+    report.case(
+        "M06", "FS5", "the domain predictor views stay registered beside the model views until nothing reads them", len(domain) == len(schema["servable"]) > 0
+    )
+    hashes = {set_id: getattr(schema_module, "set_schema_sha256", lambda name, **options: "")(set_id) for set_id in MODEL_SETS}
+    report.case(
+        "M07", "FS6", "every set has its own 64-digit schema hash", all(len(value) == 64 for value in hashes.values()) and len(set(hashes.values())) == 6
+    )
+    with tempfile.TemporaryDirectory(prefix="model_set_cases_") as folder:
+        base = Path(folder)
+
+        def edit_list(slot: str, change: Callable[[list[str]], None]) -> Callable[[Path], None]:
+            return edit_json(f"{LIST_FOLDER}/{slot}.json", lambda document: change(document["references"]))
+
+        unknown, message = attempt(planted_root(base, "unknown", edit_list("m1_ols", lambda refs: refs.append("feature_matrix_hospital:c999__value__number"))))
+        report.case(
+            "M08",
+            "FS1",
+            "a list reference that is no predictor column of the schema is refused and named",
+            unknown is None and "feature_matrix_hospital:c999__value__number" in message,
+            message=message[:200],
+        )
+        doubled, message = attempt(planted_root(base, "doubled", edit_list("m3_mixed", lambda refs: refs.append(refs[0]))))
+        report.case(
+            "M09",
+            "FS1",
+            "a list that names a column twice is refused and the column is named",
+            doubled is None and refs_name(list_references("m3_mixed")[0]) in message,
+        )
+        missing, message = attempt(planted_root(base, "missing", lambda root: (root / LIST_FOLDER / "m5_spatial.json").unlink()))
+        report.case("M10", "FS1", "a set whose list file is missing is refused and the file is named", missing is None and "m5_spatial" in message)
+        shorter = planted_root(base, "shorter", edit_list("m1_ols", lambda refs: refs.pop()))
+        short_schema, _ = attempt(shorter)
+        changed = getattr(schema_module, "set_schema_sha256", lambda name, **options: "")
+        report.case(
+            "M11",
+            "FS6",
+            "dropping one reference changes that set's hash and no other set's hash",
+            short_schema is not None
+            and changed("m1", root=shorter, schema=short_schema) != hashes["m1"]
+            and all(changed(name, root=shorter, schema=short_schema) == hashes[name] for name in MODEL_SETS if name != "m1"),
+        )
+        try:
+            flipped = planted_root(base, "flipped", edit_json(schema_module.RULES, lambda document: document["model_sets"]["m3"].update(online=True)))
+        except KeyError:
+            report.case("M12", "FS5", "the rules file has no model_sets entry to flip", False)
+            report.case("M13", "FS1", "no scratch copy to hand edit", False)
+            return
+        report.case(
+            "M12",
+            "FS5",
+            "the generator check notices a set whose online flag differs from the committed definitions",
+            any(schema_module.DEFINITIONS in problem for problem in schema_module.check(flipped)),
+        )
+        hand_edit("dbt/models/features/matrix/feature_matrix_m1.sql", flipped)
+        report.case(
+            "M13",
+            "FS1",
+            "the generator check notices a hand edit of a generated set model",
+            any("feature_matrix_m1.sql" in problem for problem in schema_module.check(flipped)),
+        )
+
+
+def refs_name(reference: str) -> str:
+    """The column name of a ``<view>:<column>`` reference."""
+    return reference.split(":", 1)[1]
+
+
 def static(report: Report) -> None:
     """Every static case."""
     generator_cases(report)
     with tempfile.TemporaryDirectory(prefix="package_three_cases_") as folder:
         package_three_cases(report, Path(folder), schema_module.load_schema())
     register_coverage_cases(report)
+    model_set_cases(report)
     role_cases(report)
     contract_cases(report)
     pin_cases(report)

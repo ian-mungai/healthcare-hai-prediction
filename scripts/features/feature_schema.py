@@ -72,6 +72,10 @@ FLAGS = {
     "county_family": "(hospital.county_source = 'pos_own' and hospital.planning_region_fips is null) is true as county_family_eligible",
     "ruca_zip": "(hospital.zip_code is not null and hospital.zip_code = left(own_snapshot.zip_code, 5)) is true as ruca_zip_eligible",
 }
+FEATURE_LISTS = "config/training/feature_lists"
+MODEL_SET_ID = re.compile(r"m[1-6]")
+SET_TABLE = "feature_matrix_{set_id}"
+SET_VIEW = "model_{set_id}"
 HAI_TYPES = tuple(f"HAI_{number}" for number in range(1, 7))
 LABEL_TABLE = "label_matrix_hai_outcomes"
 WINDOW_TABLE = "feature_matrix_hospital_window"
@@ -651,6 +655,61 @@ def role_problems(schema: dict[str, Any]) -> list[str]:
     return problems
 
 
+def model_set_entries(root: Path, rules: dict[str, Any], tables: dict[str, Any], label_views: dict[str, Any]) -> dict[str, Any]:
+    """One entry per model set of the rules: the table, the Feast view and service, the online flag and the columns of the set's feature list.
+
+    A list reference must be a predictor column of the domain tables and may appear once. The columns keep the list's order after the key and the event time.
+    """
+    entries = rules.get("model_sets")
+    if not isinstance(entries, dict) or not entries:
+        raise SchemaError(f"{RULES}: model_sets is missing or empty")
+    sets: dict[str, Any] = {}
+    for set_id, rule in sorted(entries.items()):
+        if not MODEL_SET_ID.fullmatch(set_id) or not isinstance(rule, dict) or set(rule) != {"list", "online"} or type(rule["online"]) is not bool:
+            raise SchemaError(f"{RULES}: model set {set_id!r} must be m1 to m6 with exactly the keys list and online (a boolean)")
+        path = root / FEATURE_LISTS / f"{rule['list']}.json"
+        try:
+            references = read_json(path)["references"]
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise SchemaError(
+                f"model set {set_id}: the feature list {path.relative_to(root)} is missing or has no references ({type(error).__name__})"
+            ) from error
+        if not isinstance(references, list) or not references:
+            raise SchemaError(f"model set {set_id}: the feature list {rule['list']} has no references")
+        columns = key_columns()
+        seen: set[str] = set()
+        for reference in references:
+            view, _, name = str(reference).partition(":")
+            found = {column["name"]: column for column in tables.get(view, {}).get("columns", []) if column["role"] == "predictor"}.get(name)
+            if found is None:
+                raise SchemaError(f"model set {set_id}: reference {reference} of {rule['list']} is not a predictor column of the schema")
+            if name in seen:
+                raise SchemaError(f"model set {set_id}: column {name} is listed twice in {rule['list']}")
+            seen.add(name)
+            columns.append(
+                {
+                    "description": found["description"],
+                    "feast_type": found["feast_type"],
+                    "name": name,
+                    "role": "predictor",
+                    "source_table": view,
+                    "type": found["type"],
+                    "view": SET_VIEW.format(set_id=set_id),
+                }
+            )
+        sets[set_id] = {
+            "list": rule["list"],
+            "table": SET_TABLE.format(set_id=set_id),
+            "view": SET_VIEW.format(set_id=set_id),
+            "service": SET_VIEW.format(set_id=set_id),
+            "online": rule["online"],
+            "source_tables": sorted({column["source_table"] for column in columns if "source_table" in column}),
+            "label_views": list(label_views),
+            "columns": columns,
+        }
+    return sets
+
+
 def build_schema(root: Path = REPO_ROOT) -> dict[str, Any]:
     """The schema document, computed from the seeds and the rules. Raises ``SchemaError`` before anything is written."""
     rules = read_json(root / RULES)
@@ -732,6 +791,7 @@ def build_schema(root: Path = REPO_ROOT) -> dict[str, Any]:
         "masks": rules["masks"],
         "servable": servable,
         "tables": tables,
+        "model_sets": model_set_entries(root, rules, tables, label_views),
     }
     problems = role_problems(schema)
     if problems:
@@ -770,6 +830,20 @@ def render_model(name: str, table: dict[str, Any]) -> str:
     if name == WINDOW_TABLE:
         return header + render_window_model(table)
     return header + render_pivot_model(table)
+
+
+def render_set_model(set_id: str, entry: dict[str, Any]) -> str:
+    """The dbt model of a model set: the columns of its feature list, joined from the domain tables on the spine key (the hospital-window table first)."""
+    header = f"-- {GENERATED_LINE}\n-- model set {set_id}: the columns of feature list {entry['list']}, joined from the domain tables on {SPINE_KEY}.\n\n"
+    alias = {WINDOW_TABLE: "hospital_window"} | {name: name.removeprefix("feature_matrix_") for name in entry["source_tables"]}
+    lines = ["select", f"    {alias[WINDOW_TABLE]}.{SPINE_KEY},", f"    {alias[WINDOW_TABLE]}.{EVENT_TIME},"]
+    names = [f"    {alias[column['source_table']]}.{column['name']}" for column in entry["columns"] if "source_table" in column]
+    lines += [line + "," for line in names[:-1]] + [names[-1]]
+    lines += ["from {{ ref('" + WINDOW_TABLE + "') }} as " + alias[WINDOW_TABLE]]
+    for name in entry["source_tables"]:
+        if name != WINDOW_TABLE:
+            lines += ["left join {{ ref('" + name + "') }} as " + alias[name], f"    on {alias[WINDOW_TABLE]}.{SPINE_KEY} = {alias[name]}.{SPINE_KEY}"]
+    return header + "\n".join(lines) + "\n"
 
 
 def render_window_model(table: dict[str, Any]) -> str:
@@ -874,6 +948,21 @@ def render_yaml(schema: dict[str, Any]) -> str:
             out += [f"      - name: {column['name']}", f"        data_type: {column['type']}", f"        description: {yaml_text(column['description'])}"]
             if column["role"] == "key":
                 out += ["        data_tests: [unique, not_null]"]
+    for entry in schema["model_sets"].values():
+        out += [
+            f"  - name: {entry['table']}",
+            "    description: >",
+            f"      Model table of the feature list {entry['list']}, one row per hospital-window (spine key):",
+            "      the key, the event time and exactly the list's columns.",
+            "      Published to the features namespace and registered with Feast as the view and the service of the set. A missing value is null, never zero.",
+            "    meta:",
+            "      classification: Public",
+            "    columns:",
+        ]
+        for column in entry["columns"]:
+            out += [f"      - name: {column['name']}", f"        data_type: {column['type']}", f"        description: {yaml_text(column['description'])}"]
+            if column["role"] == "key":
+                out += ["        data_tests: [unique, not_null]"]
     return "\n".join(out) + "\n"
 
 
@@ -892,13 +981,13 @@ The offline source of every view is an Iceberg table of the features namespace, 
 Settings come from the environment and are closed: ``FEAST_NAMESPACE`` is ``features`` or ``features_e2e``,
 ``FEAST_CATALOG_TYPE`` is ``rest`` or ``sql``, and ``sql`` is allowed only with ``features_e2e`` and a SQLite file
 inside ``FEAST_RUN_FOLDER``. Every source sets ``credential_vending=False``: Feast sends a vended-credentials request by default and Polaris cannot vend.
-Predictor views are online; label views are offline only and are never served.
+Predictor views are online; label views are offline only and are never served. A model view is online only for a set that the rules mark online.
 """
 
 import os
 from datetime import timedelta
 
-from feast import Entity, FeatureView, Field
+from feast import Entity, FeatureService, FeatureView, Field
 from feast.infra.data_sources.contrib.iceberg_catalog.iceberg_source import IcebergSource
 from feast.types import Bool, Float64, Int64, String
 from feast.value_type import ValueType
@@ -975,6 +1064,20 @@ def view(name: str, online: bool) -> FeatureView:
     )
 
 
+def model_view(name: str) -> FeatureView:
+    """The view of one model set over its table: served only when the set is online."""
+    table, online, fields = MODEL_VIEWS[name]
+    return FeatureView(
+        name=name,
+        entities=[{entity}],
+        ttl=timedelta(0),
+        schema=[Field(name=column, dtype=DTYPES[dtype]) for column, dtype in fields],
+        online=online,
+        source=iceberg_source(table),
+        tags={{"table": table, "model_set": name.removeprefix("model_")}},
+    )
+
+
 '''
 
 
@@ -995,10 +1098,26 @@ def render_definitions(schema: dict[str, Any]) -> str:
     for view, names in labels["label_views"].items():
         out += [f'    "{view}": (', f'        "{LABEL_TABLE}",', "        (", *[f'            ("{column}", "{by_name[column]}"),' for column in names]]
         out += ["        ),", "    ),"]
+    out += ["}", "MODEL_VIEWS: dict[str, tuple[str, bool, tuple[tuple[str, str], ...]]] = {"]
+    for entry in schema["model_sets"].values():
+        out += [f'    "{entry["view"]}": (', f'        "{entry["table"]}",', f"        {entry['online']},", "        ("]
+        out += [f'            ("{column["name"]}", "{column["feast_type"]}"),' for column in entry["columns"] if column["role"] == "predictor"]
+        out += ["        ),", "    ),"]
     out.append("}")
     tail = DEFINITIONS_TAIL.format(entity=ENTITY, join_key=SPINE_KEY)
     registered = [f'{name} = view("{name}", True)' for name in predictor] + [f'{view} = view("{view}", False)' for view in labels["label_views"]]
+    for entry in schema["model_sets"].values():
+        registered.append(f'{entry["view"]}_view = model_view("{entry["view"]}")')
+        features = ", ".join([f"{entry['view']}_view", *entry["label_views"]])
+        registered.append(f'{entry["service"]}_service = FeatureService(name="{entry["service"]}", features=[{features}])')
     return "\n".join(out) + "\n" + tail + "\n".join(registered) + "\n"
+
+
+def set_schema_sha256(set_id: str, root: Path = REPO_ROOT, schema: dict[str, Any] | None = None) -> str:
+    """The schema hash of one model set: the digest of its table name and its columns with their types, in order. It changes only when that set's table does."""
+    entry = (schema if schema is not None else load_schema(root))["model_sets"][set_id]
+    body = {"set": set_id, "table": entry["table"], "columns": [[column["name"], column["type"]] for column in entry["columns"]]}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def generated_files(root: Path = REPO_ROOT) -> dict[str, str]:
@@ -1007,6 +1126,8 @@ def generated_files(root: Path = REPO_ROOT) -> dict[str, str]:
     files = {SCHEMA: schema_text(schema), MATRIX_YAML: render_yaml(schema), DEFINITIONS: render_definitions(schema), DERIVED_SEED: derived_seed_text(root)}
     for name, table in schema["tables"].items():
         files[f"{MATRIX_FOLDER}/{name}.sql"] = render_model(name, table)
+    for set_id, entry in schema["model_sets"].items():
+        files[f"{MATRIX_FOLDER}/{entry['table']}.sql"] = render_set_model(set_id, entry)
     return files
 
 
@@ -1055,6 +1176,26 @@ def servable_in_definitions(text: str) -> list[str]:
             views = ast.literal_eval(node.value)
             return [f"{view}:{column}" for view, fields in views.items() for column, _ in fields]
     return []
+
+
+def model_views_in_definitions(text: str) -> dict[str, tuple[str, bool, list[str]]]:
+    """The model views a definitions file registers, read from its text: view name to (table, online, column names)."""
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "MODEL_VIEWS" and node.value is not None:
+            return {view: (table, online, [column for column, _ in fields]) for view, (table, online, fields) in ast.literal_eval(node.value).items()}
+    return {}
+
+
+def model_services_in_definitions(text: str) -> dict[str, list[str]]:
+    """The feature services a definitions file registers, read from its text: service name to the names of the features it holds, in order."""
+    found: dict[str, list[str]] = {}
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "FeatureService":
+            options = {keyword.arg: keyword.value for keyword in node.keywords}
+            name, features = options.get("name"), options.get("features")
+            if isinstance(name, ast.Constant) and isinstance(features, ast.List):
+                found[str(name.value)] = [item.id for item in features.elts if isinstance(item, ast.Name)]
+    return found
 
 
 def generate(root: Path = REPO_ROOT) -> list[str]:

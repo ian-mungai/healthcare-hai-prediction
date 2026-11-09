@@ -385,6 +385,8 @@ class RecordingBackend:
             for column in table["columns"]:
                 if column["role"] in ("predictor", "label"):
                     registered.setdefault(column["view"], (column["role"] == "predictor", []))[1].append(column["name"])
+        for entry in self.schema.get("model_sets", {}).values():
+            registered[entry["view"]] = (entry["online"], [column["name"] for column in entry["columns"] if column["role"] == "predictor"])
         return {name: (online, tuple(sorted(columns))) for name, (online, columns) in registered.items()}
 
     def apply(self) -> None:
@@ -553,6 +555,69 @@ def case_e11_views(c: Checker) -> None:
         "a table that drifted from the schema is refused",
         lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log)),
         "1 columns extra",
+    )
+
+
+def with_model_sets(schema: dict[str, Any]) -> dict[str, Any]:
+    """The synthetic schema with two model sets: m1 online over bed_count and c001, m3 offline over c002."""
+    window, measures = schema["tables"]["feature_matrix_window"]["columns"], schema["tables"]["feature_matrix_measures"]["columns"]
+    keys = [column for column in window if column["role"] in ("key", "event_time")]
+
+    def entry(set_id: str, online: bool, columns: list[dict[str, Any]]) -> dict[str, Any]:
+        view = f"model_{set_id}"
+        return {
+            "table": f"feature_matrix_{set_id}",
+            "view": view,
+            "service": view,
+            "online": online,
+            "label_views": ["label_hai_1", "label_hai_2"],
+            "columns": keys + [{**column, "view": view} for column in columns],
+        }
+
+    by_name = {column["name"]: column for column in window + measures}
+    sets = {"m1": entry("m1", True, [by_name["bed_count"], by_name["c001__value__number"]]), "m3": entry("m3", False, [by_name["c002__value__category"]])}
+    return {**schema, "model_sets": sets}
+
+
+def case_e31_model_views(c: Checker) -> None:
+    """The model views of the repository are checked against the model sets of the schema: the online flag, the columns and the owner of every model_ view."""
+    schema = with_model_sets(synthetic_schema())
+    catalog, _ = stub_features(schema)
+    publication = reads.read_publication(catalog, "features_e2e")
+    log: list[str] = []
+    feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log))
+    c.check("model views that match their sets pass beside the domain and label views", True)
+    good = RecordingBackend(schema, log).registered_views()
+    c.check("the stand-in registers one view per set with the set's online flag", good["model_m1"][0] is True and good["model_m3"][0] is False)
+    online_m3 = {**good, "model_m3": (True, good["model_m3"][1])}
+    c.refused(
+        "a view of an offline-only set that is registered online is refused and named",
+        lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log, views=online_m3)),
+        "model_m3",
+    )
+    offline_m1 = {**good, "model_m1": (False, good["model_m1"][1])}
+    c.refused(
+        "a view of an online set that is registered offline is refused and named",
+        lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log, views=offline_m1)),
+        "model_m1",
+    )
+    short = {name: value for name, value in good.items() if name != "model_m1"}
+    c.refused(
+        "a set without a registered view is refused and named",
+        lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log, views=short)),
+        "model_m1: the repository registers no view",
+    )
+    wider = {**good, "model_m1": (True, (*good["model_m1"][1], "ccn"))}
+    c.refused(
+        "a model view with another column is refused and named",
+        lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log, views=wider)),
+        "model_m1",
+    )
+    stray = {**good, "model_m9": (True, good["model_m1"][1])}
+    c.refused(
+        "a model_ view that no set owns is refused and named",
+        lambda: feast_job.preflight(catalog, publication, schema, RecordingBackend(schema, log, views=stray)),
+        "model_m9",
     )
 
 
@@ -1795,6 +1860,7 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E11_schema": (case_e11_schema, "LC10 LC11"),
     "E11_views": (case_e11_views, "LC11"),
     "E11_variables": (case_e11_variables, "LC19"),
+    "E31_model_views": (case_e31_model_views, "FS5"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
     "E13_lease": (case_e13_lease, "LC12"),

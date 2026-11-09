@@ -229,12 +229,18 @@ def preflight(catalog: reads.IcebergCatalog, publication: reads.Publication, sch
     problems += reads.column_problems(schema, {**columns, **{name: {} for name in set(schema["tables"]) - named}})
     registered = backend.registered_views()
     predictors, labels = reads.reference_lists(schema)
-    online = sorted(f"{view}:{column}" for view, (is_online, view_columns) in registered.items() if is_online for column in view_columns)
-    offline = sorted(f"{view}:{column}" for view, (is_online, view_columns) in registered.items() if not is_online for column in view_columns)
+    model_views = {entry["view"] for entry in schema.get("model_sets", {}).values()}
+    online = sorted(
+        f"{view}:{column}" for view, (is_online, view_columns) in registered.items() if is_online and view not in model_views for column in view_columns
+    )
+    offline = sorted(
+        f"{view}:{column}" for view, (is_online, view_columns) in registered.items() if not is_online and view not in model_views for column in view_columns
+    )
     if online != predictors:
         problems.append("the online feature views of the repository differ from the registered predictors of the schema")
     if offline != labels:
         problems.append("the offline-only views of the repository differ from the label columns of the schema")
+    problems += reads.model_view_problems(schema, registered)
     if problems:
         raise ReadError(f"the repository is refused before apply ({len(problems)} problems): {reads.listed(problems)}")
 

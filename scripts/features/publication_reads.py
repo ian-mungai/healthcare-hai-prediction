@@ -247,6 +247,23 @@ def view_problems(schema: Mapping[str, Any]) -> list[str]:
     return problems
 
 
+def model_view_problems(schema: Mapping[str, Any], registered: Mapping[str, tuple[bool, tuple[str, ...]]]) -> list[str]:
+    """Differences between the model sets of the schema and the model views the repository registers: a missing view, another online flag or other columns,
+    and a ``model_`` view that no set owns."""
+    problems = []
+    owned = set()
+    for set_id, entry in sorted(schema.get("model_sets", {}).items()):
+        owned.add(entry["view"])
+        wanted = (bool(entry["online"]), tuple(sorted(column["name"] for column in entry["columns"] if column["role"] == "predictor")))
+        found = registered.get(entry["view"])
+        if found is None:
+            problems.append(f"{entry['view']}: the repository registers no view for model set {set_id}")
+        elif found != wanted:
+            problems.append(f"{entry['view']}: the registered online flag or columns differ from model set {set_id}")
+    problems += [f"{name}: a model view that no model set owns" for name in sorted(registered) if name.startswith("model_") and name not in owned]
+    return problems
+
+
 def column_problems(schema: Mapping[str, Any], iceberg: Mapping[str, Mapping[str, str]]) -> list[str]:
     """Differences between the schema file and the Iceberg schemas (table to column to type text): names only, no values."""
     problems = []
