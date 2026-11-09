@@ -31,6 +31,7 @@ from scripts.features.publication_reads import ReadError
 
 FEATURE_DB = 1
 CONTROL_DB = 2
+SET_DATABASES = {"m1": 3, "m2": 4, "m4": 5}  # one feature database per online model set, so a set's load flushes only its own entities
 PORT = 6379
 LEASE_KEY = "hai:fs:lease"
 MARKER_KEY = "hai:fs:marker"
@@ -48,8 +49,8 @@ SAFE_TEXT = re.compile(r"[A-Za-z0-9:_.-]{1,64}")
 BEGIN_LOAD = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 redis.call('DEL', KEYS[2])
-redis.call('HSET', KEYS[2], 'state', 'loading', 'load_id', ARGV[2], 'owner_token', ARGV[1], unpack(ARGV, 3))
-redis.call('SELECT', 1)
+redis.call('HSET', KEYS[2], 'state', 'loading', 'load_id', ARGV[2], 'owner_token', ARGV[1], unpack(ARGV, 4))
+redis.call('SELECT', ARGV[3])
 redis.call('FLUSHDB')
 return 1
 """
@@ -67,6 +68,24 @@ return 0
 
 class OnlineError(ReadError):
     """A Redis step is refused or fails; the message names the step and the error type, never the password or a value."""
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Where one load writes: the feature database it flushes and fills, and the marker that says what that database holds. The lease is shared."""
+
+    feature_db: int = FEATURE_DB
+    marker_key: str = MARKER_KEY
+
+
+DEFAULT_LAYOUT = Layout()
+
+
+def set_layout(feature_set: str) -> Layout:
+    """The layout of an online model set (m1, m2 and m4); any other set has no online database and is refused by name."""
+    if feature_set not in SET_DATABASES:
+        raise OnlineError(f"set {feature_set!r} has no online database (only {', '.join(SET_DATABASES)} are online)")
+    return Layout(SET_DATABASES[feature_set], f"{MARKER_KEY}:{feature_set}")
 
 
 class RedisClient(Protocol):
@@ -154,7 +173,7 @@ def connect(environ: Mapping[str, str], database: int, *, timeout: float = SOCKE
 
 
 @contextlib.contextmanager
-def feast_job_redis(environ: Mapping[str, str], *, timeout: float = SOCKET_TIMEOUT) -> Iterator[None]:
+def feast_job_redis(environ: Mapping[str, str], *, timeout: float = SOCKET_TIMEOUT, database: int = FEATURE_DB) -> Iterator[None]:
     """Give every Feast Redis online store in this process one client with explicit bounds and zero retries, for the length of the block.
 
     Feast builds its own client from ``feature_store.yaml`` (5 s timeouts) and redis-py would retry it three times. Feast keeps the client in
@@ -163,7 +182,7 @@ def feast_job_redis(environ: Mapping[str, str], *, timeout: float = SOCKET_TIMEO
     """
     store_class = importlib.import_module("feast.infra.online_stores.redis").RedisOnlineStore
     previous = store_class.__dict__.get("_client")
-    store_class._client = connect(environ, FEATURE_DB, timeout=timeout, decode=False)
+    store_class._client = connect(environ, database, timeout=timeout, decode=False)
     try:
         yield
     finally:
@@ -176,16 +195,16 @@ def safe(value: Any) -> str:
     return text if SAFE_TEXT.fullmatch(text) else "unknown"
 
 
-def read_marker(control: RedisClient) -> dict[str, str]:
+def read_marker(control: RedisClient, marker_key: str = MARKER_KEY) -> dict[str, str]:
     """The marker hash as text; empty when there is none."""
-    raw = call("marker read", lambda: control.hgetall(MARKER_KEY))
+    raw = call("marker read", lambda: control.hgetall(marker_key))
     return {(k.decode() if isinstance(k, bytes) else str(k)): (v.decode() if isinstance(v, bytes) else str(v)) for k, v in raw.items()}
 
 
-def acquire(control: RedisClient, token: str, lease_ms: int = LEASE_MS) -> None:
+def acquire(control: RedisClient, token: str, lease_ms: int = LEASE_MS, marker_key: str = MARKER_KEY) -> None:
     """Take the lease at once or fail naming the feature run that the marker records (the holder)."""
     if not call("lease acquire", lambda: control.set(LEASE_KEY, token, nx=True, px=lease_ms)):
-        holder = safe(read_marker(control).get("feature_run_id", "none"))
+        holder = safe(read_marker(control, marker_key).get("feature_run_id", "none"))
         raise OnlineError(f"the writer lease is held by another writer (marker feature run {holder})")
 
 
@@ -222,14 +241,14 @@ def memory_guard(control: RedisClient, plan: LoadPlan, bytes_per_field: int = BY
         raise OnlineError(f"the estimated size ({estimate} bytes for {plan.entity_count} entities) is above 60 % of maxmemory ({limit} bytes)")
 
 
-def begin_load(control: RedisClient, token: str, load_id: str, plan: LoadPlan) -> None:
-    """Replace the marker (``loading``, new ``load_id``) and flush database 1 in one script, only while this writer holds the lease."""
+def begin_load(control: RedisClient, token: str, load_id: str, plan: LoadPlan, layout: Layout = DEFAULT_LAYOUT) -> None:
+    """Replace the marker (``loading``, new ``load_id``) and flush the layout's feature database in one script, only while this writer holds the lease."""
     extra = ["feature_run_id", plan.feature_run_id, "snapshot_set_sha256", plan.snapshot_set_sha256, "feature_schema_sha256", plan.feature_schema_sha256]
-    if not call("begin load", lambda: control.eval(BEGIN_LOAD, 2, LEASE_KEY, MARKER_KEY, token, load_id, *extra)):
+    if not call("begin load", lambda: control.eval(BEGIN_LOAD, 2, LEASE_KEY, layout.marker_key, token, load_id, layout.feature_db, *extra)):
         raise OnlineError("the flush was refused: this writer no longer holds the lease")
 
 
-def publish(control: RedisClient, token: str, load_id: str, plan: LoadPlan, now: datetime) -> None:
+def publish(control: RedisClient, token: str, load_id: str, plan: LoadPlan, now: datetime, layout: Layout = DEFAULT_LAYOUT) -> None:
     """Set the marker ``ready`` only while this writer holds the lease and the marker still carries this load's ``load_id``."""
     fields = [
         "feature_run_id",
@@ -245,19 +264,19 @@ def publish(control: RedisClient, token: str, load_id: str, plan: LoadPlan, now:
         "feast_version",
         plan.feast_version,
     ]
-    if not call("publish", lambda: control.eval(PUBLISH, 2, LEASE_KEY, MARKER_KEY, token, load_id, *fields)):
+    if not call("publish", lambda: control.eval(PUBLISH, 2, LEASE_KEY, layout.marker_key, token, load_id, *fields)):
         raise OnlineError("the publish was refused: the lease or the load is no longer this writer's")
 
 
-def entity_counts(features: RedisClient, plan: LoadPlan, parse_key: Callable[[bytes], bool]) -> int:
-    """Count entity keys in database 1 only (control keys live in database 2); the count must equal the entity count and every key must parse."""
+def entity_counts(features: RedisClient, plan: LoadPlan, parse_key: Callable[[bytes], bool], database: int = FEATURE_DB) -> int:
+    """Count entity keys in the feature database only (control keys live in database 2); the count must equal the entity count and every key must parse."""
     size = call("entity count", features.dbsize)
     if size != plan.entity_count:
-        raise OnlineError(f"database 1 holds {size} keys; the publication has {plan.entity_count} entities")
+        raise OnlineError(f"database {database} holds {size} keys; the publication has {plan.entity_count} entities")
     keys = call("key scan", lambda: list(features.scan_iter(count=SCAN_COUNT)))
     bad = sum(1 for key in keys if not parse_key(key if isinstance(key, bytes) else str(key).encode()))
     if len(keys) != size or bad:
-        raise OnlineError(f"database 1: {len(keys)} keys scanned, {bad} are not Feast entity keys of the project")
+        raise OnlineError(f"database {database}: {len(keys)} keys scanned, {bad} are not Feast entity keys of the project")
     return size
 
 
@@ -271,28 +290,29 @@ def run_load(
     lease_ms: int = LEASE_MS,
     new_id: Callable[[], str] = lambda: str(uuid.uuid4()),
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    layout: Layout = DEFAULT_LAYOUT,
 ) -> LoadResult:
     """The writer protocol of design 4.3, steps 1 to 9. After a failure the marker stays ``loading`` (or absent) and the lease is released if still ours."""
     token, load_id = new_id(), new_id()
     deadline("the lease")
-    acquire(control, token, lease_ms)
+    acquire(control, token, lease_ms, layout.marker_key)
     try:
         deadline("the memory guard")
         memory_guard(control, plan)
         deadline("the first head check")
         hooks.verify_heads("before the flush")
         deadline("the flush")
-        begin_load(control, token, load_id, plan)
+        begin_load(control, token, load_id, plan, layout)
         deadline("materialize")
         hooks.materialize(plan.window_start, plan.window_end)
         deadline("the counts")
-        count = entity_counts(features, plan, hooks.parse_key)
+        count = entity_counts(features, plan, hooks.parse_key, layout.feature_db)
         deadline("the samples")
         hooks.verify_samples()
         deadline("the last head check")
         hooks.verify_heads("after the last write")
         deadline("publish")
-        publish(control, token, load_id, plan, now())
+        publish(control, token, load_id, plan, now(), layout)
     finally:
         try:
             release(control, token)

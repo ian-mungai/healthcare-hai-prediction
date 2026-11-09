@@ -57,8 +57,8 @@ T0 = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
 MODELED_BEGIN_LOAD = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 redis.call('DEL', KEYS[2])
-redis.call('HSET', KEYS[2], 'state', 'loading', 'load_id', ARGV[2], 'owner_token', ARGV[1], unpack(ARGV, 3))
-redis.call('SELECT', 1)
+redis.call('HSET', KEYS[2], 'state', 'loading', 'load_id', ARGV[2], 'owner_token', ARGV[1], unpack(ARGV, 4))
+redis.call('SELECT', ARGV[3])
 redis.call('FLUSHDB')
 return 1
 """
@@ -148,7 +148,7 @@ class FakeServer:
 
     def __init__(self) -> None:
         self.phrase = PHRASE
-        self.dbs: dict[int, dict[Any, Any]] = {0: {}, 1: {}, 2: {}}
+        self.dbs: dict[int, dict[Any, Any]] = {number: {} for number in range(6)}
         self.expiry: dict[tuple[int, Any], float] = {}
         self.clock = 0.0
         self.config = {"maxmemory-policy": "noeviction", "maxmemory": str(1 << 30)}
@@ -165,8 +165,8 @@ class FakeServer:
         if not client.alive(client.db, keys[0]) or self.dbs[client.db].get(keys[0]) != args[0]:
             return 0
         self.dbs[client.db].pop(keys[1], None)
-        self.dbs[client.db][keys[1]] = {"state": "loading", "load_id": args[1], "owner_token": args[0], **dict(zip(args[2::2], args[3::2], strict=True))}
-        self.dbs[1].clear()
+        self.dbs[client.db][keys[1]] = {"state": "loading", "load_id": args[1], "owner_token": args[0], **dict(zip(args[3::2], args[4::2], strict=True))}
+        self.dbs[int(args[2])].clear()
         return 1
 
     def publish(self, client: FakeClient, keys: list[str], args: list[str]) -> int:
@@ -246,7 +246,7 @@ class RealServer:
             socket_timeout=timeout,
             socket_connect_timeout=timeout,
             retry=online.no_retry(),
-            decode_responses=db != online.FEATURE_DB,
+            decode_responses=db not in (online.FEATURE_DB, *online.SET_DATABASES.values()),
         )
 
     def write_hash(self, db: int, key: Any, mapping: Mapping[str, str]) -> None:
@@ -1136,6 +1136,89 @@ def case_materialize(c: Checker, make: Callable[[], Any]) -> None:
 # ---------------------------------------------------------------------------------------------------------------------------------------------
 
 
+class SetHooks(Hooks):
+    """The Feast stand-in of a set load: the entity hashes go to the set's own database."""
+
+    def __init__(self, server: Any, version: str, layout: Any, **actions: Callable[..., None]) -> None:
+        super().__init__(server, version, **actions)
+        self.layout = layout
+
+    def materialize(self, start: datetime, end: datetime) -> None:
+        self.events.append("materialize")
+        for key in self.keys:
+            self.server.write_hash(self.layout.feature_db, key.encode(), field_values(self.version, key))
+
+
+def set_load(server: Any, feature_set: str, version: str) -> online.LoadResult:
+    """One load of a model set through the protocol with the set's layout; returns the result."""
+    layout = online.set_layout(feature_set)
+    hooks = SetHooks(server, version, layout)
+    return online.run_load(
+        server.client(online.CONTROL_DB), server.client(layout.feature_db), plan_for(run=RUN_A), hooks, deadline=never, lease_ms=60_000, layout=layout
+    )
+
+
+def case_e34(c: Checker, make: Callable[[], Any]) -> None:
+    """Each online model set has its own database and marker: a load flushes and marks only its own, and the old single path keeps database 1."""
+    server = make()
+    server.write_hash(online.FEATURE_DB, b"single:path", {"x": "old"})
+    layouts = {name: online.set_layout(name) for name in ("m1", "m2", "m4")}
+    c.check(
+        "m1, m2 and m4 have databases 3, 4 and 5 and a marker each",
+        [(layout.feature_db, layout.marker_key) for layout in layouts.values()] == [(3, "hai:fs:marker:m1"), (4, "hai:fs:marker:m2"), (5, "hai:fs:marker:m4")],
+    )
+    first = set_load(server, "m1", "v1")
+    c.check("the load of m1 writes its entities into database 3 only", len(server.database_keys(3)) == len(KEYS) and not server.database_keys(4))
+    marker = server.read_hash(online.CONTROL_DB, layouts["m1"].marker_key)
+    c.check(
+        "the marker of m1 is ready with its own load ID and no marker of the old path appears",
+        marker.get("state") == "ready" and marker.get("load_id") == first.load_id and not server.marker(),
+    )
+    c.check("the old single path database is untouched by a set load", server.read_hash(online.FEATURE_DB, b"single:path") == {"x": "old"})
+    before = online.database_digest(server.client(3, timeout=online.SOCKET_TIMEOUT))
+    second = set_load(server, "m2", "v2")
+    c.check(
+        "the load of m2 fills database 4 and leaves the data and the marker of m1 as they were",
+        online.database_digest(server.client(3)) == before and server.read_hash(online.CONTROL_DB, layouts["m1"].marker_key) == marker,
+    )
+    c.check("the marker of m2 is its own", server.read_hash(online.CONTROL_DB, layouts["m2"].marker_key).get("load_id") == second.load_id != first.load_id)
+    third = set_load(server, "m1", "v3")
+    after = server.read_hash(3, KEYS[0].encode())
+    c.check(
+        "a second load of m1 replaces the content of database 3 and flushes nothing of database 4",
+        third.load_id != first.load_id
+        and all(value.startswith("v3|") for key, value in after.items() if key != serving.feast_name(serving.PROBE) + serving.TIMESTAMP_POSTFIX)
+        and len(server.database_keys(4)) == len(KEYS),
+    )
+    for name in ("m3", "m5", "m6", "m7", "base", ""):
+        try:
+            online.set_layout(name)
+            refused = False
+        except online.OnlineError as error:
+            refused = name in str(error)
+        c.check(f"set {name!r} has no online database and is refused by name", refused)
+    c.check("the lease is shared: a second writer for another set is refused while one holds it", refused_while_held(server))
+    c.check("the single path load still uses database 1 and the old marker", single_path_unchanged(server))
+
+
+def refused_while_held(server: Any) -> bool:
+    holder_id = "holder"
+    online.acquire(server.client(online.CONTROL_DB), holder_id, 60_000)
+    try:
+        set_load(server, "m4", "v4")
+    except online.OnlineError as error:
+        return "lease is held" in str(error)
+    finally:
+        online.release(server.client(online.CONTROL_DB), holder_id)
+    return False
+
+
+def single_path_unchanged(server: Any) -> bool:
+    hooks = Hooks(server, "old")
+    load(server, hooks)
+    return len(server.database_keys(1)) == len(KEYS) and server.marker().get("state") == "ready"
+
+
 FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] = {
     "E20": (case_e20, "LO1 D1 RS5 B9"),
     "E21": (case_e21, "LO8 LO17 D1 D9 CR5"),
@@ -1145,6 +1228,7 @@ FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] 
     "E25": (case_e25, "LO2 LO3 LO4 LO6 B5 D11 D13 D15 D16 D19 RS3 RS5"),
     "E26": (case_e26, "LO6 LO12 D10 D19"),
     "E33": (case_e33, "LO1 LO16 RS5"),
+    "E34": (case_e34, "FS6"),
     "E24_serving": (case_serving_read, "LO13 LO16"),
     "E24_materialize": (case_materialize, "LO11 D7"),
 }
