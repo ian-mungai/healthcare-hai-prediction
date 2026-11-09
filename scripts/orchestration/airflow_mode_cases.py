@@ -19,7 +19,8 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    ``host_table_matches_the_job_table``, ``missing_launch_module_is_named``).
 8. The launch services come from the named environment, with the session adapter (``services_come_from_named_environment``,
    ``services_build_the_session_adapter``).
-9. The metadata job sends overrides only for the one container of its host definition (``metadata_uses_the_host_containers``).
+9. The metadata job sends overrides only for the one container of its host definition (``metadata_uses_the_host_containers``). The rig reads the host
+   definitions from ``infra/jobs`` (``host_definitions_hold_the_init_step_and_the_layer_guards``).
 """
 
 from __future__ import annotations
@@ -951,6 +952,21 @@ def dags_hold_no_broker_client() -> None:
     require(sent == [("pin_bronze", "silver_transform_dag")] and not rig.ecs.calls, f"the step did not go to the launch library alone: {sent}")
 
 
+def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
+    """The rig's stand-in ECS knows the containers of main's host definitions: every one holds the init step, only the three layer jobs hold the guard
+    and the metadata job holds its init step and its one client."""
+    definitions = Rig().ecs.definitions
+    require(len(definitions) == 9, f"nine host families were expected: {sorted(definitions)}")
+    require(all("init" in names for names in definitions.values()), f"a host definition lacks the init step: {definitions}")
+    guarded = {family for family, names in definitions.items() if "guard" in names}
+    require(
+        guarded == {f"example_dev_job_{layer}_host" for layer in ("silver", "gold", "features")}, f"the guard is not the layer jobs' alone: {sorted(guarded)}"
+    )
+    require(
+        definitions["example_dev_job_metadata_host"] == frozenset({"init", "ingest"}), f"metadata containers: {definitions['example_dev_job_metadata_host']}"
+    )
+
+
 CASES: dict[str, Callable[[], None]] = {
     "dags_hold_no_broker_client": dags_hold_no_broker_client,
     "pool_only_when_configured": pool_only_when_configured,
@@ -979,4 +995,5 @@ CASES: dict[str, Callable[[], None]] = {
     "services_build_the_session_adapter": services_build_the_session_adapter,
     "scratch_usage_counts_only_what_it_can_read": scratch_usage_counts_only_what_it_can_read,
     "metadata_uses_the_host_containers": metadata_uses_the_host_containers,
+    "host_definitions_hold_the_init_step_and_the_layer_guards": host_definitions_hold_the_init_step_and_the_layer_guards,
 }
