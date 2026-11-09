@@ -375,7 +375,8 @@ chow_count as (
         false as is_conflict,
         spine.change_window_start::date as period_start,
         (spine.window_start - interval 1 day)::date as period_end,
-        string_agg(distinct case when chow_events.effective_date >= spine.change_window_start then chow_events.chow_type_code end, '; ') as value_text,
+        string_agg(distinct chow_events.chow_type_code, '; ' order by chow_events.chow_type_code)
+        filter (where chow_events.effective_date >= spine.change_window_start) as value_text,
         count(distinct chow_events.event_key) filter (where chow_events.effective_date >= spine.change_window_start)::double as value_number,
         count(distinct chow_events.event_key) as unit_count
     from spine
