@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SLOTS = ("m1_ols", "m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m6_fixed_effects", "rq4_reduced")
 ALL_ROW_BRIDGES = frozenset(("hai_outcome_measures_bridge.csv", "validation_measures_bridge.csv"))
 EXCLUDED_DECISIONS = frozenset(("exclude_primary", "comparison_only"))
-CMI_COLUMNS = frozenset(("cmi", "cmi_cases", "has_cmi", "is_cmi_held"))
+CMI_COLUMNS = frozenset(("cmi", "cmi_cases", "has_cmi", "is_cmi_held", "cmi_cases_log", "cmi_change"))
 # Counties nest in states, so their one-hot columns are collinear; geography enters through county context and the spatial test instead.
 LOCATION_COLUMNS = frozenset(("state_code", "county_fips"))
 

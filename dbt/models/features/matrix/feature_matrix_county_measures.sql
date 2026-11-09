@@ -272,6 +272,7 @@ pivoted as (
         ) as c243__emotionspt_ageadjprv__number,
         max(value_number) filter (where pivot_key = 'places|C243|EMOTIONSPT:CrdPrv' and county_family_eligible) as c243__emotionspt_crdprv__number,
         max(value_text) filter (where pivot_key = 'rucc|C198|rucc_code' and county_family_eligible) as c198__rucc_code__category,
+        max(value_number) filter (where pivot_key = 'rucc|C198|rucc_code_ordinal' and county_family_eligible) as c198__rucc_code_ordinal__number,
         max(value_number) filter (where pivot_key = 'wonder|C259|crude_rate' and county_family_eligible) as c259__crude_rate__number,
         max(value_number) filter (where pivot_key = 'wonder|C259|crude_rate_lower_95' and county_family_eligible) as c259__crude_rate_lower_95__number,
         max(value_number) filter (
@@ -476,6 +477,7 @@ select
     pivoted.c243__emotionspt_ageadjprv__number,
     pivoted.c243__emotionspt_crdprv__number,
     pivoted.c198__rucc_code__category,
+    pivoted.c198__rucc_code_ordinal__number,
     pivoted.c259__crude_rate__number,
     pivoted.c259__crude_rate_lower_95__number,
     pivoted.c259__crude_rate_standard_error__number,

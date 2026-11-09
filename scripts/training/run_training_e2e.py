@@ -23,7 +23,8 @@ from scripts.process import TimeoutExpired, run_command
 ROOT = Path(__file__).resolve().parents[2]
 SLOTS = ("m1_ols", "m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m6_fixed_effects", "rq4_reduced")
 CMS = ["feature_matrix_care_compare:c119__value__number", "feature_matrix_hospital_window:bed_count"]
-ALL = sorted([*CMS, "feature_matrix_hospital:c001__value__number", "feature_matrix_hospital_window:cmi"])
+CMI_DERIVED = ["feature_matrix_hospital_window:cmi_cases_log", "feature_matrix_hospital_window:cmi_change"]
+ALL = sorted([*CMS, "feature_matrix_hospital:c001__value__number", "feature_matrix_hospital_window:cmi", *CMI_DERIVED])
 # Registered and servable, but location identity never enters a feature list (owner decision, Nov 8 2026).
 LOCATION = ["feature_matrix_hospital_window:county_fips", "feature_matrix_hospital_window:state_code"]
 REDUNDANT = "feature_matrix_hospital:c001_01__value__number"
@@ -72,6 +73,10 @@ def _set_references(document: dict[str, Any], references: list[str]) -> None:
 
 def _write_plan(folder: Path, content: bytes) -> None:
     (folder / "docs/analysis_plan.md").write_bytes(content)
+
+
+def _append_reference(document: Any, reference: str) -> None:
+    document["references"].append(reference)
 
 
 def _edit_config(folder: Path, filename: str, change: Callable[[Any], None]) -> None:
@@ -123,7 +128,9 @@ def _fixture(folder: Path) -> None:
         "feature_matrix_hospital_window": {
             "family": "hospital_window",
             "role": "predictor",
-            "columns": [_column(name, "feature_matrix_hospital_window") for name in ("bed_count", "cmi", "state_code", "county_fips")],
+            "columns": [
+                _column(name, "feature_matrix_hospital_window") for name in ("bed_count", "cmi", "cmi_cases_log", "cmi_change", "state_code", "county_fips")
+            ],
         },
         "label_matrix_hai_outcomes": {"family": "hai_outcomes", "role": "label", "columns": [], "label_views": {}},
     }
@@ -440,6 +447,12 @@ def _guard_cases(report: Report, scratch: Path) -> None:
         partial(_edit_config, filename="feature_lists/m1_ols.json", change=lambda d: d["references"].append("feature_matrix_hospital:c001__value__number")),
         "cms_only scope",
     )
+    for derived in CMI_DERIVED:
+        run(
+            f"{derived.split(':')[1]}_in_cms_baseline",
+            partial(_edit_config, filename="feature_lists/m1_ols.json", change=partial(_append_reference, reference=derived)),
+            "cms_only scope",
+        )
     run(
         "omitted_eligible_reference",
         lambda f: _edit_config(f, "feature_lists/m2_elastic_net.json", lambda d: d["references"].remove(ALL[0])),

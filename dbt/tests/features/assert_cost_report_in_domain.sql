@@ -1,6 +1,7 @@
 -- Fails for each published cost-report value that lies outside the domain its control states in cost_report_measures_recipe (domain_min, domain_max),
 -- and for each value published with a denominator that is not above the recipe's floor (denominator_floor). It reads int_cost_report_measures and the
--- cost-report rows of int_spine_hospital_measures, so a value that leaves the measure model is caught again in the spine model that the matrix pivots.
+-- cost-report value rows of int_spine_hospital_measures (the log and change rows derived from them are not values of the control), so a value that leaves
+-- the measure model is caught again in the spine model that the matrix pivots.
 
 with
 
@@ -31,7 +32,9 @@ published as (
         value_number,
         null::double as denominator
     from {{ ref('int_spine_hospital_measures') }}
-    where measure_source = 'cost_report'
+    where
+        measure_source = 'cost_report'
+        and field = 'value'
 )
 
 select

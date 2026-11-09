@@ -242,6 +242,12 @@ chosen as (
     where recency = 1
 ),
 
+previous as (
+    -- The period before the chosen one, for the change fields (design 2.10); it also ends before the window start.
+    select * from candidates
+    where recency = 2
+),
+
 any_period as (
     select distinct
         measure_source,
@@ -263,54 +269,122 @@ held_before as (
             held.ccn = spine.ccn
             and held.survey_end_date < spine.window_start
     where held.hold_reason is not null
+),
+
+base as (
+    select
+        spine.spine_key,
+        spine.ccn,
+        spine.window_year,
+        spine.window_start,
+        controls.measure_source,
+        controls.measure_control,
+        controls.field,
+        controls.review_decision,
+        chosen.period_start,
+        chosen.period_end,
+        null::date as previous_period_end,
+        chosen.rule_fiscal_year,
+        chosen.rule_stage,
+        chosen.period_copy_count,
+        spine.is_primary_population,
+        spine.is_sensitivity_population,
+        spine.is_connecticut,
+        spine.is_maryland,
+        case when not chosen.is_conflict then chosen.value_code end as value_code,
+        case when not chosen.is_conflict then chosen.value_number end as value_number,
+        -- Calendar months from the period end to the window start; no limit [585].
+        case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
+        case
+            when chosen.spine_key is not null and not chosen.is_conflict then 'aligned'
+            when chosen.is_conflict then 'held_in_staging'
+            when held_before.spine_key is not null then 'held_in_staging'
+            when any_period.ccn is not null then 'no_period_before_start'
+            else 'not_in_source'
+        end as alignment_status,
+        spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control || ':' || controls.field as alignment_key
+    from spine
+    cross join controls
+    left join chosen
+        on
+            spine.spine_key = chosen.spine_key
+            and controls.measure_source = chosen.measure_source
+            and controls.measure_control = chosen.measure_control
+            and controls.field = chosen.field
+    left join held_before
+        on
+            spine.spine_key = held_before.spine_key
+            and controls.measure_source = held_before.measure_source
+            and controls.measure_control = held_before.measure_control
+    left join any_period
+        on
+            spine.ccn = any_period.ccn
+            and controls.measure_source = any_period.measure_source
+            and controls.measure_control = any_period.measure_control
+            and controls.field = any_period.field
+),
+
+derived_fields as (
+    -- The log and change fields of the reviewed lists (dbt/seeds/features/derived_fields.csv, written by the feature schema generator).
+    select
+        measure_source,
+        measure_control,
+        parent_field,
+        field,
+        transform
+    from {{ ref('derived_fields') }}
+    where family = 'hospital'
+),
+
+derived as (
+    -- A log is the natural log of the value and null when the value is not above 0. A change is the value of the chosen period minus that of the period
+    -- before it, null when either value is missing, when there is no second period or when the two period ends are more than 18 months apart [585].
+    select
+        base.spine_key,
+        base.ccn,
+        base.window_year,
+        base.window_start,
+        base.measure_source,
+        base.measure_control,
+        derived_fields.field,
+        base.review_decision,
+        base.period_start,
+        base.period_end,
+        previous.period_end as previous_period_end,
+        base.rule_fiscal_year,
+        base.rule_stage,
+        base.period_copy_count,
+        base.is_primary_population,
+        base.is_sensitivity_population,
+        base.is_connecticut,
+        base.is_maryland,
+        null::varchar as value_code,
+        case derived_fields.transform
+            when 'log' then case when base.value_number > 0 then ln(base.value_number) end
+            else
+                case
+                    when previous.period_end is not null and not previous.is_conflict and datediff('month', previous.period_end, base.period_end) <= 18
+                        then base.value_number - previous.value_number
+                end
+        end as value_number,
+        base.age_months,
+        base.alignment_status,
+        base.alignment_key || ':' || derived_fields.field as alignment_key
+    from base
+    inner join derived_fields
+        on
+            base.measure_source = derived_fields.measure_source
+            and base.measure_control = derived_fields.measure_control
+            and base.field = derived_fields.parent_field
+    left join previous
+        on
+            derived_fields.transform = 'change'
+            and base.spine_key = previous.spine_key
+            and base.measure_source = previous.measure_source
+            and base.measure_control = previous.measure_control
+            and base.field = previous.field
 )
 
-select
-    spine.spine_key,
-    spine.ccn,
-    spine.window_year,
-    spine.window_start,
-    controls.measure_source,
-    controls.measure_control,
-    controls.field,
-    controls.review_decision,
-    chosen.period_start,
-    chosen.period_end,
-    chosen.rule_fiscal_year,
-    chosen.rule_stage,
-    chosen.period_copy_count,
-    spine.is_primary_population,
-    spine.is_sensitivity_population,
-    spine.is_connecticut,
-    spine.is_maryland,
-    case when not chosen.is_conflict then chosen.value_code end as value_code,
-    case when not chosen.is_conflict then chosen.value_number end as value_number,
-    -- Calendar months from the period end to the window start; no limit [585].
-    case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
-    case
-        when chosen.spine_key is not null and not chosen.is_conflict then 'aligned'
-        when chosen.is_conflict then 'held_in_staging'
-        when held_before.spine_key is not null then 'held_in_staging'
-        when any_period.ccn is not null then 'no_period_before_start'
-        else 'not_in_source'
-    end as alignment_status,
-    spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control || ':' || controls.field as alignment_key
-from spine
-cross join controls
-left join chosen
-    on
-        spine.spine_key = chosen.spine_key
-        and controls.measure_source = chosen.measure_source
-        and controls.measure_control = chosen.measure_control
-        and controls.field = chosen.field
-left join held_before
-    on
-        spine.spine_key = held_before.spine_key
-        and controls.measure_source = held_before.measure_source
-        and controls.measure_control = held_before.measure_control
-left join any_period
-    on
-        spine.ccn = any_period.ccn
-        and controls.measure_source = any_period.measure_source
-        and controls.measure_control = any_period.measure_control
-        and controls.field = any_period.field
+select * from base
+union all
+select * from derived

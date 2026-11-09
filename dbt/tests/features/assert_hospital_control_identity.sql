@@ -1,7 +1,8 @@
 -- Fails when the hospital finance and operations alignment does not carry exactly the source, control and field rows the retired seeds
--- cost_report_measures, impact_measures, mup_measures and occmix_measures gave at e918ed7 (frozen_hospital_controls, 98 rows), also when a control is
--- swapped for another and the count stays the same; when a formula recipe differs from the frozen rule and columns; and for each hospital-window
--- that does not have exactly one row per source, control and field [576] [582]. The row checks wait for a model with rows; the recipe check always runs.
+-- cost_report_measures, impact_measures, mup_measures and occmix_measures gave at e918ed7 (frozen_hospital_controls, 98 rows) and the derived fields of the
+-- reviewed lists (derived_fields), also when a control is swapped for another and the count stays the same; when a formula recipe differs from the frozen
+-- rule and columns; and for each hospital-window that does not have exactly one row per source, control and field [576] [582]. The row checks wait for a model
+-- with rows; the recipe check always runs.
 with
 
 frozen as (
@@ -95,11 +96,19 @@ carried as (
 ),
 
 expected as (
+    -- The frozen rows, then the log and change fields of the reviewed lists (derived_fields), which the model writes beside them.
     select distinct
         measure_source,
         measure_control,
         field
     from frozen
+    union
+    select
+        measure_source,
+        measure_control,
+        field
+    from {{ ref('derived_fields') }}
+    where family = 'hospital'
 )
 
 select

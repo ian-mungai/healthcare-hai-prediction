@@ -354,7 +354,11 @@ def generator_cases(report: Report) -> None:
         },
     }
     rules = json.loads((ROOT / schema_module.RULES).read_text())
-    extra = {"care_compare": 0, "hospital": 0, "operations": len(rules["both_kinds"])}
+    derived = {
+        family: sum(entry["family"] == family for name in DERIVED_LISTS for entry in rules.get(name, []))
+        for family in ("care_compare", "hospital", "operations")
+    }
+    extra = {"care_compare": derived["care_compare"], "hospital": derived["hospital"], "operations": len(rules["both_kinds"]) + derived["operations"]}
     counts = {}
     for family, keys in inventory.items():
         table = schema["tables"][f"feature_matrix_{family}"]
@@ -362,7 +366,7 @@ def generator_cases(report: Report) -> None:
     report.case(
         "E04s",
         "G4",
-        "predictor columns equal the frozen controls of the family (plus one per both-kinds key)",
+        "predictor columns equal the frozen controls of the family (plus one per both-kinds key and one per derived field)",
         all(wide == keys + extra[name] for name, (keys, wide) in counts.items()),
         counts=counts,
     )
@@ -535,6 +539,8 @@ HOSPITAL_LOG = {"family": "hospital", "source": "cost_report", "control": "C038"
 HOSPITAL_CHANGE = {"family": "hospital", "source": "cost_report", "control": "C040", "field": "value", "reason": "planted"}
 CARE_LOG = {"family": "care_compare", "source": "", "control": "C143", "field": "value", "reason": "planted"}
 CARE_ORDINAL = {"family": "care_compare", "source": "", "control": "C141", "field": "value", "reason": "planted"}
+DERIVED_SEED = "dbt/seeds/features/derived_fields.csv"
+DERIVED_LISTS = ("log_fields", "change_fields", "ordinal_fields", "computed_fields")
 WINDOW_GROUPS = {
     "state_code": "pos",
     "county_fips": "pos",
@@ -550,6 +556,11 @@ WINDOW_GROUPS = {
     "is_cmi_held": "cmi",
     "is_critical_access": "ccn",
     "is_veterans_affairs": "ccn",
+    "log_bed_count": "pos",
+    "or_per_100_beds": "pos",
+    "ownership_class": "pos",
+    "cmi_cases_log": "cmi",
+    "cmi_change": "cmi",
 }
 
 
@@ -626,22 +637,42 @@ def role_cases(report: Report) -> None:
 CATEGORY_CONTROLS = ("C141", "C167")
 
 
+def derived_children(family: str) -> set[tuple[str, str]]:
+    """The (control, field) of each derived field the committed rules add to a family: ``<field>_<transform>``, or the stated field of a computed entry."""
+    rules = json.loads((ROOT / schema_module.RULES).read_text())
+    transforms = {"log_fields": "log", "change_fields": "change", "ordinal_fields": "ordinal", "computed_fields": ""}
+    return {
+        (entry["control"], entry["field"] if not transform else f"{entry['field']}_{transform}")
+        for name, transform in transforms.items()
+        for entry in rules.get(name, [])
+        if entry["family"] == family
+    }
+
+
 def care_compare_field_cases(report: Report, schema: dict[str, Any]) -> None:
     """R1: the Care Compare family matches on control and field; the names of its columns do not change."""
     table = schema["tables"]["feature_matrix_care_compare"]
     controls = {row["measure_control"] for row in schema_module.read_seed(ROOT, "frozen_care_compare_controls")}
     expected = {schema_module.column_name(control, "value", "category" if control in CATEGORY_CONTROLS else "number") for control in controls}
+    children = derived_children("care_compare")
+    expected |= {schema_module.column_name(control, field, "number") for control, field in children}
     names = {column["name"] for column in table["columns"] if column["role"] == "predictor"}
-    report.case("R1", "G12", "the Care Compare column names are the control and the field value, as before", names == expected, columns=len(names))
+    report.case(
+        "R1",
+        "G12",
+        "the Care Compare column names are the control and the field value, as before, plus the derived fields of the reviewed lists",
+        names == expected,
+        columns=len(names),
+    )
     matched = all(
-        column["pivot"]["match"] == {"measure_control": column["pivot"]["match"]["measure_control"], "field": "value"}
+        column["pivot"]["match"]["field"] in {"value", *(field for _, field in children)} and set(column["pivot"]["match"]) == {"measure_control", "field"}
         for column in table["columns"]
         if column["role"] == "predictor"
     )
     report.case(
         "R1",
         "G12",
-        "the Care Compare family matches on control and field, field value for every existing column",
+        "the Care Compare family matches on control and field, field value for every existing column and the derived field for a derived one",
         table["match_columns"] == ["measure_control", "field"] and matched,
     )
     text = schema_module.generated_files(ROOT)[f"{schema_module.MATRIX_FOLDER}/feature_matrix_care_compare.sql"]
@@ -904,7 +935,7 @@ def restricted_table_cases(report: Report, base: Path) -> None:
 def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> None:
     """R7: log, change and ordinal fields of a control are keys of the same family, named from the field; they carry the parent's control."""
     rules = {"log_fields": [HOSPITAL_LOG, CARE_LOG], "change_fields": [HOSPITAL_CHANGE], "ordinal_fields": [CARE_ORDINAL]}
-    root = planted_root(base, "derived", with_rules(**rules))
+    root = planted_root(base, "derived", with_rules(**rules, computed_fields=[]))
     built, error = attempt(root)
     hospital, care = columns_of(built, "feature_matrix_hospital"), columns_of(built, "feature_matrix_care_compare")
     wanted = {
@@ -929,7 +960,9 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
         error=error[:120],
         found=sorted(set(wanted) & (set(hospital) | set(care))),
     )
-    old = {name: set(columns_of(schema, name)) for name in ("feature_matrix_hospital", "feature_matrix_care_compare")}
+    plain = planted_root(base, "derived_plain", with_rules(log_fields=[], change_fields=[], ordinal_fields=[], computed_fields=[]))
+    plain_schema, _ = attempt(plain)
+    old = {name: set(columns_of(plain_schema, name)) for name in ("feature_matrix_hospital", "feature_matrix_care_compare")}
     report.case(
         "R7",
         "G16",
@@ -983,6 +1016,98 @@ def derived_field_cases(report: Report, base: Path, schema: dict[str, Any]) -> N
     report.case("R7", "G16", "an ordinal field of a number key stops the generator", refuses(lambda: schema_module.generated_files(ordinal), "category"))
     twice = planted_root(base, "twice", with_rules(log_fields=[HOSPITAL_LOG, HOSPITAL_LOG]))
     report.case("R7", "G16", "the same derived field listed twice stops the generator", refuses(lambda: schema_module.generated_files(twice), "twice"))
+
+
+PACKAGE_THREE_WINDOW = {
+    "log_bed_count": ("double", "none", "pos"),
+    "or_per_100_beds": ("double", "none", "pos"),
+    "ownership_class": ("varchar", "own_snapshot_classification", "pos"),
+    "cmi_cases_log": ("double", "none", "cmi"),
+    "cmi_change": ("double", "none", "cmi"),
+}
+PACKAGE_THREE_COLUMNS = {
+    "feature_matrix_hospital": {
+        "c038__value_log__number": "value_log",
+        "c057__value_log__number": "value_log",
+        "c028__value_change__number": "value_change",
+        "c040__value_change__number": "value_change",
+        "c045__value_change__number": "value_change",
+        "c054__value_change__number": "value_change",
+        "c030__rnhr_change__number": "rnhr_change",
+    },
+    "feature_matrix_care_compare": {"c143__value_log__number": "value_log", "c141__value_ordinal__number": "value_ordinal"},
+    "feature_matrix_county_measures": {"c198__rucc_code_ordinal__number": "rucc_code_ordinal"},
+    "feature_matrix_county_context": {"c191__density_log__number": "density_log"},
+    "feature_matrix_operations": {"c069__any_event__number": "any_event"},
+}
+DENSITY = {"family": "county_context", "source": "svi", "control": "C191", "field": "density_log", "reason": "planted"}
+
+
+def package_three_cases(report: Report, base: Path, schema: dict[str, Any]) -> None:
+    """R9: the hospital-window and derived columns of package 3 (design 2.5, 2.6, 2.10, 2.11): their names, kinds and masks, the computed-field list, the
+    generated seed that tells the long models which derived rows to write, and RNs per bed, which stays out until the owner decides item 13."""
+    window = columns_of(schema, schema_module.WINDOW_TABLE)
+    found = {
+        name: (window[name]["type"], window[name]["mask"], window[name].get("source_group"))
+        for name in PACKAGE_THREE_WINDOW
+        if name in window and window[name]["role"] == "predictor"
+    }
+    report.case(
+        "R9",
+        "G18",
+        "the window table has log beds, ORs per 100 beds, ownership class, log CMI cases and CMI change with their masks",
+        found == PACKAGE_THREE_WINDOW,
+        found=sorted(found),
+    )
+    report.case("R9", "G18", "RNs per bed is not built while an RN count of 0 is an open owner decision", "rn_per_bed" not in window)
+    for table, wanted in PACKAGE_THREE_COLUMNS.items():
+        columns = columns_of(schema, table)
+        right = all(
+            name in columns
+            and columns[name]["pivot"]["kind"] == "number"
+            and columns[name]["pivot"]["match"].get("field") == field
+            and columns[name]["role"] == "predictor"
+            for name, field in wanted.items()
+        )
+        report.case("R9", "G18", f"{table} carries the derived columns {', '.join(sorted(wanted))} that match their derived field", right)
+    operations = columns_of(schema, "feature_matrix_operations")
+    report.case(
+        "R9",
+        "G18",
+        "every operations column matches the field value or the field of its derived key, so a derived key does not collide with its control",
+        all("field" in column["pivot"]["match"] for column in operations.values() if column["pivot"] is not None),
+    )
+    seed = schema_module.generated_files(ROOT).get(DERIVED_SEED, "")
+    seed_rows = seed.splitlines()[1:]
+    wanted_rows = sum(len(json.loads((ROOT / schema_module.RULES).read_text()).get(name, [])) for name in DERIVED_LISTS)
+    report.case(
+        "R9",
+        "G19",
+        "the generated derived-field seed has one row for each reviewed derived field",
+        len(seed_rows) == wanted_rows and wanted_rows > 0,
+        rows=len(seed_rows),
+    )
+    report.case(
+        "R9",
+        "G19",
+        "a hand-edited derived-field seed is named",
+        any(DERIVED_SEED in line for line in schema_module.check(planted_root(base, "stale_seed", partial(hand_edit, DERIVED_SEED)))),
+    )
+    for name, entry, words in (
+        ("unknown_control", dict(DENSITY, control="C999"), ("no control seed gives",)),
+        ("unknown_key", dict(DENSITY, unexpected="planted"), ("unknown key",)),
+        ("no_reason", {key: value for key, value in DENSITY.items() if key != "reason"}, ("reason",)),
+        ("already_a_key", dict(DENSITY, field="e_totpop"), ("already a key",)),
+    ):
+        planted = planted_root(base, f"computed_{name}", with_rules(computed_fields=[entry]))
+        report.case(
+            "R9",
+            "G18",
+            f"a computed field that is {name.replace('_', ' ')} stops the generator",
+            refuses(partial(schema_module.generated_files, planted), *words),
+        )
+    twice = planted_root(base, "computed_twice", with_rules(computed_fields=[DENSITY, DENSITY]))
+    report.case("R9", "G18", "the same computed field listed twice stops the generator", refuses(lambda: schema_module.generated_files(twice), "twice"))
 
 
 def grouping_role_cases(report: Report, base: Path) -> None:
@@ -1139,6 +1264,8 @@ def tool_interpreter_case(report: Report) -> None:
 def static(report: Report) -> None:
     """Every static case."""
     generator_cases(report)
+    with tempfile.TemporaryDirectory(prefix="package_three_cases_") as folder:
+        package_three_cases(report, Path(folder), schema_module.load_schema())
     role_cases(report)
     contract_cases(report)
     pin_cases(report)
@@ -1485,9 +1612,11 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
     task_environment_case(report, build, base, first)
     from scripts.features.cost_report_domain_cases import built_domains
     from scripts.features.delta_cases import built_support
+    from scripts.features.derived_column_cases import built_derived
 
     built_support(report, staging, ROOT, first)
     built_domains(report, first)
+    built_derived(report, first)
     connection = open_db(staging)
     try:
         tables = {row[0] for row in rows(connection, "select table_name from information_schema.tables where table_schema = 'main'")}

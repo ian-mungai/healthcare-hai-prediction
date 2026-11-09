@@ -94,10 +94,10 @@ def scratch_root(folder: Path) -> Path:
         shutil.copy2(columns.REPO_ROOT / name, root / name)
     path = root / SQL_MODEL
     text = path.read_text()
-    marker = "    spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control || ':' || controls.field as alignment_key\n"
+    marker = "select * from base\nunion all\nselect * from derived\n"
     if marker not in text:
-        raise RuntimeError(f"{SQL_MODEL} does not hold the line this case extends")
-    path.write_text(text.replace(marker, marker.rstrip("\n") + ",\n    1 as planted_extra_column\n", 1))
+        raise RuntimeError(f"{SQL_MODEL} does not hold the lines this case extends")
+    path.write_text(text.replace(marker, "select\n    both_parts.*,\n    1 as planted_extra_column\nfrom (" + marker + ") as both_parts\n", 1))
     return root
 
 

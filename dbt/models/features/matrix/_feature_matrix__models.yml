@@ -64,6 +64,21 @@ models:
       - name: is_veterans_affairs
         data_type: boolean
         description: Whether the CCN is that of a Veterans Affairs hospital (fixed by the CCN).
+      - name: log_bed_count
+        data_type: double
+        description: Natural log of the beds of the own POS snapshot; null without a snapshot or when the beds are not above 0.
+      - name: or_per_100_beds
+        data_type: double
+        description: Operating rooms per 100 beds of the own POS snapshot; null without a snapshot, when the beds are not above 0 or when the operating room count is missing. A count of 0 operating rooms stays 0.
+      - name: ownership_class
+        data_type: varchar
+        description: "Ownership class from the control type of the own POS snapshot: nonprofit (01 to 03), for_profit (04 and 09) or government (05 to 08 and 10); null when the classification was filled from another snapshot."
+      - name: cmi_cases_log
+        data_type: double
+        description: Natural log of the discharges behind the case-mix index; null when none is chosen or the discharges are not above 0.
+      - name: cmi_change
+        data_type: double
+        description: Case-mix index of the data fiscal year before the window minus that of the year before it; null when either year has none.
   - name: feature_matrix_care_compare
     description: >
       Wide table of the care compare family, one row per hospital-window (spine key), built from int_spine_care_compare_measures.
@@ -147,12 +162,18 @@ models:
       - name: c141__value__category
         data_type: varchar
         description: "Control C141, field value: value_category of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
+      - name: c141__value_ordinal__number
+        data_type: double
+        description: "Control C141, field value_ordinal: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none.Field value as its ordered level number; null when value is missing or outside the levels."
       - name: c142__value__number
         data_type: double
         description: "Control C142, field value: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
       - name: c143__value__number
         data_type: double
         description: "Control C143, field value: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
+      - name: c143__value_log__number
+        data_type: double
+        description: "Control C143, field value_log: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none.Natural log of field value; null when value is not positive."
       - name: c144__value__number
         data_type: double
         description: "Control C144, field value: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
@@ -284,6 +305,9 @@ models:
       - name: c028__value__number
         data_type: double
         description: "Control C028, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c028__value_change__number
+        data_type: double
+        description: "Control C028, source cost_report, field value_change: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Field value of the latest period minus that of the period before it, both ending before the window start; null when either is missing, when there is no second period or when the two period ends are more than 18 months apart."
       - name: c029__value__number
         data_type: double
         description: "Control C029, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
@@ -299,12 +323,18 @@ models:
       - name: c038__value__number
         data_type: double
         description: "Control C038, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c038__value_log__number
+        data_type: double
+        description: "Control C038, source cost_report, field value_log: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Natural log of field value; null when value is not positive."
       - name: c039__value__number
         data_type: double
         description: "Control C039, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
       - name: c040__value__number
         data_type: double
         description: "Control C040, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c040__value_change__number
+        data_type: double
+        description: "Control C040, source cost_report, field value_change: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Field value of the latest period minus that of the period before it, both ending before the window start; null when either is missing, when there is no second period or when the two period ends are more than 18 months apart."
       - name: c041__value__number
         data_type: double
         description: "Control C041, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
@@ -314,6 +344,9 @@ models:
       - name: c045__value__number
         data_type: double
         description: "Control C045, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c045__value_change__number
+        data_type: double
+        description: "Control C045, source cost_report, field value_change: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Field value of the latest period minus that of the period before it, both ending before the window start; null when either is missing, when there is no second period or when the two period ends are more than 18 months apart."
       - name: c046__value__number
         data_type: double
         description: "Control C046, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
@@ -341,6 +374,9 @@ models:
       - name: c054__value__number
         data_type: double
         description: "Control C054, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c054__value_change__number
+        data_type: double
+        description: "Control C054, source cost_report, field value_change: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Field value of the latest period minus that of the period before it, both ending before the window start; null when either is missing, when there is no second period or when the two period ends are more than 18 months apart."
       - name: c055__value__number
         data_type: double
         description: "Control C055, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
@@ -350,6 +386,9 @@ models:
       - name: c057__value__number
         data_type: double
         description: "Control C057, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c057__value_log__number
+        data_type: double
+        description: "Control C057, source cost_report, field value_log: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Natural log of field value; null when value is not positive."
       - name: c058__value__number
         data_type: double
         description: "Control C058, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
@@ -542,6 +581,9 @@ models:
       - name: c030__rnhr__number
         data_type: double
         description: "Control C030, source occupational_mix, field rnhr: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
+      - name: c030__rnhr_change__number
+        data_type: double
+        description: "Control C030, source occupational_mix, field rnhr_change: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none.Field rnhr of the latest period minus that of the period before it, both ending before the window start; null when either is missing, when there is no second period or when the two period ends are more than 18 months apart."
       - name: c031__rn_paid_hour_share__number
         data_type: double
         description: "Control C031, source occupational_mix, field rn_paid_hour_share: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
@@ -721,6 +763,9 @@ models:
       - name: c068__value__category
         data_type: varchar
         description: "Control C068, source ownership, field value: value_text of the latest period that ends before the window start (int_spine_operations_measures); null when there is none."
+      - name: c069__any_event__number
+        data_type: double
+        description: "Control C069, source ownership, field any_event: value_number of the latest period that ends before the window start (int_spine_operations_measures); null when there is none.Field any_event of the control, computed by the long model from other fields of the same control and period; null when an input is missing."
       - name: c069__value__number
         data_type: double
         description: "Control C069, source ownership, field value: value_number of the latest period that ends before the window start (int_spine_operations_measures); null when there is none."
@@ -1311,6 +1356,9 @@ models:
       - name: c198__rucc_code__category
         data_type: varchar
         description: "Control C198, source rucc, field rucc_code: value_text of the latest period that ends before the window start (int_spine_county_measures); null when there is none. Null unless the window's county is its own POS snapshot's and no planning region is set."
+      - name: c198__rucc_code_ordinal__number
+        data_type: double
+        description: "Control C198, source rucc, field rucc_code_ordinal: value_number of the latest period that ends before the window start (int_spine_county_measures); null when there is none. Null unless the window's county is its own POS snapshot's and no planning region is set.Field rucc_code as its ordered level number; null when rucc_code is missing or outside the levels."
       - name: c259__crude_rate__number
         data_type: double
         description: "Control C259, source wonder, field crude_rate: value_number of the latest period that ends before the window start (int_spine_county_measures); null when there is none. Null unless the window's county is its own POS snapshot's and no planning region is set."
@@ -1745,6 +1793,9 @@ models:
       - name: c191__area_sqmi__number
         data_type: double
         description: "Control C191, source svi, field area_sqmi: value_number of the latest period that ends before the window start (int_spine_county_context); null when there is none. Null unless the window's county is its own POS snapshot's and no planning region is set."
+      - name: c191__density_log__number
+        data_type: double
+        description: "Control C191, source svi, field density_log: value_number of the latest period that ends before the window start (int_spine_county_context); null when there is none. Null unless the window's county is its own POS snapshot's and no planning region is set.Field density_log of the control, computed by the long model from other fields of the same control and period; null when an input is missing."
       - name: c191__e_totpop__number
         data_type: double
         description: "Control C191, source svi, field e_totpop: value_number of the latest period that ends before the window start (int_spine_county_context); null when there is none. Null unless the window's county is its own POS snapshot's and no planning region is set."

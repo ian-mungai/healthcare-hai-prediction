@@ -122,59 +122,115 @@ held_before as (
         on
             holds.entity_id = spine.ccn
             and holds.window_end < spine.window_start
+),
+
+base as (
+    select
+        spine.spine_key,
+        spine.ccn,
+        spine.window_year,
+        spine.window_start,
+        controls.measure_control,
+        controls.fact,
+        -- The field the matrix model pivots on beside the control; the family has one, so every value is field value.
+        'value' as field,
+        controls.review_decision,
+        chosen.measure_id,
+        case when not chosen.is_release_conflict then chosen.value_text end as value_text,
+        case when not chosen.is_release_conflict then chosen.value_number end as value_number,
+        -- Each published C141 spelling and each published C167 (SM_7) text maps to one category; Not Available stays a token [569].
+        case
+            when controls.measure_control = 'C141' and not chosen.is_release_conflict
+                then {{ edv_category('chosen.value_text') }}
+            when controls.measure_control = 'C167' and not chosen.is_release_conflict
+                then {{ sm7_category('chosen.value_text') }}
+        end as value_category,
+        case when not chosen.is_release_conflict then chosen.footnote_text end as footnote_text,
+        chosen.sample_text,
+        chosen.period_start,
+        chosen.period_end,
+        chosen.release_date,
+        chosen.release_file_count,
+        -- Whole months from the period end to the window start; no limit [570].
+        case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
+        case
+            when chosen.spine_key is not null and not chosen.is_release_conflict then 'aligned'
+            when chosen.is_release_conflict then 'held_in_staging'
+            when held_before.spine_key is not null then 'held_in_staging'
+            when any_period.ccn is not null then 'no_period_before_start'
+            else 'not_in_source'
+        end as alignment_status,
+        spine.is_primary_population,
+        spine.is_sensitivity_population,
+        spine.is_connecticut,
+        spine.is_maryland,
+        spine.spine_key || ':' || controls.measure_control as alignment_key
+    from spine
+    cross join controls
+    left join chosen
+        on
+            spine.spine_key = chosen.spine_key
+            and controls.measure_control = chosen.measure_control
+    left join held_before
+        on
+            spine.spine_key = held_before.spine_key
+            and controls.measure_control = held_before.measure_control
+    left join any_period
+        on
+            spine.ccn = any_period.ccn
+            and controls.measure_control = any_period.measure_control
+),
+
+derived_fields as (
+    -- The log and ordinal fields of the reviewed lists (dbt/seeds/features/derived_fields.csv, written by the feature schema generator).
+    select
+        measure_control,
+        parent_field,
+        field,
+        transform
+    from {{ ref('derived_fields') }}
+    where family = 'care_compare'
+),
+
+derived as (
+    -- A log is the natural log of the score and null when the score is not above 0. An ordinal maps the emergency department volume category low, medium,
+    -- high and very high to 1 to 4; any other value gives null. The row keeps the parent's period, release and alignment status.
+    select
+        base.spine_key,
+        base.ccn,
+        base.window_year,
+        base.window_start,
+        base.measure_control,
+        base.fact,
+        derived_fields.field,
+        base.review_decision,
+        base.measure_id,
+        null::varchar as value_text,
+        case derived_fields.transform
+            when 'log' then case when base.value_number > 0 then ln(base.value_number) end
+            else case base.value_category when 'low' then 1 when 'medium' then 2 when 'high' then 3 when 'very high' then 4 end
+        end::double as value_number,
+        null::varchar as value_category,
+        base.footnote_text,
+        base.sample_text,
+        base.period_start,
+        base.period_end,
+        base.release_date,
+        base.release_file_count,
+        base.age_months,
+        base.alignment_status,
+        base.is_primary_population,
+        base.is_sensitivity_population,
+        base.is_connecticut,
+        base.is_maryland,
+        base.alignment_key || ':' || derived_fields.field as alignment_key
+    from base
+    inner join derived_fields
+        on
+            base.measure_control = derived_fields.measure_control
+            and base.field = derived_fields.parent_field
 )
 
-select
-    spine.spine_key,
-    spine.ccn,
-    spine.window_year,
-    spine.window_start,
-    controls.measure_control,
-    controls.fact,
-    -- The field the matrix model pivots on beside the control; the family has one, so every value is field value.
-    'value' as field,
-    controls.review_decision,
-    chosen.measure_id,
-    case when not chosen.is_release_conflict then chosen.value_text end as value_text,
-    case when not chosen.is_release_conflict then chosen.value_number end as value_number,
-    -- Each published C141 spelling and each published C167 (SM_7) text maps to one category; Not Available stays a token [569].
-    case
-        when controls.measure_control = 'C141' and not chosen.is_release_conflict
-            then {{ edv_category('chosen.value_text') }}
-        when controls.measure_control = 'C167' and not chosen.is_release_conflict
-            then {{ sm7_category('chosen.value_text') }}
-    end as value_category,
-    case when not chosen.is_release_conflict then chosen.footnote_text end as footnote_text,
-    chosen.sample_text,
-    chosen.period_start,
-    chosen.period_end,
-    chosen.release_date,
-    chosen.release_file_count,
-    -- Whole months from the period end to the window start; no limit [570].
-    case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
-    case
-        when chosen.spine_key is not null and not chosen.is_release_conflict then 'aligned'
-        when chosen.is_release_conflict then 'held_in_staging'
-        when held_before.spine_key is not null then 'held_in_staging'
-        when any_period.ccn is not null then 'no_period_before_start'
-        else 'not_in_source'
-    end as alignment_status,
-    spine.is_primary_population,
-    spine.is_sensitivity_population,
-    spine.is_connecticut,
-    spine.is_maryland,
-    spine.spine_key || ':' || controls.measure_control as alignment_key
-from spine
-cross join controls
-left join chosen
-    on
-        spine.spine_key = chosen.spine_key
-        and controls.measure_control = chosen.measure_control
-left join held_before
-    on
-        spine.spine_key = held_before.spine_key
-        and controls.measure_control = held_before.measure_control
-left join any_period
-    on
-        spine.ccn = any_period.ccn
-        and controls.measure_control = any_period.measure_control
+select * from base
+union all
+select * from derived

@@ -454,6 +454,9 @@ models:
       - name: certified_bed_count
         data_type: integer
         description: Certified beds from the window's own POS snapshot; null without one.
+      - name: operating_room_count
+        data_type: integer
+        description: Operating rooms from the window's own POS snapshot; null without one.
       - name: is_active
         data_type: boolean
         description: POS active flag of the window's own snapshot; null without one.
@@ -476,6 +479,21 @@ models:
       - name: cmi_cases
         data_type: double
         description: The cases the CMI file publishes.
+      - name: cmi_cases_log
+        data_type: double
+        description: Natural log of cmi_cases; null when there is no CMI or the cases are not above 0.
+      - name: cmi_change
+        data_type: double
+        description: The CMI of the data fiscal year Y-1 minus that of Y-2 (window year Y); null when either year has no CMI. A missing year is never bridged by an older one.
+      - name: log_bed_count
+        data_type: double
+        description: Natural log of bed_count; null without a snapshot or when the beds are not above 0.
+      - name: or_per_100_beds
+        data_type: double
+        description: 100 times the operating rooms over the beds of the own POS snapshot; null without a snapshot, when the beds are not above 0 or when the operating room count is missing. A count of 0 stays 0.
+      - name: ownership_class
+        data_type: varchar
+        description: Ownership class of the chosen snapshot's POS control type (nonprofit for 01 to 03, for_profit for 04 and 09, government for 05 to 08 and 10); null for any other code or without a snapshot.
       - name: has_pos_snapshot
         data_type: boolean
         description: True when the hospital is in the POS snapshot that ends in the 12 months before the window.
@@ -1320,6 +1338,9 @@ models:
       period that ends before the HAI window starts: the report period, the rule fiscal year (Oct 1 to Sep 30, most
       final stage), the data year or the survey. Values that disagree for one period are held; occupational-mix copies
       within 0.0001 count as one value. Age in months, no limit; no eligibility choice.
+      Rows of the reviewed log and change fields (dbt/seeds/features/derived_fields.csv) sit beside them: a log is the natural log of the value (null when the value
+      is not above 0); a change is the value of the chosen period minus that of the period before it (null when either is missing or the two period ends are more
+      than 18 months apart).
     meta:
       classification: Public
     columns:
@@ -1364,6 +1385,9 @@ models:
       - name: period_end
         data_type: date
         description: Last day of the chosen period (report, rule fiscal year, data year or survey); null when no period is chosen.
+      - name: previous_period_end
+        data_type: date
+        description: For a change row, the last day of the period before the chosen one (it also ends before the window start); null for every other row and when there is no second period.
       - name: rule_fiscal_year
         data_type: integer
         description: The payment-rule fiscal year of the chosen impact file or survey copy; null for cost reports and Medicare inpatient data.
@@ -1418,7 +1442,8 @@ models:
       7-day sums, a mean of 7-day averages; a CCN-week with two HHS hospitals skipped and counted). ONC: the latest
       performance period ending before the start. Ownership: the latest owner release before the start through the
       enrollment CCN, private equity and REIT flags from ownership roles only (Y or not_reported). Change of
-      ownership: events in the year before the start (C069) and months since the latest (C070).
+      ownership: events in the year before the start (C069), 0 when there is none inside the register (a true zero from the register start, the earliest effective
+      date of the gold events) and missing before it, with its any-event flag, and months since the latest (C070).
     meta:
       classification: Public
     columns:
@@ -1445,6 +1470,9 @@ models:
       - name: measure_control
         data_type: varchar
         description: Registry control identifier.
+      - name: field
+        data_type: varchar
+        description: The field the matrix model pivots on beside the source and control; value for every control, any_event for the C069 any-event flag.
       - name: review_decision
         data_type: varchar
         description: The registry control's review decision, from dim_registry_control; null when the control has none.

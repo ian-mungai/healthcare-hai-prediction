@@ -1,0 +1,13 @@
+family,measure_source,measure_control,parent_field,field,transform
+care_compare,,C141,value,value_ordinal,ordinal
+care_compare,,C143,value,value_log,log
+county_context,svi,C191,,density_log,computed
+county_measures,rucc,C198,rucc_code,rucc_code_ordinal,ordinal
+hospital,cost_report,C028,value,value_change,change
+hospital,cost_report,C038,value,value_log,log
+hospital,cost_report,C040,value,value_change,change
+hospital,cost_report,C045,value,value_change,change
+hospital,cost_report,C054,value,value_change,change
+hospital,cost_report,C057,value,value_log,log
+hospital,occupational_mix,C030,rnhr,rnhr_change,change
+operations,ownership,C069,,any_event,computed

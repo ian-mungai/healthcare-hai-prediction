@@ -60,6 +60,50 @@ DOMAIN_CASES = (
     ("DOM8", "inside_bounds", 2021, 10000.0, 5000.0),
     ("DOM9", "missing_denominator", 2021, None, 5000.0),
 )
+# Package 3 cases (design 2.5, 2.6, 2.10 and 2.11). Hospital 990009 has windows 2022 to 2024, hospital 990010 windows 2022 and 2023 and hospital 990011
+# the window 2023, hospital 990012 the window 2023 after two reports of one period that disagree. Every value is synthetic; the expected results are worked
+# out by hand in scripts/features/derived_column_cases.py.
+DERIVED_CCN = "990009"
+GAP_CCN = "990010"
+NEGATIVE_CCN = "990011"
+CONFLICT_CCN = "990012"
+DERIVED_WINDOWS = {DERIVED_CCN: (2022, 2023, 2024), GAP_CCN: (2022, 2023), NEGATIVE_CCN: (2023,), CONFLICT_CCN: (2023,)}
+# (report, ccn, fiscal year, denominator, numerator). 990009: window 2022 has two reports a year apart, window 2023 a report with a zero denominator.
+# 990010: window 2022 has one report, window 2023 two reports three years apart. 990011: a negative denominator. 990012: two reports of the period 2021 with
+# different shares (a conflict), then one of 2022.
+DERIVED_REPORTS = (
+    ("DR1", DERIVED_CCN, 2020, 20000.0, 500.0),
+    ("DR2", DERIVED_CCN, 2021, 10000.0, 2000.0),
+    ("DR3", DERIVED_CCN, 2022, 0.0, 100.0),
+    ("DR4", GAP_CCN, 2019, 10000.0, 1000.0),
+    ("DR5", GAP_CCN, 2022, 10000.0, 3000.0),
+    ("DR6", NEGATIVE_CCN, 2022, -5.0, 100.0),
+    ("DR7", CONFLICT_CCN, 2021, 10000.0, 1000.0),
+    ("DR8", CONFLICT_CCN, 2021, 10000.0, 2000.0),
+    ("DR9", CONFLICT_CCN, 2022, 10000.0, 3000.0),
+)
+# (snapshot period end, beds, operating rooms, control type) of 990009: the own snapshot of window 2022 ends 2021-12-31; the row ending on the start of
+# window 2023 is never read for that window.
+DERIVED_SNAPSHOTS = (
+    (date(2021, 12, 31), 200, 10, "04"),
+    (date(2022, 12, 31), 0, 10, "02"),
+    (date(2023, 1, 1), 999, 99, "08"),
+    (date(2023, 12, 31), 150, 0, "07"),
+)
+# Case-mix index by data fiscal year, with its cases: window 2023 gets 1.8 minus 1.5; window 2022 has no earlier year; window 2024 has no 2023 year.
+DERIVED_CMI = ((2021, 1.5, 1000.0), (2022, 1.8, 0.0))
+# Change of ownership events: (key, effective date, buyer, seller, type). The first starts the register at 2021-06-01 and belongs to no spine hospital.
+DERIVED_EVENTS = (
+    ("EV0", date(2021, 6, 1), "990012", None, "ACQ"),
+    ("EV1", date(2022, 6, 15), DERIVED_CCN, "990013", "ACQ"),
+    ("EV2", date(2022, 12, 31), "990014", DERIVED_CCN, "MRG"),
+    ("EV3", date(2024, 1, 1), DERIVED_CCN, "990015", "ACQ"),
+    ("EV4", date(2023, 1, 1), DERIVED_CCN, "990016", "ACQ"),
+)
+# SVI editions of county 01001 (population, area in square miles): the area of the last one is zero.
+DERIVED_SVI = (("2020", 50000.0, 100.0), ("2022", 60000.0, 100.0), ("2023", 70000.0, 0.0))
+# Rural-urban continuum codes: county, vintage, code.
+DERIVED_RUCC = (("01001", "2013", "3"), ("48001", "2013", "9"), ("12001", "2013", "0"))
 Rows = dict[str, list[dict[str, Any]]]
 INSERT_SQL = 'insert into main."{table}" ({names}) values ({marks})'
 COPY_SQL = "copy (select * from main.\"{table}\") to '{path}' (format parquet)"
@@ -127,12 +171,12 @@ def snapshot(ccn: str, period_end: date, **values: Any) -> dict[str, Any]:
     return base
 
 
-def domain_report(number: str, year: int, denominator: float | None, numerator: float) -> dict[str, Any]:
+def domain_report(number: str, year: int, denominator: float | None, numerator: float, ccn: str = DOMAIN_CCN) -> dict[str, Any]:
     """One cost report of the domain cases: every floored denominator and every share numerator at the given values."""
     return {
         "rpt_rec_num": number,
-        "ccn": DOMAIN_CCN,
-        "provider_ccn_raw": DOMAIN_CCN,
+        "ccn": ccn,
+        "provider_ccn_raw": ccn,
         "period_begin": date(year, 1, 1),
         "period_end": date(year, 12, 31),
         "file_fiscal_year": year,
@@ -162,6 +206,99 @@ def domain_report(number: str, year: int, denominator: float | None, numerator: 
     }
 
 
+def derived_rows(rows: Rows) -> None:
+    """The gold rows of the package 3 cases: POS snapshots with operating rooms, case-mix indexes, cost reports a year, three years and no year apart,
+    occupational-mix surveys, Care Compare minutes and volumes, change of ownership events, SVI editions and rural-urban continuum codes."""
+    for ending, beds, rooms, control in DERIVED_SNAPSHOTS:
+        rows["fct_pos_snapshot"].append(snapshot(DERIVED_CCN, ending, bed_count=beds, operating_room_count=rooms, control_type_code=control))
+    for year, cmi, cases in DERIVED_CMI:
+        rows["fct_cmi_observation"].append(
+            {
+                "bronze_table": "cmi_fixture",
+                "member_sha256": f"cmi-{DERIVED_CCN}-{year}",
+                "sheet_name": "sheet",
+                "line_number": 1,
+                "rule_fiscal_year": year + 1,
+                "data_fiscal_year": year,
+                "rule_stage": "final",
+                "ccn": DERIVED_CCN,
+                "cmi": cmi,
+                "cases": cases,
+                "cmi_row_key": f"{DERIVED_CCN}-{year}",
+            }
+        )
+    rows["fct_cost_report"] += [domain_report(number, year, denominator, numerator, ccn) for number, ccn, year, denominator, numerator in DERIVED_REPORTS]
+    for number, (start, end, hours) in enumerate(((date(2020, 7, 1), date(2021, 6, 30), 10.0), (date(2021, 7, 1), date(2022, 6, 30), 11.5)), start=1):
+        rows["fct_occupational_mix_survey"].append(
+            {
+                "bronze_table": "occmix_fixture",
+                "member_sha256": f"occmix-{number}",
+                "sheet_name": "sheet",
+                "source_row_number": number,
+                "survey_row_key": f"occmix-{DERIVED_CCN}-{number}",
+                "rule_fiscal_years": [2022],
+                "rule_stages": ["final"],
+                "is_deleted": False,
+                "ccn": DERIVED_CCN,
+                "survey_start_date": start,
+                "survey_end_date": end,
+                "rnhr": hours,
+                "nursehr": 40.0,
+                "rows_for_provider_period": 1,
+            }
+        )
+    # Minutes (C143) of 120, zero and negative; emergency department volume (C141) Low, Medium and Not Available.
+    for year, minutes, volume in ((2021, "120", "Low"), (2022, "0", "Medium"), (2023, "-3", "Not Available")):
+        released = date(year + 1, 7, 6)
+        rows["fct_timely_effective_care_window"].append(care_window(DERIVED_CCN, "OP_18b", (date(year, 1, 1), date(year, 12, 31)), minutes, released))
+        rows["fct_timely_effective_care_window"].append(care_window(DERIVED_CCN, "EDV", (date(year, 1, 1), date(year, 12, 31)), volume, released))
+    for key, effective, buyer, seller, kind in DERIVED_EVENTS:
+        rows["fct_ownership_change"].append(
+            {
+                "member_sha256": f"chow-{key}",
+                "source_row_number": 1,
+                "chow_type_code": kind,
+                "effective_date": effective,
+                "ccn_buyer": buyer,
+                "ccn_seller": seller,
+                "event_key": key,
+                "chow_row_key": key,
+                "releases_listed": 1,
+            }
+        )
+    for edition, population, area in DERIVED_SVI:
+        for field, value in (("e_totpop", population), ("area_sqmi", area)):
+            rows["fct_svi_county_value"].append(
+                {
+                    "member_sha256": f"svi-{edition}",
+                    "source_row_number": 1,
+                    "edition": edition,
+                    "county_fips": "01001",
+                    "field": field,
+                    "value_published": str(value),
+                    "value_number": value,
+                    "county_scope": "county",
+                    "svi_value_key": f"svi-{edition}-{field}",
+                    "is_connecticut": False,
+                }
+            )
+    for county, vintage, code in DERIVED_RUCC:
+        rows["fct_rucc_county"].append(
+            {
+                "member_sha256": f"rucc-{vintage}",
+                "vintage": vintage,
+                "county_fips": county,
+                "county_published": county,
+                "rucc_published": code,
+                "population": 1000.0,
+                "county_scope": "county",
+                "rucc_key": f"rucc-{vintage}-{county}",
+                "rucc_code": code,
+                "is_connecticut": False,
+            }
+        )
+
+
 def gold_rows(version: int = 1) -> Rows:
     """The gold rows of one fixture version (1 or 2)."""
     rows: Rows = {name: [] for name in TABLES}
@@ -173,6 +310,7 @@ def gold_rows(version: int = 1) -> Rows:
         "990005": [2022],
         # A hospital with a window before the reviewed first_window_year (2017: history only), one on it (2018) and one after it (2019).
         "990007": [2017, 2018, 2019],
+        **{ccn: list(years) for ccn, years in DERIVED_WINDOWS.items()},
     }
     if version == 2:
         hospitals["990006"] = [2023, 2024]
@@ -349,6 +487,7 @@ def gold_rows(version: int = 1) -> Rows:
                     "is_connecticut": False,
                 }
             )
+    derived_rows(rows)
     for measure in ("PSI_90", "PSI_13"):
         for year in range(2020, 2025):
             rows["fct_complications_deaths_window"].append(
@@ -443,6 +582,11 @@ TABLES = (
     "fct_places_county_value",
     "fct_acs_county_value",
     "fct_ruca_code",
+    "fct_cmi_observation",
+    "fct_ownership_change",
+    "fct_svi_county_value",
+    "fct_rucc_county",
+    "fct_occupational_mix_survey",
 )
 
 

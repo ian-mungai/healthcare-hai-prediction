@@ -14,3 +14,13 @@ case {{ stage }}
     else 10
 end
 {% endmacro %}
+
+{% macro ownership_class(column) %}
+{#- The ownership class of a POS control type code (design 2.11): 01 to 03 nonprofit, 04 and 09 for profit, 05 to 08 and 10 government; any other code or a
+    missing code gives null. assert_ownership_class_codes runs every code through this macro. -#}
+case
+    when {{ column }} in ('01', '02', '03') then 'nonprofit'
+    when {{ column }} in ('04', '09') then 'for_profit'
+    when {{ column }} in ('05', '06', '07', '08', '10') then 'government'
+end
+{% endmacro %}

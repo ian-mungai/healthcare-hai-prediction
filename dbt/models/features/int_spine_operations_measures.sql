@@ -355,42 +355,71 @@ chow_events as (
         and effective_date is not null
 ),
 
-chow as (
-    -- C069: distinct events in [start - 1 year, start), every type listed; C070: completed months since the latest [594].
+register as (
+    -- The change-of-ownership register starts on the earliest effective date of the gold events (2016-01-01 in the data of 8 Nov 2026), read from the data and
+    -- never written as a literal. A 12-month window that starts before it is not covered, so its count stays missing.
+    select min(effective_date) as register_start
+    from {{ ref('fct_ownership_change') }}
+),
+
+chow_count as (
+    -- C069: distinct events in [start - 1 year, start), every type listed. A window whose 12 months lie inside the register has 0 when no event falls in them,
+    -- a true zero and not a missing value (owner decision, 8 Nov 2026); an earlier window has no row, so its value stays missing [594].
     select
         spine.spine_key,
         controls.measure_control,
         'ownership' as measure_source,
         0 as skipped_count,
         false as is_conflict,
-        case when controls.measure_control = 'C069' then spine.change_window_start end::date as period_start,
-        case
-            when controls.measure_control = 'C069' then spine.window_start - interval 1 day
-            else max(chow_events.effective_date)
-        end::date as period_end,
-        case
-            when controls.measure_control = 'C069'
-                then
-                    string_agg(distinct chow_events.chow_type_code, '; ' order by chow_events.chow_type_code)
-                    filter (where chow_events.effective_date >= spine.change_window_start)
-        end as value_text,
-        case
-            when controls.measure_control = 'C069'
-                then count(distinct chow_events.event_key) filter (where chow_events.effective_date >= spine.change_window_start)
-            else date_sub('month', max(chow_events.effective_date), spine.window_start)
-        end::double as value_number,
+        spine.change_window_start::date as period_start,
+        (spine.window_start - interval 1 day)::date as period_end,
+        string_agg(distinct case when chow_events.effective_date >= spine.change_window_start then chow_events.chow_type_code end, '; ') as value_text,
+        count(distinct chow_events.event_key) filter (where chow_events.effective_date >= spine.change_window_start)::double as value_number,
+        count(distinct chow_events.event_key) as unit_count
+    from spine
+    cross join register
+    left join chow_events
+        on
+            spine.ccn = chow_events.ccn
+            and spine.window_start > chow_events.effective_date
+    inner join controls on controls.measure_control = 'C069'
+    where spine.change_window_start::date >= register.register_start
+    group by
+        spine.spine_key,
+        spine.window_start,
+        spine.change_window_start,
+        controls.measure_control
+),
+
+chow_latest as (
+    -- C070: completed months since the latest event before the start [594].
+    select
+        spine.spine_key,
+        controls.measure_control,
+        'ownership' as measure_source,
+        0 as skipped_count,
+        false as is_conflict,
+        null::date as period_start,
+        max(chow_events.effective_date)::date as period_end,
+        null::varchar as value_text,
+        date_sub('month', max(chow_events.effective_date), spine.window_start)::double as value_number,
         count(distinct chow_events.event_key) as unit_count
     from spine
     inner join chow_events
         on
             spine.ccn = chow_events.ccn
             and spine.window_start > chow_events.effective_date
-    inner join controls on controls.measure_control in ('C069', 'C070')
+    inner join controls on controls.measure_control = 'C070'
     group by
         spine.spine_key,
         spine.window_start,
-        spine.change_window_start,
         controls.measure_control
+),
+
+chow as (
+    select * from chow_count
+    union all
+    select * from chow_latest
 ),
 
 chosen as (
@@ -467,45 +496,95 @@ any_source as (
         ccn,
         'ownership' as measure_source
     from chow_events
+),
+
+base as (
+    select
+        spine.spine_key,
+        spine.ccn,
+        spine.window_year,
+        spine.window_start,
+        controls.measure_source,
+        controls.measure_control,
+        'value' as field,
+        controls.review_decision,
+        chosen.period_start,
+        chosen.period_end,
+        chosen.unit_count,
+        chosen.skipped_count,
+        spine.is_primary_population,
+        spine.is_sensitivity_population,
+        spine.is_connecticut,
+        spine.is_maryland,
+        case when not chosen.is_conflict then chosen.value_text end as value_text,
+        case when not chosen.is_conflict then chosen.value_number end as value_number,
+        case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
+        case
+            when chosen.is_conflict then 'held_in_staging'
+            when chosen.spine_key is not null and (chosen.value_text is not null or chosen.value_number is not null) then 'aligned'
+            when chosen.spine_key is not null and chosen.skipped_count > 0 then 'held_in_staging'
+            -- A period with rows but no value for this control (for example a field the source does not publish).
+            when chosen.spine_key is not null then 'not_in_source'
+            when any_source.ccn is not null then 'no_period_before_start'
+            else 'not_in_source'
+        end as alignment_status,
+        spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control as alignment_key
+    from spine
+    cross join controls
+    left join chosen
+        on
+            spine.spine_key = chosen.spine_key
+            and controls.measure_source = chosen.measure_source
+            and controls.measure_control = chosen.measure_control
+    left join any_source
+        on
+            spine.ccn = any_source.ccn
+            and controls.measure_source = any_source.measure_source
+),
+
+derived_fields as (
+    -- The computed fields of the reviewed lists (dbt/seeds/features/derived_fields.csv, written by the feature schema generator): the any-event flag of C069.
+    select
+        measure_source,
+        measure_control,
+        field
+    from {{ ref('derived_fields') }}
+    where
+        family = 'operations'
+        and transform = 'computed'
+),
+
+derived as (
+    -- The any-event flag is 1 when the count of C069 is above 0, else 0, and missing when the count is missing. The row keeps the parent's period and status.
+    select
+        base.spine_key,
+        base.ccn,
+        base.window_year,
+        base.window_start,
+        base.measure_source,
+        base.measure_control,
+        derived_fields.field,
+        base.review_decision,
+        base.period_start,
+        base.period_end,
+        base.unit_count,
+        base.skipped_count,
+        base.is_primary_population,
+        base.is_sensitivity_population,
+        base.is_connecticut,
+        base.is_maryland,
+        null::varchar as value_text,
+        case when base.value_number is not null then case when base.value_number > 0 then 1.0 else 0.0 end end as value_number,
+        base.age_months,
+        base.alignment_status,
+        base.alignment_key || ':' || derived_fields.field as alignment_key
+    from base
+    inner join derived_fields
+        on
+            base.measure_source = derived_fields.measure_source
+            and base.measure_control = derived_fields.measure_control
 )
 
-select
-    spine.spine_key,
-    spine.ccn,
-    spine.window_year,
-    spine.window_start,
-    controls.measure_source,
-    controls.measure_control,
-    controls.review_decision,
-    chosen.period_start,
-    chosen.period_end,
-    chosen.unit_count,
-    chosen.skipped_count,
-    spine.is_primary_population,
-    spine.is_sensitivity_population,
-    spine.is_connecticut,
-    spine.is_maryland,
-    case when not chosen.is_conflict then chosen.value_text end as value_text,
-    case when not chosen.is_conflict then chosen.value_number end as value_number,
-    case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
-    case
-        when chosen.is_conflict then 'held_in_staging'
-        when chosen.spine_key is not null and (chosen.value_text is not null or chosen.value_number is not null) then 'aligned'
-        when chosen.spine_key is not null and chosen.skipped_count > 0 then 'held_in_staging'
-        -- A period with rows but no value for this control (for example a field the source does not publish).
-        when chosen.spine_key is not null then 'not_in_source'
-        when any_source.ccn is not null then 'no_period_before_start'
-        else 'not_in_source'
-    end as alignment_status,
-    spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control as alignment_key
-from spine
-cross join controls
-left join chosen
-    on
-        spine.spine_key = chosen.spine_key
-        and controls.measure_source = chosen.measure_source
-        and controls.measure_control = chosen.measure_control
-left join any_source
-    on
-        spine.ccn = any_source.ccn
-        and controls.measure_source = any_source.measure_source
+select * from base
+union all
+select * from derived

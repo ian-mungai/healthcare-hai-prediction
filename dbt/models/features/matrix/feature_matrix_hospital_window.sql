@@ -18,11 +18,16 @@ attributes as (
         is_cmi_held,
         is_critical_access,
         is_veterans_affairs,
+        log_bed_count,
+        or_per_100_beds,
+        cmi_cases_log,
+        cmi_change,
         (window_start::timestamp) at time zone 'UTC' as event_timestamp,
         case when state_source = 'pos_own' then state_code end as state_code,
         case when county_source = 'pos_own' then county_fips end as county_fips,
         case when classification_source = 'pos_own' then provider_subtype_code end as provider_subtype_code,
-        case when classification_source = 'pos_own' then control_type_code end as control_type_code
+        case when classification_source = 'pos_own' then control_type_code end as control_type_code,
+        case when classification_source = 'pos_own' then ownership_class end as ownership_class
     from {{ ref('int_hospital_spine') }}
 )
 
@@ -44,5 +49,10 @@ select
     has_cmi,
     is_cmi_held,
     is_critical_access,
-    is_veterans_affairs
+    is_veterans_affairs,
+    log_bed_count,
+    or_per_100_beds,
+    ownership_class,
+    cmi_cases_log,
+    cmi_change
 from attributes

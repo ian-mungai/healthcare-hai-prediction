@@ -87,7 +87,32 @@ expected as (
         measure_source,
         measure_control
     from frozen
+),
+
+derived as (
+    select
+        measure_source,
+        measure_control,
+        field
+    from {{ ref('derived_fields') }}
+    where family = 'operations'
+),
+
+carried_rows as (
+    select
+        listed.spine_key,
+        listed.measure_source,
+        listed.measure_control,
+        listed.field,
+        derived.field is not null as is_derived
+    from {{ ref('int_spine_operations_measures') }} as listed
+    left join derived
+        on
+            listed.measure_source = derived.measure_source
+            and listed.measure_control = derived.measure_control
+            and listed.field = derived.field
 )
+
 
 select
     'recipe or bridge differs from the frozen identity' as failure,
@@ -129,6 +154,15 @@ union all
 select
     'control count differs' as failure,
     spine_key as detail
-from {{ ref('int_spine_operations_measures') }}
+from carried_rows
+where not is_derived
 group by spine_key
 having count(*) <> (select count(*) from expected) or count(distinct measure_source || ':' || measure_control) <> count(*)
+union all
+select
+    'derived rows differ from the derived-field seed' as failure,
+    spine_key as detail
+from carried_rows
+where is_derived
+group by spine_key
+having count(*) <> (select count(*) from derived) or count(distinct measure_source || ':' || measure_control || ':' || field) <> count(*)

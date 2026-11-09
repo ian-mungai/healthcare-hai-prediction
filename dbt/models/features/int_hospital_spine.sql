@@ -62,6 +62,7 @@ pos as (
         control_type_code,
         bed_count,
         certified_bed_count,
+        operating_room_count,
         is_active
     from {{ ref('fct_pos_snapshot') }}
 ),
@@ -147,6 +148,7 @@ located as (
         pos.period_end as pos_period_end,
         pos.bed_count,
         pos.certified_bed_count,
+        pos.operating_room_count,
         pos.is_active,
         pos.ccn is not null as has_pos_snapshot,
         coalesce(pos.state_code, earlier.state_code, enrollment.state) as state_code,
@@ -284,7 +286,16 @@ joined as (
         located.classification_source_period_end,
         located.bed_count,
         located.certified_bed_count,
+        located.operating_room_count,
         located.is_active,
+        -- Derived hospital-window fields (design 2.5, 2.10 and 2.11). A log needs a value above 0. ORs per 100 beds needs beds above 0; an operating room count
+        -- of 0 stays 0. The ownership class maps the POS control type of the chosen snapshot. The CMI change is the data year Y-1 minus Y-2 and is null when
+        -- either year has none, so a missing year is never bridged by an older one. RNs per bed is not built: an RN count of 0 is an open owner decision.
+        case when located.bed_count > 0 then ln(located.bed_count) end as log_bed_count,
+        case when located.bed_count > 0 then 100.0 * located.operating_room_count / located.bed_count end as or_per_100_beds,
+        {{ ownership_class('located.control_type_code') }} as ownership_class,
+        case when cmi.cases > 0 then ln(cmi.cases) end as cmi_cases_log,
+        cmi.cmi - earlier_cmi.cmi as cmi_change,
         cmi.cmi,
         cmi.data_fiscal_year as cmi_data_fiscal_year,
         cmi.rule_fiscal_year as cmi_rule_fiscal_year,
@@ -314,6 +325,10 @@ joined as (
         on
             located.ccn = cmi.ccn
             and located.window_year - 1 = cmi.data_fiscal_year
+    left join cmi as earlier_cmi
+        on
+            located.ccn = earlier_cmi.ccn
+            and located.window_year - 2 = earlier_cmi.data_fiscal_year
     left join cmi_holds
         on
             located.ccn = cmi_holds.ccn

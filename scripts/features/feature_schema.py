@@ -21,7 +21,9 @@ registered in an online view. A ``label`` and a ``weight`` (the expected count t
 ``grouping`` column is stored and never registered. Every predictor has a ``source_group``, the source whose columns go missing together. The
 earlier-outcome controls are excluded from predictors everywhere except in a restricted table (``restriction``), which
 ``config/training/earlier_outcomes.json`` names. A reviewed list of the rules file can add a derived key beside a key of a family: ``log_fields`` and
-``change_fields`` of a number key, ``ordinal_fields`` of a category key.
+``change_fields`` of a number key, ``ordinal_fields`` of a category key, and ``computed_fields`` (a field a long model computes from other fields of the same
+control, such as a density). ``generate`` also writes ``dbt/seeds/features/derived_fields.csv``, the list of those keys that tells each long model which
+derived rows to write.
 """
 
 from __future__ import annotations
@@ -46,6 +48,8 @@ SCHEMA = "data_contracts/features/feature_schema.json"
 MATRIX_FOLDER = "dbt/models/features/matrix"
 MATRIX_YAML = f"{MATRIX_FOLDER}/_feature_matrix__models.yml"
 DEFINITIONS = "feature_store/definitions.py"
+DERIVED_SEED = f"{SEEDS}/derived_fields.csv"
+DERIVED_SEED_COLUMNS = ("family", "measure_source", "measure_control", "parent_field", "field", "transform")
 EARLIER_OUTCOMES = "config/training/earlier_outcomes.json"
 EARLIER_SCHEMA = "data_contracts/training/earlier_outcomes.schema.json"
 TARGETS = "config/training/targets.json"
@@ -108,7 +112,13 @@ FAMILIES = (
         "none",
     ),
     Family(
-        "operations", "feature_matrix_operations", "int_spine_operations_measures", ("measure_source", "measure_control"), "value_number", "value_text", "none"
+        "operations",
+        "feature_matrix_operations",
+        "int_spine_operations_measures",
+        ("measure_source", "measure_control", "field"),
+        "value_number",
+        "value_text",
+        "none",
     ),
     Family(
         "county_measures",
@@ -136,11 +146,20 @@ HISTORY = Family(
 Key = tuple[str, str, str]
 WINDOW_ROLES = ("identifier", "predictor", "grouping")
 OFFLINE_ROLES = ("label", "weight")
-DERIVED = (("log_fields", "log", "number"), ("change_fields", "change", "number"), ("ordinal_fields", "ordinal", "category"))
+DERIVED = (
+    ("log_fields", "log", "number"),
+    ("change_fields", "change", "number"),
+    ("ordinal_fields", "ordinal", "category"),
+    ("computed_fields", "computed", ""),
+)
 DERIVED_NOTES = {
     "log": "Natural log of field {parent}; null when {parent} is not positive.",
-    "change": "Field {parent} of the latest period minus that of the one before; null when either is missing.",
-    "ordinal": "Field {parent} as its ordered level number; null when {parent} is missing.",
+    "change": (
+        "Field {parent} of the latest period minus that of the period before it, both ending before the window start; null when either is missing, "
+        "when there is no second period or when the two period ends are more than 18 months apart."
+    ),
+    "ordinal": "Field {parent} as its ordered level number; null when {parent} is missing or outside the levels.",
+    "computed": "Field {field} of the control, computed by the long model from other fields of the same control and period; null when an input is missing.",
 }
 HISTORY_GROUP = "hai_history"
 
@@ -162,6 +181,11 @@ WINDOW_COLUMNS: tuple[tuple[str, str, str, str, str], ...] = (
     ("is_cmi_held", "boolean", "predictor", "is_cmi_held", "none"),
     ("is_critical_access", "boolean", "predictor", "is_critical_access", "none"),
     ("is_veterans_affairs", "boolean", "predictor", "is_veterans_affairs", "none"),
+    ("log_bed_count", "double", "predictor", "log_bed_count", "none"),
+    ("or_per_100_beds", "double", "predictor", "or_per_100_beds", "none"),
+    ("ownership_class", "varchar", "predictor", "ownership_class", "own_snapshot_classification"),
+    ("cmi_cases_log", "double", "predictor", "cmi_cases_log", "none"),
+    ("cmi_change", "double", "predictor", "cmi_change", "none"),
 )
 WINDOW_DESCRIPTIONS = {
     "ccn": "The hospital's CCN. An identifier stored for audit; registered in no Feast view.",
@@ -180,6 +204,17 @@ WINDOW_DESCRIPTIONS = {
     "is_cmi_held": "Whether the case-mix index of the data fiscal year before the window is held (rows disagree).",
     "is_critical_access": "Whether the CCN is that of a critical access hospital (fixed by the CCN).",
     "is_veterans_affairs": "Whether the CCN is that of a Veterans Affairs hospital (fixed by the CCN).",
+    "log_bed_count": "Natural log of the beds of the own POS snapshot; null without a snapshot or when the beds are not above 0.",
+    "or_per_100_beds": (
+        "Operating rooms per 100 beds of the own POS snapshot; null without a snapshot, when the beds are not above 0 or when the operating room count is "
+        "missing. A count of 0 operating rooms stays 0."
+    ),
+    "ownership_class": (
+        "Ownership class from the control type of the own POS snapshot: nonprofit (01 to 03), for_profit (04 and 09) or government (05 to 08 and 10); "
+        "null when the classification was filled from another snapshot."
+    ),
+    "cmi_cases_log": "Natural log of the discharges behind the case-mix index; null when none is chosen or the discharges are not above 0.",
+    "cmi_change": "Case-mix index of the data fiscal year before the window minus that of the year before it; null when either year has none.",
 }
 
 
@@ -199,6 +234,11 @@ WINDOW_SOURCE_GROUPS = {
     "is_cmi_held": "cmi",
     "is_critical_access": "ccn",
     "is_veterans_affairs": "ccn",
+    "log_bed_count": "pos",
+    "or_per_100_beds": "pos",
+    "ownership_class": "pos",
+    "cmi_cases_log": "cmi",
+    "cmi_change": "cmi",
 }
 
 
@@ -328,29 +368,58 @@ def history_keys(rules: dict[str, Any], earlier: dict[str, Any]) -> set[Key]:
     return {("", control, field) for control in earlier["controls"] for field in fields}
 
 
-def derived_keys(
-    rules: dict[str, Any], inventory: dict[str, set[Key]], categories: set[tuple[str, Key]], both: set[tuple[str, Key]]
-) -> dict[str, dict[Key, str]]:
-    """The derived keys the reviewed lists add, by family: each is a field ``<field>_<transform>`` of a key that the seeds give, with the parent's control."""
-    found: dict[str, dict[Key, str]] = {}
+DerivedEntry = tuple[str, str, str, str, str, str]
+
+
+def derived_entries(rules: dict[str, Any], inventory: dict[str, set[Key]], categories: set[tuple[str, Key]], both: set[tuple[str, Key]]) -> list[DerivedEntry]:
+    """The derived fields the reviewed lists add: (family, source, control, parent field, field, transform), in the order of ``DERIVED``. A log, change or
+    ordinal entry names a key that the seeds give and adds the field ``<field>_<transform>``. A computed entry names a control of the family (through any of
+    its keys) and adds the field it states, with no parent field."""
+    found: list[DerivedEntry] = []
+    seen: set[tuple[str, Key]] = set()
     for label, transform, need in DERIVED:
         for index, entry in enumerate(rules.get(label, [])):
             if not isinstance(entry, dict) or any(not entry.get(name) for name in ("family", "control", "field", "reason")) or "source" not in entry:
                 raise SchemaError(f"{RULES}: {label} entry {index} needs a family, source, control, field and a reason")
             if set(entry) - {"family", "source", "control", "field", "reason"}:
                 raise SchemaError(f"{RULES}: {label} entry {index} has an unknown key; it holds only a family, source, control, field and a reason")
-            family, parent = entry["family"], (entry["source"], entry["control"], entry["field"])
-            if family not in inventory or parent not in inventory[family]:
+            family, source, control, field = entry["family"], entry["source"], entry["control"], entry["field"]
+            computed = transform == "computed"
+            parent = (source, control, field)
+            known = any(key[:2] == (source, control) for key in inventory.get(family, set())) if computed else parent in inventory.get(family, set())
+            if not known:
                 raise SchemaError(f"{RULES}: {label} names {family} {parent}, which no control seed gives")
-            if need not in kinds_of(family, parent, categories, both):
+            if not computed and need not in kinds_of(family, parent, categories, both):
                 raise SchemaError(f"{RULES}: {label} names {family} {parent}, which has no {need} column; a {transform} field needs a {need} key")
-            child = (parent[0], parent[1], f"{parent[2]}_{transform}")
-            if child in found.get(family, {}):
+            child = (source, control, field if computed else f"{field}_{transform}")
+            if (family, child) in seen:
                 raise SchemaError(f"{RULES}: {label} lists {family} {child} twice")
             if child in inventory[family]:
                 raise SchemaError(f"{RULES}: {label} names {family} {child}, which is already a key")
-            found.setdefault(family, {})[child] = transform
+            seen.add((family, child))
+            found.append((family, source, control, "" if computed else field, child[2], transform))
     return found
+
+
+def derived_keys(
+    rules: dict[str, Any], inventory: dict[str, set[Key]], categories: set[tuple[str, Key]], both: set[tuple[str, Key]]
+) -> dict[str, dict[Key, str]]:
+    """The derived keys the reviewed lists add, by family, with the transform of each."""
+    found: dict[str, dict[Key, str]] = {}
+    for family, source, control, _, field, transform in derived_entries(rules, inventory, categories, both):
+        found.setdefault(family, {})[(source, control, field)] = transform
+    return found
+
+
+def derived_seed_text(root: Path = REPO_ROOT) -> str:
+    """The text of the derived-field seed: one row for each derived field of the reviewed lists, sorted. The long models read it to write their derived rows."""
+    rules = read_json(root / RULES)
+    inventory = {family.name: INVENTORY[family.name](root, rules) for family in FAMILIES}
+    categories = rule_set(rules["categories"], "categories", inventory)
+    both = rule_set(rules["both_kinds"], "both_kinds", inventory)
+    lines = [",".join(DERIVED_SEED_COLUMNS)]
+    lines += [",".join(entry) for entry in sorted(derived_entries(rules, inventory, categories, both))]
+    return "\n".join(lines) + "\n"
 
 
 def source_group(family: Family, key: Key, facts: Mapping[str, str]) -> str:
@@ -611,7 +680,7 @@ def build_schema(root: Path = REPO_ROOT) -> dict[str, Any]:
         if leaked:
             raise SchemaError(f"{family.table}: control {leaked[0]} is excluded from predictors")
         kinds = {key: ("number",) if restricted or key in derived.get(family.name, {}) else kinds_of(family.name, key, categories, both) for key in keys}
-        notes = {key: DERIVED_NOTES[transform].format(parent=f"{key[2].rsplit('_', 1)[0]}") for key, transform in derived.get(family.name, {}).items()}
+        notes = {key: DERIVED_NOTES[transform].format(parent=key[2].rsplit("_", 1)[0], field=key[2]) for key, transform in derived.get(family.name, {}).items()}
         columns = key_columns() + family_columns(family, keys, kinds, facts, notes)
         check_names(family.table, columns)
         tables[family.table] = {
@@ -929,7 +998,7 @@ def render_definitions(schema: dict[str, Any]) -> str:
 def generated_files(root: Path = REPO_ROOT) -> dict[str, str]:
     """Every generated file by repository path, from one computation."""
     schema = build_schema(root)
-    files = {SCHEMA: schema_text(schema), MATRIX_YAML: render_yaml(schema), DEFINITIONS: render_definitions(schema)}
+    files = {SCHEMA: schema_text(schema), MATRIX_YAML: render_yaml(schema), DEFINITIONS: render_definitions(schema), DERIVED_SEED: derived_seed_text(root)}
     for name, table in schema["tables"].items():
         files[f"{MATRIX_FOLDER}/{name}.sql"] = render_model(name, table)
     return files

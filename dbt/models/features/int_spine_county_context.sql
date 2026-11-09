@@ -429,12 +429,60 @@ ruca_rows as (
     left join ruca_zips on spine.zip_code = ruca_zips.zip_code
 ),
 
-all_rows as (
+base_rows as (
     select * from value_rows
     union all
     select * from designation_rows
     union all
     select * from ruca_rows
+),
+
+computed_fields as (
+    -- The computed fields of the reviewed lists (dbt/seeds/features/derived_fields.csv, written by the feature schema generator): the density of C191.
+    select
+        measure_source,
+        measure_control,
+        field
+    from {{ ref('derived_fields') }}
+    where
+        family = 'county_context'
+        and transform = 'computed'
+),
+
+density_rows as (
+    -- Density is the natural log of the SVI population over the SVI area in square miles of the same spine key; null when either is missing or not above
+    -- 0. The row takes the period of the population row, so its age is that of the population.
+    select
+        population.spine_key,
+        population.measure_source,
+        population.measure_control,
+        computed_fields.field,
+        population.review_decision,
+        population.period_end,
+        null::varchar as value_text,
+        case when population.value_number > 0 and area.value_number > 0 then ln(population.value_number / area.value_number) end as value_number,
+        null::varchar as value_note,
+        population.alignment_status
+    from base_rows as population
+    inner join base_rows as area
+        on
+            population.spine_key = area.spine_key
+            and population.measure_source = area.measure_source
+            and population.measure_control = area.measure_control
+    inner join computed_fields
+        on
+            population.measure_source = computed_fields.measure_source
+            and population.measure_control = computed_fields.measure_control
+    where
+        computed_fields.field = 'density_log'
+        and population.field = 'e_totpop'
+        and area.field = 'area_sqmi'
+),
+
+all_rows as (
+    select * from base_rows
+    union all
+    select * from density_rows
 )
 
 select

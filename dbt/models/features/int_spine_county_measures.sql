@@ -258,44 +258,94 @@ any_period as (
         control_periods.field
     from spine_geos as spine
     inner join control_periods on spine.geo_fips = control_periods.county_fips
+),
+
+base as (
+    select
+        spine.spine_key,
+        spine.ccn,
+        spine.window_year,
+        spine.window_start,
+        spine.county_fips,
+        controls.measure_source,
+        controls.measure_control,
+        controls.field,
+        controls.review_decision,
+        chosen.period_end,
+        spine.is_primary_population,
+        spine.is_sensitivity_population,
+        spine.is_connecticut,
+        spine.is_maryland,
+        case when not chosen.is_conflict then chosen.value_text end as value_text,
+        case when not chosen.is_conflict then chosen.value_number end as value_number,
+        case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
+        -- Connecticut joins through its old county or its planning region [633].
+        coalesce(spine.county_fips, spine.planning_region_fips) is not null as is_primary_county_join,
+        case
+            when chosen.is_conflict then 'held_in_staging'
+            when chosen.spine_key is not null then 'aligned'
+            when any_period.spine_key is not null then 'no_period_before_start'
+            else 'not_in_source'
+        end as alignment_status,
+        spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control || ':' || controls.field as alignment_key
+    from spine
+    cross join controls
+    left join chosen
+        on
+            spine.spine_key = chosen.spine_key
+            and controls.measure_control = chosen.measure_control
+            and controls.field = chosen.field
+    left join any_period
+        on
+            spine.spine_key = any_period.spine_key
+            and controls.measure_control = any_period.measure_control
+            and controls.field = any_period.field
+),
+
+derived_fields as (
+    -- The ordinal fields of the reviewed lists (dbt/seeds/features/derived_fields.csv, written by the feature schema generator).
+    select
+        measure_source,
+        measure_control,
+        parent_field,
+        field
+    from {{ ref('derived_fields') }}
+    where
+        family = 'county_measures'
+        and transform = 'ordinal'
+),
+
+derived as (
+    -- The rural-urban continuum code as a number from 1 to 9; any other text gives null. The row keeps the parent's period and alignment status.
+    select
+        base.spine_key,
+        base.ccn,
+        base.window_year,
+        base.window_start,
+        base.county_fips,
+        base.measure_source,
+        base.measure_control,
+        derived_fields.field,
+        base.review_decision,
+        base.period_end,
+        base.is_primary_population,
+        base.is_sensitivity_population,
+        base.is_connecticut,
+        base.is_maryland,
+        null::varchar as value_text,
+        case when try_cast(base.value_text as integer) between 1 and 9 then try_cast(base.value_text as integer) end::double as value_number,
+        base.age_months,
+        base.is_primary_county_join,
+        base.alignment_status,
+        base.alignment_key || ':' || derived_fields.field as alignment_key
+    from base
+    inner join derived_fields
+        on
+            base.measure_source = derived_fields.measure_source
+            and base.measure_control = derived_fields.measure_control
+            and base.field = derived_fields.parent_field
 )
 
-select
-    spine.spine_key,
-    spine.ccn,
-    spine.window_year,
-    spine.window_start,
-    spine.county_fips,
-    controls.measure_source,
-    controls.measure_control,
-    controls.field,
-    controls.review_decision,
-    chosen.period_end,
-    spine.is_primary_population,
-    spine.is_sensitivity_population,
-    spine.is_connecticut,
-    spine.is_maryland,
-    case when not chosen.is_conflict then chosen.value_text end as value_text,
-    case when not chosen.is_conflict then chosen.value_number end as value_number,
-    case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
-    -- Connecticut joins through its old county or its planning region [633].
-    coalesce(spine.county_fips, spine.planning_region_fips) is not null as is_primary_county_join,
-    case
-        when chosen.is_conflict then 'held_in_staging'
-        when chosen.spine_key is not null then 'aligned'
-        when any_period.spine_key is not null then 'no_period_before_start'
-        else 'not_in_source'
-    end as alignment_status,
-    spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control || ':' || controls.field as alignment_key
-from spine
-cross join controls
-left join chosen
-    on
-        spine.spine_key = chosen.spine_key
-        and controls.measure_control = chosen.measure_control
-        and controls.field = chosen.field
-left join any_period
-    on
-        spine.spine_key = any_period.spine_key
-        and controls.measure_control = any_period.measure_control
-        and controls.field = any_period.field
+select * from base
+union all
+select * from derived
