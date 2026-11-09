@@ -6,6 +6,9 @@ The run folder is one that ``features_build`` filled from the fixture rows of ``
 control in every case come from the arithmetic and the literal firm domains of design 3.1 below, not from the recipe and not from the model. A recipe that
 widens a domain, a model that lets a value through and a count model that disagrees with the nulls each fail here. The build itself runs the two dbt tests
 ``assert_cost_report_in_domain`` and ``assert_cost_report_domain_counts``; these cases add the exact status and value of each fixture row.
+
+The expected counts cover every fixture cost report that holds the domain amounts (the domain cases and the package 3 reports), because the count model
+reads them all.
 """
 
 from __future__ import annotations
@@ -79,10 +82,19 @@ def expected_rows() -> dict[tuple[str, str], tuple[str, float | None]]:
     }
 
 
+def fixture_reports() -> list[tuple[str, int, float | None, float]]:
+    """Report, fiscal year, denominator and numerator of every fixture cost report that holds the domain amounts; the count model reads all of them."""
+    return [
+        (row["rpt_rec_num"], row["fiscal_year"], row["net_patient_revenue"], row["net_revenue_from_medicaid"])
+        for row in feature_fixture.gold_rows()["fct_cost_report"]
+        if "net_revenue_from_medicaid" in row
+    ]
+
+
 def expected_counts() -> dict[tuple[str, int], tuple[int, int, int]]:
-    """The expected rows evaluated, out of domain and with a bad denominator by control and fiscal year."""
+    """The expected rows evaluated, out of domain and with a bad denominator by control and fiscal year, over every fixture cost report."""
     counts: dict[tuple[str, int], list[int]] = {}
-    for _, _, year, denominator, numerator in feature_fixture.DOMAIN_CASES:
+    for _, year, denominator, numerator in fixture_reports():
         for control in CHECKED:
             if denominator is None and control in NUMERATOR_IS_DENOMINATOR:
                 continue
