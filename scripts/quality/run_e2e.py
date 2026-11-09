@@ -20,7 +20,6 @@ import tempfile
 import threading
 import time
 import urllib.error
-import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -276,6 +275,19 @@ class ScriptedHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if kind in {"slow_headers", "slow_chunk_size"}:
+            # Raw bytes sent by hand: the status line and one header or chunk-size line arrive a byte at a time, so no read finishes early.
+            head = b"HTTP/1.1 200 OK\r\nX-Slow: " if kind == "slow_headers" else b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            tail = b"\r\nContent-Length: 1\r\n\r\nx" if kind == "slow_headers" else b"1\r\nx\r\n0\r\n\r\n"
+            self.wfile.write(head)
+            for _ in range(value):
+                self.wfile.write(b"x" if kind == "slow_headers" else b"0")
+                self.wfile.flush()
+                time.sleep(0.05)
+            self.wfile.write(tail)
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if kind == "drip":
             payload, interval, sent = value
             self.send_response(200)
@@ -340,12 +352,10 @@ def download_attempt(
     tools.LOGGER.setLevel(logging.DEBUG)
     try:
         with loopback_server(script) as (base, requests):
-            opener = urllib.request.build_opener(tools.HTTPSRedirect())
             outcome: bytes | BaseException
             started = time.monotonic()
             try:
                 outcome = tools.download_verified(
-                    opener,
                     f"{base}/asset.tar.gz{query}",
                     tool="example_tool",
                     expected_sha256=hashlib.sha256(payload).hexdigest(),
@@ -476,6 +486,41 @@ def slow_body_is_bounded_by_deadline(tools: ModuleType, policy: Any) -> dict[str
     )
     check(stalled.seconds < 1.0 + tolerance, f"A body that stalled after 0.6 s held a 1.0 s deadline for {stalled.seconds:.2f} s")
     return {"drip_seconds": round(slow.seconds, 2), "stalled_seconds": round(stalled.seconds, 2)}
+
+
+def slow_framing_is_bounded_by_deadline(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """Headers or a chunk-size line that arrive a byte at a time cannot hold the download past the deadline plus 0.3 s, and no second attempt starts."""
+    tolerance = 0.3
+    short = tools.RetryPolicy(attempts=5, deadline=0.25, base_delay=0.01, max_delay=0.01, attempt_timeout=0.25)
+    seconds: dict[str, float] = {}
+    for name in ("slow_headers", "slow_chunk_size"):
+        attempt = download_attempt(tools, [(name, 40)], short, payload=b"x")
+        check(
+            isinstance(attempt.outcome, tools.DownloadFailed) and "reason=deadline" in str(attempt.outcome),
+            f"{name} did not end with the deadline error: {attempt.outcome!r}",
+        )
+        check(
+            "last=timeout" in str(attempt.outcome) and attempt.requests == 1,
+            f"{name} was retried or misclassified: {attempt.outcome!r}, {attempt.requests} requests",
+        )
+        check(attempt.seconds < 0.25 + tolerance, f"{name} held a 0.25 s deadline for {attempt.seconds:.2f} s")
+        seconds[name] = round(attempt.seconds, 2)
+    return seconds
+
+
+def watchdog_never_outlives_the_attempt(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """After a download that succeeds, one that fails and one that the deadline cuts off, no watchdog thread is left running."""
+    short = tools.RetryPolicy(attempts=5, deadline=0.25, base_delay=0.01, max_delay=0.01, attempt_timeout=0.25)
+    long_lived = tools.RetryPolicy(attempts=2, deadline=600.0, base_delay=0.01, max_delay=0.01, attempt_timeout=5.0)
+    for name, script, used in (
+        ("succeeded", [("body", ARCHIVE_FIXTURE)], long_lived),
+        ("failed", [("status", 404)], long_lived),
+        ("cut_off", [("slow_chunk_size", 40)], short),
+    ):
+        download_attempt(tools, script, used, payload=ARCHIVE_FIXTURE if name != "cut_off" else b"x")
+        left = [thread.name for thread in threading.enumerate() if "watchdog" in thread.name]
+        check(not left, f"A watchdog thread outlived the {name} download: {left}")
+    return {"cases": ["succeeded", "failed", "cut_off"]}
 
 
 LOOPBACK_TOOLS = ("gitleaks", "tflint", "trivy")
@@ -616,6 +661,8 @@ def download_retry_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
         ("default_retry_policy_is_bounded", default_policy_is_bounded),
         ("retry_log_hides_url_and_headers", retry_log_hides_url_and_headers),
         ("slow_body_is_bounded_by_deadline", slow_body_is_bounded_by_deadline),
+        ("slow_framing_is_bounded_by_deadline", slow_framing_is_bounded_by_deadline),
+        ("watchdog_never_outlives_the_attempt", watchdog_never_outlives_the_attempt),
         ("install_retries_through_the_production_call_site", install_retries_through_the_production_call_site),
         ("install_budget_is_shared_by_every_archive", install_budget_is_shared_by_every_archive),
     ]

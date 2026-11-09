@@ -13,18 +13,22 @@ import os
 import platform
 import re
 import secrets
+import socket
 import ssl
 import stat
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_ARCHIVE = 64 * 1024 * 1024
@@ -116,40 +120,126 @@ def verified(content: bytes, limit: int, expected_sha256: str) -> bytes:
     return content
 
 
-def bound_next_read(response: Any, deadline_at: float, timeout: float) -> None:
-    """Limit the next receive to the time left before the deadline; the timeout given to open() alone only measures silence between bytes."""
-    left = deadline_at - time.monotonic()
-    if left <= 0:
-        raise TimeoutError("Download deadline passed while reading")
-    if response.fp is None:
-        return
-    connection = getattr(getattr(response.fp, "raw", None), "_sock", None)
-    if connection is None:
-        raise ValueError("Cannot bound the download read")
-    connection.settimeout(min(timeout, left))
+class DeadlineExpired(Exception):
+    """The watchdog cut an attempt's connections at its deadline; no retry can follow because the deadline is also the end of the budget."""
 
 
-def fetch_once(opener: urllib.request.OpenerDirector, url: str, limit: int, expected_sha256: str, timeout: float, deadline_at: float) -> bytes:
-    """Make one bounded request and verify the whole body; a body shorter than its announced length is a lost connection, not a bad hash."""
-    with opener.open(url, timeout=timeout) as response:
-        announced = response.headers.get("Content-Length", "")
-        chunks: list[bytes] = []
-        size = 0
-        while size <= limit:
-            bound_next_read(response, deadline_at, timeout)
-            chunk = response.read1(min(READ_CHUNK, limit + 1 - size))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            size += len(chunk)
-    content = b"".join(chunks)
-    if announced.isdecimal() and size <= limit and size < int(announced):
-        raise http.client.IncompleteRead(content, int(announced) - size)
-    return verified(content, limit, expected_sha256)
+class AttemptGuard:
+    """Shut down every connection of one attempt when its deadline passes, so no blocked read, header parse or chunk-size parse outlasts it."""
+
+    def __init__(self, seconds: float) -> None:
+        self.expired = threading.Event()
+        self.lock = threading.Lock()
+        self.sockets: list[socket.socket] = []
+        self.timer = threading.Timer(max(seconds, 0.0), self.expire)
+        self.timer.name = "download_deadline_watchdog"
+        self.timer.daemon = True
+
+    def __enter__(self) -> AttemptGuard:
+        self.timer.start()
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        self.timer.cancel()
+        self.timer.join(timeout=5)
+        if self.timer.is_alive():
+            raise RuntimeError("Download watchdog did not stop")
+
+    def expire(self) -> None:
+        with self.lock:
+            self.expired.set()
+            sockets = list(self.sockets)
+        for connection in sockets:
+            self.cut(connection)
+
+    def add(self, connection: socket.socket) -> None:
+        with self.lock:
+            self.sockets.append(connection)
+            late = self.expired.is_set()
+        if late:
+            self.cut(connection)
+
+    @staticmethod
+    def cut(connection: socket.socket) -> None:
+        with suppress(OSError):  # The peer or the attempt may have closed it already.
+            connection.shutdown(socket.SHUT_RDWR)
+
+
+class GuardedHTTPConnection(http.client.HTTPConnection):
+    """Hand the connected socket to the attempt's watchdog."""
+
+    def __init__(self, *args: Any, guard: AttemptGuard, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.guard = guard
+
+    def connect(self) -> None:
+        super().connect()
+        self.guard.add(cast(socket.socket, self.sock))
+
+
+class GuardedHTTPSConnection(http.client.HTTPSConnection):
+    """Hand the connected, wrapped socket to the attempt's watchdog."""
+
+    def __init__(self, *args: Any, guard: AttemptGuard, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.guard = guard
+
+    def connect(self) -> None:
+        super().connect()
+        self.guard.add(cast(socket.socket, self.sock))
+
+
+class GuardedHTTPHandler(urllib.request.HTTPHandler):
+    """Open plain HTTP connections that the watchdog can cut."""
+
+    def __init__(self, guard: AttemptGuard) -> None:
+        super().__init__()
+        self.guard = guard
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(partial(GuardedHTTPConnection, guard=self.guard), req)
+
+
+class GuardedHTTPSHandler(urllib.request.HTTPSHandler):
+    """Open HTTPS connections that the watchdog can cut."""
+
+    def __init__(self, guard: AttemptGuard, context: ssl.SSLContext | None = None) -> None:
+        super().__init__(context=context)
+        self.guard = guard
+        self.tls_context = context
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(partial(GuardedHTTPSConnection, guard=self.guard), req, context=self.tls_context)
+
+
+def fetch_once(url: str, limit: int, expected_sha256: str, timeout: float, deadline_at: float) -> bytes:
+    """Make one request and verify the whole body; a watchdog cuts the connections at the deadline, whatever the server is sending."""
+    with AttemptGuard(deadline_at - time.monotonic()) as guard:
+        opener = urllib.request.build_opener(HTTPSRedirect(), GuardedHTTPHandler(guard), GuardedHTTPSHandler(guard))
+        try:
+            with opener.open(url, timeout=timeout) as response:
+                announced = response.headers.get("Content-Length", "")
+                chunks: list[bytes] = []
+                size = 0
+                while size <= limit:
+                    chunk = response.read(min(READ_CHUNK, limit + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+            content = b"".join(chunks)
+            # A body shorter than its announced length is a lost connection, not a bad hash.
+            if announced.isdecimal() and size <= limit and size < int(announced):
+                raise http.client.IncompleteRead(content, int(announced) - size)
+            return verified(content, limit, expected_sha256)
+        except (OSError, http.client.HTTPException, ValueError):
+            # A cut connection surfaces as an end of stream, a reset, a short body or a closed-socket error, so the watchdog's flag decides.
+            if guard.expired.is_set():
+                raise DeadlineExpired from None
+            raise
 
 
 def download_verified(
-    opener: urllib.request.OpenerDirector,
     url: str,
     *,
     tool: str,
@@ -168,7 +258,9 @@ def download_verified(
         if remaining <= 0:
             raise DownloadFailed(tool, attempt - 1, expired, last)
         try:
-            return fetch_once(opener, url, limit, expected_sha256, min(policy.attempt_timeout, remaining), deadline_at)
+            return fetch_once(url, limit, expected_sha256, min(policy.attempt_timeout, remaining), deadline_at)
+        except DeadlineExpired:
+            raise DownloadFailed(tool, attempt, expired, "timeout") from None
         except (OSError, http.client.HTTPException) as error:
             if isinstance(error, urllib.error.HTTPError):
                 error.close()
@@ -204,9 +296,8 @@ def archive_bytes(
     if directory is not None:
         with (directory / Path(url.path).name).open("rb") as source:
             return verified(source.read(limit + 1), limit, release["sha256"])
-    opener = urllib.request.build_opener(HTTPSRedirect())
     return download_verified(
-        opener, release["url"], tool=tool, expected_sha256=release["sha256"], limit=limit, policy=settings.policy, install_deadline_at=install_deadline_at
+        release["url"], tool=tool, expected_sha256=release["sha256"], limit=limit, policy=settings.policy, install_deadline_at=install_deadline_at
     )
 
 
