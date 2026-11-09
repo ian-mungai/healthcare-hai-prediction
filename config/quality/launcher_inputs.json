@@ -1054,6 +1054,8 @@
     "dbt/tests/features/assert_care_compare_as_of_start.sql",
     "dbt/tests/features/assert_care_compare_control_identity.sql",
     "dbt/tests/features/assert_care_compare_edv_known.sql",
+    "dbt/tests/features/assert_care_compare_sm7_category.sql",
+    "dbt/tests/features/assert_care_compare_sm7_known.sql",
     "dbt/tests/features/assert_county_context_as_of_start.sql",
     "dbt/tests/features/assert_county_context_control_identity.sql",
     "dbt/tests/features/assert_county_measures_as_of_start.sql",

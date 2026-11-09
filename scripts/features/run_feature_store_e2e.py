@@ -622,11 +622,15 @@ def role_cases(report: Report) -> None:
         regeneration_cases(report, base)
 
 
+# The Care Compare controls read as categories: C141 (emergency department volume) and C167 (SM_7, the maternal morbidity structural measure).
+CATEGORY_CONTROLS = ("C141", "C167")
+
+
 def care_compare_field_cases(report: Report, schema: dict[str, Any]) -> None:
     """R1: the Care Compare family matches on control and field; the names of its columns do not change."""
     table = schema["tables"]["feature_matrix_care_compare"]
     controls = {row["measure_control"] for row in schema_module.read_seed(ROOT, "frozen_care_compare_controls")}
-    expected = {schema_module.column_name(control, "value", "category" if control == "C141" else "number") for control in controls}
+    expected = {schema_module.column_name(control, "value", "category" if control in CATEGORY_CONTROLS else "number") for control in controls}
     names = {column["name"] for column in table["columns"] if column["role"] == "predictor"}
     report.case("R1", "G12", "the Care Compare column names are the control and the field value, as before", names == expected, columns=len(names))
     matched = all(
@@ -1543,6 +1547,27 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
             "and neither takes the 2018-19 season of IMM_3, which ends after the window starts",
             influenza == {"990007:2018": 80.0, "990007:2019": 84.0},
             values=influenza,
+        )
+        categories = {
+            row[0]: row[1:]
+            for row in rows(
+                connection,
+                "select spine_key, c167__value__category, c141__value__category from feature_matrix_care_compare "
+                "where spine_key in ('990001:2022', '990001:2023', '990001:2024', '990002:2023') order by 1",
+            )
+        }
+        report.case(
+            "E14",
+            "SM1",
+            "C167 is a category like C141: Yes, No and Not Applicable are categories and Not Available stays missing",
+            categories
+            == {
+                "990001:2022": ("yes", "very high"),
+                "990001:2023": ("not applicable", "very high"),
+                "990001:2024": (None, "very high"),
+                "990002:2023": ("no", None),
+            },
+            values=categories,
         )
         county = dict(rows(connection, "select spine_key, c203__diabetes_ageadjprv__number from feature_matrix_county_measures"))
         context = {

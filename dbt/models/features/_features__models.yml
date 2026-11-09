@@ -1157,7 +1157,7 @@ models:
       source_seed registry_measure_sources, families S13 to S16). Each control takes the latest measure window that
       ends before the HAI window starts; the overall rating (C284) takes the latest Hospital General Information
       release dated before the start, and two files on one date that disagree are held. Values stay as published with
-      each row's age in months; C141's spellings map to one category each. No age limit and no eligibility choice.
+      each row's age in months; C141's spellings and C167's texts map to one category each. No age limit and no eligibility choice.
     meta:
       classification: Public
     columns:
@@ -1208,11 +1208,11 @@ models:
         description: The value as a number when it is a plain number; null otherwise and when the two files of a release date disagree.
       - name: value_category
         data_type: varchar
-        description: C141 only; low, medium, high or very high, null for the Not Available token.
+        description: C141 (low, medium, high or very high) and C167 (yes, no or not applicable) only; null for the Not Available token.
         data_tests:
           - accepted_values:
               arguments:
-                values: [low, medium, high, very high]
+                values: [low, medium, high, very high, 'yes', 'no', not applicable]
       - name: footnote_text
         data_type: varchar
         description: The footnote published with the value.

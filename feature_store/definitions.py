@@ -91,7 +91,7 @@ PREDICTOR_VIEWS: dict[str, tuple[tuple[str, str], ...]] = {
         ("c164__value__number", "Float64"),
         ("c165__value__number", "Float64"),
         ("c166__value__number", "Float64"),
-        ("c167__value__number", "Float64"),
+        ("c167__value__category", "String"),
         ("c168__value__number", "Float64"),
         ("c169__value__number", "Float64"),
         ("c170__value__number", "Float64"),

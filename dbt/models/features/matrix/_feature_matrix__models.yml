@@ -222,9 +222,9 @@ models:
       - name: c166__value__number
         data_type: double
         description: "Control C166, field value: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
-      - name: c167__value__number
-        data_type: double
-        description: "Control C167, field value: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
+      - name: c167__value__category
+        data_type: varchar
+        description: "Control C167, field value: value_category of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."
       - name: c168__value__number
         data_type: double
         description: "Control C168, field value: value_number of the latest period that ends before the window start (int_spine_care_compare_measures); null when there is none."

@@ -179,6 +179,16 @@ def gold_rows(version: int = 1) -> Rows:
         care_window("990007", "IMM_3_OP_27_FAC_ADHPCT", (date(2018, 7, 1), date(2019, 1, 1)), "99", date(2019, 3, 4)),
         care_window("990007", "IMM_3", (date(2018, 10, 1), date(2019, 3, 31)), "90", date(2019, 10, 31)),
     ]
+    # C141 (emergency department volume) and C167 (SM_7, the maternal morbidity structural measure) are read as categories. 990001 reports Yes for the last
+    # quarter of 2021, Not Applicable for 2022 and Not Available for 2023; 990002 reports No for 2022.
+    rows["fct_timely_effective_care_window"].append(care_window("990001", "EDV", (date(2021, 1, 1), date(2021, 12, 31)), "Very High", date(2022, 7, 6)))
+    not_applicable = "Not Applicable (our hospital does not provide inpatient labor/delivery care)"
+    rows["fct_maternal_health_window"] += [
+        care_window("990001", "SM_7", (date(2021, 10, 1), date(2021, 12, 31)), "Yes", date(2022, 7, 6)),
+        care_window("990001", "SM_7", (date(2022, 1, 1), date(2022, 12, 31)), not_applicable, date(2023, 7, 6)),
+        care_window("990001", "SM_7", (date(2023, 1, 1), date(2023, 12, 31)), "Not Available", date(2024, 7, 6)),
+        care_window("990002", "SM_7", (date(2022, 1, 1), date(2022, 12, 31)), "No", date(2023, 7, 6)),
+    ]
     # Care Compare overall rating (C284): one release before the 2022 window, one dated on its start.
     for released, rating in ((date(2021, 6, 1), 4), (date(2022, 1, 1), 5)):
         rows["fct_hgi_release"].append(
@@ -374,6 +384,7 @@ TABLES = (
     "fct_enrollment_release",
     "fct_hgi_release",
     "fct_timely_effective_care_window",
+    "fct_maternal_health_window",
     "fct_cost_report",
     "fct_onc_ehr_product",
     "fct_places_county_value",

@@ -36,6 +36,8 @@
   "assert_care_compare_as_of_start": ["int_spine_care_compare_measures"],
   "assert_care_compare_control_identity": ["dim_measure", "feature_bridge_registry_measure_sources", "frozen_care_compare_controls", "int_spine_care_compare_measures"],
   "assert_care_compare_edv_known": ["int_spine_care_compare_measures"],
+  "assert_care_compare_sm7_category": ["int_spine_care_compare_measures"],
+  "assert_care_compare_sm7_known": ["int_spine_care_compare_measures"],
   "assert_county_context_as_of_start": ["int_spine_county_context"],
   "assert_county_context_control_identity": ["dim_measure", "feature_bridge_acs_svi_measures", "feature_bridge_income_labor_measures", "feature_bridge_shortage_measures", "frozen_county_controls"],
   "assert_county_measures_as_of_start": ["int_spine_county_measures"],

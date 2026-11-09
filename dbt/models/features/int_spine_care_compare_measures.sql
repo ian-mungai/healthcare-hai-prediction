@@ -1,7 +1,7 @@
 -- One row per spine hospital-window and Care Compare process or structure control (families S13 to S16): the latest
 -- measure window that ends before the HAI window starts, or for the overall rating (C284) the latest Hospital General
 -- Information release dated before the start, with its age in months and an alignment status. Values stay as published;
--- C141's spellings map to one category each. No limit on age and no eligibility choice (alignment step AL2, failure modes
+-- C141's spellings and C167's texts map to one category each. No limit on age and no eligibility choice (alignment step AL2, failure modes
 -- 564 to 575, plans/alignment_20261008/failure_modes_al2.md).
 
 with
@@ -137,10 +137,12 @@ select
     chosen.measure_id,
     case when not chosen.is_release_conflict then chosen.value_text end as value_text,
     case when not chosen.is_release_conflict then chosen.value_number end as value_number,
-    -- Each published C141 spelling maps to one category; Not Available stays a token [569].
+    -- Each published C141 spelling and each published C167 (SM_7) text maps to one category; Not Available stays a token [569].
     case
         when controls.measure_control = 'C141' and not chosen.is_release_conflict
             then {{ edv_category('chosen.value_text') }}
+        when controls.measure_control = 'C167' and not chosen.is_release_conflict
+            then {{ sm7_category('chosen.value_text') }}
     end as value_category,
     case when not chosen.is_release_conflict then chosen.footnote_text end as footnote_text,
     chosen.sample_text,
