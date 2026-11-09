@@ -31,6 +31,7 @@ from scripts.infrastructure.host_session_stand_in import (
     SERVICES,
     StandInHost,
 )
+from scripts.process import TimeoutExpired
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
@@ -768,6 +769,39 @@ def code_fetch_wait_and_launch_share_one_deadline() -> dict[str, bool]:
     }
 
 
+def code_fetch_launch_retries_stay_inside_the_limit() -> dict[str, bool]:
+    """A RunTask whose reply is lost near the end of the one-shot's limit is not retried past it: every AWS call of the one-shot, retries included, runs
+    under the one-shot's deadline and is refused once it has passed, so no launch happens after the limit and start fails visibly."""
+    host, session, _ = build(code_fetch=True, checkout=OLD_SHA)
+    session.host_on()
+    running = launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
+    begun = host.now
+    host.tasks[running]["stops_at"] = begun + CODE_FETCH_LIMIT - 110
+    host.latency = 100
+    original, lost = host.runner, [False]
+
+    def runner(argv: list[str], **options: Any) -> Any:
+        if argv[2] == "run-task" and CODE_FETCH_FAMILY in argv and not lost[0]:
+            lost[0] = True
+            host.advance(options["timeout"])
+            raise TimeoutExpired(argv, options["timeout"])
+        return original(argv, **options)
+
+    session.cli.runner = runner
+    message = failure(lambda: session.place_code((OTHER_RUN, OTHER_SHA)))
+    late = [
+        entry["at"] - begun
+        for entry in host.log
+        if entry["operation"] == "run-task" and entry["at"] > begun and entry["options"]["--task-definition"] == [CODE_FETCH_FAMILY]
+    ]
+    return {
+        "the reply of the first launch was lost": lost[0],
+        "the placement fails": message is not None and "code_fetch" in message,
+        "no launch happens after the limit": all(offset <= CODE_FETCH_LIMIT for offset in late),
+        "the placement ends by the limit": host.now - begun <= CODE_FETCH_LIMIT,
+    }
+
+
 def code_given_without_the_one_shot_is_refused() -> dict[str, bool]:
     host, session, _ = build()
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
@@ -855,6 +889,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_fetch_running_for_the_same_code_is_awaited_not_doubled": code_fetch_running_for_the_same_code_is_awaited_not_doubled,
     "code_fetch_running_for_other_code_that_never_stops_fails_visibly": code_fetch_running_for_other_code_that_never_stops_fails_visibly,
     "code_fetch_wait_and_launch_share_one_deadline": code_fetch_wait_and_launch_share_one_deadline,
+    "code_fetch_launch_retries_stay_inside_the_limit": code_fetch_launch_retries_stay_inside_the_limit,
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
 }

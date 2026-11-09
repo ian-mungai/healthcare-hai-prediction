@@ -372,31 +372,39 @@ class Session:
         raise HostSessionError(f"{key} RunTask unconfirmed after {RUN_TASK_ATTEMPTS} attempts; the task may be running")
 
     def one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None = None) -> None:
-        """Run a one-shot task once and require exit code 0; ``seconds`` bounds everything, including a wait for an earlier task to stop.
+        """Run ``run_one_shot`` under one session deadline, so every AWS call of the one-shot, a RunTask retry included, gets only the time left of
+        ``seconds`` and is refused once it has passed."""
+        outer = self.deadline
+        end = self.clock.now() + seconds
+        self.deadline = end if outer is None else min(end, outer)
+        try:
+            self.run_one_shot(key, seconds, overrides)
+        except HostSessionError as error:
+            # A call refused by the deadline names only the AWS operation; the owner reads which one-shot it was.
+            if not str(error).startswith(key):
+                raise HostSessionError(f"{key}: {error}") from None
+            raise
+        finally:
+            self.deadline = outer
+
+    def run_one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None) -> None:
+        """Run a one-shot task once and require exit code 0. The caller's session deadline bounds everything: each wait is capped by it and each AWS call
+        is refused once it has passed, so the wait for an earlier task, the launch with its retries and the wait for the stop share one limit.
 
         A running task of the family with the same code overrides is awaited, never doubled. A running task with other code overrides is awaited until it
         stops, then the requested task launches, so two tasks of the family never run at once and the requested code is the code that is installed.
         """
         family = self.names.one_shot[key]
-        end = self.clock.now() + seconds
-
-        def left(what: str) -> int:
-            """The whole seconds that remain of the one-shot's single limit; none left fails here, before anything else starts."""
-            remaining = int(end - self.clock.now())
-            if remaining <= 0:
-                raise HostSessionError(f"{key} {what}: the one-shot's limit of {seconds} s is spent")
-            return remaining
 
         running = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--family", family, "--desired-status", "RUNNING"]).get("taskArns", [])
         if running and not self.same_code(key, running, overrides):
             self.step(key, "a task of this family is already running for another run or digest; waiting for it to stop, then launching the requested one")
-            self.wait(f"{key} running task stop", lambda: self.all_stopped(key, running), left("running task stop"), TASK_POLL_SECONDS)
+            self.wait(f"{key} running task stop", lambda: self.all_stopped(key, running), seconds, TASK_POLL_SECONDS)
             running = []
         if running:
             task = running[0]
             self.step(key, "a task of this family is already running; waiting for it")
         else:
-            left("launch")
             launched = self.run_task(key, family, overrides)
             tasks = launched.get("tasks", [])
             if launched.get("failures") or len(tasks) != 1:
@@ -411,7 +419,7 @@ class Session:
             found = described.get("tasks", [])
             return found[0] if len(found) == 1 and found[0].get("lastStatus") == "STOPPED" else None
 
-        stopped_task = self.wait(f"{key} task stop", stopped, left("task stop"), TASK_POLL_SECONDS)
+        stopped_task = self.wait(f"{key} task stop", stopped, seconds, TASK_POLL_SECONDS)
         exits = {item.get("name"): item.get("exitCode") for item in stopped_task.get("containers", [])}
         if not exits or any(code != 0 for code in exits.values()):
             raise HostSessionError(f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}")
