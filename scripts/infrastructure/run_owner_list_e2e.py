@@ -179,7 +179,7 @@ def features_checks(body: str) -> dict[str, bool]:
         ("IAM activation", index("--iam", "job_features_image_prepared")),
         ("feature store image", index("push_images plan", "--only feature_store")),
         ("host start", index("host_session start", "describe-instances")),
-        ("pair under the administrator", index("aws_catalog_setup principal", "--identity features", "--admin-profile <ADMIN_PROFILE>")),
+        ("features catalog identity", index("aws_catalog_setup principal", "--identity features", "--namespace-approval <APPROVAL_ID>")),
         ("jobs file", index("--jobs", "train_images")),
         ("approval", index("code_archive", "layer_acceptance approve --layer features")),
         ("IAM preflight", index("iam_preflight --scope features")),
@@ -192,6 +192,10 @@ def features_checks(body: str) -> dict[str, bool]:
     ]
     positions = [position for _, position in order]
     checks[f"the features steps come in dependency order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
+    pair = index("aws_catalog_setup principal", "--identity features")
+    checks["the features catalog identity is set up under the project profile like silver and gold"] = (
+        pair >= 0 and "(project profile)" in steps[pair] and "--admin-profile" not in steps[pair] and "administrator" not in steps[pair]
+    )
     jobs = index("--jobs", "train_images")
     checks["the jobs step names the task role, the pair and only the features task definition"] = jobs >= 0 and all(
         word in steps[jobs] for word in ("write_features_task", "_job_features", "and nothing else")

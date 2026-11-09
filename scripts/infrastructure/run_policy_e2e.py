@@ -602,7 +602,7 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="policy_name_defects_") as scratch:
         root = Path(scratch)
         original = VARIABLES.read_text(encoding="utf-8")
-        for sibling in secret_store.OPENMETADATA_FILES:
+        for sibling in (*secret_store.OPENMETADATA_FILES, *secret_store.FEATURES_PAIR_FILES):
             shutil.copy(VARIABLES.parent / sibling, root / sibling)
 
         def changed_variables(old: str, new: str, label: str) -> Path:

@@ -26,6 +26,7 @@ COPIED = (
     "infra/iam/variables.tf",
     "infra/iam/openmetadata.tf",
     "infra/iam/openmetadata_persistent.tf",
+    "infra/iam/job_writer_variables.tf",
     "tests/test_iam_policy_scripts.py",
     "tests/support.py",
     "pyproject.toml",
