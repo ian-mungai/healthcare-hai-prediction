@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -57,7 +58,8 @@ PROCESS_MODULE = "sub" + "process"
 LAUNCHER_SOURCE = (ROOT / "scripts" / "process.py").read_text()
 CI_SOURCE = (ROOT / "scripts" / "ci" / "groups" / "python_lint.sh").read_text()
 ALLOWLIST = ".privacy_allowlist"
-ALLOWLIST_SOURCE = (ROOT / ALLOWLIST).read_text()
+# The scratch repository holds none of the documents that an entry's path-absent expiry waits on, so the copy makes those entries permanent.
+ALLOWLIST_SOURCE = re.sub(r" -- expires-when path-absent:\S+$", " -- permanent", (ROOT / ALLOWLIST).read_text(), flags=re.MULTILINE)
 ENV_EXAMPLE_SOURCE = (ROOT / ".env.example").read_text()
 VENDOR_ADDRESS = "noreply" + "@" + "anthropic.com"  # The attribution check matches this vendor address.
 HOME_PATH = "/Us" + "ers/jdoe/projects/app/run.log"
@@ -109,10 +111,10 @@ DASH_M_MODULE = "nightly" + "_report"
 USED_TF = f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n' + 'output "region" {\n  value = local.region\n}\n'
 # The scratch repository holds this repository's scripts; the cleanup samples sit outside them.
 COPIED_ALLOWED = (
-    "orphan scripts/* -- check scripts copied into the scratch repository\n"
-    "orphan dbt/* -- dbt settings copied into the scratch repository\n"
-    "unused-code scripts/* -- check scripts copied into the scratch repository\n"
-    "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
+    "orphan scripts/* -- check scripts copied into the scratch repository -- permanent\n"
+    "orphan dbt/* -- dbt settings copied into the scratch repository -- permanent\n"
+    "unused-code scripts/* -- check scripts copied into the scratch repository -- permanent\n"
+    "unused-dependencies scripts/* -- check scripts copied into the scratch repository -- permanent\n"
 )
 SIX = "si" + "x"
 
@@ -149,8 +151,8 @@ def lock_files(groups: dict[str, tuple[dict[str, str], dict[str, str]]]) -> dict
 # The scratch repository holds this repository's scripts, whose fixtures name docs/ paths of their own.
 DOCS_ALLOWED = (
     COPIED_ALLOWED
-    + "docs-path scripts/* -- check scripts copied into the scratch repository\n"
-    + "docs-path config/quality/launcher_inputs.json -- the copied input list names the analysis plan, which the scratch repository lacks\n"
+    + "docs-path scripts/* -- check scripts copied into the scratch repository -- permanent\n"
+    + "docs-path config/quality/launcher_inputs.json -- the copied input list names the analysis plan, which the scratch repository lacks -- permanent\n"
 )
 # A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
 # jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
@@ -770,7 +772,7 @@ CASES = [
         "removed-names",
         True,
         committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n", "docs/history.md": f"The `{OLD_CLASS}` era.\n"},
-        files={"app/models.py": "X = 1\n", ".cleanup_allowlist": "python docs/history.md -- migration notes keep the old name\n"},
+        files={"app/models.py": "X = 1\n", ".cleanup_allowlist": "python docs/history.md -- migration notes keep the old name -- permanent\n"},
     ),
     Case(
         "function named like a folder is removed",
@@ -928,7 +930,10 @@ CASES = [
         "docs reference kept by an allowlist entry",
         "docs-references",
         True,
-        {"README.md": "Read [the guide](docs/missing_guide.md).\n", ".cleanup_allowlist": DOCS_ALLOWED + "docs-path README.md -- quotes a deleted guide\n"},
+        {
+            "README.md": "Read [the guide](docs/missing_guide.md).\n",
+            ".cleanup_allowlist": DOCS_ALLOWED + "docs-path README.md -- quotes a deleted guide -- permanent\n",
+        },
     ),
     Case(
         "docs reference with a ./ prefix to a missing file",
@@ -1062,19 +1067,19 @@ CASES = [
         "allowlisted email",
         "privacy-scan",
         True,
-        {"notes.md": f"Ask {PERSONAL_EMAIL}\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md -- synthetic contact used in a demo\n"},
+        {"notes.md": f"Ask {PERSONAL_EMAIL}\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md -- synthetic contact used in a demo -- permanent\n"},
     ),
     Case(
         "allowlist is by type",
         "privacy-scan",
         False,
-        {"notes.md": f"Call {PHONE}\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md -- synthetic contact used in a demo\n"},
+        {"notes.md": f"Call {PHONE}\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md -- synthetic contact used in a demo -- permanent\n"},
     ),
     Case(
         "allowlist is by path",
         "privacy-scan",
         False,
-        {"docs/notes.md": f"Ask {PERSONAL_EMAIL}\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md -- synthetic contact used in a demo\n"},
+        {"docs/notes.md": f"Ask {PERSONAL_EMAIL}\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md -- synthetic contact used in a demo -- permanent\n"},
     ),
     Case("allowlist entry without reason", "privacy-scan", False, {"notes.md": "Nothing here.\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md\n"}),
     Case("allowlist entry with unknown type", "privacy-scan", False, {ALLOWLIST: ALLOWLIST_SOURCE + "address notes.md -- demo\n"}),
@@ -1415,6 +1420,7 @@ def scratch_repo(root: Path, case: Case) -> Path:
         if (ROOT / relative).is_file():
             (repo / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / relative, repo / relative)
+    (repo / ALLOWLIST).write_text(ALLOWLIST_SOURCE)
     for tool in (".venv", ".tools"):
         (repo / tool).symlink_to(ROOT / tool)
     (repo / ".git" / "info" / "exclude").write_text(".venv\n.tools\n__pycache__/\n")
@@ -1730,7 +1736,7 @@ WRITING_SAMPLES = [
     ("declared data folder skipped", {"tests/fixtures/report.md": SERIAL_COMMA}, [], 0, ""),
     (
         "allowlisted ISO date",
-        {"CHANGELOG.md": f"## v1.0.0 ({ISO_DATE})\n", WRITING_ALLOWLIST: "iso-date CHANGELOG.md -- release headings are machine-readable\n"},
+        {"CHANGELOG.md": f"## v1.0.0 ({ISO_DATE})\n", WRITING_ALLOWLIST: "iso-date CHANGELOG.md -- release headings are machine-readable -- permanent\n"},
         [],
         0,
         "",
@@ -1761,6 +1767,269 @@ def run_writing_case() -> tuple[bool, str]:
             results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected {expected}); --warn exit={warned.returncode}"))
             if not ok:
                 results.append((False, result.stderr + warned.stderr))
+    return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
+
+
+# Allowlist expiry. An entry reads ``<type> <key> -- <reason> -- <expiry>``: exactly two " -- " separators, and the expiry is exactly
+# ``permanent``, ``expires YYYY-MM-DD`` or ``expires-when path-absent:GLOB``. The samples use .writing_allowlist, whose reader is the shared
+# allowlist parser, beside a file whose one finding the entry silences.
+EXPIRY_NOTES = {"notes.md": f"Released on {ISO_DATE} after review.\n"}
+REASON = "release headings are machine-readable"
+NBSP = " "
+
+
+def entry(field: str | None, reason: str = REASON) -> str:
+    """One writing-allowlist line in the new format; ``field`` None leaves the expiry field and its separator out."""
+    return f"iso-date notes.md -- {reason}" + ("" if field is None else f" -- {field}")
+
+
+MISSING_EXPIRY = "allowlist entry without an expiry"
+MISSING_REASON = "allowlist entry without a reason"
+MALFORMED_FIELD = "allowlist entry with a malformed expiry field"
+INVALID_DATE = "allowlist entry with an invalid expiry date"
+NAMES_EXPIRY = "allowlist entry: the reason may not name an expiry; put it in the expiry field"
+TOO_MANY = "allowlist entry with more than two ' -- ' separators"
+NON_ASCII = "allowlist lines may contain only printable ASCII"
+BAD_SHAPE = "allowlist entry must read '<type> <key> -- <reason> -- <expiry>'"
+UNKNOWN_TYPE = "allowlist entry with an unknown type"
+# Many lines in one file, each judged on its own line number, with today fixed: (name, line, problem that line must raise or None).
+EXPIRY_BATCH = [
+    # Accepted.
+    ("future date", entry("expires 2999-12-31"), None),
+    ("permanent", entry("permanent"), None),
+    ("path still tracked", entry("expires-when path-absent:notes.md"), None),
+    ("path glob still tracked", entry("expires-when path-absent:*.md"), None),
+    ("bracket glob still tracked", entry("expires-when path-absent:[n]otes.md"), None),
+    ("glob with a leading closing bracket still tracked", entry("expires-when path-absent:[]n]otes.md"), None),
+    ("bracketed reason", entry("permanent", "reviewed [RFC]"), None),
+    ("bracketed reasons", entry("expires 2999-12-31", "reviewed [RFC] and [draft]"), None),
+    ("bracketed reason with a class", entry("permanent", "reviewed [n]o brackets here"), None),
+    # Expired.
+    ("past date", entry("expires 2020-01-01"), "allowlist entry expired on 2020-01-01"),
+    ("path gone", entry("expires-when path-absent:gone.md"), "allowlist entry expired: no tracked file matches gone.md"),
+    ("bracket glob gone", entry("expires-when path-absent:gone[n].md"), "allowlist entry expired: no tracked file matches gone[n].md"),
+    (
+        "glob that opens a bracket matches nothing",
+        entry("expires-when path-absent:[[]notes.md"),
+        "allowlist entry expired: no tracked file matches [[]notes.md",
+    ),
+    # The expiry field must match exactly.
+    ("impossible date", entry("expires 2026-13-40"), INVALID_DATE),
+    ("date without zero padding", entry("expires 2026-1-5"), MALFORMED_FIELD),
+    ("unknown marker", entry("expires-never"), MALFORMED_FIELD),
+    ("unknown event kind", entry("expires-when file-exists:notes.md"), MALFORMED_FIELD),
+    ("event without an argument", entry("expires-when path-absent:"), MALFORMED_FIELD),
+    ("event with trailing text", entry("expires-when path-absent:notes.md extra"), MALFORMED_FIELD),
+    ("event with a double space", entry("expires-when  path-absent:notes.md"), MALFORMED_FIELD),
+    ("old bracket form of permanent", entry("[permanent]"), MALFORMED_FIELD),
+    ("old bracket form of a date", entry("[expires 2999-12-31]"), MALFORMED_FIELD),
+    ("permanent with a date", entry("permanent expires 2999-12-31"), MALFORMED_FIELD),
+    ("two dates", entry("expires 2999-12-31 expires 2998-12-31"), MALFORMED_FIELD),
+    ("capitalized permanent", entry("Permanent"), MALFORMED_FIELD),
+    ("upper case permanent", entry("PERMANENT"), MALFORMED_FIELD),
+    ("capitalized expires", entry("Expires 2999-12-31"), MALFORMED_FIELD),
+    ("double space in a date field", entry("expires  2999-12-31"), MALFORMED_FIELD),
+    ("trailing space", entry("permanent "), MALFORMED_FIELD),
+    ("leading space", entry(" permanent"), MALFORMED_FIELD),
+    ("trailing tab", entry("permanent\t"), MALFORMED_FIELD),
+    ("leading tab", entry("\tpermanent"), MALFORMED_FIELD),
+    ("trailing nonbreaking space", entry(f"permanent{NBSP}"), MALFORMED_FIELD),
+    ("nonbreaking space in a date field", entry(f"expires{NBSP}2999-12-31"), MALFORMED_FIELD),
+    ("full width permanent", entry("ｐｅｒｍａｎｅｎｔ"), MALFORMED_FIELD),
+    ("Cyrillic a in permanent", entry("permаnent"), MALFORMED_FIELD),
+    ("full width brackets", entry("［permanent］"), MALFORMED_FIELD),
+    ("zero width space after permanent", entry("permanent​"), MALFORMED_FIELD),
+    ("trailing text", entry("permanent forever"), MALFORMED_FIELD),
+    ("trailing separator", entry("permanent --"), MALFORMED_FIELD),
+    ("note after a date", entry("expires 2999-12-31 (renewed)"), MALFORMED_FIELD),
+    ("Arabic-Indic digits in a date", entry("expires ٢٠٩٩-١٢-٣١"), MALFORMED_FIELD),
+    # The reason may not name an expiry.
+    ("reason with a bracketed date", entry("permanent", "reviewed [expires 2020-01-01]"), NAMES_EXPIRY),
+    ("reason with a space after the bracket", entry("permanent", "reviewed [ expires 2020-01-01]"), NAMES_EXPIRY),
+    ("reason with a tab after the bracket", entry("permanent", "reviewed [\texpires 2020-01-01]"), NAMES_EXPIRY),
+    ("reason with a nonbreaking space after the bracket", entry("permanent", f"reviewed [{NBSP}expires 2020-01-01]"), NAMES_EXPIRY),
+    ("reason with an upper case marker", entry("permanent", "reviewed [EXPIRES 2020-01-01]"), NAMES_EXPIRY),
+    ("reason with a capitalized permanent", entry("permanent", "reviewed [Permanent]"), NAMES_EXPIRY),
+    ("reason with an unclosed permanent", entry("expires 2999-12-31", "reviewed [permanent"), NAMES_EXPIRY),
+    ("reason with an event", entry("permanent", "reviewed [expires-when path-absent:gone.md]"), NAMES_EXPIRY),
+    ("reason with full width brackets", entry("permanent", "reviewed ［expires 2020-01-01］"), NAMES_EXPIRY),
+    ("reason with a full width word", entry("permanent", "ｅｘｐｉｒｅｓ soon"), NAMES_EXPIRY),
+    ("reason with a full width upper case word", entry("permanent", "ＰＥＲＭＡＮＥＮＴ exception"), NAMES_EXPIRY),
+    ("reason with the plain word", entry("permanent", "permanent exception"), NAMES_EXPIRY),
+    # The owner's accepted limit: the expiry field is the only expiry the check reads, and the reason is free text. A reason that spells the word
+    # apart passes and the entry counts as permanent. This case pins that behavior so it cannot change without a decision.
+    ("reason with a spaced word is accepted", entry("permanent", "reviewed [exp ires 2020-01-01]"), None),
+    # Invisible characters inside a word: the reviewer's twelve variants (six characters, two words) must not hide an expiry.
+    *(
+        (f"reason with U+{ord(char):04X} inside {word}", entry("permanent", f"reviewed [{word[:3]}{char}{word[3:]} 2020-01-01]"), NON_ASCII)
+        for char in ("\u200b", "\u200c", "\u200d", "\ufeff", "\u2060", "\u00ad")
+        for word in ("expires", "permanent")
+    ),
+    # Any character outside space to tilde, anywhere on the line.
+    ("tab in the reason", entry("permanent", "reviewed\tby the owner"), NON_ASCII),
+    ("nonbreaking space in the reason", entry("permanent", f"reviewed{NBSP}by the owner"), NON_ASCII),
+    ("accented letter in the reason", entry("permanent", "caf\u00e9 stand-in"), NON_ASCII),
+    ("Cyrillic letter in the reason", entry("permanent", "r\u0435viewed"), NON_ASCII),
+    ("full width letters in the reason", entry("permanent", "\uff52\uff45\uff56\uff49\uff45\uff57\uff45\uff44"), NON_ASCII),
+    ("Cyrillic letter in the key", "iso-date n\u043etes.md -- reviewed -- permanent", NON_ASCII),
+    ("line separator in the reason", entry("permanent", "reviewed\u2028by the owner"), NON_ASCII),
+    ("next line character in the reason", entry("permanent", "reviewed\u0085by the owner"), NON_ASCII),
+    ("vertical tab in the reason", entry("permanent", "reviewed\x0bby the owner"), NON_ASCII),
+    ("form feed in the reason", entry("permanent", "reviewed\x0cby the owner"), NON_ASCII),
+    ("carriage return at the end", entry("permanent") + "\r", NON_ASCII),
+    ("carriage return before the expiry", entry("permanent", "reviewed\r"), NON_ASCII),
+    ("control character in the reason", entry("permanent", "reviewed\x1bby the owner"), NON_ASCII),
+    ("delete character in the reason", entry("permanent", "reviewed\x7fby the owner"), NON_ASCII),
+    ("non-ASCII line that is a comment", "# caf\u00e9", NON_ASCII),
+    ("tab-only line", "\t", NON_ASCII),
+    # The line shape.
+    ("no separator", "iso-date notes.md", MISSING_REASON),
+    ("one separator", entry(None), MISSING_EXPIRY),
+    ("one separator and an old trailer", entry(None, "reviewed [permanent]"), MISSING_EXPIRY),
+    ("three separators", entry("permanent -- extra"), TOO_MANY),
+    ("three separators with a date", entry("expires 2999-12-31 -- extra"), TOO_MANY),
+    ("empty reason", "iso-date notes.md --  -- permanent", MISSING_REASON),
+    ("tab separators", "iso-date notes.md\t--\treviewed\t--\tpermanent", BAD_SHAPE),
+    ("nonbreaking space separators", f"iso-date notes.md{NBSP}--{NBSP}reviewed{NBSP}--{NBSP}permanent", BAD_SHAPE),
+    ("two spaces in the head", "iso-date  notes.md -- reviewed -- permanent", BAD_SHAPE),
+    ("leading space", " iso-date notes.md -- reviewed -- permanent", BAD_SHAPE),
+    ("unknown type", "address notes.md -- reviewed -- permanent", UNKNOWN_TYPE),
+]
+# A line with a character outside space to tilde has one finding, whatever else is wrong with it.
+EXPIRY_BATCH = [
+    (name, line, NON_ASCII if not line.isascii() or not all(" " <= char <= "~" for char in line) else problem) for name, line, problem in EXPIRY_BATCH
+]
+# One entry per file, for the rules about suppression, counting and the date boundary: (name, line, extra arguments, exit, stderr marker, stdout marker).
+EXPIRY_SINGLE = [
+    ("last valid day", entry("expires 2026-11-04"), ["--today", "2026-11-04"], 0, "", ""),
+    ("day after the last valid day", entry("expires 2026-11-04"), ["--today", "2026-11-05"], 1, "allowlist entry expired on 2026-11-04", ""),
+    ("expired entry still silences its match", entry("expires 2020-01-01"), [], 1, "allowlist entry expired on 2020-01-01", ""),
+    ("malformed field still silences its match", entry("permanent forever"), [], 1, MALFORMED_FIELD, ""),
+    ("missing expiry still silences its match", entry(None), [], 1, MISSING_EXPIRY, ""),
+    ("extra separator still silences its match", entry("permanent -- extra"), [], 1, TOO_MANY, ""),
+    ("reason naming an expiry still silences its match", entry("permanent", "reviewed [expires 2020-01-01]"), [], 1, NAMES_EXPIRY, ""),
+    ("permanent counted per file and type", entry("permanent"), [], 0, "", "permanent allowlist entries: .writing_allowlist 1 (iso-date 1)"),
+]
+# Whole files, for what a line-by-line batch cannot hold: (name, file content, line that must raise the ASCII finding, permanent entries counted).
+EXPIRY_FILES = [
+    ("byte order mark at the start of the file", "\ufeff" + entry("permanent") + "\n", 1, 0),
+    ("file with Windows line ends", entry("permanent") + "\r\n" + entry("expires 2999-12-31") + "\r\n", 1, 0),
+    ("byte order mark in a comment line", "\ufeff# header\n" + entry("permanent") + "\n", 1, 1),
+    ("non-ASCII line after valid lines", entry("permanent") + "\n" + entry("expires 2999-12-31") + "\n" + entry("permanent", "caf\u00e9") + "\n", 3, 1),
+]
+# The real lists, read from the repository: every entry passes and the parser counts the same entries and permanent entries as a plain text count of the files.
+REAL_LIST_FILES = [".linter_allowlist", ".privacy_allowlist", ".cleanup_allowlist", ".writing_allowlist"]
+REAL_LISTS = """
+import json
+import sys
+sys.path.insert(0, ".")
+from scripts.quality import lint_tools, repo_checks
+repo_checks.set_today("2026-11-04")  # The real lists carry dates, so the check pins its own day.
+lists = {
+    ".linter_allowlist": (list(lint_tools.CHECKS), lint_tools.RULE),
+    ".privacy_allowlist": ([*repo_checks.PRIVACY_PATTERNS, "env-value"], repo_checks.PRIVACY_RULE),
+    ".cleanup_allowlist": (repo_checks.REMOVED_KINDS + repo_checks.UNUSED_KINDS, repo_checks.CLEANUP_RULE),
+    ".writing_allowlist": ([*repo_checks.WRITING_PATTERNS, "internal-reference"], repo_checks.WRITING_RULE),
+}
+entries = findings = permanent = 0
+for name, (kinds, rule) in lists.items():
+    found, problems = repo_checks.read_allowlist(name, kinds, rule, "why")
+    entries += len(found)
+    findings += len(problems)
+    permanent += sum(repo_checks.PERMANENT.get(name, {}).values())
+print(json.dumps([entries, findings, permanent]))
+"""
+# An entry that raises its own finding still silences the finding it excuses, so one defect never hides behind another.
+SUPPRESSED_FINDING = "notes.md:1: ISO date in prose"
+# The other readers share the parser: the privacy and cleanup lists get an expired and a permanent sample each.
+EXPIRY_OTHER_LISTS = [
+    (
+        "privacy list, expired",
+        "privacy-scan",
+        ".privacy_allowlist",
+        "email notes.md -- synthetic contact used in a demo -- expires 2020-01-01",
+        1,
+        "allowlist entry expired on 2020-01-01",
+    ),
+    ("privacy list, permanent", "privacy-scan", ".privacy_allowlist", "email notes.md -- synthetic contact used in a demo -- permanent", 0, ""),
+    (
+        "cleanup list, expired",
+        "removed-names",
+        ".cleanup_allowlist",
+        "python notes.md -- history keeps the old name -- expires 2020-01-01",
+        1,
+        "allowlist entry expired on 2020-01-01",
+    ),
+    ("cleanup list, permanent", "removed-names", ".cleanup_allowlist", "python notes.md -- history keeps the old name -- permanent", 0, ""),
+]
+
+
+def run_allowlist_expiry_case() -> tuple[bool, str]:
+    """Each line of the new format is accepted or refused for its own cause; the permanent entries are counted in the output."""
+    results = []
+    python = str(ROOT / ".venv/bin/python")
+    with tempfile.TemporaryDirectory(prefix="hai_expiry_") as scratch:
+        repo = scratch_repo(Path(scratch), Case("expiry setup", "writing-check", True))
+        write(repo, {**EXPIRY_NOTES, WRITING_ALLOWLIST: "\n".join(line for _, line, _ in EXPIRY_BATCH) + "\n"})
+        git(repo, "add", "-A")
+        batch = run_command(python, ["-m", "scripts.quality.repo_checks", "writing-check", "--today", "2026-11-04"], cwd=repo)
+        for number, (name, _, problem) in enumerate(EXPIRY_BATCH, 1):
+            where = f"{WRITING_ALLOWLIST}:{number}:"
+            ok = f"{where} {problem}" in batch.stderr if problem else where not in batch.stderr
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}"))
+        permanent = sum(1 for _, line, problem in EXPIRY_BATCH if problem is None and line.endswith(" -- permanent"))
+        batch_counted = f"permanent allowlist entries: {WRITING_ALLOWLIST} {permanent} (iso-date {permanent})" in batch.stdout
+        results.append(
+            (batch_counted and "Traceback" not in batch.stderr, f"{'ok' if batch_counted else 'WRONG'} the batch counts {permanent} permanent entries")
+        )
+    for name, content, line_number, permanent_count in EXPIRY_FILES:
+        with tempfile.TemporaryDirectory(prefix="hai_expiry_") as scratch:
+            repo = scratch_repo(Path(scratch), Case("expiry setup", "writing-check", True))
+            (repo / "notes.md").write_text(EXPIRY_NOTES["notes.md"])
+            (repo / WRITING_ALLOWLIST).write_bytes(content.encode())
+            git(repo, "add", "-A")
+            result = run_command(python, ["-m", "scripts.quality.repo_checks", "writing-check"], cwd=repo)
+            ok = result.returncode == 1 and f"{WRITING_ALLOWLIST}:{line_number}: {NON_ASCII}" in result.stderr and "Traceback" not in result.stderr
+            file_counted = (
+                f"{WRITING_ALLOWLIST} {permanent_count} (" in result.stdout if permanent_count else "permanent allowlist entries" not in result.stdout
+            )
+            ok = ok and file_counted  # A refused line is never counted as permanent.
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode}"))
+            if not ok:
+                results.append((False, result.stdout + result.stderr))
+    real = run_command(python, ["-I", "-c", REAL_LISTS], cwd=ROOT)
+    counts = real.stdout.strip()
+    lines = [line for name in REAL_LIST_FILES for line in (ROOT / name).read_text().splitlines()]
+    entry_lines = [line for line in lines if line.strip() and not line.startswith("#")]
+    want = [len(entry_lines), 0, sum(1 for line in entry_lines if line.endswith(" -- permanent"))]
+    ok = real.returncode == 0 and counts == json.dumps(want)
+    got = counts or real.stderr[-200:]
+    results.append((ok, f"{'ok' if ok else 'WRONG'} the real lists read {want[0]} entries with 0 findings and {want[2]} permanent (got {got})"))
+    for name, line, extra, expected, marker, counted in EXPIRY_SINGLE:
+        with tempfile.TemporaryDirectory(prefix="hai_expiry_") as scratch:
+            repo = scratch_repo(Path(scratch), Case("expiry setup", "writing-check", True))
+            write(repo, {**EXPIRY_NOTES, WRITING_ALLOWLIST: line + "\n"})
+            git(repo, "add", "-A")
+            result = run_command(python, ["-m", "scripts.quality.repo_checks", "writing-check", *extra], cwd=repo)
+            ok = result.returncode == expected and marker in result.stderr and counted in result.stdout
+            ok = ok and SUPPRESSED_FINDING not in result.stderr and "Traceback" not in result.stderr
+            if name == "reason naming an expiry still silences its match":
+                ok = ok and "permanent allowlist entries" not in result.stdout  # An entry with a finding is never counted as permanent.
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected {expected})"))
+            if not ok:
+                results.append((False, result.stdout + result.stderr))
+    for name, hook, path, line, expected, marker in EXPIRY_OTHER_LISTS:
+        with tempfile.TemporaryDirectory(prefix="hai_expiry_") as scratch:
+            repo = scratch_repo(Path(scratch), Case("expiry setup", hook, True))
+            base = ALLOWLIST_SOURCE if path == ALLOWLIST else ""
+            write(repo, {"notes.md": "Nothing here.\n", path: base + line + "\n"})
+            git(repo, "add", "-A")
+            result = run_command(python, ["-m", "scripts.quality.repo_checks", hook], cwd=repo)
+            last = len(base.splitlines()) + 1
+            ok = result.returncode == expected and (not marker or f"{path}:{last}: {marker}" in result.stderr) and "Traceback" not in result.stderr
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected {expected})"))
+            if not ok:
+                results.append((False, result.stdout + result.stderr))
     return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
 
 
@@ -1874,21 +2143,21 @@ WRITING_KIND_SAMPLES = [
     ),
     (
         "allowlist entry with a reason silences only its kind",
-        {"notes.md": SEMICOLON_LINE + DASH_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon\n"},
+        {"notes.md": SEMICOLON_LINE + DASH_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon -- permanent\n"},
         (),
         0,
         [f"WARN notes.md:2: {DASH_FINDING}"],
     ),
     (
         "allowlist entry silences a blocked kind",
-        {"notes.md": SEMICOLON_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon\n"},
+        {"notes.md": SEMICOLON_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon -- permanent\n"},
         ("--block", "semicolon"),
         0,
         [],
     ),
     (
         "allowlist entry is by path",
-        {"notes.md": SLASH_LINE, WRITING_ALLOWLIST: "slash docs/*.md -- another folder\n"},
+        {"notes.md": SLASH_LINE, WRITING_ALLOWLIST: "slash docs/*.md -- another folder -- permanent\n"},
         (),
         0,
         [f"WARN notes.md:1: {SLASH_FINDING}"],
@@ -1971,7 +2240,7 @@ WRITING_KIND_SAMPLES = [
         {
             ".gitignore": "/plans/\n",
             "notes.txt": "Read plans/design.md.\n",
-            WRITING_ALLOWLIST: "internal-reference .gitignore -- local planning records must stay untracked\n",
+            WRITING_ALLOWLIST: "internal-reference .gitignore -- local planning records must stay untracked -- permanent\n",
         },
         ("--block", "internal-reference"),
         1,
@@ -2004,7 +2273,7 @@ WRITING_KIND_SAMPLES = [
     ),
     (
         "reasoned internal reference allowlist",
-        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference *.txt -- synthetic example\n"},
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference *.txt -- synthetic example -- permanent\n"},
         ("--block", "internal-reference"),
         0,
         [],
@@ -2018,14 +2287,14 @@ WRITING_KIND_SAMPLES = [
     ),
     (
         "internal reference allowlist checks the kind",
-        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "semicolon *.txt -- another kind\n"},
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "semicolon *.txt -- another kind -- permanent\n"},
         (),
         0,
         ["WARN notes.txt:1: internal reference (wave)"],
     ),
     (
         "internal reference allowlist checks the path",
-        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference docs/* -- another folder\n"},
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference docs/* -- another folder -- permanent\n"},
         (),
         0,
         ["WARN notes.txt:1: internal reference (wave)"],
@@ -2272,6 +2541,7 @@ def main() -> int:
             ("privacy scope", run_privacy_scope_case),
             ("writing samples", run_writing_case),
             ("writing kinds", run_writing_kinds_case),
+            ("allowlist expiry", run_allowlist_expiry_case),
             ("typecheck import closure", run_typecheck_import_case),
             ("typecheck pending manifest", run_typecheck_manifest_case),
             ("typecheck cold caches", run_typecheck_cold_case),

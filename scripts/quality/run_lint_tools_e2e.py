@@ -132,7 +132,23 @@ def main() -> int:
                 }
             )
         extra = [
-            ("stale_allowlist_entry", "zizmor", ".linter_allowlist", "zizmor nothing/here.yml:self-repository -- probe\n", "matched no finding", True),
+            (
+                "stale_allowlist_entry",
+                "zizmor",
+                ".linter_allowlist",
+                "zizmor nothing/here.yml:self-repository -- probe -- permanent\n",
+                "matched no finding",
+                True,
+            ),
+            (
+                "expired_allowlist_entry",
+                "zizmor",
+                ".linter_allowlist",
+                "zizmor nothing/here.yml:self-repository -- probe -- expires 2020-01-01\n",
+                "expired on 2020-01-01",
+                True,
+            ),
+            ("allowlist_entry_without_expiry", "zizmor", ".linter_allowlist", "zizmor nothing/here.yml:self-repository -- probe\n", "without an expiry", True),
             ("pin_differs_from_installed", "typos", "config/quality_tools.json", None, "must be version 1.0.0", False),
         ]
         for name, hook, path, addition, diagnostic, append in extra if not args.tool else [row for row in extra if row[1] in args.tool]:

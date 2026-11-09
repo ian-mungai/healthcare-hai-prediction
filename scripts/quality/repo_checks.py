@@ -13,6 +13,7 @@ import ast
 import configparser
 import datetime
 import fnmatch
+import functools
 import importlib
 import io
 import json
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import tokenize
 import tomllib
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -652,7 +654,7 @@ def unused_code() -> list[Finding]:
     for line in result.stdout.splitlines():
         match = re.match(r"^(.+?):(\d+): (.+?) \((\d+)% confidence\)", line)
         if match and not any(fnmatch.fnmatch(match.group(1), glob) for glob in globs):
-            fix = f"delete it, or add 'unused-code {match.group(1)} -- <who uses it>' to {CLEANUP_ALLOWLIST}"
+            fix = f"delete it, or add 'unused-code {match.group(1)} -- <who uses it> -- <expiry>' to {CLEANUP_ALLOWLIST}"
             findings.append(Finding(f"{match.group(1)}:{match.group(2)}", match.group(3), CLEANUP_RULE, fix))
     return findings
 
@@ -822,7 +824,7 @@ def orphan_files() -> list[Finding]:
             patterns.append(rf"(?<![\w-])(?:import|from|-m)\s+(?:[\w.]+\.)?{re.escape(Path(path).stem)}\b")  # \b cannot precede -m
         pattern = re.compile("|".join(patterns))
         if not any(other != path and pattern.search(text) for other, text in texts.items()):
-            fix = f"delete it, link it from the file that uses it, or add 'orphan {path} -- <why it stays>' to {CLEANUP_ALLOWLIST}"
+            fix = f"delete it, link it from the file that uses it, or add 'orphan {path} -- <why it stays> -- <expiry>' to {CLEANUP_ALLOWLIST}"
             findings.append(Finding(path, "no other tracked file references it", CLEANUP_RULE, fix))
     return findings
 
@@ -952,7 +954,7 @@ def terraform_unused() -> list[Finding]:
             # tflint reports paths from the starting folder, not from the --chdir folder.
             path = (root / where["filename"]).resolve().relative_to(root).as_posix()
             if not any(fnmatch.fnmatch(path, glob) for glob in globs):
-                fix = f"delete the declaration, or add 'terraform-unused {path} -- <who uses it>' to {CLEANUP_ALLOWLIST}"
+                fix = f"delete the declaration, or add 'terraform-unused {path} -- <who uses it> -- <expiry>' to {CLEANUP_ALLOWLIST}"
                 findings.append(Finding(f"{path}:{where['start']['line']}", issue["message"], CLEANUP_RULE, fix))
     return findings
 
@@ -976,7 +978,7 @@ def removed_names() -> list[Finding]:
                 matcher = python_reference(name) if kind == "python" and not path.endswith(".py") else pattern
                 for number, line in enumerate(view, 1):
                     if matcher.search(line):
-                        fix = f"remove or update the reference, or add '{kind} {path} -- <why the reference stays>' to {CLEANUP_ALLOWLIST}"
+                        fix = f"remove or update the reference, or add '{kind} {path} -- <why the reference stays> -- <expiry>' to {CLEANUP_ALLOWLIST}"
                         findings.append(Finding(f"{path}:{number}", f"{name} was removed but is still referenced", CLEANUP_RULE, fix))
     return findings
 
@@ -1076,25 +1078,115 @@ def privacy_files() -> list[str]:
     return sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines()))
 
 
+# An entry reads "<type> <key> -- <reason> -- <expiry>". The expiry field matches this exactly, with nothing before or after it.
+EXPIRY_FIELD = re.compile(r"permanent|expires [0-9]{4}-[0-9]{2}-[0-9]{2}|expires-when path-absent:\S+")
+PRINTABLE_ASCII = re.compile(r"[ -~]*")  # Space (0x20) through tilde (0x7E): a tab, a carriage return and any non-ASCII character are outside it.
+ENTRY_SHAPE = "allowlist entry must read '<type> <key> -- <reason> -- <expiry>'"
+EXPIRY_FIX = "end the entry with ' -- permanent', ' -- expires YYYY-MM-DD' or ' -- expires-when path-absent:<glob>', after the reason"
+CLOCK: list[datetime.date] = []  # Holds the date --today sets; empty means the real UTC date.
+PERMANENT: dict[str, dict[str, int]] = {}  # Allowlist file -> entry type -> permanent entries read in this run.
+
+
+def set_today(day: str) -> None:
+    """Fix the date that allowlist expiry is judged against (--today), so a test can pin it."""
+    CLOCK[:] = [datetime.date.fromisoformat(day)]
+
+
+def allowlist_today() -> datetime.date:
+    """The UTC date an allowlist entry's expiry is judged against."""
+    return CLOCK[0] if CLOCK else datetime.datetime.now(datetime.UTC).date()
+
+
+@functools.cache
+def tracked_paths() -> list[str]:
+    """The files in the Git index; an expiry event reads this, so a deleted file is gone as soon as the deletion is staged."""
+    return [path for path in git("ls-files", "-z").split("\0") if path]
+
+
+def names_expiry(reason: str) -> bool:
+    """Whether the reason names an expiry, in any case or width: NFKC and case folding bring lookalike forms of the words together."""
+    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", reason).casefold())
+    return "expires" in folded or "permanent" in folded
+
+
+def expiry_problems(field: str, today: datetime.date, tracked: Callable[[], list[str]]) -> list[str]:
+    """Return what is wrong with an entry's expiry field: malformed, an impossible date, or already expired. The field is not trimmed."""
+    if not EXPIRY_FIELD.fullmatch(field):
+        return ["allowlist entry with a malformed expiry field"]
+    if field.startswith("expires-when "):
+        glob = field.partition(":")[2]
+        return [] if any(fnmatch.fnmatchcase(path, glob) for path in tracked()) else [f"allowlist entry expired: no tracked file matches {glob}"]
+    if field.startswith("expires "):
+        try:
+            day = datetime.date.fromisoformat(field.removeprefix("expires "))
+        except ValueError:
+            return ["allowlist entry with an invalid expiry date"]
+        return [f"allowlist entry expired on {day.isoformat()}"] if day < today else []
+    return []
+
+
 def read_allowlist(name: str, kinds: list[str], rule: str, reason: str) -> tuple[list[tuple[str, str]], list[Finding]]:
-    """Read ``type glob -- reason`` entries; an entry without a reason or with an unknown type is itself a finding."""
+    """Read ``type key -- reason -- expiry`` entries; an entry that breaks that form is itself a finding.
+
+    Every line holds only printable ASCII (space through tilde); a line with any other character, such as a tab, a carriage
+    return, a byte order mark or an invisible character, is a finding and is read no further. The line is split on exactly two
+    `` -- `` separators, with no trimming and no bracket handling. The expiry field is exactly
+    ``permanent`` (counted and reported by the check that read the list, when the entry has no finding), ``expires YYYY-MM-DD``
+    (valid through that UTC date) or ``expires-when path-absent:<glob>`` (expired once no tracked file matches). The reason may not
+    name an expiry. An entry with a finding stays in the result, so its own finding is the only one it raises.
+    The expiry field is the only expiry the check reads; the reason is free text and is not interpreted. The ban on the literal words is a cheap
+    guard, not a reading of the reason; a reason worded to mislead is left to review.
+    """
     entries: list[tuple[str, str]] = []
     findings: list[Finding] = []
+    PERMANENT.pop(name, None)
     if not Path(name).exists():
         return entries, findings
-    for number, line in enumerate(Path(name).read_text().splitlines(), 1):
-        text = "" if line.lstrip().startswith("#") else line.strip()
-        if not text:
-            continue
-        match = re.fullmatch(r"(\S+)\s+(\S+)(?:\s+--\s*(.*))?", text)
+    today = allowlist_today()
+    # Bytes, not text mode: text mode would turn a carriage return into a line end before the check sees it.
+    for number, line in enumerate(Path(name).read_bytes().decode("utf-8", errors="replace").split("\n"), 1):
         location = f"{name}:{number}"
-        if not match or match.group(1) not in kinds:
+        if not PRINTABLE_ASCII.fullmatch(line):
+            fix = "use only space through tilde; a tab, a carriage return (Windows line ends), a byte order mark and invisible characters are refused"
+            findings.append(Finding(location, "allowlist lines may contain only printable ASCII", rule, fix))
+            continue
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split(" -- ")
+        head = re.fullmatch(r"(\S+) (\S+)", parts[0])
+        if not head:
+            findings.append(Finding(location, ENTRY_SHAPE, rule, "write the type and the key with one space between them"))
+            continue
+        if head.group(1) not in kinds:
             findings.append(Finding(location, "allowlist entry with an unknown type", rule, f"use one of: {', '.join(kinds)}"))
-        elif not (match.group(3) or "").strip():
-            findings.append(Finding(location, "allowlist entry without a reason", rule, f"add ' -- <{reason}>'"))
+            continue
+        if len(parts) == 1 or not parts[1].strip():
+            findings.append(Finding(location, "allowlist entry without a reason", rule, f"add ' -- <{reason}> -- <expiry>'"))
+            continue
+        entries.append((head.group(1), head.group(2)))
+        problems = []
+        if names_expiry(parts[1]):
+            problems.append("allowlist entry: the reason may not name an expiry; put it in the expiry field")
+        if len(parts) == 2:
+            problems.append("allowlist entry without an expiry")
+        elif len(parts) > 3:
+            problems.append("allowlist entry with more than two ' -- ' separators")
         else:
-            entries.append((match.group(1), match.group(2)))
+            problems.extend(expiry_problems(parts[2], today, tracked_paths))
+        if len(parts) == 3 and parts[2] == "permanent" and not problems:
+            counts = PERMANENT.setdefault(name, {})
+            counts[head.group(1)] = counts.get(head.group(1), 0) + 1
+        findings.extend(Finding(location, problem, rule, EXPIRY_FIX) for problem in problems)
     return entries, findings
+
+
+def permanent_summary() -> str:
+    """One line naming each allowlist read in this run that holds permanent entries, with the count per entry type."""
+    parts = [
+        f"{name} {sum(counts.values())} ({', '.join(f'{kind} {count}' for kind, count in sorted(counts.items()))})"
+        for name, counts in sorted(PERMANENT.items())
+    ]
+    return f"permanent allowlist entries: {'; '.join(parts)}\n" if parts else ""
 
 
 def privacy_allowlist() -> tuple[list[tuple[str, str]], list[Finding]]:
@@ -1400,7 +1492,7 @@ def warn(findings: list[Finding]) -> int:
 
 
 def main() -> int:
-    """Run the named check and report its findings."""
+    """Run the named check and report its findings, then count the permanent allowlist entries it read."""
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
     checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1412,7 +1504,20 @@ def main() -> int:
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
     parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST), help="writing-check: make a warn-first kind block")
+    parser.add_argument("--today", metavar="YYYY-MM-DD", help="judge allowlist expiry against this UTC date instead of today's")
     args = parser.parse_args()
+    if args.today:
+        try:
+            set_today(args.today)
+        except ValueError:
+            parser.error("--today must be a valid YYYY-MM-DD date")
+    code = run(args)
+    sys.stdout.write(permanent_summary())
+    return code
+
+
+def run(args: argparse.Namespace) -> int:
+    """Run the check ``args`` names."""
     if args.check == "writing-check":
         findings, warnings = writing_check(args.articles, args.block)
         if args.warn:

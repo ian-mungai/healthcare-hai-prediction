@@ -1,8 +1,10 @@
 """Run the pinned linters that sit beside lint_sources: TFLint (AWS ruleset), trivy config, OSV-Scanner, zizmor, import-linter, typos and check-jsonschema.
 
 Run ``.venv/bin/python -m scripts.quality.lint_tools <check> [files]``. Versions come from config/quality_tools.json and are verified before each run;
-no tool is installed or updated here. Exceptions live in .linter_allowlist as ``<check> <key> -- <reason>`` (a key is ``path:rule`` or
-``path:package==version``); an entry that matches nothing is a finding, so the list cannot rot. Each check prints ``path:line: problem`` and returns 1
+no tool is installed or updated here. Exceptions live in .linter_allowlist as ``<check> <key> -- <reason> -- <expiry>`` (a key is ``path:rule`` or
+``path:package==version``); ``<expiry>`` is exactly ``permanent``, ``expires YYYY-MM-DD`` or ``expires-when path-absent:<glob>``, the reason may not name an
+expiry, and a missing, malformed or expired expiry is a finding. An entry that matches nothing is a finding, so the list cannot rot. Each check prints
+``path:line: problem`` and returns 1
 when anything is left.
 """
 
@@ -22,7 +24,7 @@ from typing import Any
 
 from scripts.process import TimeoutExpired, run_command
 from scripts.quality.lint_sources import native, paths
-from scripts.quality.repo_checks import read_allowlist
+from scripts.quality.repo_checks import permanent_summary, read_allowlist, set_today
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKS = ("tflint", "trivy-config", "osv-scanner", "zizmor", "import-linter", "typos", "check-jsonschema")
@@ -84,13 +86,14 @@ def report(check: str, issues: Iterable[Issue], *, stale_check: bool = True) -> 
         else:
             used.add(match)
     for issue in left:
-        sys.stderr.write(f"{issue.location}: {check}: {issue.problem}. Fix it, or add '{check} {issue.key} -- <why it stays>' to {ALLOWLIST}.\n")
+        sys.stderr.write(f"{issue.location}: {check}: {issue.problem}. Fix it, or add '{check} {issue.key} -- <why it stays> -- <expiry>' to {ALLOWLIST}.\n")
     stale = [glob for _, glob in entries if glob not in used] if stale_check else []
     for glob in stale:
         sys.stderr.write(f"{ALLOWLIST}:1: {check}: entry {glob} matched no finding. Remove it.\n")
     for finding in malformed:
         sys.stderr.write(f"{finding.location}: {finding.problem}. {finding.fix}.\n")
     sys.stdout.write(f"{check}: {len(left)} findings, {len(used)} allowlist entries in use\n")
+    sys.stdout.write(permanent_summary())
     return int(bool(left or stale or malformed))
 
 
@@ -240,7 +243,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("check", choices=CHECKS)
     parser.add_argument("files", nargs="*", help="typos only: the files to check (default: every tracked source)")
+    parser.add_argument("--today", metavar="YYYY-MM-DD", help="judge allowlist expiry against this UTC date instead of today's")
     args = parser.parse_args()
+    if args.today:
+        try:
+            set_today(args.today)
+        except ValueError:
+            parser.error("--today must be a valid YYYY-MM-DD date")
     try:
         runners = {
             "tflint": tflint,

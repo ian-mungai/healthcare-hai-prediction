@@ -1,69 +1,70 @@
 # Exceptions to the privacy scan (scripts/quality/repo_checks.py privacy-scan).
+# Every entry reads <type> <key> -- <reason> -- <expiry>, with exactly two ' -- ' separators. The expiry is the last field and is exactly one of: permanent (counted in the check output; the owner approves each kind of permanent entry), expires YYYY-MM-DD (valid through that UTC date) or expires-when path-absent:<glob> (expired once no tracked file matches; no spaces in the glob). The reason may not contain the words expires or permanent. The expiry field is the only expiry the check reads; the reason is free text and is not interpreted. A missing, malformed or expired expiry is a finding.
 # One entry per line: <type> <path glob> -- <why this value is intentionally public>. Entries match by type and path only.
-aws-account infra/iam/tests/policies.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account
-aws-account infra/iam/tests/bronze_writer.tftest.hcl -- synthetic all-ones account IDs in mocked bronze IAM tests
-aws-account infra/modules/bronze_writer_job/tests/definition.tftest.hcl -- synthetic all-ones account IDs in mocked bronze definition tests
-aws-account infra/tests/storage.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account
-aws-account infra/platform/tests/platform.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account
-aws-account infra/services/tests/services.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account
-aws-account infra/services/tests/monitoring.tftest.hcl -- synthetic all-ones account IDs in the monitoring plan tests; not the project's account
-aws-account infra/services/tests/openmetadata.tftest.hcl -- synthetic all-ones account IDs in the persistent OpenMetadata plan tests; not the project's account
-aws-account infra/iam/tests/openmetadata_persistent.tftest.hcl -- synthetic all-ones account IDs in the persistent OpenMetadata IAM plan tests; not the project's account
-aws-account infra/iam/tests/jobs_read.tftest.hcl -- synthetic all-ones and all-zeros account IDs in a Terraform test; not the project's account
-aws-account infra/iam/tests/training.tftest.hcl -- synthetic all-ones account IDs in mocked training IAM tests; not the project's account
-aws-account infra/iam/tests/job_writer.tftest.hcl -- synthetic all-ones account IDs in mocked qualification writer IAM tests; not the project's account
-aws-account infra/iam/tests/athena_mirror.tftest.hcl -- synthetic all-ones account IDs in mocked Athena mirror IAM tests; not the project's account
-aws-account scripts/infrastructure/run_jobs_iam_e2e.py -- a synthetic all-ones account ID in the job role policy assertions; not the project's account
-aws-account scripts/infrastructure/job_writer_policy_cases.py -- synthetic all-ones and all-twos account IDs in the writer policy cases; not the project's account
-aws-account scripts/infrastructure/run_e2e.py -- synthetic all-ones and all-twos account IDs in the infrastructure E2E; not the project's account
-aws-account scripts/infrastructure/run_policy_e2e.py -- a synthetic all-nines account ID that sizes the policies with the longest values; not the project's account
-aws-account tests/test_iam_policy_scripts.py -- a synthetic all-twos account ID for the wrong-account case; not the project's account
-aws-account tests/test_project_config.py -- synthetic all-ones and all-twos account IDs in configuration tests; not the project's account
-aws-account scripts/infrastructure/host_session_stand_in.py -- a synthetic all-zeros account ID that marks stand-in ARNs so the E2E can detect any printed ARN; not the project's account
-home-path docker-compose.yaml -- the analytics container service user home directory, not a person
-home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person
-home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person
-email scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py -- a synthetic role address on a reserved-style example domain in the redaction E2E fixture; not a person
-aws-account data_contracts/orchestration/examples/ecs_outputs.json -- synthetic all-zero account ID in the output schema example, not a deployment identity
-aws-account data_contracts/orchestration/examples/ecs_target.json -- synthetic all-zero account references in the read target example
-aws-account data_contracts/orchestration/examples/ecs_target_inputs.json -- synthetic all-zero account references in exported-output examples
-aws-account scripts/infrastructure/run_ecs_render_e2e.py -- synthetic all-zero and all-ones accounts in renderer command cases
-aws-account infra/jobs/tests/jobs.tftest.hcl -- synthetic all-ones and all-twos account IDs in read definition refusal cases; not the project account
-aws-account infra/jobs/tests/train.tftest.hcl -- synthetic all-ones account IDs in mocked training task definition tests; not the project account
-aws-account infra/jobs/identity_probe/tests/probe.tftest.hcl -- synthetic all-ones and all-twos account IDs in identity probe refusal cases; not the project account
-aws-account scripts/infrastructure/run_jobs_preparation_e2e.py -- synthetic all-ones account IDs in inert preparation renderer fixtures; not the project account
-aws-account infra/jobs/tests/writers.tftest.hcl -- synthetic all-ones account IDs in writer definition plans and refusal cases. These are not the project account.
-aws-account infra/iam/tests/job_writer_layers.tftest.hcl -- synthetic all-ones, all-twos and all-zero account IDs in mocked layer writer IAM tests; not the project's account
-aws-account scripts/infrastructure/layer_writer_policy_cases.py -- synthetic all-ones and all-twos account IDs in the layer writer policy cases; not the project's account
-aws-account infra/iam/tests/github_oidc.tftest.hcl -- synthetic all-ones account IDs in mocked delivery role tests; not the project's account
-aws-account tests/test_services_preparation.py -- synthetic all-ones account IDs in reviewed services input cases; not the project's account
-aws-account infra/iam/tests/broker.tftest.hcl -- synthetic all-ones account IDs in mocked broker IAM tests; not the project's account
-aws-account infra/iam/tests/airflow_launch.tftest.hcl -- synthetic all-ones account IDs in mocked Airflow launch role IAM tests; not the project's account
-aws-account infra/jobs/tests/promote.tftest.hcl -- synthetic all-ones account IDs in mocked promotion task tests; not the project's account
-aws-account scripts/infrastructure/iam_preflight_policies.py -- a synthetic all-ones account ID for the offline preflight run; not the project's account
-env-value scripts/infrastructure/iam_preflight_policies.py -- the AWS CLI profile name of the offline preflight values: a profile name is a local label, not a credential or an account identifier
-aws-account infra/jobs/tests/layers.tftest.hcl -- synthetic all-ones account IDs in mocked layer task definition tests; not the project account
-aws-account infra/iam/tests/job_layer_runs.tftest.hcl -- synthetic all-ones account IDs in mocked layer run IAM tests; not the project account
-aws-account infra/iam/tests/drift.tftest.hcl -- synthetic all-ones account IDs in mocked drift IAM tests; not the project's account
-aws-account infra/jobs/tests/drift.tftest.hcl -- synthetic all-ones account IDs in drift task definition plans and refusal cases. These are not the project account.
-aws-account infra/iam/tests/model_api.tftest.hcl -- synthetic all-ones account IDs in mocked model API role tests; not the project's account
-aws-account infra/iam/tests/openmetadata.tftest.hcl -- synthetic all-ones account IDs in mocked catalog IAM tests; not the project's account
-aws-account infra/jobs/tests/openmetadata.tftest.hcl -- synthetic all-ones account IDs in catalog task definition plans and refusal cases. These are not the project account.
-aws-account scripts/infrastructure/run_openmetadata_e2e.py -- synthetic all-ones account ID in the catalog policy and image cases; not the project's account
-email scripts/infrastructure/openmetadata_bootstrap.py -- the default administrator login of OpenMetadata, a public product constant; not a person
-email scripts/infrastructure/run_openmetadata_e2e.py -- the same OpenMetadata default administrator login in the stand-in server
-email scripts/infrastructure/run_openmetadata_persistent_e2e.py -- the same OpenMetadata default administrator login in the stand-in server
-aws-account infra/jobs/tests/bronze.tftest.hcl -- synthetic all-ones account IDs in mocked bronze task definition tests; not the project account
-aws-account infra/iam/tests/serve.tftest.hcl -- synthetic all-ones account IDs in mocked serve IAM tests; not the project's account
-aws-account infra/jobs/tests/serve.tftest.hcl -- synthetic all-ones account IDs in serve task definition plans and refusal cases. These are not the project account.
-aws-account scripts/infrastructure/run_activation_inputs_e2e.py -- synthetic all-ones account IDs in inert activation input fixtures; not the project account
-aws-account infra/iam/tests/silver_first_run.tftest.hcl -- synthetic all-ones account IDs in mocked silver first run IAM tests; not the project account
-aws-account infra/iam/tests/features_image.tftest.hcl -- synthetic all-ones account IDs in mocked features image grant tests; not the project account
-aws-account infra/jobs/tests/guard.tftest.hcl -- synthetic all-ones account IDs in the mocked guard task definition tests; not the project account
-aws-account infra/jobs/tests/host.tftest.hcl -- synthetic all-ones account IDs in the mocked host task definition plans and refusal cases; not the project account
-aws-account infra/iam/tests/serving_execution.tftest.hcl -- synthetic all-ones account IDs in mocked serving execution role tests; not the project account
-aws-account infra/platform/tests/scratch.tftest.hcl -- synthetic all-ones account ID in the scratch volume plan tests; not the project's account
-aws-account infra/platform/tests/scratch_replace.tftest.hcl -- synthetic all-ones account ID in the scratch volume replacement tests; not the project's account
-aws-account infra/iam/tests/host_network.tftest.hcl -- synthetic all-ones account IDs in the host firewall and boot plan tests; not the project's account
-aws-account infra/services/tests/host_capacity.tftest.hcl -- synthetic all-ones account IDs in the service CPU and host folder plan tests; not the project's account
-aws-account infra/jobs/tests/host_scratch.tftest.hcl -- synthetic all-ones account IDs in the host init wipe plan tests; not the project's account
+aws-account infra/iam/tests/policies.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account -- permanent
+aws-account infra/iam/tests/bronze_writer.tftest.hcl -- synthetic all-ones account IDs in mocked bronze IAM tests -- permanent
+aws-account infra/modules/bronze_writer_job/tests/definition.tftest.hcl -- synthetic all-ones account IDs in mocked bronze definition tests -- permanent
+aws-account infra/tests/storage.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account -- permanent
+aws-account infra/platform/tests/platform.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account -- permanent
+aws-account infra/services/tests/services.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account -- permanent
+aws-account infra/services/tests/monitoring.tftest.hcl -- synthetic all-ones account IDs in the monitoring plan tests; not the project's account -- permanent
+aws-account infra/services/tests/openmetadata.tftest.hcl -- synthetic all-ones account IDs in the persistent OpenMetadata plan tests; not the project's account -- permanent
+aws-account infra/iam/tests/openmetadata_persistent.tftest.hcl -- synthetic all-ones account IDs in the persistent OpenMetadata IAM plan tests; not the project's account -- permanent
+aws-account infra/iam/tests/jobs_read.tftest.hcl -- synthetic all-ones and all-zeros account IDs in a Terraform test; not the project's account -- permanent
+aws-account infra/iam/tests/training.tftest.hcl -- synthetic all-ones account IDs in mocked training IAM tests; not the project's account -- permanent
+aws-account infra/iam/tests/job_writer.tftest.hcl -- synthetic all-ones account IDs in mocked qualification writer IAM tests; not the project's account -- permanent
+aws-account infra/iam/tests/athena_mirror.tftest.hcl -- synthetic all-ones account IDs in mocked Athena mirror IAM tests; not the project's account -- permanent
+aws-account scripts/infrastructure/run_jobs_iam_e2e.py -- a synthetic all-ones account ID in the job role policy assertions; not the project's account -- permanent
+aws-account scripts/infrastructure/job_writer_policy_cases.py -- synthetic all-ones and all-twos account IDs in the writer policy cases; not the project's account -- permanent
+aws-account scripts/infrastructure/run_e2e.py -- synthetic all-ones and all-twos account IDs in the infrastructure E2E; not the project's account -- permanent
+aws-account scripts/infrastructure/run_policy_e2e.py -- a synthetic all-nines account ID that sizes the policies with the longest values; not the project's account -- permanent
+aws-account tests/test_iam_policy_scripts.py -- a synthetic all-twos account ID for the wrong-account case; not the project's account -- permanent
+aws-account tests/test_project_config.py -- synthetic all-ones and all-twos account IDs in configuration tests; not the project's account -- permanent
+aws-account scripts/infrastructure/host_session_stand_in.py -- a synthetic all-zeros account ID that marks stand-in ARNs so the E2E can detect any printed ARN; not the project's account -- permanent
+home-path docker-compose.yaml -- the analytics container service user home directory, not a person -- permanent
+home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person -- permanent
+home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person -- permanent
+email scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py -- a synthetic role address on a reserved-style example domain in the redaction E2E fixture; not a person -- permanent
+aws-account data_contracts/orchestration/examples/ecs_outputs.json -- synthetic all-zero account ID in the output schema example, not a deployment identity -- permanent
+aws-account data_contracts/orchestration/examples/ecs_target.json -- synthetic all-zero account references in the read target example -- permanent
+aws-account data_contracts/orchestration/examples/ecs_target_inputs.json -- synthetic all-zero account references in exported-output examples -- permanent
+aws-account scripts/infrastructure/run_ecs_render_e2e.py -- synthetic all-zero and all-ones accounts in renderer command cases -- permanent
+aws-account infra/jobs/tests/jobs.tftest.hcl -- synthetic all-ones and all-twos account IDs in read definition refusal cases; not the project account -- permanent
+aws-account infra/jobs/tests/train.tftest.hcl -- synthetic all-ones account IDs in mocked training task definition tests; not the project account -- permanent
+aws-account infra/jobs/identity_probe/tests/probe.tftest.hcl -- synthetic all-ones and all-twos account IDs in identity probe refusal cases; not the project account -- permanent
+aws-account scripts/infrastructure/run_jobs_preparation_e2e.py -- synthetic all-ones account IDs in inert preparation renderer fixtures; not the project account -- permanent
+aws-account infra/jobs/tests/writers.tftest.hcl -- synthetic all-ones account IDs in writer definition plans and refusal cases. These are not the project account. -- permanent
+aws-account infra/iam/tests/job_writer_layers.tftest.hcl -- synthetic all-ones, all-twos and all-zero account IDs in mocked layer writer IAM tests; not the project's account -- permanent
+aws-account scripts/infrastructure/layer_writer_policy_cases.py -- synthetic all-ones and all-twos account IDs in the layer writer policy cases; not the project's account -- permanent
+aws-account infra/iam/tests/github_oidc.tftest.hcl -- synthetic all-ones account IDs in mocked delivery role tests; not the project's account -- permanent
+aws-account tests/test_services_preparation.py -- synthetic all-ones account IDs in reviewed services input cases; not the project's account -- permanent
+aws-account infra/iam/tests/broker.tftest.hcl -- synthetic all-ones account IDs in mocked broker IAM tests; not the project's account -- permanent
+aws-account infra/iam/tests/airflow_launch.tftest.hcl -- synthetic all-ones account IDs in mocked Airflow launch role IAM tests; not the project's account -- permanent
+aws-account infra/jobs/tests/promote.tftest.hcl -- synthetic all-ones account IDs in mocked promotion task tests; not the project's account -- permanent
+aws-account scripts/infrastructure/iam_preflight_policies.py -- a synthetic all-ones account ID for the offline preflight run; not the project's account -- permanent
+env-value scripts/infrastructure/iam_preflight_policies.py -- the AWS CLI profile name of the offline preflight values: a profile name is a local label, not a credential or an account identifier -- permanent
+aws-account infra/jobs/tests/layers.tftest.hcl -- synthetic all-ones account IDs in mocked layer task definition tests; not the project account -- permanent
+aws-account infra/iam/tests/job_layer_runs.tftest.hcl -- synthetic all-ones account IDs in mocked layer run IAM tests; not the project account -- permanent
+aws-account infra/iam/tests/drift.tftest.hcl -- synthetic all-ones account IDs in mocked drift IAM tests; not the project's account -- permanent
+aws-account infra/jobs/tests/drift.tftest.hcl -- synthetic all-ones account IDs in drift task definition plans and refusal cases. These are not the project account. -- permanent
+aws-account infra/iam/tests/model_api.tftest.hcl -- synthetic all-ones account IDs in mocked model API role tests; not the project's account -- permanent
+aws-account infra/iam/tests/openmetadata.tftest.hcl -- synthetic all-ones account IDs in mocked catalog IAM tests; not the project's account -- permanent
+aws-account infra/jobs/tests/openmetadata.tftest.hcl -- synthetic all-ones account IDs in catalog task definition plans and refusal cases. These are not the project account. -- permanent
+aws-account scripts/infrastructure/run_openmetadata_e2e.py -- synthetic all-ones account ID in the catalog policy and image cases; not the project's account -- permanent
+email scripts/infrastructure/openmetadata_bootstrap.py -- the default administrator login of OpenMetadata, a public product constant; not a person -- permanent
+email scripts/infrastructure/run_openmetadata_e2e.py -- the same OpenMetadata default administrator login in the stand-in server -- permanent
+email scripts/infrastructure/run_openmetadata_persistent_e2e.py -- the same OpenMetadata default administrator login in the stand-in server -- permanent
+aws-account infra/jobs/tests/bronze.tftest.hcl -- synthetic all-ones account IDs in mocked bronze task definition tests; not the project account -- permanent
+aws-account infra/iam/tests/serve.tftest.hcl -- synthetic all-ones account IDs in mocked serve IAM tests; not the project's account -- permanent
+aws-account infra/jobs/tests/serve.tftest.hcl -- synthetic all-ones account IDs in serve task definition plans and refusal cases. These are not the project account. -- permanent
+aws-account scripts/infrastructure/run_activation_inputs_e2e.py -- synthetic all-ones account IDs in inert activation input fixtures; not the project account -- permanent
+aws-account infra/iam/tests/silver_first_run.tftest.hcl -- synthetic all-ones account IDs in mocked silver first run IAM tests; not the project account -- permanent
+aws-account infra/iam/tests/features_image.tftest.hcl -- synthetic all-ones account IDs in mocked features image grant tests; not the project account -- permanent
+aws-account infra/jobs/tests/guard.tftest.hcl -- synthetic all-ones account IDs in the mocked guard task definition tests; not the project account -- permanent
+aws-account infra/jobs/tests/host.tftest.hcl -- synthetic all-ones account IDs in the mocked host task definition plans and refusal cases; not the project account -- permanent
+aws-account infra/iam/tests/serving_execution.tftest.hcl -- synthetic all-ones account IDs in mocked serving execution role tests; not the project account -- permanent
+aws-account infra/platform/tests/scratch.tftest.hcl -- synthetic all-ones account ID in the scratch volume plan tests; not the project's account -- permanent
+aws-account infra/platform/tests/scratch_replace.tftest.hcl -- synthetic all-ones account ID in the scratch volume replacement tests; not the project's account -- permanent
+aws-account infra/iam/tests/host_network.tftest.hcl -- synthetic all-ones account IDs in the host firewall and boot plan tests; not the project's account -- permanent
+aws-account infra/services/tests/host_capacity.tftest.hcl -- synthetic all-ones account IDs in the service CPU and host folder plan tests; not the project's account -- permanent
+aws-account infra/jobs/tests/host_scratch.tftest.hcl -- synthetic all-ones account IDs in the host init wipe plan tests; not the project's account -- permanent
