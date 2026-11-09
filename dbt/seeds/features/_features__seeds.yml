@@ -502,9 +502,9 @@ seeds:
 
   - name: frozen_hospital_controls
     description: >
-      The 99 source, control and field rows the hospital alignment carries: the 98 of e918ed7 (cost_report_measures 30, impact_measures 12, mup_measures
-      50 and occmix_measures 6) and C051.01 (cost_report_measures row 31), with each rule and column. int_spine_hospital_measures must carry exactly
-      these rows and the formula recipes must give these rules and columns.
+      The 98 source, control and field rows the hospital alignment carried at e918ed7: cost_report_measures (30), impact_measures (12), mup_measures
+      (50) and occmix_measures (6), with each retired rule and column. int_spine_hospital_measures must carry exactly these rows and the formula
+      recipes must give these rules and columns.
     config:
       column_types:
         measure_source: varchar
@@ -592,7 +592,7 @@ seeds:
 
   - name: frozen_registry_controls
     description: >
-      Every registry control of the 15 retired registry-map seeds at e918ed7 (432) and C051.01, with the seeds that listed it. The gold control bridge and the
+      Every registry control of the 15 retired registry-map seeds at e918ed7 (432), with the seeds that listed it. The gold control bridge and the
       formula recipes together must hold exactly the carried ones. C288.payment_adjustment has no measure and is not carried (lead decision,
       design.md step 1 of the feature phase): is_carried is false for it.
     config:

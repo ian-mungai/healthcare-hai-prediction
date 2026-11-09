@@ -44,7 +44,7 @@ PLANTED = {
     "after_first_window_year": "990007:2019",
 }
 # Cost-report domain cases (design 3.1): one report each at a hospital outside the spine, so no window reads them. The denominator is the value of every
-# denominator that has a floor (net patient revenue, operating expense, total costs, bed days, discharges, current liabilities, gross patient revenue). The
+# denominator that has a floor (net patient revenue, operating expense, total costs, bed days, discharges, current liabilities). The
 # numerator is the value of every share numerator and of the margin numerator. The day-share denominator stays at DOMAIN_DAYS.
 DOMAIN_CCN = "990008"
 DOMAIN_DAYS = 10000.0
@@ -149,8 +149,6 @@ def domain_report(number: str, year: int, denominator: float | None, numerator: 
         "total_costs": denominator,
         "cost_of_charity_care": numerator,
         "cost_of_uncompensated_care": numerator,
-        "total_patient_revenue": denominator,
-        "total_bad_debt_expense": numerator,
         "total_bed_days_available": denominator,
         "total_discharges_v_xviii_xix_unknown": denominator,
         "total_current_liabilities": denominator,

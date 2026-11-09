@@ -24,10 +24,10 @@ from scripts.features import feature_fixture
 DAYS = feature_fixture.DOMAIN_DAYS
 FTE = 10.0
 DAYS_PER_YEAR = 365.0
-SHARES = ("C023", "C024", "C049", "C050", "C051.01", "C052", "C053", "C054")
+SHARES = ("C023", "C024", "C049", "C050", "C052", "C053", "C054")
 DOMAIN_MAX = {**dict.fromkeys(SHARES, 1.0), "C045": 1.0}
 DOMAIN_MIN = dict.fromkeys(SHARES, 0.0)
-FLOORED = ("C028", "C040", "C041", "C042", "C045", "C046", "C048", "C049", "C050", "C051.01", "C052", "C053", "C054", "C057")
+FLOORED = ("C028", "C040", "C041", "C042", "C045", "C046", "C048", "C049", "C050", "C052", "C053", "C054", "C057")
 NUMERATOR_IS_DENOMINATOR = ("C041", "C057")
 CHECKED = tuple(sorted({*DOMAIN_MAX, *DOMAIN_MIN, *FLOORED}))
 STATUSES = ("in_domain", "out_of_domain", "denominator_not_positive")

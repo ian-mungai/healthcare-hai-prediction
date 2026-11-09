@@ -332,9 +332,6 @@ models:
       - name: c051__value__number
         data_type: double
         description: "Control C051, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
-      - name: c051_01__value__number
-        data_type: double
-        description: "Control C051.01, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."
       - name: c052__value__number
         data_type: double
         description: "Control C052, source cost_report, field value: value_number of the latest period that ends before the window start (int_spine_hospital_measures); null when there is none."

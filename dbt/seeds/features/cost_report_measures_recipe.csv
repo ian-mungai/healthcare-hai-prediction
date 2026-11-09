@@ -50,5 +50,3 @@ C056,value,value,fct_cost_report,health_information_technology_designated_assets
 C057,ratio,numerator,fct_cost_report,less_total_operating_expense,,,,,,,,,29,,,,
 C057,ratio,denominator,fct_cost_report,total_discharges_v_xviii_xix_unknown,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,29,,,0,discharges must be above 0
 C058,value,value,fct_cost_report,depreciation_cost,,,,,,,,,30,,,,
-C051.01,ratio,numerator,fct_cost_report,total_bad_debt_expense,,,,,,,,,31,0,1,,a share of a total lies between 0 and 1
-C051.01,ratio,denominator,fct_cost_report,total_patient_revenue,,,rpt_rec_num,,not null and not zero; otherwise the value is null,,,,31,,,0,gross patient revenue must be above 0

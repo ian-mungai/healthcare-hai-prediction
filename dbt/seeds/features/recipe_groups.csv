@@ -29,7 +29,6 @@ cost_report_measures,C055,27,value,value=1
 cost_report_measures,C056,28,value,value=1
 cost_report_measures,C057,29,ratio,denominator=1 numerator=1
 cost_report_measures,C058,30,value,value=1
-cost_report_measures,C051.01,31,ratio,denominator=1 numerator=1
 impact_measures,C001,1,value,value=1
 impact_measures,C006,2,value,value=1
 impact_measures,C021,3,code,value=1
