@@ -181,6 +181,14 @@ TEMPORARY_LIST_SOURCE = json.dumps({"note": "sample list", "files": [{"path": TE
 TEMPORARY_BASE = {TEMPORARY_LIST: TEMPORARY_LIST_SOURCE, TEMPORARY_FILE: "VALUE = 1\n"}
 
 
+LINK_TARGET_PAGE = "# Setup\n\n## Install steps\n\n## Run `a/b` (fast), then C\n\n## Repeat\n\n## Repeat\n"
+
+
+def link_page(*links: str) -> str:
+    """A guide whose first link sits on line 3, one link per line."""
+    return "# Guide\n\n" + "".join(f"See [the target]({link}).\n" for link in links)
+
+
 @dataclass
 class Case:
     """One hook run: files to stage (or delete) in a scratch repository and whether the hook must pass."""
@@ -677,6 +685,53 @@ CASES = [
             )
         },
     ),
+    Case(
+        "valid links and anchors pass",
+        "markdown-links",
+        True,
+        {
+            "docs/guide.md": link_page(
+                "setup.md", "setup.md#install-steps", "setup.md#run-ab-fast-then-c", "setup.md#repeat-1", "#guide", "../README.md", "/docs/setup.md", "../docs/"
+            ),
+            "docs/setup.md": LINK_TARGET_PAGE,
+            "README.md": "# Project\n",
+        },
+    ),
+    Case(
+        "external and non-Markdown links pass",
+        "markdown-links",
+        True,
+        {
+            "docs/guide.md": link_page("https://example.invalid/absent.md#nope", "mailto:someone@example.invalid", "//example.invalid/absent.md", "app.py#L10"),
+            "docs/app.py": "VALUE = 1\n",
+        },
+    ),
+    Case(
+        "links inside code pass",
+        "markdown-links",
+        True,
+        {"docs/guide.md": "# Guide\n\nA span `[x](absent.md)` stays.\n\n````markdown\n```text\n```\n[x](absent.md)\n````\n"},
+    ),
+    Case("missing file blocked", "markdown-links", False, {"docs/guide.md": link_page("absent.md")}),
+    Case("missing anchor blocked", "markdown-links", False, {"docs/guide.md": link_page("setup.md#no-such-heading"), "docs/setup.md": LINK_TARGET_PAGE}),
+    Case("missing anchor in the same file blocked", "markdown-links", False, {"docs/guide.md": link_page("#nowhere")}),
+    Case(
+        "ignored target blocked",
+        "markdown-links",
+        False,
+        {".gitignore": "docs/local_notes.md\n", "docs/local_notes.md": "# Notes\n", "docs/guide.md": link_page("local_notes.md")},
+    ),
+    Case(
+        "deleted target blocked",
+        "markdown-links",
+        False,
+        committed={"docs/guide.md": link_page("setup.md"), "docs/setup.md": LINK_TARGET_PAGE},
+        delete=["docs/setup.md"],
+    ),
+    Case("link above the repository root blocked", "markdown-links", False, {"docs/guide.md": link_page("../../outside.md")}),
+    Case("missing image blocked", "markdown-links", False, {"docs/guide.md": "# Guide\n\n![diagram](assets/absent.png)\n"}),
+    Case("missing reference definition target blocked", "markdown-links", False, {"docs/guide.md": "# Guide\n\nSee [the target][ref].\n\n[ref]: absent.md\n"}),
+    Case("missing HTML link target blocked", "markdown-links", False, {"docs/guide.md": '# Guide\n\n<a href="absent.md">the target</a>\n'}),
     Case("clean Markdown through markdownlint", "markdownlint", True, {"notes.md": "# Notes\n\n- One item\n\n```bash\nls\n```\n"}),
     Case("star bullet blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n* One item\n"}),
     Case("fence without a language blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n```\nls\n```\n"}),
@@ -838,6 +893,15 @@ BLOCK_REASONS = {
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
     "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
     "internal references warn through the hook": "WARN notes.md:1: internal reference (wave)",
+    "missing file blocked": "docs/guide.md:3: link target 'absent.md' is not a tracked file",
+    "missing anchor blocked": "docs/guide.md:3: link anchor '#no-such-heading' matches no heading in docs/setup.md",
+    "missing anchor in the same file blocked": "docs/guide.md:3: link anchor '#nowhere' matches no heading in docs/guide.md",
+    "ignored target blocked": "docs/guide.md:3: link target 'local_notes.md' is not a tracked file",
+    "deleted target blocked": "docs/guide.md:3: link target 'setup.md' is not a tracked file",
+    "link above the repository root blocked": "docs/guide.md:3: link target '../../outside.md' is not a tracked file",
+    "missing image blocked": "docs/guide.md:3: link target 'assets/absent.png' is not a tracked file",
+    "missing reference definition target blocked": "docs/guide.md:5: link target 'absent.md' is not a tracked file",
+    "missing HTML link target blocked": "docs/guide.md:3: link target 'absent.md' is not a tracked file",
     "star bullet blocked by markdownlint": "MD004",
     "missing front matter blocked": "docs/guide.md:1: no front matter",
     "title different from the H1 blocked": "title does not match the H1",
@@ -946,7 +1010,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
-        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
+        if case.hook in ("writing-check", "markdownlint", "front-matter", "markdown-links", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
             reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"

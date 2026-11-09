@@ -252,6 +252,7 @@
       "writing-check",
       "front-matter",
       "docs-references",
+      "markdown-links",
       "markdownlint",
       "documentation-review-untracked",
       "test-documentation-review"

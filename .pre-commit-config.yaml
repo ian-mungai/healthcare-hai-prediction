@@ -135,6 +135,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: markdown-links
+        name: Markdown links point at tracked files and existing headings
+        entry: .venv/bin/python -m scripts.quality.repo_checks markdown-links
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: markdownlint
         # Pinned markdownlint-cli2 from scripts/quality/install_markdownlint.py with the documentation baseline in
         # .markdownlint-cli2.jsonc; E2E records under data/ are skipped. Blocking from the start: the whole project was clean.

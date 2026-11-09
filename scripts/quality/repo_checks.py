@@ -17,6 +17,7 @@ import importlib
 import io
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -27,6 +28,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from scripts.process import run_command
 
@@ -1382,6 +1384,99 @@ def front_matter() -> list[Finding]:
     return findings
 
 
+LINK_RULE = "bundle standards/conventional_docs.md section 8.9: relative repository links with no broken targets or anchors"
+LINK_FIX = "link a tracked file or an existing heading, or remove the link; ignored, untracked and deleted files count as missing"
+INLINE_LINK = re.compile(r"\]\(\s*(<[^>]*>|[^)\s]*)")
+REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)")
+HTML_LINK = re.compile(r"""\b(?:href|src)=["']([^"']+)["']""")
+HTML_ANCHOR = re.compile(r"""<a\s[^>]*?\b(?:id|name)=["']([^"']+)["']""")
+HEADING = re.compile(r"^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def body_lines(text: str) -> list[tuple[int, str]]:
+    """The numbered lines of a Markdown file outside its front matter and fenced code blocks."""
+    lines = []
+    in_front_matter = False
+    fence = ""
+    for number, line in enumerate(text.splitlines(), 1):
+        if number == 1 and line.strip() == "---":
+            in_front_matter = True
+        elif in_front_matter:
+            in_front_matter = line.strip() != "---"
+        elif fence:
+            marker = FENCE.match(line)
+            if marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) and not line.strip().strip(fence[0]):
+                fence = ""
+        elif marker := FENCE.match(line):
+            fence = marker.group(1)
+        else:
+            lines.append((number, line))
+    return lines
+
+
+def heading_slug(heading: str) -> str:
+    """GitHub's anchor for a heading: visible text, lower case, punctuation removed, spaces as hyphens."""
+    text = re.sub(r"<[^>]+>", "", re.sub(r"`([^`]*)`", r"\1", re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", heading)))
+    text = re.sub(r"(?<!\w)_+|_+(?!\w)", "", text).lower()
+    return re.sub(r"[^\w -]", "", text).replace(" ", "-")
+
+
+def heading_anchors(text: str) -> set[str]:
+    """Every anchor of a Markdown file: its heading slugs (repeats get -1, -2) and its HTML id and name attributes."""
+    anchors: set[str] = set()
+    counts: dict[str, int] = {}
+    lines = body_lines(text)
+    for _, line in lines:
+        found = HEADING.match(line)
+        if found:
+            slug = heading_slug(found.group(1))
+            anchors.add(slug if slug not in counts else f"{slug}-{counts[slug]}")
+            counts[slug] = counts.get(slug, 0) + 1
+        anchors.update(name.lower() for name in HTML_ANCHOR.findall(line))
+    return anchors
+
+
+def link_destinations(text: str) -> list[tuple[int, str]]:
+    """Every link, image, reference definition and HTML href or src destination of a Markdown file, outside code, with its line."""
+    found = []
+    for number, line in body_lines(text):
+        reference = REFERENCE_DEFINITION.match(line)
+        line = re.sub(r"`[^`\n]*`", "", line)
+        destinations = [reference.group(1)] if reference else []
+        destinations += INLINE_LINK.findall(line) + HTML_LINK.findall(line)
+        found += [(number, destination.strip("<>")) for destination in destinations]
+    return found
+
+
+def link_findings() -> list[Finding]:
+    """Every relative link of a tracked Markdown file points at a tracked file that exists, and its #anchor at a heading of that file."""
+    tracked = {path for path in git("ls-files", "-z", "--cached").split("\0") if path and os.path.isfile(path)}
+    folders = {parent for path in tracked for parent in map(str, Path(path).parents)}
+    anchors: dict[str, set[str]] = {}
+    findings = []
+    for source in sorted(path for path in tracked if path.endswith(".md") and not path.startswith(DATA_FOLDERS)):
+        text = Path(source).read_text(errors="replace")
+        for number, destination in link_destinations(text):
+            if URL_SCHEME.match(destination) or destination.startswith("//"):
+                continue
+            written, _, fragment = destination.partition("#")
+            written = unquote(written.partition("?")[0])
+            if not written and not fragment:
+                continue
+            base = "" if written.startswith("/") else os.path.dirname(source)
+            target = posixpath.normpath(posixpath.join(base, written.lstrip("/"))) if written else source
+            if target == ".." or target.startswith("../") or not (target in tracked or target in folders):
+                findings.append(Finding(f"{source}:{number}", f"link target '{written}' is not a tracked file", LINK_RULE, LINK_FIX))
+            elif fragment and target.endswith(".md") and target in tracked:
+                if target not in anchors:
+                    anchors[target] = heading_anchors(Path(target).read_text(errors="replace"))
+                if unquote(fragment).lower() not in anchors[target]:
+                    findings.append(Finding(f"{source}:{number}", f"link anchor '#{fragment}' matches no heading in {target}", LINK_RULE, LINK_FIX))
+    return findings
+
+
 def warn(findings: list[Finding]) -> int:
     """Report findings without failing: the warn period before a check blocks."""
     for finding in findings:
@@ -1394,7 +1489,9 @@ def main() -> int:
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
     checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references"])
+    parser.add_argument(
+        "check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references", "markdown-links"]
+    )
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
@@ -1427,6 +1524,7 @@ def main() -> int:
         "temporary-code": temporary_code,
         "front-matter": front_matter,
         "docs-references": docs_references,
+        "markdown-links": link_findings,
         "commit-msg": lambda: commit_message(args.paths[0]),
         "commit-range": lambda: commit_range(args.paths[0], args.paths[1]),
     }
