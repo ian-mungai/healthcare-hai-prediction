@@ -28,6 +28,7 @@ from scripts.lakehouse import gold_maintenance as maintenance
 from scripts.lakehouse import gold_publish as publish
 from scripts.lakehouse.gold_publish import Context, Faults, FolderStore, InjectedFault, Plan
 from scripts.lakehouse.gold_publish_record import PublishError
+from scripts.lakehouse.publish_plan import plan_state
 from scripts.lakehouse.session import CATALOG, spark_session
 
 REPORT_ROOT = Path("data/e2e/gold_publish")
@@ -79,8 +80,30 @@ def run_id(index: int) -> str:
     return f"20261014T03{index:02d}00Z-{index + 1:08x}"
 
 
+VARIANTS = {9: "add", 10: "drop", 11: "retype"}
+
+
+def reshaped(table: str, variant: str) -> tuple[list[str], list[tuple[Any, ...]], str]:
+    """The rows of data version 2 with another column list: ``add`` appends one column to fct_visit and dim_site, ``drop`` removes fct_visit.note and
+    ``retype`` turns fct_visit.flag into a string."""
+    names, rows, ddl = rows_for(table, 2)
+    if table == "fct_visit" and variant == "add":
+        return [*names, "visit_ordinal"], [(*row, int(row[0][1:])) for row in rows], ddl + ", visit_ordinal bigint"
+    if table == "dim_site" and variant == "add":
+        return [*names, "site_tier"], [(*row, f"tier-{row[0]}") for row in rows], ddl + ", site_tier string"
+    if table == "fct_visit" and variant == "drop":
+        return [name for name in names if name != "note"], [(*row[:5], row[6]) for row in rows], ddl.replace("note string, ", "")
+    if table == "fct_visit" and variant == "retype":
+        return names, [(*row[:4], str(row[4]), *row[5:]) for row in rows], ddl.replace("flag boolean", "flag string")
+    return names, rows, ddl
+
+
 def rows_for(table: str, version: int) -> tuple[list[str], list[tuple[Any, ...]], str]:
-    """Rows of a test table in a data version: version 2 changes, adds and removes rows against version 1, and so on."""
+    """Rows of a test table in a data version: version 2 changes, adds and removes rows against version 1, and so on.
+
+    Versions 9 to 11 hold the rows of version 2 with a changed column list (``VARIANTS``)."""
+    if version in VARIANTS:
+        return reshaped(table, VARIANTS[version])
     rows: list[tuple[Any, ...]]
     if table == "fct_visit":
         names = ["visit_key", "site_sk", "visit_date", "amount", "flag", "note", "noted_at"]
@@ -1174,6 +1197,64 @@ def readback(h: Harness) -> Check:
     return checks
 
 
+def schema_evolution(h: Harness) -> Check:
+    """A publish whose export has more columns than the committed table adds them before the fingerprint; a removed or retyped column is refused by name."""
+    committed_baseline(h)
+    checks = h.begin()
+    spark = h.restore("r1")
+
+    def columns(ctx: Context, name: str) -> list[str]:
+        return [field.name for field in spark.table(ctx.fq(name)).schema.fields]
+
+    ctx = h.context(7, 9, work="evolve")
+    want = expected_content(ctx)
+    before = {n: columns(ctx, n) for n in ctx.plan.tables}
+    first_set = reader_view(ctx)["set"]
+    planned = plan_state(ctx)["tables"]
+    checks["the dry-run plan names the new columns, reports the table as changed and reads no error"] = (
+        "error" not in planned["fct_visit"]
+        and planned["fct_visit"]["same"] is False
+        and planned["fct_visit"]["new_columns"] == ["visit_ordinal"]
+        and planned["bridge_pair"]["new_columns"] == []
+    )
+    checks["the dry-run plan left every table as it was"] = {n: columns(ctx, n) for n in ctx.plan.tables} == before
+    step(ctx, "candidates")
+    after = {n: columns(ctx, n) for n in ctx.plan.tables}
+    checks["candidates add the new columns of fct_visit and dim_site to the existing tables"] = after["fct_visit"] == [
+        *before["fct_visit"],
+        "visit_ordinal",
+    ] and after["dim_site"] == [*before["dim_site"], "site_tier"]
+    checks["a table whose export adds no column keeps its columns"] = after["bridge_pair"] == before["bridge_pair"]
+    checks["main of every table is still at the first set after the candidates"] = {n: int(m) for n, m in mains(ctx).items() if m is not None} == first_set
+    snapshots = {n: q(spark, SNAP_COUNT_Q, table=ctx.fq(n)).collect()[0][0] for n in ctx.plan.tables}
+    step(ctx, "candidates")
+    checks["a candidates rerun adds no column and no snapshot"] = {n: columns(ctx, n) for n in ctx.plan.tables} == after and {
+        n: q(spark, SNAP_COUNT_Q, table=ctx.fq(n)).collect()[0][0] for n in ctx.plan.tables
+    } == snapshots
+    run_steps(ctx, ("reconcile", "backup", "commit"))
+    view = reader_view(ctx)
+    checks["the committed set equals the export with the new columns (rows and fingerprint)"] = (
+        bool(view) and view["run_id"] == run_id(7) and view["content"] == want
+    )
+    first = publish.published_runs(ctx)[0]
+    old_columns = [[name] for name in before["fct_visit"]]
+    checks["the first set still reads at its snapshot with its old columns"] = (
+        content_at(ctx, "fct_visit", int(first["snapshot_set"]["fct_visit"]), old_columns) == h.r1_expected["fct_visit"]
+    )
+    for index, (variant, version, table, column) in enumerate((("a removed column", 10, "fct_visit", "note"), ("a retyped column", 11, "fct_visit", "flag"))):
+        spark = h.restore("r1")
+        refused = h.context(8 + index, version, work=f"evolve_{version}")
+        columns_before = columns(refused, table)
+        message = refusal_of(lambda ctx=refused: step(ctx, "candidates"))
+        checks[f"{variant} is refused and the message names the table and the column"] = table in message and column in message
+        checks[f"{variant} changes no column, creates no branch and moves no main"] = (
+            columns(refused, table) == columns_before
+            and all(refused.branch not in publish.table_refs(refused, n) for n in refused.plan.tables)
+            and {n: int(m) for n, m in mains(refused).items() if m is not None} == first_set
+        )
+    return checks
+
+
 CASES: dict[str, Case] = {
     "iceberg_check": iceberg_check,
     "happy_path": happy_path,
@@ -1190,6 +1271,7 @@ CASES: dict[str, Case] = {
     "maintenance_protection": maintenance_protection,
     "reader_discovery": reader_discovery,
     "contract_plan": contract_plan,
+    "schema_evolution": schema_evolution,
     "readback": readback,
 }
 STAMP = ""

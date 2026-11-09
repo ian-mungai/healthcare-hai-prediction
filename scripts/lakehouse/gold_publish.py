@@ -56,6 +56,7 @@ CREATE_TABLE = "CREATE TABLE IF NOT EXISTS {table} ({columns}) USING iceberg TBL
 REFS = "SELECT name, type, snapshot_id FROM {table}.refs"
 SNAPSHOTS = "SELECT snapshot_id, parent_id, operation, committed_at FROM {table}.snapshots"
 METADATA_LOG = "SELECT file FROM {table}.metadata_log_entries ORDER BY timestamp DESC LIMIT 1"
+ADD_COLUMNS = "ALTER TABLE {table} ADD COLUMNS ({columns})"
 CREATE_BRANCH = "ALTER TABLE {table} CREATE BRANCH {branch}"
 DROP_BRANCH = "ALTER TABLE {table} DROP BRANCH IF EXISTS {branch}"
 FAST_FORWARD = "CALL {catalog}.system.fast_forward('{namespace}.{name}', 'main', '{branch}')"
@@ -409,6 +410,31 @@ def same_columns(columns: Sequence[Sequence[str]], key: Sequence[str]) -> str:
     return " AND ".join(f"t.{quote(str(c[0]))} <=> s.{quote(str(c[0]))}" for c in columns if c[0] not in key)
 
 
+def column_changes(ctx: Context, name: str, view: str) -> tuple[list[str], dict[str, str]]:
+    """The names of the export's new columns and their types, for an existing table.
+
+    A column that the table has and the export lacks, or that has another type in the export, is refused by name: removing or retyping a committed column
+    needs its own reviewed change."""
+    wanted = {field.name: field.dataType.simpleString() for field in ctx.spark.table(view).schema.fields}
+    current = {field.name: field.dataType.simpleString() for field in ctx.spark.table(ctx.fq(name)).schema.fields}
+    removed = sorted(set(current) - set(wanted))
+    retyped = sorted(column for column in set(current) & set(wanted) if current[column] != wanted[column])
+    if removed or retyped:
+        details = [f"removes column {column}" for column in removed] + [
+            f"changes the type of column {column} from {current[column]} to {wanted[column]}" for column in retyped
+        ]
+        raise PublishError(f"{name}: the export {'; '.join(details)}; a committed column is never removed or retyped by a publish")
+    return [column for column in wanted if column not in current], wanted
+
+
+def evolve_columns(ctx: Context, name: str, view: str) -> list[str]:
+    """Add the export's new columns to the existing table before the branch is compared with the export, and return their names. A rerun finds none."""
+    added, wanted = column_changes(ctx, name, view)
+    if added:
+        ctx.sql(ADD_COLUMNS, table=ctx.fq(name), columns=", ".join(f"{quote(column)} {wanted[column]}" for column in added))
+    return added
+
+
 def merge_statement(ctx: Context, name: str, view: str, columns: Sequence[Sequence[str]], key: Sequence[str]) -> str:
     on = " AND ".join(f"t.{quote(column)} <=> s.{quote(column)}" for column in key)
     same = same_columns(columns, key)
@@ -426,6 +452,9 @@ def publish_candidates(ctx: Context) -> dict[str, Any]:
     ensure_namespace(ctx)
     if committed_run(ctx) is not None:
         raise PublishError("this run is already committed; its candidates are not rewritten")
+    for name, item in manifest["tables"].items():
+        if table_exists(ctx, name):
+            column_changes(ctx, name, parquet_view(ctx, export_dir, name, item))
     record_path = ctx.path("candidates.json")
     previous = read_record(record_path)[0] if record_path.is_file() else None
     if previous is not None and previous.get("export_manifest_sha256") != manifest_sha:
@@ -453,12 +482,14 @@ def publish_candidates(ctx: Context) -> dict[str, Any]:
         fq = ctx.fq(name)
         if not table_exists(ctx, name):
             ctx.sql(CREATE_TABLE, table=fq, columns=table_ddl(ctx, view))
+        else:
+            evolve_columns(ctx, name, view)
         if ctx.branch not in table_refs(ctx, name):
             ctx.sql(CREATE_BRANCH, table=fq, branch=ctx.branch)
         ctx.faults.hit(f"candidates:after_branch:{name}")
         columns = item["columns"]
         wanted = fingerprint(ctx, columns, view)
-        if fingerprint(ctx, columns, f"{fq} VERSION AS OF {table_refs(ctx, name)[ctx.branch]}") != wanted:
+        if fingerprint(ctx, columns, f"{fq}.branch_{ctx.branch}") != wanted:
             ctx.spark.sql(merge_statement(ctx, name, view, columns, item["merge_key"]))
         ctx.faults.hit(f"candidates:after_merge:{name}")
         head = table_refs(ctx, name)[ctx.branch]

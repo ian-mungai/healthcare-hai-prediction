@@ -37,11 +37,13 @@ def table_state(ctx: Context, name: str, item: dict[str, Any], view: str) -> dic
         return {"exists": False}
     table = ctx.fq(name)
     on = " AND ".join(f"t.{gold_publish.quote(column)} <=> s.{gold_publish.quote(column)}" for column in item["merge_key"])
-    same = gold_publish.fingerprint(ctx, item["columns"], table) == gold_publish.fingerprint(ctx, item["columns"], view)
+    new_columns, _ = gold_publish.column_changes(ctx, name, view)
+    same = not new_columns and gold_publish.fingerprint(ctx, item["columns"], table) == gold_publish.fingerprint(ctx, item["columns"], view)
     return {
         "exists": True,
         "rows_now": number(ctx, COUNT.format(source=table)),
         "same": same,
+        "new_columns": new_columns,
         "added": number(ctx, ADDED.format(view=view, table=table, on=on)),
         "removed": number(ctx, REMOVED.format(view=view, table=table, on=on)),
     }
