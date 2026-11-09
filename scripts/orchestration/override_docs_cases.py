@@ -21,6 +21,7 @@ VALUES = {
     "RUN_ID": RUN,
     "CODE_RUN_ID": RUN,
     "INPUT_RUN_ID": "20261030T090000Z-0badcafe",
+    "FEATURE_SET": "base",
     "CODE_SHA256": "ab" * 32,
     "POLARIS_URI": "http://10.0.0.5:8181/api/catalog",
     "MLFLOW_TRACKING_URI": "http://10.0.0.5:5100",

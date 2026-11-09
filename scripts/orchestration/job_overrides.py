@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from scripts.features import feature_sets
+
 ROOT = Path(__file__).resolve().parents[2]
 TABLE = ROOT / "config/orchestration/ecs_broker_jobs.json"
 DRY_RUN_VARIABLE = "LAYER_DRY_RUN"
@@ -33,6 +35,9 @@ def build(job: str, values: dict[str, str], dry_run: bool = False, table: Path =
         raise OverrideError(f"{job} is not a job of the broker table: {sorted(jobs)}")
     if dry_run and job not in LAYERS:
         raise OverrideError("only the silver, gold and features jobs have a dry run")
+    chosen = values.get(feature_sets.VARIABLE)
+    if chosen and chosen != feature_sets.SINGLE_PATH and chosen not in feature_sets.SETS:
+        raise OverrideError(f"{feature_sets.VARIABLE} {chosen!r} is not one of {feature_sets.SINGLE_PATH}, {', '.join(feature_sets.SETS)}")
     overrides = []
     for container, names in jobs[job]["containers"].items():
         environment = []
@@ -54,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--code-sha256", default="", help="CODE_SHA256: the digest in code.sha256 beside the staged archive")
     parser.add_argument("--polaris-uri", default="", help="POLARIS_URI: http://<host private address>:8181/api/catalog")
     parser.add_argument("--input-run", default="", help="INPUT_RUN_ID: the committed silver run for gold, the committed gold run for features")
+    parser.add_argument("--feature-set", default="", help="FEATURE_SET: all (the single path), base or m1 to m6 for the features job")
     parser.add_argument("--mlflow-uri", default="", help="MLFLOW_TRACKING_URI: http://<host private address>:5100")
     parser.add_argument("--training-parameters", default="", help="TRAINING_PARAMETERS: the parameters of the run as one JSON string")
     parser.add_argument("--serving-request", default="", help="SERVING_REQUEST: the staged serving_request.json of the run as one JSON string")
@@ -65,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         "CODE_SHA256": args.code_sha256,
         "POLARIS_URI": args.polaris_uri,
         "INPUT_RUN_ID": args.input_run,
+        "FEATURE_SET": args.feature_set,
         "MLFLOW_TRACKING_URI": args.mlflow_uri,
         "TRAINING_PARAMETERS": args.training_parameters,
         "SERVING_REQUEST": args.serving_request,

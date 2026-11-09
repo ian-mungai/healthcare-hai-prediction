@@ -35,8 +35,8 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, read_record, safe_name
-from scripts.features import feature_schema
-from scripts.features.features_input import INPUT_NAME, PIN_NAME, check_gold_pin
+from scripts.features import feature_schema, feature_sets
+from scripts.features.features_input import BASE_INPUT_NAME, BASE_PIN_NAME, INPUT_NAME, PIN_NAME, base_tables, check_base_pin, check_gold_pin
 from scripts.lakehouse import duckdb_bounds
 from scripts.lakehouse import feature_columns as columns
 from scripts.lakehouse.gold_publish import load_plan
@@ -72,6 +72,11 @@ INPUTS_SQL = (
     "? as gold_snapshot_set_sha256, ? as source_sha256, ? as feature_schema_sha256, ? as hai_outcome_controls_sha256"
 )
 RECEIPT_SQL = "create table main.feature_build_receipt (node varchar, resource_type varchar, status varchar)"
+SET_INPUTS_TABLE = "feature_set_inputs"
+SET_INPUTS_SQL = (
+    "create table main.feature_set_inputs as select 'current' as build_key, ? as features_run_id, ? as feature_set, ? as base_run_id, ? as base_snapshot_set, "
+    "? as base_snapshot_set_sha256, ? as source_sha256, ? as set_schema_sha256"
+)
 
 
 class BuildBudget:
@@ -129,15 +134,16 @@ def published_tables(root: Path) -> list[str]:
     return sorted(document["publish"]["tables"])
 
 
-def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connection: Any, seconds: int) -> list[str]:
-    """Materialize the exported gold snapshot bytes into the run's database within ``seconds``; returns the table names."""
-    manifest, digest = read_record(folder / INPUT_NAME, "manifest.json")
+def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connection: Any, seconds: int, input_name: str = INPUT_NAME) -> list[str]:
+    """Materialize the exported snapshot bytes (gold, or the base run with ``input_name``) into the run's database within ``seconds``; return the tables."""
+    label = "base" if input_name == BASE_INPUT_NAME else "gold"
+    manifest, digest = read_record(folder / input_name, "manifest.json")
     if digest != expected or manifest.get("pins_sha256") != pin_sha or manifest.get("run_id") != run_id:
-        raise PipelineError("the gold extract manifest differs from its accepted input")
+        raise PipelineError(f"the {label} extract manifest differs from its accepted input")
     tables = manifest.get("snapshot_set")
     files = manifest.get("files")
     if not isinstance(tables, dict) or not isinstance(files, dict) or not files:
-        raise PipelineError("the gold extract manifest is incomplete")
+        raise PipelineError(f"the {label} extract manifest is incomplete")
     with tempfile.TemporaryDirectory(prefix="gold_import_", dir=folder) as temporary:
         private = Path(temporary)
         copied: dict[str, list[str]] = {safe_name(name): [] for name in tables}
@@ -145,10 +151,10 @@ def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connecti
         for name, sha in sorted(files.items()):
             parts = Path(name).parts
             if len(parts) != 2 or parts[0] not in copied or not parts[1].endswith(".parquet") or ".." in parts:
-                raise PipelineError("the gold extract names an unexpected file")
-            source = folder / INPUT_NAME / name
+                raise PipelineError(f"the {label} extract names an unexpected file")
+            source = folder / input_name / name
             if source.parent.is_symlink():
-                raise PipelineError("the gold extract table directory is a symlink")
+                raise PipelineError(f"the {label} extract table directory is a symlink")
             descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
             destination = private / f"{sum(len(paths) for paths in copied.values())}.parquet"
             digest_bytes = hashlib.sha256()
@@ -156,13 +162,13 @@ def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connecti
                 with destination.open("xb") as writer, os.fdopen(descriptor, "rb", closefd=False) as reader:
                     while block := reader.read(1 << 20):
                         if time.monotonic() >= deadline:
-                            raise PipelineError(f"gold snapshot import exceeded {seconds} seconds")
+                            raise PipelineError(f"{label} snapshot import exceeded {seconds} seconds")
                         digest_bytes.update(block)
                         writer.write(block)
             finally:
                 os.close(descriptor)
             if digest_bytes.hexdigest() != sha:
-                raise PipelineError("a gold snapshot export changed before import")
+                raise PipelineError(f"a {label} snapshot export changed before import")
             copied[parts[0]].append(str(destination))
         for table, members in copied.items():
             if not members:
@@ -264,8 +270,97 @@ def domain_counts(stage: Path) -> list[dict[str, Any]]:
     return [dict(zip(DOMAIN_COUNT_KEYS, row, strict=True)) for row in rows]
 
 
+def check_set_results(work: Path, table: str) -> tuple[str, list[tuple[str, str, str]]]:
+    """Require every node of a model set build to end ``success`` or ``pass`` and the set's model to be among them; returns the invocation ID and the rows."""
+    results, _ = read_record(work, "target/run_results.json")
+    rows = [(str(item["unique_id"]), str(item["unique_id"]).split(".")[0], str(item["status"])) for item in results.get("results", [])]
+    if not rows or any(status not in ("success", "pass") for _, _, status in rows):
+        raise PipelineError("the model set build results contain an incomplete or nonpassing node")
+    if table not in {node.split(".")[-1] for node, kind, _ in rows if kind == "model"}:
+        raise PipelineError(f"the model set build did not build {table}")
+    return str(results["metadata"]["invocation_id"]), rows
+
+
+def materialize_set(source: Path, destination: Path, table: str, domain: list[str], inputs: list[Any], rows: list[tuple[str, str, str]]) -> None:
+    """Write ``destination`` with the set's table, the domain matrices it was built from (validation only), the build inputs and the receipt."""
+    duckdb: Any = importlib.import_module("duckdb")
+    destination.unlink(missing_ok=True)
+    connection = duckdb_bounds.connect(duckdb, destination)
+    try:
+        catalog = safe_name(source.stem)
+        connection.execute(ATTACH_SQL.format(path=source, catalog=catalog))
+        for name in [table, *domain]:
+            connection.execute(MATERIALIZE_SQL.format(table=safe_name(name), catalog=catalog))
+        connection.execute(SET_INPUTS_SQL, inputs)
+        connection.execute(RECEIPT_SQL)
+        connection.executemany("insert into main.feature_build_receipt values (?, ?, ?)", rows)
+        connection.execute(f"detach {catalog}")
+    finally:
+        connection.close()
+
+
+def build_set(args: argparse.Namespace) -> dict[str, Any]:
+    """Build one model set from the domain matrices of its pinned base run: the matrices are imported as tables and dbt builds only ``feature_matrix_<set>``."""
+    duckdb: Any = importlib.import_module("duckdb")
+    folder, root = args.folder, args.project.parent
+    schema = feature_schema.load_schema(root)
+    entry = schema["model_sets"][args.feature_set]
+    table, domain = entry["table"], base_tables(schema)
+    pin, pin_sha = read_record(folder, BASE_PIN_NAME)
+    check_base_pin(pin, args.run, args.mode, set(domain))
+    if pin_sha != args.input_sha256:
+        raise PipelineError("the base pin differs from the accepted input digest")
+    budget = BuildBudget.from_environment(os.environ)
+    work = folder / "features_work"
+    if work.is_symlink():
+        raise PipelineError("the build work folder is a symlink")
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir()
+    full = work / "model_set.duckdb"
+    connection = duckdb_bounds.connect(duckdb, full)
+    try:
+        if os.environ.get("DUCKDB_MEMORY_LIMIT"):
+            connection.execute("SET memory_limit = ?", [os.environ["DUCKDB_MEMORY_LIMIT"]])
+        if os.environ.get("JOB_THREADS"):
+            connection.execute("SET threads = ?", [int(os.environ["JOB_THREADS"])])
+        imported = import_gold(folder, args.extract_sha256, args.input_sha256, args.run, connection, budget.seconds("copy"), BASE_INPUT_NAME)
+    finally:
+        connection.close()
+    if sorted(imported) != domain:
+        raise PipelineError("the base extract does not hold exactly the domain matrices")
+    project = work / "dbt"
+    columns.copy_project(root, project, contract=True)
+    profile = write_profile(work / "profiles", full, locked=True)
+    run_dbt(["build", "--select", table, *columns.dbt_arguments(project, profile, work / "build")], root, f"build {table}", budget.seconds("build"))
+    invocation, rows = check_set_results(work / "build", table)
+    set_hash = feature_schema.set_schema_sha256(args.feature_set, root, schema)
+    snapshot_set = json.dumps(pin["snapshot_set"], sort_keys=True)
+    inputs = [args.run, args.feature_set, pin["source_run_id"], snapshot_set, hashlib.sha256(snapshot_set.encode()).hexdigest(), args.source_sha256, set_hash]
+    materialize_set(full, folder / "staging.partial.duckdb", table, domain, inputs, rows)
+    os.replace(folder / "staging.partial.duckdb", folder / "staging.duckdb")
+    receipt = {
+        "schema": 1,
+        "run_id": args.run,
+        "layer": "features",
+        "mode": args.mode,
+        "feature_set": args.feature_set,
+        "base_run": pin["source_run_id"],
+        "source_sha256": args.source_sha256,
+        "input_sha256": args.input_sha256,
+        "extract_sha256": args.extract_sha256,
+        "feature_schema_sha256": feature_schema.schema_sha256(root),
+        "set_schema_sha256": set_hash,
+        "invocation_id": invocation,
+        "nodes": len(rows),
+    }
+    (folder / "build_receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    return receipt
+
+
 def build(args: argparse.Namespace) -> dict[str, Any]:
     """Run the build and return the receipt."""
+    if feature_sets.checked(args.feature_set) in feature_sets.MODEL_SETS:
+        return build_set(args)
     duckdb: Any = importlib.import_module("duckdb")
     folder, root = args.folder, args.project.parent
     gold_pin, pin_sha = read_record(folder, PIN_NAME)
@@ -342,6 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--source-sha256", required=True)
     parser.add_argument("--input-sha256", required=True)
     parser.add_argument("--extract-sha256", required=True)
+    parser.add_argument("--feature-set", default=os.environ.get(feature_sets.VARIABLE, ""), help="the set this job builds (empty: the single path)")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     try:
         if args.folder.joinpath("staging.duckdb").is_symlink():

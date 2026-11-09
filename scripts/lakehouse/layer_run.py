@@ -8,6 +8,10 @@ Each ECS container of a job runs one phase on the shared ``/workspace`` (the con
 - gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``maintain``
 - features: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``feast``
 
+A features job takes ``FEATURE_SET`` (``--feature-set``): empty is the single path that builds every table, ``base`` the same tables as the base of the model
+sets, ``m1`` to ``m6`` one model table each. A model set pins the newest committed base run (``INPUT_RUN_ID`` names it; an older base run is refused) and
+builds ``feature_matrix_<set>`` from the domain matrices of that run. Every phase after the pin checks that it names the set the pin recorded.
+
 The first container of the task (``fetch``) has already downloaded and unpacked ``code.tar.gz``. ``pin`` checks its SHA-256 again, records the code
 identity and pins the input layer: bronze for silver, the silver run ``--input-run`` for gold, the gold run for features (only the newest committed gold
 run: the chain reads what its gold job just published, ``features_input --newest-only``). Every later digest comes
@@ -61,6 +65,7 @@ from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
 from scripts import resource_peaks
+from scripts.features import feature_sets
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, task_capacity, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
@@ -89,6 +94,7 @@ DBT_ARTIFACT_PREFIX = "metadata/dbt/"
 # The code copy, the bulk input extracts, the build file the sealed copy repeats and the working databases of the features build, which hold a copy of gold.
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb", "features_work")
 FEAST_RECORDS = ("feast_apply.json", "feast_materialize.json")
+HOLD_RECORD = "online_hold.json"  # a model set whose online load is held leaves it in the run folder; the release reads it from the run prefix
 DRY_ENV = "LAYER_DRY_RUN"
 DRY_MARKER = "dry_run"  # in the run folder: once a task has a dry phase, every later phase of it is dry
 PLAN_FILE = "publish/dry_run_plan.json"
@@ -119,6 +125,7 @@ class Job:
     local: Path | None = None
     dry_run: bool = False
     input_run: str = ""
+    feature_set: str = ""  # features only: empty is the single path, else base or a model set
     code_run: str = ""  # the run whose staged code the task fetched: a chain layer fetches the bronze run's code, not code staged under its own run ID
 
     @property
@@ -132,6 +139,24 @@ class Job:
     @property
     def publish_folder(self) -> Path:
         return self.folder / "publish"
+
+    @property
+    def model_set(self) -> bool:
+        return self.layer == "features" and self.feature_set in feature_sets.MODEL_SETS
+
+    @property
+    def set_flags(self) -> list[str]:
+        """The set argument of the modules that scope their work to a set."""
+        return ["--feature-set", self.feature_set] if self.feature_set else []
+
+    @property
+    def pin_name(self) -> str:
+        """The pin record of the layer's input: a model set pins a base run, which sits in the features layer."""
+        return "base_pins.json" if self.model_set else PIN_FILE[self.layer]
+
+    @property
+    def input_name(self) -> str:
+        return "base_input" if self.model_set else INPUT_FOLDER[self.layer]
 
     @property
     def local_flags(self) -> list[str]:
@@ -277,8 +302,8 @@ def source_digest(job: Job) -> str:
 
 def input_digests(job: Job) -> tuple[str, str | None]:
     """The digest of the layer's input pin and of its input extract (silver has none)."""
-    pin = digest_file(job.folder / PIN_FILE[job.layer])
-    return (pin, None) if job.layer == "silver" else (pin, digest_file(job.folder / INPUT_FOLDER[job.layer] / "manifest.json"))
+    pin = digest_file(job.folder / job.pin_name)
+    return (pin, None) if job.layer == "silver" else (pin, digest_file(job.folder / job.input_name / "manifest.json"))
 
 
 def staged_objects(client: Any, bucket: str, run: str) -> dict[str, dict[str, Any]]:
@@ -291,7 +316,7 @@ def staged_objects(client: Any, bucket: str, run: str) -> dict[str, dict[str, An
 
 
 def input_prefix(job: Job) -> str:
-    return f"lakehouse/{INPUT_LAYER[job.layer]}/"
+    return f"lakehouse/{'features' if job.model_set else INPUT_LAYER[job.layer]}/"
 
 
 def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
@@ -351,6 +376,11 @@ def check_pin_tables(job: Job) -> None:
     elif job.layer == "gold":
         pinned = set(read_record(job.folder, PIN_FILE["gold"])[0].get("snapshot_set", {}))
         wanted, source = set(publish_contract(replace(job, layer="silver")).tables), "the silver publish contract"
+    elif job.model_set:
+        from scripts.features import features_input
+
+        pinned = set(read_record(job.folder, job.pin_name)[0].get("snapshot_set", {}))
+        wanted, source = set(features_input.base_tables()), "the domain matrices of the features contract"
     else:
         pinned = set(read_record(job.folder, PIN_FILE["features"])[0].get("snapshot_set", {}))
         wanted, source = set(publish_contract(replace(job, layer="gold")).tables), "the gold publish contract"
@@ -402,6 +432,8 @@ def bundle(job: Job, archive: Path, code_sha256: str, evidence: dict[str, Any] |
         "git_revision": revision,
     }
     record["source_sha256"] = provenance.tree_digest(snapshot)
+    if job.feature_set:
+        record["feature_set"] = job.feature_set
     record |= evidence or {}
     (job.folder / "layer_run.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
@@ -419,6 +451,13 @@ def check_code_run(job: Job) -> None:
         raise StepError(f"CODE_RUN_ID {job.code_run!r} differs from the code run {recorded!r} that the pin recorded")
 
 
+def check_feature_set(job: Job) -> None:
+    """Every phase after the pin must name the feature set that the pin recorded: a container that dropped the variable or got another one is refused."""
+    recorded = identity(job).get("feature_set", "")
+    if recorded != job.feature_set:
+        raise StepError(f"FEATURE_SET {job.feature_set!r} differs from the feature set {recorded!r} that the pin recorded")
+
+
 def check_archive(archive: Path, code_sha256: str) -> None:
     """Refuse an archive the pin cannot use before the run ID is claimed, so a bad artifact does not consume the approved ID."""
     try:
@@ -431,7 +470,7 @@ def pin(job: Job) -> None:
     if job.layer == "silver":
         run_module(job, "scripts.lakehouse.pins", ["pin", "--run", job.run])
         return
-    record = job.folder / PIN_FILE[job.layer]
+    record = job.folder / job.pin_name
     common = ["--run", job.run, "--mode", job.mode, "--source-run", job.input_run]
     if job.layer == "gold":
         run_module(job, "scripts.lakehouse.silver_publish", ["pin", *common, "--record", record, *job.local_flags])
@@ -448,14 +487,16 @@ def pin(job: Job) -> None:
         ]
         run_module(job, "scripts.lakehouse.silver_input", arguments)
         return
-    run_module(job, "scripts.features.features_input", ["pin", *common, "--newest-only", "--folder", job.folder, "--record", record, *job.local_flags])
+    run_module(
+        job, "scripts.features.features_input", ["pin", *common, "--newest-only", "--folder", job.folder, "--record", record, *job.set_flags, *job.local_flags]
+    )
     run_module(
         job,
         "scripts.features.features_input",
-        ["read", "--run", job.run, "--mode", job.mode, "--expected-pin-sha256", digest_file(record), "--folder", job.folder, *job.local_flags],
+        ["read", "--run", job.run, "--mode", job.mode, "--expected-pin-sha256", digest_file(record), "--folder", job.folder, *job.set_flags, *job.local_flags],
     )
-    if read_record(job.folder, PIN_FILE["features"])[0].get("source_run_id") != job.input_run:
-        raise StepError("the features pin names another gold run than INPUT_RUN_ID")
+    if read_record(job.folder, job.pin_name)[0].get("source_run_id") != job.input_run:
+        raise StepError(f"the features pin names another {'base' if job.model_set else 'gold'} run than INPUT_RUN_ID")
 
 
 def verify(job: Job) -> None:
@@ -500,7 +541,7 @@ def build(job: Job) -> None:
     arguments: list[str | Path] = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", project]
     arguments += ["--source-sha256", source, "--input-sha256", input_sha, *(["--extract-sha256", extract] if extract else [])]
     if job.layer == "features":
-        run_module(job, "scripts.features.features_build", arguments, environment | phase_deadline_environment(job))
+        run_module(job, "scripts.features.features_build", [*arguments, *job.set_flags], environment | phase_deadline_environment(job))
     else:
         run_module(job, "scripts.lakehouse.pipeline_build", ["--layer", job.layer, *arguments], environment)
 
@@ -521,7 +562,7 @@ def validate(job: Job) -> None:
             output / "result.json",
         ]
         if kind == "features":
-            run_module(job, "scripts.features.feature_validation", [*arguments, *FEATURE_FILES])
+            run_module(job, "scripts.features.feature_validation", [*arguments, *FEATURE_FILES, *job.set_flags])
         elif kind == "cross":
             run_module(job, "scripts.lakehouse.gold_reconcile", [*arguments, "--baselines", Path(SUITES) / baselines])
         else:
@@ -572,7 +613,7 @@ def publish_contract(job: Job) -> Any:
 
     if job.layer == "silver":
         return silver_publish.publish_plan(job.mode)
-    return gold_publish.load_plan() if job.layer == "gold" else features_publish.publish_plan(job.mode)
+    return gold_publish.load_plan() if job.layer == "gold" else features_publish.publish_plan(job.mode, feature_set=job.feature_set)
 
 
 def accepted_result(job: Job, sha: str) -> str:
@@ -592,7 +633,7 @@ def export(job: Job) -> None:
     elif job.layer == "gold":
         run_module(job, "scripts.lakehouse.gold_export", arguments)
     else:
-        run_module(job, "scripts.features.features_export", arguments)
+        run_module(job, "scripts.features.features_export", [*arguments, *job.set_flags])
     accepted_result(job, sha)
     manifest = read_record(job.publish_folder, "export/manifest.json")[0]
     if set(manifest.get("tables", {})) != set(publish_contract(job).tables):
@@ -656,7 +697,7 @@ def run_publish(job: Job, arguments: Sequence[str | Path]) -> None:
     elif job.layer == "gold":
         run_module(job, "scripts.lakehouse.gold_publish", arguments)
     else:
-        run_module(job, "scripts.features.features_publish", arguments)
+        run_module(job, "scripts.features.features_publish", [*arguments, *job.set_flags])
 
 
 def publish(job: Job, bucket: str, client: Any = None) -> None:
@@ -678,7 +719,10 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
         if step == "commit":
             accept_commit(job)
     if job.layer in RECORD_FILE:
-        run_publish(job, ["record", *common, "--publish-dir", job.publish_folder, "--record", job.folder / RECORD_FILE[job.layer], *job.local_flags])
+        pin_flags = ["--base-pin", job.folder / job.pin_name] if job.model_set else []
+        run_publish(
+            job, ["record", *common, "--publish-dir", job.publish_folder, "--record", job.folder / RECORD_FILE[job.layer], *pin_flags, *job.local_flags]
+        )
     sys.stdout.write(f"publish acceptance passed for {job.layer} run {job.run}\n")
 
 
@@ -736,8 +780,8 @@ def feast(job: Job, bucket: str, client: Any) -> None:
     """Apply and materialize the committed publication, then add the records of the two steps to the run's upload, which ran before this phase."""
     accepted_publish(job)
     for step in ("apply", "materialize"):
-        run_module(job, "scripts.features.feast_job", [step, "--run", job.run, "--mode", job.mode])
-    for name in FEAST_RECORDS:
+        run_module(job, "scripts.features.feast_job", [step, "--run", job.run, "--mode", job.mode, *job.set_flags])
+    for name in [*FEAST_RECORDS, *([HOLD_RECORD] if (job.folder / HOLD_RECORD).is_file() else [])]:
         client.upload_file(str(job.folder / name), bucket, f"{UPLOAD_PREFIX}/{job.layer}/{job.run}/{name}")
 
 
@@ -924,6 +968,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--layer", required=True, choices=sorted(PHASES))
     parser.add_argument("--run", required=True)
     parser.add_argument("--input-run", default=os.environ.get("INPUT_RUN_ID", ""), help="gold and features: the committed silver or gold run to pin")
+    parser.add_argument(
+        "--feature-set",
+        default=os.environ.get(feature_sets.VARIABLE, ""),
+        help="features only: empty is the single path, base or m1 to m6 is a set (FEATURE_SET)",
+    )
     parser.add_argument("--mode", default="real", choices=("real", "publish_fixture"))
     parser.add_argument("--work", type=Path, default=Path("/workspace"))
     parser.add_argument("--local-warehouse", type=Path)
@@ -945,7 +994,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"{args.phase} is not a phase of {args.layer}")
     if not RUN_ID.fullmatch(args.run):
         parser.error("the run ID must look like 20261030T010203Z-0a1b2c3d")
-    job = Job(args.layer, args.run, args.mode, args.work / "code", args.local_warehouse, input_run=args.input_run, code_run=args.code_run_id)
+    try:
+        chosen = feature_sets.checked(args.feature_set)
+    except PublishError as error:
+        parser.error(str(error))
+    if chosen and args.layer != "features":
+        parser.error(f"{feature_sets.VARIABLE} applies to the features layer only")
+    job = Job(
+        args.layer, args.run, args.mode, args.work / "code", args.local_warehouse, input_run=args.input_run, feature_set=chosen, code_run=args.code_run_id
+    )
     dry = args.dry_run or os.environ.get(DRY_ENV, "") in ("1", "true", "yes")
     try:
         if args.phase == "pin":  # a new pin starts a new task
@@ -964,6 +1021,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         with task_deadline(job):
             if args.phase != "pin":
                 check_code_run(job)
+                check_feature_set(job)
             dispatch(job, args.phase, args)
     except (
         StepError,

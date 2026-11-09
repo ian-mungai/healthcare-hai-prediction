@@ -88,11 +88,14 @@ class Report:
         return [f"{step['case']}: {step['name']}" for step in self.steps if step["verdict"] == "fail"]
 
 
+StepRefusal = importlib.import_module("scripts.lakehouse.layer_run").StepError
+
+
 def refuses(action: Callable[[], Any], *words: str) -> bool:
     """True when the action raises a refusal whose text holds every word (a refusal for the right reason)."""
     try:
         action()
-    except (PublishError, schema_module.SchemaError, features_input.PipelineError) as error:
+    except (PublishError, schema_module.SchemaError, features_input.PipelineError, StepRefusal) as error:
         return all(word in str(error) for word in words)
     except Exception:
         return False
@@ -249,6 +252,115 @@ def pin_cases(report: Report) -> None:
             for label, document in bad_records.items()
         }
         report.case("E02", "A1", "a pin record of another shape, run, namespace or table set is refused", all(refused.values()), refused=refused)
+
+
+BASE_RUN, BASE_RUN_2, MODEL_RUN = "20261109T010000Z-0000b001", "20261109T030000Z-0000b002", "20261109T040000Z-0000c001"
+
+
+def base_pin_cases(report: Report) -> None:
+    """B01 to B10: a model set pins the domain matrices of the newest committed base run once, refuses every other base run, and records the base run."""
+    feature_sets: Any = importlib.import_module("scripts.features.feature_sets")
+    plan = features_publish.publish_plan("publish_fixture")
+    schema = schema_module.load_schema()
+    names, domain = sorted(plan.tables), feature_sets.domain_tables(schema)
+    every = {1000 + index for index in range(len(names) + 10)}
+    model_plan = features_publish.publish_plan("publish_fixture", feature_set="m1")
+
+    def context(spark: FakeSpark, run: str = RUN) -> gold_publish.Context:
+        return gold_publish.Context(spark, plan, run, "publish_fixture", Path("/nonexistent"), "", needs_sealed=False)
+
+    def base(run: str) -> tuple[Any, ...]:
+        return gold_run_row(plan, run=run)
+
+    def model(run: str) -> tuple[Any, ...]:
+        return gold_run_row(model_plan, run=run)
+
+    pin_base = getattr(features_input, "pin_base", None)
+    with tempfile.TemporaryDirectory(prefix="base_pin_cases_") as folder:
+        path = Path(folder) / "base_pins.json"
+        rows = [base(BASE_RUN), base(BASE_RUN_2), model(MODEL_RUN)]
+        record = pin_base(context(FakeSpark(rows, every)), path, BASE_RUN_2) if pin_base else {}
+        report.case(
+            "B01",
+            "FS3",
+            "the pin of the newest base run names exactly the six domain matrices and not the model row that came after it",
+            record.get("source_run_id") == BASE_RUN_2 and sorted(record.get("snapshot_set", {})) == domain,
+        )
+        later = FakeSpark([*rows, base("20261109T050000Z-0000b003")], every)
+        report.case(
+            "B02",
+            "FS3",
+            "a retry after a newer base run was committed returns the pin unchanged",
+            bool(pin_base) and pin_base(context(later), path, BASE_RUN_2) == record,
+        )
+
+        def pin_with(spark: FakeSpark, source: str | None) -> Any:
+            return features_input.pin_base(context(spark), Path(folder) / f"{len(list(Path(folder).iterdir()))}.json", source)
+
+        report.case(
+            "B03",
+            "FS3",
+            "an older base run is refused and the message names both runs",
+            bool(pin_base) and refuses(lambda: pin_with(FakeSpark(rows, every), BASE_RUN), BASE_RUN, BASE_RUN_2, "not the newest committed base run"),
+        )
+        report.case(
+            "B04",
+            "FS3",
+            "a model set run is no base run",
+            bool(pin_base) and refuses(lambda: pin_with(FakeSpark(rows, every), MODEL_RUN), MODEL_RUN, "not the newest committed base run"),
+        )
+        report.case(
+            "B05", "FS3", "no named base run is refused", bool(pin_base) and refuses(lambda: pin_with(FakeSpark(rows, every), None), "names no base run")
+        )
+        report.case(
+            "B06",
+            "FS3",
+            "no committed base run is refused",
+            bool(pin_base) and refuses(lambda: pin_with(FakeSpark([model(MODEL_RUN)], every), BASE_RUN), "no committed base run"),
+        )
+        report.case(
+            "B07",
+            "FS3",
+            "a snapshot of a domain matrix that the catalog does not hold is refused",
+            bool(pin_base) and refuses(lambda: pin_with(FakeSpark(rows, every - {1000 + names.index(domain[0])}), BASE_RUN_2), "base", "absent"),
+        )
+        check = getattr(features_input, "check_base_pin", None)
+        bad = {
+            "another run": {**record, "run_id": "20261109T060000Z-00000009"},
+            "the gold namespace": {**record, "namespace": "gold_e2e"},
+            "an extra key": {**record, "extra": 1},
+            "a missing table": {**record, "snapshot_set": dict(list(record.get("snapshot_set", {}).items())[:-1])},
+        }
+        refused = {label: bool(check) and refuses(partial(check, document, RUN, "publish_fixture", set(domain)), "base pin") for label, document in bad.items()}
+        report.case("B08", "FS3", "a base pin record of another shape, run, namespace or table set is refused", all(refused.values()), refused=refused)
+        committed = {"feature_matrix_m1": 1000}
+        publish_dir = Path(folder) / "publish"
+        publish_dir.mkdir()
+        (publish_dir / "commit.json").write_text(json.dumps({"schema": 1, "run_id": RUN, "state": "committed", "snapshot_set": committed}))
+        spark = FakeSpark([gold_run_row(model_plan, run=RUN, ids=committed)], every)
+        ctx = gold_publish.Context(spark, model_plan, RUN, "publish_fixture", publish_dir, "", needs_sealed=False)
+        try:
+            recorded = features_publish.record_committed(ctx, Path(folder) / "features_snapshot.json", feature_set="m1", base_run=BASE_RUN_2)
+        except TypeError as error:
+            recorded = {"error": str(error)}
+        report.case(
+            "B09",
+            "FS3",
+            "a model set record names its set and the base run it read",
+            recorded.get("feature_set") == "m1" and recorded.get("base_run") == BASE_RUN_2,
+            keys=sorted(recorded),
+        )
+        (publish_dir / "commit.json").write_text(json.dumps({"schema": 1, "run_id": RUN, "state": "committed", "snapshot_set": committed}))
+        plain = FakeSpark([gold_run_row(model_plan, run=RUN, ids=committed)], every)
+        single = features_publish.record_committed(
+            gold_publish.Context(plain, model_plan, RUN, "publish_fixture", publish_dir, "", needs_sealed=False), Path(folder) / "single.json"
+        )
+        report.case(
+            "B10",
+            "FS3",
+            "the record of the single path keeps its five keys and gains none",
+            sorted(single) == ["mode", "namespace", "run_id", "schema", "snapshot_set"],
+        )
 
 
 def plan_cases(report: Report) -> None:
@@ -1442,6 +1554,169 @@ def refs_name(reference: str) -> str:
     return reference.split(":", 1)[1]
 
 
+class RegistryAbsent(RuntimeError):
+    """What MLflow raises for a registered model that does not exist: the code the champion reader recognises."""
+
+    error_code = "RESOURCE_DOES_NOT_EXIST"
+
+
+class ChampionStore:
+    """The registry call the champion reader makes, answered from a table of registered model name to version tags (a name without an entry has no alias)."""
+
+    def __init__(self, tags: dict[str, dict[str, str]]) -> None:
+        self.tags = tags
+
+    def get_model_version_by_alias(self, name: str, alias: str) -> Any:
+        if name not in self.tags:
+            raise RegistryAbsent(f"Registered Model with name={name} not found")
+        return type("Version", (), {"tags": self.tags[name], "version": "1", "run_id": "run"})()
+
+
+def feature_set_cases(report: Report) -> None:
+    """F01 to F10: the set ids, the tables each set publishes, the newest base run and the online decision (nothing, offline, load or hold)."""
+    feature_sets: Any = importlib.import_module("scripts.features.feature_sets")
+    schema = schema_module.load_schema()
+    plan = features_publish.publish_plan("publish_fixture")
+    legacy = sorted(plan.tables)
+    accepted = [feature_sets.checked(value) for value in ("", None, "all", "base", "m1", "m6")]
+    report.case("F01", "FS2", "an empty set and all are the single path and base, m1 to m6 are accepted", accepted == ["", "", "", "base", "m1", "m6"])
+    report.case(
+        "F02",
+        "FS2",
+        "any other set value is refused by value",
+        all(refuses(partial(feature_sets.checked, value), repr(value)) for value in ("m7", "M1", "ALL", " m1", "base,m1")),
+    )
+    domain = feature_sets.domain_tables(schema)
+    base = feature_sets.set_tables("base", legacy, schema)
+    report.case(
+        "F03",
+        "FS1",
+        "base publishes every contract table, the six domain matrices included, and the single path publishes the same tables",
+        len(domain) == 6
+        and base == legacy
+        and set(domain) <= set(base)
+        and {"int_hospital_spine", "label_matrix_hai_outcomes", "feature_build_inputs"} <= set(base),
+        tables=len(base),
+    )
+    report.case(
+        "F04",
+        "FS1",
+        "each model set publishes exactly feature_matrix_<set>, keyed by the spine key",
+        all(
+            feature_sets.set_tables(name, legacy, schema) == [f"feature_matrix_{name}"]
+            and feature_sets.scoped_plan(plan, name, schema).tables == {f"feature_matrix_{name}": ("spine_key",)}
+            for name in feature_sets.MODEL_SETS
+        ),
+    )
+    scoped = feature_sets.scoped_plan(plan, "m2", schema)
+    report.case(
+        "F05",
+        "FS2",
+        "a scoped plan keeps the namespaces and the runs table; base and the single path keep the whole contract",
+        scoped.namespaces == plan.namespaces
+        and scoped.runs_table == plan.runs_table
+        and sorted(scoped.tables) == ["feature_matrix_m2"]
+        and feature_sets.scoped_plan(plan, "", schema) is plan
+        and feature_sets.scoped_plan(plan, "base", schema) is plan,
+    )
+
+    def row(run: str, tables: list[str]) -> dict[str, Any]:
+        return {"run_id": run, "snapshot_set": dict.fromkeys(tables, 1)}
+
+    base_run, model_run = (lambda run: row(run, base)), (lambda run: row(run, ["feature_matrix_m1"]))
+    rows = [
+        base_run("20261109T010000Z-00000001"),
+        model_run("20261109T020000Z-00000002"),
+        base_run("20261109T030000Z-00000003"),
+        model_run("20261109T040000Z-00000004"),
+    ]
+    found = feature_sets.newest_base_row(rows, base)
+    report.case(
+        "F06",
+        "FS3",
+        "the newest base run is the newest row that names every base table, past later model rows",
+        found is not None and found["run_id"].endswith("00000003"),
+    )
+    report.case(
+        "F07",
+        "FS3",
+        "model rows alone, or a base row short of one table, are no base run",
+        feature_sets.newest_base_row([model_run("20261109T020000Z-00000002"), row("20261109T030000Z-00000003", base[:-1])], base) is None,
+    )
+    report.case(
+        "F08",
+        "FS3",
+        "a run of the single path counts as a base run",
+        feature_sets.newest_base_row([row("20261109T010000Z-00000001", legacy)], base) is not None,
+    )
+    names = json.loads(feature_sets.MODEL_CONTRACT.read_text())["registered_models"]
+    hashes = {name: schema_module.set_schema_sha256(name, schema=schema) for name in feature_sets.MODEL_SETS}
+
+    def decide(feature_set: str, models: dict[str, dict[str, str]]) -> str:
+        store = ChampionStore({names[hai_type]: tags for hai_type, tags in models.items()})
+        return str(feature_sets.online_action(feature_set, schema, hashes.get(feature_set, ""), feature_sets.production_hashes(store, feature_set)))
+
+    same = {"feature_set": "m1", "feature_set_schema_sha256": hashes["m1"]}
+    other = {"feature_set": "m1", "feature_set_schema_sha256": "0" * 64}
+    untagged = {"feature_set": "m1"}
+    elsewhere = {"feature_set": "m2", "feature_set_schema_sha256": "0" * 64}
+    table = {
+        "base never loads online": decide("base", {"HAI_1": other}) == "none",
+        "a set that is not online publishes offline": decide("m3", {"HAI_1": {"feature_set": "m3", "feature_set_schema_sha256": "0" * 64}}) == "offline",
+        "no Production model at all loads online": decide("m1", {}) == "load",
+        "a Production model of another set only loads online": decide("m1", {"HAI_1": elsewhere}) == "load",
+        "a Production model with the same set hash loads online": decide("m1", {"HAI_1": same}) == "load",
+        "a Production model with another set hash holds the load": decide("m1", {"HAI_1": other}) == "hold",
+        "a Production model without the hash tag holds the load": decide("m1", {"HAI_1": untagged}) == "hold",
+        "one differing model of six types holds the load": decide("m1", {"HAI_1": same, "HAI_2": same, "HAI_3": other}) == "hold",
+        "all models of the set with the same hash load online": decide("m1", {"HAI_1": same, "HAI_2": same}) == "load",
+    }
+    report.case(
+        "F09", "FS6", "the online decision for base, an offline set, no model, a matching model and a differing model", all(table.values()), table=table
+    )
+    from scripts.lakehouse import layer_run
+
+    def job(feature_set: str, layer: str = "features") -> Any:
+        return layer_run.Job(layer, RUN, "publish_fixture", Path("/nonexistent"), input_run=BASE_RUN, feature_set=feature_set)
+
+    report.case(
+        "F11",
+        "FS2",
+        "a model set job reads base_pins.json and base_input; base, the single path and gold read the gold pin",
+        all(job(name).pin_name == "base_pins.json" and job(name).input_name == "base_input" for name in feature_sets.MODEL_SETS)
+        and all(job(name).pin_name == "gold_pins.json" and job(name).input_name == "gold_input" for name in ("", "base"))
+        and job("", "gold").pin_name == "silver_pins.json"
+        and [job(name).model_set for name in ("", "base", "m1")] == [False, False, True],
+    )
+    with tempfile.TemporaryDirectory(prefix="layer_set_cases_") as folder:
+        record = job("m1", "features")
+        run_folder = Path(folder)
+        (run_folder / "layer_run.json").write_text(json.dumps({"feature_set": "m1"}) + "\n")
+        with mock.patch.object(layer_run.Job, "folder", run_folder):
+            layer_run.check_feature_set(record)
+            report.case(
+                "F12",
+                "FS2",
+                "a phase that names another set than the pin recorded, or none, is refused",
+                refuses(lambda: layer_run.check_feature_set(job("m2")), "FEATURE_SET", "'m1'")
+                and refuses(lambda: layer_run.check_feature_set(job("")), "FEATURE_SET"),
+            )
+            (run_folder / "layer_run.json").write_text(json.dumps({"schema": 1}) + "\n")
+            layer_run.check_feature_set(job(""))
+            report.case(
+                "F13",
+                "FS2",
+                "a run of the single path records no set and every phase names none",
+                refuses(lambda: layer_run.check_feature_set(job("base")), "FEATURE_SET"),
+            )
+    report.case(
+        "F10",
+        "FS6",
+        "a model set whose online flag is false never reaches the hold path, whatever its model hash",
+        all(decide(name, {"HAI_1": {"feature_set": name, "feature_set_schema_sha256": "0" * 64}}) == "offline" for name in ("m3", "m5", "m6")),
+    )
+
+
 def static(report: Report) -> None:
     """Every static case."""
     generator_cases(report)
@@ -1449,9 +1724,11 @@ def static(report: Report) -> None:
         package_three_cases(report, Path(folder), schema_module.load_schema())
     register_coverage_cases(report)
     model_set_cases(report)
+    feature_set_cases(report)
     role_cases(report)
     contract_cases(report)
     pin_cases(report)
+    base_pin_cases(report)
     plan_cases(report)
     settings_cases(report)
     pipeline_quality_case(report)
@@ -2103,6 +2380,9 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
         after.close()
     export_cases(report, staging, first, base)
     guard_cases(report, build, first, base)
+    from scripts.features.model_set_cases import model_set_build_cases
+
+    model_set_build_cases(report, first, base)
 
 
 def export_cases(report: Report, staging: Path, folder: Path, base: Path) -> None:

@@ -87,13 +87,13 @@ locals {
     }
     features = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"]
-      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      validate = ["RUN_ID", "CODE_RUN_ID"]
-      export   = ["RUN_ID", "CODE_RUN_ID"]
-      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      upload   = ["RUN_ID", "CODE_RUN_ID"]
-      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET"]
+      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
+      validate = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
+      export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
+      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
+      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
     }
   }
   layer_driver = "cd /workspace/code && python -m scripts.lakehouse.layer_run %s --layer %s --run \"$RUN_ID\""

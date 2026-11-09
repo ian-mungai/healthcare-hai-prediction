@@ -145,34 +145,41 @@
           "CODE_RUN_ID",
           "CODE_SHA256",
           "POLARIS_URI",
-          "INPUT_RUN_ID"
+          "INPUT_RUN_ID",
+          "FEATURE_SET"
         ],
         "build": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "FEATURE_SET"
         ],
         "validate": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "FEATURE_SET"
         ],
         "export": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "FEATURE_SET"
         ],
         "publish": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "FEATURE_SET"
         ],
         "upload": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "FEATURE_SET"
         ],
         "feast": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "FEATURE_SET"
         ]
       },
       "chain": true,

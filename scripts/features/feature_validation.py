@@ -155,6 +155,19 @@ RECEIPT_ROWS = "select resource_type, status, node from feature_build_receipt"
 INPUTS_ROWS = "select count(*) from feature_build_inputs"
 INPUTS_SAME = "select count(*) from feature_build_inputs where build_key = 'current' and feature_schema_sha256 = ?"
 INPUTS_CONTROL_DIGEST = "select count(*) from feature_build_inputs where regexp_full_match(hai_outcome_controls_sha256, '[a-f0-9]{64}')"
+SET_INPUTS = "feature_set_inputs"
+SET_INPUTS_ROW = (
+    "select count(*) from feature_set_inputs where build_key = 'current' and feature_set = ? and set_schema_sha256 = ? "
+    "and regexp_full_match(base_run_id, '[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}')"
+)
+SET_INPUTS_ROWS = "select count(*) from feature_set_inputs"
+SET_ROWS_UNMATCHED = (
+    "select count(*) from {table} as m full outer join {window} as w on m.spine_key = w.spine_key where m.spine_key is null or w.spine_key is null"
+)
+SET_EVENT_TIME = (
+    "select count(*) from {table} as m inner join {window} as w on m.spine_key = w.spine_key where m.event_timestamp is distinct from w.event_timestamp"
+)
+SET_VALUES = "select count(*) from {table} as m inner join {source} as d on m.spine_key = d.spine_key where {differs}"
 SUITE_COUNT = "select count(*) from ({query})"
 CREATE_MAP = "create temp table pivot_map (col varchar, mask varchar, value_column varchar, {columns})"
 INSERT_MAP = "insert into pivot_map values (?, ?, ?, {marks})"
@@ -419,6 +432,42 @@ def validate(database: Path, schema_path: Path, contract_path: Path, suites: lis
         connection.close()
 
 
+def validate_set(database: Path, schema_path: Path, feature_set: str) -> Record:
+    """Run the checks of one model set on a build file (already a private copy): the receipt, the inputs, the columns, the key, and the table against the
+    domain matrices it was built from (same rows, same event times, every listed column equal)."""
+    duckdb: Any = importlib.import_module("duckdb")
+    schema = json.loads(schema_path.read_text())
+    entry = schema["model_sets"][feature_set]
+    table, window = entry["table"], WINDOW_TABLE
+    contract = {"publish": {"tables": {table: {"merge_key": [feature_schema.SPINE_KEY]}}}}
+    connection = duckdb_bounds.connect(duckdb, database, read_only=True)
+    try:
+        checker = Checker(connection, schema, contract, sha256_of(schema_path))
+        checker.receipt()
+        checker.merge_keys()
+        rows = checker.scalar(SET_INPUTS_ROWS) if SET_INPUTS in checker.tables else 0
+        same = checker.scalar(SET_INPUTS_ROW, [feature_set, feature_schema.set_schema_sha256(feature_set, schema=schema)]) if rows else 0
+        checker.expect("set_inputs", SET_INPUTS, rows == 1 and same == 1, rows=rows, matching=same)
+        needed = {table, window, *entry["source_tables"]}
+        for missing in sorted(needed - checker.tables):
+            checker.expect("table_exists", missing, False)
+        if needed <= checker.tables and checker.wide_columns(table, entry):
+            quoted = quote(table)
+            unmatched = checker.count(SET_ROWS_UNMATCHED, table=quoted, window=quote(window))
+            checker.expect("set_rows_equal_window", table, unmatched == 0, unmatched=unmatched)
+            late = checker.count(SET_EVENT_TIME, table=quoted, window=quote(window))
+            checker.expect("set_event_time_equal_window", table, late == 0, rows_with_another_time=late)
+            different = 0
+            for source in entry["source_tables"]:
+                names = [column["name"] for column in entry["columns"] if column.get("source_table") == source]
+                differs = " or ".join(f"m.{quote(name)} is distinct from d.{quote(name)}" for name in names)
+                different += checker.count(SET_VALUES, table=quoted, source=quote(source), differs=differs)
+            checker.expect("set_values_equal_source", table, different == 0, rows_with_another_value=different)
+        return checker.record
+    finally:
+        connection.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Validate the build file and write the result record; returns 1 when an expectation fails, 2 when the file cannot be validated."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -430,10 +479,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--suites", type=Path, nargs="*", default=[], help="suite folders of unexpected-rows expectations (data_contracts/great_expectations/features)"
     )
     parser.add_argument("--baselines", help="ignored: the features gate has no baselines")
+    parser.add_argument("--feature-set", default="", help="validate this model set's build instead of the single path or base")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     try:
         with private_copy(args.database) as (copy, digest):
-            expectations = validate(copy, args.schema, args.contract, args.suites)
+            model_sets = json.loads(args.schema.read_text()).get("model_sets", {})
+            if args.feature_set in model_sets:
+                expectations = validate_set(copy, args.schema, args.feature_set)
+            elif args.feature_set in ("", "base"):
+                expectations = validate(copy, args.schema, args.contract, args.suites)
+            else:
+                raise QualityError(f"the feature set {args.feature_set!r} is neither empty, base nor one of {', '.join(model_sets)}")
         record: dict[str, Any] = {
             "expectations": expectations,
             "counts": {"pass": sum(e["level"] == "pass" for e in expectations), "warn": 0, "fail": sum(e["level"] == "fail" for e in expectations)},

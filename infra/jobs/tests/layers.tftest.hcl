@@ -380,7 +380,9 @@ run "run_task_contract" {
       output.layer_run_tasks["gold"].assign_public_ip == "DISABLED" && output.layer_run_tasks["gold"].capacity_providers == ["FARGATE"] &&
       output.layer_run_tasks["gold"].network == "lakehouse" && output.layer_run_tasks["gold"].propagate_tags == "TASK_DEFINITION" &&
       output.layer_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
-      output.layer_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
+      output.layer_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"] &&
+      output.layer_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET"] &&
+      output.layer_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
     )
     error_message = "The output names the on-demand private placement, the layer's role key and the variables each container needs."
   }

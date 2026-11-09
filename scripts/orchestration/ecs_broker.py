@@ -325,6 +325,7 @@ class EcsBroker:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: input_run or "latest",
+            "FEATURE_SET": lambda: "all",
             **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, DEADLINE_VARIABLE)},
         }
         return {name: values[name]() for name in names}

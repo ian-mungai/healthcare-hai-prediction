@@ -114,8 +114,8 @@ def pin(ctx: Context, path: Path, source_run: str | None = None) -> dict[str, An
     return record
 
 
-def record_committed(ctx: Context, path: Path) -> dict[str, Any]:
-    """Record this producer's committed set after comparing its commit artifact with the catalog."""
+def record_committed(ctx: Context, path: Path, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Record this producer's committed set after comparing its commit artifact with the catalog; ``extra`` adds fields to the record."""
     record, _ = read_record(ctx.path("commit.json"))
     row = next((entry for entry in published_runs(ctx) if entry["run_id"] == ctx.run_id), None)
     if record.get("run_id") != ctx.run_id or record.get("state") != "committed" or row is None:
@@ -123,7 +123,7 @@ def record_committed(ctx: Context, path: Path) -> dict[str, Any]:
     snapshots = checked_set(ctx, row)
     if record.get("snapshot_set") != snapshots:
         raise PublishError("the silver commit artifact differs from its catalog publication")
-    output = {"schema": 1, "run_id": ctx.run_id, "mode": ctx.mode, "namespace": ctx.namespace, "snapshot_set": snapshots}
+    output = {"schema": 1, "run_id": ctx.run_id, "mode": ctx.mode, "namespace": ctx.namespace, "snapshot_set": snapshots, **(extra or {})}
     write_once(path, output)
     return output
 

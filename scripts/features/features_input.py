@@ -23,13 +23,17 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record
+from scripts.features import feature_schema, feature_sets, features_publish
 from scripts.lakehouse import silver_publish
-from scripts.lakehouse.gold_publish import MODES, Context, Plan, load_plan, published_head, remove_tree, write_record
+from scripts.lakehouse.gold_publish import MODES, Context, Plan, load_plan, published_head, published_runs, remove_tree, write_record
 from scripts.lakehouse.gold_publish_record import RUN_ID, PublishError
 
 PIN_NAME = "gold_pins.json"
 INPUT_NAME = "gold_input"
+BASE_PIN_NAME = "base_pins.json"
+BASE_INPUT_NAME = "base_input"
 NAMESPACES = {"publish_fixture": "gold_e2e", "real": "gold"}
+BASE_NAMESPACES = {"publish_fixture": "features_e2e", "real": "features"}
 SNAPSHOT_SQL = "select * from {table} version as of {snapshot}"
 MAX_SNAPSHOT = 9223372036854775807
 
@@ -72,37 +76,112 @@ def pin(ctx: Context, path: Path, source_run: str | None = None, newest_only: bo
         raise as_gold(error) from error
 
 
-def check_gold_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
-    """Require a complete gold pin for this run and mode: its shape, identity, namespace and the exact table set."""
+def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str], namespaces: Mapping[str, str], label: str) -> None:
+    """Require a complete pin of the named layer for this run and mode: its shape, identity, namespace and the exact table set."""
     if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} or record.get("schema") != 1:
-        raise PipelineError("the gold pin has an unsupported shape")
+        raise PipelineError(f"the {label} pin has an unsupported shape")
     if (
         record["run_id"] != run_id
         or record["mode"] != mode
-        or mode not in NAMESPACES
-        or record["namespace"] != NAMESPACES[mode]
+        or mode not in namespaces
+        or record["namespace"] != namespaces[mode]
         or not RUN_ID.fullmatch(str(record["source_run_id"]))
     ):
-        raise PipelineError("the gold pin identity does not match this consumer")
+        raise PipelineError(f"the {label} pin identity does not match this consumer")
     snapshots = record["snapshot_set"]
     if not isinstance(snapshots, dict) or set(snapshots) != tables:
-        raise PipelineError("the gold pin does not name exactly the gold publication tables")
+        raise PipelineError(f"the {label} pin does not name exactly the {label} publication tables")
     if any(type(value) is not int or not 0 < value <= MAX_SNAPSHOT for value in snapshots.values()):
-        raise PipelineError("the gold pin contains an invalid snapshot ID")
+        raise PipelineError(f"the {label} pin contains an invalid snapshot ID")
 
 
-def extract(ctx: Context, folder: Path, expected_pin: str) -> dict[str, Any]:
-    """Read exactly the pinned gold snapshots and export each table to Parquet with a manifest of file digests."""
-    pins, pin_sha = read_record(folder, PIN_NAME)
+def check_gold_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
+    """Require a complete gold pin for this run and mode: its shape, identity, namespace and the exact table set."""
+    check_pin(record, run_id, mode, tables, NAMESPACES, "gold")
+
+
+def check_base_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
+    """Require a complete base pin for this run and mode: the domain matrices of one committed base run in the features namespace."""
+    check_pin(record, run_id, mode, tables, BASE_NAMESPACES, "base")
+
+
+def base_tables(schema: Mapping[str, Any] | None = None) -> list[str]:
+    """The tables a model set run reads from its base run: the domain matrices."""
+    return feature_sets.domain_tables(schema if schema is not None else feature_schema.load_schema())
+
+
+def pin_base(ctx: Context, path: Path, source_run: str | None) -> dict[str, Any]:
+    """Pin the domain matrices of the newest committed base run once. The context is the features plan; the named run must be the newest base run.
+
+    A model set reads only the base run that its own chain just published, so an older base run, a run of a model set and a missing run are refused by name
+    before anything is pinned. A retry reads the same pin and checks it against the catalog again."""
+    tables = base_tables()
+    if path.exists() or path.is_symlink():
+        if path.is_symlink():
+            raise PublishError("the base pin is a symlink")
+        previous, _ = silver_publish.read_record(path)
+        if previous.get("run_id") != ctx.run_id or previous.get("mode") != ctx.mode or previous.get("namespace") != ctx.namespace:
+            raise PublishError("the base pin belongs to another run, mode or namespace")
+        if source_run is not None and previous.get("source_run_id") != source_run:
+            raise PublishError("the selected base run differs from the immutable pin")
+        row = next((entry for entry in published_runs(ctx) if entry["run_id"] == previous.get("source_run_id")), None)
+        if row is None or checked_tables(ctx, row, tables) != previous.get("snapshot_set"):
+            raise PublishError("the base pin no longer matches its committed set")
+        return previous
+    if not source_run:
+        raise PublishError("the model set pin names no base run: the job must name the base run its chain just published")
+    newest = feature_sets.newest_base_row(published_runs(ctx), ctx.plan.tables)
+    if newest is None:
+        raise PublishError(f"no committed base run exists, so base run {source_run} cannot be the newest")
+    if newest["run_id"] != source_run:
+        raise PublishError(f"base run {source_run} is not the newest committed base run ({newest['run_id']}): a model set reads only the newest base run")
+    record = {
+        "schema": 1,
+        "run_id": ctx.run_id,
+        "mode": ctx.mode,
+        "namespace": ctx.namespace,
+        "source_run_id": newest["run_id"],
+        "snapshot_set": checked_tables(ctx, newest, tables),
+    }
+    silver_publish.write_once(path, record)
+    return record
+
+
+def checked_tables(ctx: Context, row: Mapping[str, Any], tables: Sequence[str]) -> dict[str, int]:
+    """The snapshot IDs a committed row gives the named tables, each checked in the catalog; the row must be of this mode and name every table."""
+    if row.get("mode") != ctx.mode:
+        raise PublishError("the committed base set belongs to another mode")
+    snapshots = row.get("snapshot_set")
+    if not isinstance(snapshots, dict) or not set(tables) <= set(snapshots):
+        raise PublishError("the committed base set does not name every domain matrix")
+    result = {}
+    for name in sorted(tables):
+        snapshot = snapshots[name]
+        if type(snapshot) is not int or not 0 < snapshot <= MAX_SNAPSHOT:
+            raise PublishError(f"{name}: the committed base snapshot ID is invalid")
+        found = ctx.spark.sql(silver_publish.SNAPSHOT_QUERY.format(table=ctx.fq(name), snapshot=snapshot)).collect()
+        if len(found) != 1 or int(found[0][0]) != snapshot:
+            raise PublishError(f"{name}: the committed base snapshot is absent")
+        result[name] = snapshot
+    return result
+
+
+def extract(ctx: Context, folder: Path, expected_pin: str, base: bool = False) -> dict[str, Any]:
+    """Read exactly the pinned snapshots (gold, or with ``base`` the domain matrices of the base run) and export each table to Parquet with a manifest."""
+    pin_name, input_name, label = (BASE_PIN_NAME, BASE_INPUT_NAME, "base") if base else (PIN_NAME, INPUT_NAME, "gold")
+    pins, pin_sha = read_record(folder, pin_name)
     if pin_sha != expected_pin:
-        raise PipelineError("the gold pin changed after launcher acceptance")
-    check_gold_pin(pins, ctx.run_id, ctx.mode, set(ctx.plan.tables))
-    destination = folder / INPUT_NAME
-    partial = folder / f"{INPUT_NAME}.partial"
-    previous = folder / f"{INPUT_NAME}.previous"
+        raise PipelineError(f"the {label} pin changed after launcher acceptance")
+    if base:
+        check_base_pin(pins, ctx.run_id, ctx.mode, set(base_tables()))
+    else:
+        check_gold_pin(pins, ctx.run_id, ctx.mode, set(ctx.plan.tables))
+    destination = folder / input_name
+    partial = folder / f"{input_name}.partial"
+    previous = folder / f"{input_name}.previous"
     for path in (destination, partial, previous):
         if path.is_symlink():
-            raise PipelineError("a gold extract path is a symlink")
+            raise PipelineError(f"a {label} extract path is a symlink")
     remove_tree(partial)
     partial.mkdir()
     files = {}
@@ -150,11 +229,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--record", type=Path, help="pin: the pin record to write (default: gold_pins.json in the folder); read: the same file, which must be the folder's"
     )
     parser.add_argument("--local-warehouse", type=Path)
+    parser.add_argument("--feature-set", default=os.environ.get(feature_sets.VARIABLE, ""), help="a model set pins the newest base run instead of a gold run")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    model_set = feature_sets.checked(args.feature_set) in feature_sets.MODEL_SETS
+    pin_name = BASE_PIN_NAME if model_set else PIN_NAME
     if args.local_warehouse is not None and (args.mode != "publish_fixture" or os.environ.get("POLARIS_URI")):
         parser.error("a local warehouse is allowed only in publish_fixture without a remote catalog")
-    if args.record is not None and args.record != args.folder / PIN_NAME:
-        parser.error(f"--record must be {PIN_NAME} in the folder")
+    if args.record is not None and args.record != args.folder / pin_name:
+        parser.error(f"--record must be {pin_name} in the folder")
     if args.step == "read" and not args.expected_pin_sha256:
         parser.error("read needs --expected-pin-sha256")
     try:
@@ -162,15 +244,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         spark = spark_session(f"features_{args.step}", args.local_warehouse)
         try:
-            ctx = Context(spark, gold_plan(), args.run, args.mode, args.folder / "publish", "", needs_sealed=False)
+            plan = features_publish.publish_plan(args.mode) if model_set else gold_plan()
+            ctx = Context(spark, plan, args.run, args.mode, args.folder / "publish", "", needs_sealed=False)
             if args.step == "pin":
-                record = args.record or args.folder / PIN_NAME
-                result = pin(ctx, record, args.source_run, args.newest_only)
+                record = args.record or args.folder / pin_name
+                result = pin_base(ctx, record, args.source_run) if model_set else pin(ctx, record, args.source_run, args.newest_only)
                 digest = hashlib.sha256(record.read_bytes()).hexdigest()
                 output = {"step": "pin", "tables": len(result["snapshot_set"]), "sha256": digest}
             else:
-                result = extract(ctx, args.folder, args.expected_pin_sha256)
-                digest = hashlib.sha256((args.folder / INPUT_NAME / "manifest.json").read_bytes()).hexdigest()
+                result = extract(ctx, args.folder, args.expected_pin_sha256, base=model_set)
+                digest = hashlib.sha256((args.folder / (BASE_INPUT_NAME if model_set else INPUT_NAME) / "manifest.json").read_bytes()).hexdigest()
                 output = {"step": "read", "tables": len(result["snapshot_set"]), "sha256": digest}
             sys.stdout.write(json.dumps(output) + "\n")
         finally:
