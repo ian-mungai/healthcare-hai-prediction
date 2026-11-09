@@ -30,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_BINARY = 192 * 1024 * 1024  # trivy is about 160 MB.
 READ_CHUNK = 1024 * 1024
+# The shortest hosted job that installs tools allows 10 minutes and the tightest measured ones leave about 4.5 minutes beyond their own work.
+INSTALL_DEADLINE = 180.0
 TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ class RetryPolicy:
     """Bound a download: attempts, one total deadline, doubling waits with jitter and a cap on each attempt's wait for the network."""
 
     attempts: int = 5
-    deadline: float = 240.0
+    deadline: float = 120.0
     base_delay: float = 2.0
     max_delay: float = 30.0
     attempt_timeout: float = 60.0
@@ -66,6 +68,23 @@ class RetryPolicy:
 
 
 RETRY_POLICY = RetryPolicy()
+
+
+@dataclass(frozen=True)
+class DownloadSettings:
+    """Where archives may come from and how long downloads may take; the defaults are production and only tests pass others."""
+
+    scheme: str = "https"
+    host: str = "github.com"
+    policy: RetryPolicy = RETRY_POLICY
+    install_seconds: float = INSTALL_DEADLINE
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.install_seconds) or self.install_seconds <= 0:
+            raise ValueError("Invalid install deadline")
+
+
+DOWNLOADS = DownloadSettings()
 
 
 class DownloadFailed(Exception):
@@ -97,6 +116,19 @@ def verified(content: bytes, limit: int, expected_sha256: str) -> bytes:
     return content
 
 
+def bound_next_read(response: Any, deadline_at: float, timeout: float) -> None:
+    """Limit the next receive to the time left before the deadline; the timeout given to open() alone only measures silence between bytes."""
+    left = deadline_at - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("Download deadline passed while reading")
+    if response.fp is None:
+        return
+    connection = getattr(getattr(response.fp, "raw", None), "_sock", None)
+    if connection is None:
+        raise ValueError("Cannot bound the download read")
+    connection.settimeout(min(timeout, left))
+
+
 def fetch_once(opener: urllib.request.OpenerDirector, url: str, limit: int, expected_sha256: str, timeout: float, deadline_at: float) -> bytes:
     """Make one bounded request and verify the whole body; a body shorter than its announced length is a lost connection, not a bad hash."""
     with opener.open(url, timeout=timeout) as response:
@@ -104,13 +136,12 @@ def fetch_once(opener: urllib.request.OpenerDirector, url: str, limit: int, expe
         chunks: list[bytes] = []
         size = 0
         while size <= limit:
-            chunk = response.read(min(READ_CHUNK, limit + 1 - size))
+            bound_next_read(response, deadline_at, timeout)
+            chunk = response.read1(min(READ_CHUNK, limit + 1 - size))
             if not chunk:
                 break
             chunks.append(chunk)
             size += len(chunk)
-            if time.monotonic() > deadline_at:
-                raise TimeoutError("Download deadline passed while reading")
     content = b"".join(chunks)
     if announced.isdecimal() and size <= limit and size < int(announced):
         raise http.client.IncompleteRead(content, int(announced) - size)
@@ -118,16 +149,24 @@ def fetch_once(opener: urllib.request.OpenerDirector, url: str, limit: int, expe
 
 
 def download_verified(
-    opener: urllib.request.OpenerDirector, url: str, *, tool: str, expected_sha256: str, limit: int, policy: RetryPolicy = RETRY_POLICY
+    opener: urllib.request.OpenerDirector,
+    url: str,
+    *,
+    tool: str,
+    expected_sha256: str,
+    limit: int,
+    policy: RetryPolicy = RETRY_POLICY,
+    install_deadline_at: float | None = None,
 ) -> bytes:
-    """Download and hash-check an archive, retrying only transient failures within the policy's attempts and deadline."""
-    started = time.monotonic()
-    deadline_at = started + policy.deadline
+    """Download and hash-check an archive, retrying only transient failures within the policy's attempts, its deadline and what remains of the install's."""
+    own_deadline_at = time.monotonic() + policy.deadline
+    deadline_at = own_deadline_at if install_deadline_at is None else min(own_deadline_at, install_deadline_at)
+    expired = "install_deadline" if deadline_at < own_deadline_at else "deadline"
     last = "none"
     for attempt in range(1, policy.attempts + 1):
         remaining = deadline_at - time.monotonic()
         if remaining <= 0:
-            raise DownloadFailed(tool, attempt - 1, "deadline", last)
+            raise DownloadFailed(tool, attempt - 1, expired, last)
         try:
             return fetch_once(opener, url, limit, expected_sha256, min(policy.attempt_timeout, remaining), deadline_at)
         except (OSError, http.client.HTTPException) as error:
@@ -141,16 +180,18 @@ def download_verified(
             raise DownloadFailed(tool, attempt, "attempt_limit", last)
         wait = min(policy.max_delay, policy.base_delay * 2 ** (attempt - 1)) * secrets.SystemRandom().uniform(0.5, 1.0)
         if wait >= deadline_at - time.monotonic():
-            raise DownloadFailed(tool, attempt, "deadline", last)
+            raise DownloadFailed(tool, attempt, expired, last)
         LOGGER.warning("event=quality_download_retry tool=%s attempt=%d of %d status=%s wait_seconds=%.1f", tool, attempt, policy.attempts, last, wait)
         time.sleep(wait)
     raise DownloadFailed(tool, policy.attempts, "attempt_limit", last)
 
 
-def archive_bytes(release: dict[str, Any], directory: Path | None, tool: str) -> bytes:
+def archive_bytes(
+    release: dict[str, Any], directory: Path | None, tool: str, settings: DownloadSettings = DOWNLOADS, install_deadline_at: float | None = None
+) -> bytes:
     """Load bounded publisher bytes and reject unexpected hashes before extraction."""
     url = urllib.parse.urlsplit(release["url"])
-    if url.scheme != "https" or url.hostname != "github.com" or url.username or url.password or url.query or url.fragment:
+    if url.scheme != settings.scheme or url.hostname != settings.host or url.username or url.password or url.query or url.fragment:
         raise ValueError("Invalid release URL")
     if not re.fullmatch(r"/[\w.-]+/[\w.-]+/releases/download/[^/]+/[\w.-]+", url.path):
         raise ValueError("Expected a GitHub release asset")
@@ -164,7 +205,9 @@ def archive_bytes(release: dict[str, Any], directory: Path | None, tool: str) ->
         with (directory / Path(url.path).name).open("rb") as source:
             return verified(source.read(limit + 1), limit, release["sha256"])
     opener = urllib.request.build_opener(HTTPSRedirect())
-    return download_verified(opener, release["url"], tool=tool, expected_sha256=release["sha256"], limit=limit)
+    return download_verified(
+        opener, release["url"], tool=tool, expected_sha256=release["sha256"], limit=limit, policy=settings.policy, install_deadline_at=install_deadline_at
+    )
 
 
 def binary_bytes(content: bytes, kind: str, name: str) -> bytes:
@@ -218,8 +261,9 @@ def publish(path: Path, content: bytes, mode: int) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def install(manifest: Path, destination: Path, archives: Path | None, tools: list[str] | None = None) -> None:
-    """Validate every asset before publishing binaries and deterministic receipts."""
+def install(manifest: Path, destination: Path, archives: Path | None, tools: list[str] | None = None, settings: DownloadSettings = DOWNLOADS) -> None:
+    """Validate every asset before publishing binaries and deterministic receipts; all downloads share one install deadline."""
+    install_deadline_at = time.monotonic() + settings.install_seconds
     config = json.loads(manifest.read_text(encoding="utf-8"))
     native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb", "osv-scanner", "zizmor", "typos", "uv"}
     names = set(config["tools"])
@@ -240,7 +284,7 @@ def install(manifest: Path, destination: Path, archives: Path | None, tools: lis
         if not re.fullmatch(r"\d+\.\d+\.\d+", tool["version"]):
             raise ValueError("Stable tool version required")
         release = tool["releases"][selected]
-        content = binary_bytes(archive_bytes(release, archives, name), release["format"], release.get("member", name))
+        content = binary_bytes(archive_bytes(release, archives, name, settings, install_deadline_at), release["format"], release.get("member", name))
         if not content or len(content) > MAX_BINARY:
             raise ValueError("Invalid executable size")
         receipt = {"version": tool["version"], "platform": selected, "archive_sha256": release["sha256"], "binary_sha256": sha256(content)}

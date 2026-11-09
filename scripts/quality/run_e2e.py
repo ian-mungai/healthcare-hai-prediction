@@ -238,6 +238,8 @@ WRONG_FIXTURE = b"synthetic wrong bytes; never executed\n"
 RESPONSE_ECHO = "SENTINEL_RESPONSE_HEADER"
 QUERY_ECHO = "SENTINEL_URL_QUERY"
 RUNAWAY_REQUESTS = 40
+STALL_AFTER_DRIP = 5.0
+DRIP_FIXTURE = b"synthetic slow archive fixture; never executed\n"
 
 
 class ScriptedHandler(http.server.BaseHTTPRequestHandler):
@@ -249,10 +251,11 @@ class ScriptedHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         server = cast(Any, self.server)
         with server.guard:
-            index = len(server.requests)
+            index = server.requests.count(self.path)
             server.requests.append(self.path)
+        steps = server.script[self.path] if isinstance(server.script, dict) else server.script
         # A client that never stops retrying meets a permanent answer, so a planted unbounded loop ends and is counted.
-        kind, value = server.script[min(index, len(server.script) - 1)] if index < RUNAWAY_REQUESTS else ("status", 404)
+        kind, value = steps[min(index, len(steps) - 1)] if index < RUNAWAY_REQUESTS else ("status", 404)
         try:
             self.answer(kind, value)
         except (BrokenPipeError, ConnectionResetError):
@@ -273,6 +276,18 @@ class ScriptedHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if kind == "drip":
+            payload, interval, sent = value
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            for position in range(len(payload) if sent is None else sent):
+                self.wfile.write(payload[position : position + 1])
+                self.wfile.flush()
+                time.sleep(interval)
+            time.sleep(0 if sent is None else STALL_AFTER_DRIP)
+            self.close_connection = True
+            return
         body = value if kind == "body" else value[: len(value) // 2]
         self.send_response(200)
         self.send_header("Content-Length", str(len(value)))
@@ -283,8 +298,8 @@ class ScriptedHandler(http.server.BaseHTTPRequestHandler):
 
 
 @contextmanager
-def loopback_server(script: list[tuple[str, Any]]) -> Iterator[tuple[str, list[str]]]:
-    """Serve scripted answers on 127.0.0.1 only and always stop the server and its thread."""
+def loopback_server(script: list[tuple[str, Any]] | dict[str, list[tuple[str, Any]]]) -> Iterator[tuple[str, list[str]]]:
+    """Serve scripted answers (one list for every path, or one list per path) on 127.0.0.1 only and always stop the server and its thread."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ScriptedHandler)
     server.daemon_threads = True
     cast(Any, server).script = script
@@ -323,11 +338,11 @@ def download_attempt(
     capture = Capture(level=logging.DEBUG)
     tools.LOGGER.addHandler(capture)
     tools.LOGGER.setLevel(logging.DEBUG)
-    started = time.monotonic()
     try:
         with loopback_server(script) as (base, requests):
             opener = urllib.request.build_opener(tools.HTTPSRedirect())
             outcome: bytes | BaseException
+            started = time.monotonic()
             try:
                 outcome = tools.download_verified(
                     opener,
@@ -339,10 +354,11 @@ def download_attempt(
                 )
             except (ValueError, OSError, tools.DownloadFailed) as error:
                 outcome = error
+            seconds = time.monotonic() - started
             count = len(requests)
     finally:
         tools.LOGGER.removeHandler(capture)
-    return Attempt(outcome, count, time.monotonic() - started, messages)
+    return Attempt(outcome, count, seconds, messages)
 
 
 def transient_statuses_are_retried(tools: ModuleType, policy: Any) -> dict[str, Any]:
@@ -445,8 +461,150 @@ def retry_log_hides_url_and_headers(tools: ModuleType, policy: Any) -> dict[str,
     return {"log_lines": len(attempt.log)}
 
 
+def slow_body_is_bounded_by_deadline(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """A body that keeps arriving, or stops after a while, cannot hold the download past the total deadline plus a small tolerance."""
+    tolerance = 0.4
+    dripping = tools.RetryPolicy(attempts=1000, deadline=0.25, base_delay=0.05, max_delay=0.05, attempt_timeout=0.25)
+    slow = download_attempt(tools, [("drip", (DRIP_FIXTURE, 0.05, None))], dripping, payload=DRIP_FIXTURE)
+    check(isinstance(slow.outcome, tools.DownloadFailed) and "reason=deadline" in str(slow.outcome), "A slow body did not end with the deadline error")
+    check(slow.seconds < 0.25 + tolerance, f"A slow body held a 0.25 s deadline for {slow.seconds:.2f} s")
+    stalling = tools.RetryPolicy(attempts=1000, deadline=1.0, base_delay=0.05, max_delay=0.05, attempt_timeout=30.0)
+    stalled = download_attempt(tools, [("drip", (DRIP_FIXTURE, 0.05, 12))], stalling, payload=DRIP_FIXTURE)
+    check(
+        isinstance(stalled.outcome, tools.DownloadFailed) and "reason=deadline" in str(stalled.outcome),
+        "A body that stalled did not end with the deadline error",
+    )
+    check(stalled.seconds < 1.0 + tolerance, f"A body that stalled after 0.6 s held a 1.0 s deadline for {stalled.seconds:.2f} s")
+    return {"drip_seconds": round(slow.seconds, 2), "stalled_seconds": round(stalled.seconds, 2)}
+
+
+LOOPBACK_TOOLS = ("gitleaks", "tflint", "trivy")
+
+
+class InstallRun(NamedTuple):
+    """The outcome of one install() call against the loopback server."""
+
+    error: BaseException | None
+    requests: dict[str, int]
+    seconds: float
+    installed: dict[str, bytes]
+    executables: dict[str, bytes]
+
+
+def release_path(name: str) -> str:
+    """Return the URL path the loopback manifest uses for one tool's archive."""
+    return f"/example_org/example_tool/releases/download/v1.2.3/{name}.tar.gz"
+
+
+def install_through_loopback(
+    tools: ModuleType, steps: dict[str, list[tuple[str, Any]]], selected: list[str], settings: Any, scheme: str = "http"
+) -> InstallRun:
+    """Run the installer's own install() against the loopback server; the step kinds archive and wrong_archive stand for the real and the wrong bytes."""
+    archives: dict[str, bytes] = {}
+    executables: dict[str, bytes] = {}
+    for name in LOOPBACK_TOOLS:
+        executables[name] = f"synthetic {name} executable; never executed\n".encode()
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            member = tarfile.TarInfo(name)
+            member.size = len(executables[name])
+            archive.addfile(member, io.BytesIO(executables[name]))
+        archives[name] = buffer.getvalue()
+    answers = {"archive": lambda name: archives[name], "wrong_archive": lambda name: WRONG_FIXTURE}
+    served = {
+        release_path(name): [("body", answers[kind](name)) if kind in answers else (kind, value) for kind, value in script] for name, script in steps.items()
+    }
+    selected_platform = f"{platform.system().lower()}_{'amd64' if platform.machine() in {'x86_64', 'AMD64'} else platform.machine()}"
+    with tempfile.TemporaryDirectory(prefix="loopback_install_") as directory, loopback_server(served) as (base, requests):
+        releases = {
+            name: {
+                "version": "1.2.3",
+                "releases": {
+                    selected_platform: {
+                        "url": f"{scheme}{base.removeprefix('http')}{release_path(name)}",
+                        "sha256": hashlib.sha256(archives[name]).hexdigest(),
+                        "format": "tar.gz",
+                        "max_archive_bytes": len(archives[name]) + 1024,
+                    }
+                },
+            }
+            for name in LOOPBACK_TOOLS
+        }
+        manifest = Path(directory) / "manifest.json"
+        manifest.write_text(json.dumps({"schema_version": 1, "tools": releases}), encoding="utf-8")
+        destination = Path(directory) / "installed"
+        started = time.monotonic()
+        error: BaseException | None = None
+        quiet = logging.NullHandler()
+        tools.LOGGER.addHandler(quiet)
+        try:
+            tools.install(manifest, destination, None, selected, settings)
+        except (ValueError, OSError, tools.DownloadFailed) as caught:
+            error = caught
+        finally:
+            tools.LOGGER.removeHandler(quiet)
+        seconds = time.monotonic() - started
+        seen = {name: requests.count(release_path(name)) for name in LOOPBACK_TOOLS}
+        installed = {name: (destination / "bin" / name).read_bytes() for name in LOOPBACK_TOOLS if (destination / "bin" / name).is_file()}
+    return InstallRun(error, seen, seconds, installed, executables)
+
+
+def install_retries_through_the_production_call_site(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """install() itself retries a 504, rejects wrong bytes and a 404 after one request, and still refuses a non-GitHub URL."""
+    settings = tools.DownloadSettings(scheme="http", host="127.0.0.1", policy=policy, install_seconds=30.0)
+    run = install_through_loopback(tools, {"gitleaks": [("status", 504), ("status", 504), ("archive", None)]}, ["gitleaks"], settings)
+    check(run.error is None and run.requests["gitleaks"] == 3, f"install() did not retry through archive_bytes: {run.error!r}, {run.requests}")
+    check(run.installed == {"gitleaks": run.executables["gitleaks"]}, "install() did not publish the verified executable")
+    run = install_through_loopback(tools, {"gitleaks": [("wrong_archive", None), ("archive", None)]}, ["gitleaks"], settings)
+    check(isinstance(run.error, ValueError) and "mismatch" in str(run.error) and run.requests["gitleaks"] == 1, "install() retried or accepted a wrong hash")
+    check(run.installed == {}, "install() published bytes after a hash mismatch")
+    run = install_through_loopback(tools, {"gitleaks": [("status", 404)]}, ["gitleaks"], settings)
+    check(isinstance(run.error, urllib.error.HTTPError) and run.error.code == 404 and run.requests["gitleaks"] == 1, "install() retried a 404")
+    for scheme in ("http", "https"):
+        run = install_through_loopback(tools, {"gitleaks": [("archive", None)]}, ["gitleaks"], tools.DOWNLOADS, scheme)
+        check(
+            isinstance(run.error, ValueError) and "release URL" in str(run.error), f"The production URL check accepted a {scheme} loopback URL: {run.error!r}"
+        )
+        check(sum(run.requests.values()) == 0, f"The production URL check let a {scheme} loopback URL reach the server")
+    return {"requests": run.requests}
+
+
+def install_budget_is_shared_by_every_archive(tools: ModuleType, policy: Any) -> dict[str, Any]:
+    """One budget covers the whole install: a first archive that never recovers, or a slow earlier archive, leaves later archives only what remains."""
+    tolerance = 0.4
+    fast = tools.RetryPolicy(attempts=1000, deadline=30.0, base_delay=0.2, max_delay=0.2, attempt_timeout=5.0)
+    settings = tools.DownloadSettings(scheme="http", host="127.0.0.1", policy=fast, install_seconds=1.0)
+    run = install_through_loopback(tools, {"gitleaks": [("status", 504)]}, list(LOOPBACK_TOOLS), settings)
+    check(
+        isinstance(run.error, tools.DownloadFailed) and "reason=install_deadline" in str(run.error) and "tool=gitleaks" in str(run.error),
+        f"The install budget did not end a failing archive: {run.error!r}",
+    )
+    check(run.seconds < 1.0 + tolerance, f"An install budget of 1.0 s took {run.seconds:.2f} s")
+    check(run.requests["tflint"] == 0 and run.requests["trivy"] == 0, "Archives after the failure were still requested")
+    paced = tools.RetryPolicy(attempts=1000, deadline=30.0, base_delay=0.25, max_delay=0.25, attempt_timeout=5.0)
+    settings = tools.DownloadSettings(scheme="http", host="127.0.0.1", policy=paced, install_seconds=2.0)
+    steps: dict[str, list[tuple[str, Any]]] = {
+        "gitleaks": [("status", 504)] * 3 + [("archive", None)],
+        "tflint": [("status", 504)],
+        "trivy": [("archive", None)],
+    }
+    shared = install_through_loopback(tools, steps, list(LOOPBACK_TOOLS), settings)
+    check(
+        isinstance(shared.error, tools.DownloadFailed) and "tool=tflint" in str(shared.error) and "reason=install_deadline" in str(shared.error),
+        f"Archives did not share one budget: {shared.error!r}",
+    )
+    check(1.5 <= shared.seconds < 2.0 + tolerance, f"A shared budget of 2.0 s took {shared.seconds:.2f} s")
+    check(shared.requests["gitleaks"] == 4 and shared.requests["tflint"] >= 2 and shared.requests["trivy"] == 0, f"Unexpected requests {shared.requests}")
+    defaults = tools.DOWNLOADS
+    check(
+        defaults.policy is tools.RETRY_POLICY and defaults.policy.deadline <= defaults.install_seconds <= 300,
+        "Default install budget does not fit the shortest CI job",
+    )
+    return {"requests": shared.requests, "seconds": round(shared.seconds, 2), "default_install_seconds": defaults.install_seconds}
+
+
 def download_retry_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
-    """Verify the installer's download retry against a loopback server; every case runs, and any failure names its case."""
+    """Verify the installer's download retry on a loopback server, directly and through install(); every case runs and a failure names its case."""
     tools = importlib.import_module("scripts.quality.install_tools")
     scenarios: list[tuple[str, Callable[[ModuleType, Any], dict[str, Any]]]] = [
         ("retry_succeeds_after_transient_statuses", transient_statuses_are_retried),
@@ -457,6 +615,9 @@ def download_retry_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
         ("retry_deadline_is_honoured", deadline_is_honoured),
         ("default_retry_policy_is_bounded", default_policy_is_bounded),
         ("retry_log_hides_url_and_headers", retry_log_hides_url_and_headers),
+        ("slow_body_is_bounded_by_deadline", slow_body_is_bounded_by_deadline),
+        ("install_retries_through_the_production_call_site", install_retries_through_the_production_call_site),
+        ("install_budget_is_shared_by_every_archive", install_budget_is_shared_by_every_archive),
     ]
     failed: list[str] = []
     for name, scenario in scenarios:
