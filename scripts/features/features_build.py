@@ -256,7 +256,7 @@ def materialize(
 def domain_counts(stage: Path) -> list[dict[str, Any]]:
     """The rows of ``int_cost_report_domain_checks`` in the build database, in control and fiscal year order, for the build receipt."""
     duckdb: Any = importlib.import_module("duckdb")
-    connection = duckdb.connect(str(stage), read_only=True)
+    connection = duckdb_bounds.connect(duckdb, stage, read_only=True)
     try:
         rows = connection.execute(DOMAIN_COUNTS_SQL).fetchall()
     finally:
